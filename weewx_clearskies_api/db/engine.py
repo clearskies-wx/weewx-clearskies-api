@@ -111,15 +111,19 @@ def _build_mysql_url(settings: DatabaseSettings) -> str:
     password = os.environ.get(_ENV_DB_PASSWORD, "").strip()
     if not user:
         raise ValueError(
-            f"Database user not set. "
-            f"Set {_ENV_DB_USER} in /etc/weewx-clearskies/secrets.env (mode 0600). "
-            "See INSTALL.md for the SQL GRANT required for the read-only DB user."
+            f"{_ENV_DB_USER} is not set. "
+            "Create a read-only DB user and export its credentials before starting: "
+            "MariaDB — GRANT SELECT ON <database>.* TO 'clearskies_ro'@'localhost'; "
+            f"then set {_ENV_DB_USER}=clearskies_ro in "
+            "/etc/weewx-clearskies/secrets.env (mode 0600). "
+            "See etc/api.conf.example for the full config layout."
         )
     if not password:
         raise ValueError(
-            f"Database password not set. "
-            f"Set {_ENV_DB_PASSWORD} in /etc/weewx-clearskies/secrets.env (mode 0600). "
-            "See INSTALL.md for setup instructions."
+            f"{_ENV_DB_PASSWORD} is not set. "
+            f"Set {_ENV_DB_PASSWORD}=<password> in "
+            "/etc/weewx-clearskies/secrets.env (mode 0600) alongside "
+            f"{_ENV_DB_USER}. See etc/api.conf.example for the config layout."
         )
 
     host = settings.host

@@ -140,16 +140,16 @@ def _is_privilege_denied(exc: OperationalError) -> bool:
 def _critical_and_exit(reason: str) -> None:
     """Log a critical message and call sys.exit(1)."""
     logger.critical(
-        "FATAL: The database user has write access to the archive table. "
-        "clearskies-api must connect with a SELECT-only user. "
-        "Evidence: %s. "
-        "Action required: "
-        "(1) Create a read-only database user per INSTALL.md, section "
-        "'Database — read-only user setup'. "
-        "(2) Set WEEWX_CLEARSKIES_DB_USER and WEEWX_CLEARSKIES_DB_PASSWORD "
-        "in /etc/weewx-clearskies/secrets.env (mode 0600) to the new user. "
-        "(3) Restart the service. "
-        "Service will not start until a read-only user is configured.",
+        "FATAL: clearskies-api refuses to start — the database user has write "
+        "privileges. ADR-012 requires a read-only DB user. Evidence: %s. "
+        "Fix: "
+        "MariaDB — CREATE USER 'clearskies_ro'@'localhost' IDENTIFIED BY '<password>'; "
+        "GRANT SELECT ON <database>.* TO 'clearskies_ro'@'localhost'; "
+        "SQLite — use sqlite+pysqlite:///file:///<path>?mode=ro&uri=true and "
+        "chmod 0440 <path>. "
+        "Then set WEEWX_CLEARSKIES_DB_USER and WEEWX_CLEARSKIES_DB_PASSWORD in "
+        "/etc/weewx-clearskies/secrets.env (mode 0600) to the read-only credentials. "
+        "See etc/api.conf.example for the config layout.",
         reason,
     )
     sys.exit(1)
