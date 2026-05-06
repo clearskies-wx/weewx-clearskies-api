@@ -68,19 +68,29 @@ def _validate_db_host(host: str) -> None:
 def _build_sqlite_url(settings: DatabaseSettings) -> str:
     """Return a read-only SQLite URL per ADR-012.
 
-    Mandatory: ?mode=ro&uri=true on the connection string.
-    SQLAlchemy's sqlite+pysqlite dialect passes the uri flag through when
-    the URL contains ?uri=true — this is the standard pattern.
+    URL format: sqlite+pysqlite:///file:///absolute/path?mode=ro&uri=true
 
-    The path is taken verbatim from settings.path. The caller is
-    responsible for the file existing; if it doesn't, SQLite will raise
-    on connection, which the probe layer catches.
+    Why this specific format:
+      - sqlite+pysqlite:// names the dialect (sqlite) and the DBAPI driver
+        (pysqlite, which is the stdlib sqlite3 module).  Naming it explicitly
+        avoids ambiguity.
+      - file:///path is the SQLite-native URI scheme.  SQLAlchemy passes it
+        through to sqlite3.connect() when the URL contains the pysqlite driver
+        name.  This 'file:' scheme is required for SQLAlchemy's MetaData.reflect()
+        to work correctly with mode=ro — the simpler sqlite:////path format
+        works for engine.connect() and queries but fails for reflection because
+        SQLAlchemy's SQLite dialect does not pass the mode= parameter through
+        the catalog introspection path unless the 'file:' URI scheme is present.
+      - mode=ro makes the connection read-only at the SQLite level.
+      - uri=true tells the pysqlite driver to treat the connection string as a
+        SQLite URI (which activates mode= and other SQLite URI parameters).
+
+    The path is taken verbatim from settings.path; the caller is responsible
+    for the file existing. SQLite raises on first connection if the file is
+    absent, which the probe layer catches.
     """
-    # Per ADR-012: SQLite uses the URI connection string with mode=ro.
-    # SQLAlchemy wants: sqlite:///absolute/path/file.db?mode=ro&uri=true
-    # Use NullPool for SQLite — no point pooling connections to a file.
     path = settings.path
-    return f"sqlite:////{path}?mode=ro&uri=true"
+    return f"sqlite+pysqlite:///file:///{path}?mode=ro&uri=true"
 
 
 def _build_mysql_url(settings: DatabaseSettings) -> str:

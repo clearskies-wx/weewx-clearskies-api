@@ -101,6 +101,21 @@ def test_sqlite_url_contains_path() -> None:
     assert "/custom/path/archive.sdb" in url
 
 
+def test_sqlite_url_uses_pysqlite_file_scheme() -> None:
+    """SQLite URL uses sqlite+pysqlite:///file:/// format required for MetaData.reflect().
+
+    The simpler sqlite:////path format works for queries but not for
+    SQLAlchemy MetaData.reflect() with mode=ro.  This format is required
+    so the 'mode=ro' parameter is passed through during schema reflection.
+    """
+    settings = _sqlite_settings(path="/var/lib/weewx/weewx.sdb")
+    url = _build_sqlite_url(settings)
+    assert url.startswith("sqlite+pysqlite:///file:///"), (
+        f"SQLite URL must start with 'sqlite+pysqlite:///file:///' for reflection "
+        f"compatibility; got: {url!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _build_mysql_url
 # ---------------------------------------------------------------------------
