@@ -49,7 +49,8 @@ def _writable_engine_with_archive():  # type: ignore[return]
 def _readonly_sqlite_engine(tmp_path: Path):  # type: ignore[return]
     """Return a read-only SQLite engine backed by a real file with mode=ro.
 
-    We need a real file because SQLite mode=ro doesn't work with :memory:.
+    Uses the sqlite+pysqlite:///file:/// URL format required for both
+    mode=ro enforcement and MetaData.reflect() compatibility (Bug 2 fix).
     """
     from sqlalchemy import create_engine as _ce
 
@@ -61,11 +62,8 @@ def _readonly_sqlite_engine(tmp_path: Path):  # type: ignore[return]
         conn.commit()
     setup_engine.dispose()
 
-    # Now open read-only.
-    ro_engine = _ce(
-        f"sqlite:////{db_file}?mode=ro&uri=true",
-        connect_args={"check_same_thread": False},
-    )
+    # Open read-only with the corrected URL format.
+    ro_engine = _ce(f"sqlite+pysqlite:///file:///{db_file}?mode=ro&uri=true")
     return ro_engine
 
 
