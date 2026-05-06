@@ -29,9 +29,12 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 # Redaction patterns
 # ---------------------------------------------------------------------------
 
-# Match Authorization header value (common formats: Bearer <token>, Basic <b64>)
+# Match Authorization header value (common formats: Bearer <token>, Basic <b64>).
+# Allow internal whitespace so two-word "scheme credential" forms like
+# "Bearer xyz" redact fully. Stop at newlines or structural JSON-ish delimiters
+# so we don't gobble post-header content in mixed-form log lines.
 _AUTH_HEADER_RE = re.compile(
-    r"(Authorization\s*[:=]\s*)[^\s,\]}\n\"']+",
+    r"(Authorization\s*[:=]\s*)[^\r\n,\]}\"']+",
     re.IGNORECASE,
 )
 
