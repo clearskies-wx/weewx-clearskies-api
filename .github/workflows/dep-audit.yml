@@ -19,14 +19,28 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Audit (skip if no manifest yet)
+      - name: Audit dependencies (skip if no manifest yet)
         run: |
           set -eu
           pip install --quiet pip-audit
-          if [ -f requirements.txt ]; then
+          if [ -f uv.lock ]; then
+            # uv-managed project: export resolved deps to a flat requirements
+            # file so pip-audit only audits OUR project's pinned deps, not the
+            # runner's own pip / setuptools. Without --requirement, pip-audit
+            # audits the runner environment, which carries CVEs unrelated to
+            # this project.
+            pip install --quiet uv
+            uv export --format requirements-txt > /tmp/audit-reqs.txt
+            pip-audit --requirement /tmp/audit-reqs.txt --strict
+          elif [ -f poetry.lock ]; then
+            pip install --quiet poetry
+            poetry export --format requirements.txt --output /tmp/audit-reqs.txt --without-hashes
+            pip-audit --requirement /tmp/audit-reqs.txt --strict
+          elif [ -f requirements.txt ]; then
             pip-audit --requirement requirements.txt --strict
-          elif [ -f pyproject.toml ] || [ -f uv.lock ] || [ -f poetry.lock ]; then
-            pip-audit --strict
+          elif [ -f pyproject.toml ]; then
+            echo "::error::pyproject.toml present but no lockfile (uv.lock or poetry.lock) — coding.md §1 requires a lockfile"
+            exit 1
           else
             echo "No Python manifest yet — placeholder repo. Audit will run automatically once dependencies are added."
           fi
