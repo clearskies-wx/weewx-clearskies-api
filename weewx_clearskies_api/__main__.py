@@ -36,6 +36,7 @@ import ipaddress
 import logging
 import os
 import socket
+import sys
 import threading
 import time
 
@@ -202,16 +203,25 @@ def main() -> None:
     run_write_probe(engine)
 
     # Step 6: Schema reflection — build column registry.
-    # Logs warnings for unmapped columns but does NOT abort startup.
+    # Fatal on RuntimeError (missing archive table = service cannot serve data).
+    # ADR-012: "refuse to start in known-bad states."  Operator ensures weewx
+    # has run at least once to create the archive table, then restarts the api.
+    # Individual unmapped-column warnings do NOT abort startup; only full
+    # reflection failure (table missing, DB error) is fatal.
     reflector = SchemaReflector(engine)
     try:
         reflector.reflect()
     except RuntimeError as exc:
-        # Reflection failure is non-fatal at startup (the archive table might
-        # not exist in a fresh install before weewx has run).  Log a warning
-        # and continue.  Endpoints that need the registry will fail gracefully
-        # until the table exists.
-        logger.warning("Schema reflection failed at startup: %s", exc)
+        logger.critical(
+            "FATAL: Schema reflection failed — clearskies-api cannot start. "
+            "Cause: %s. "
+            "Ensure weewx has run at least once so the archive table exists, "
+            "then restart clearskies-api. "
+            "Check [database] kind/path/host/name in api.conf and verify the "
+            "DB user can SELECT from the archive table.",
+            exc,
+        )
+        sys.exit(1)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()
