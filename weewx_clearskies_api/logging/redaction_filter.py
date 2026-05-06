@@ -71,19 +71,23 @@ _SQL_LITERAL_RE = re.compile(
 
 _REDACTED = "[REDACTED]"
 
-_PATTERNS = [
-    _AUTH_HEADER_RE,
-    _PROXY_AUTH_RE,
-    _APPID_RE,
-    _CLIENT_SECRET_RE,
-    _SQL_LITERAL_RE,
+# Each entry is (pattern, replacement). The four header/query-param patterns
+# preserve a leading prefix via group 1 ("Authorization: " stays, the value is
+# replaced); the SQL pattern has no prefix to keep, so the whole match is
+# replaced.
+_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (_AUTH_HEADER_RE, r"\g<1>" + _REDACTED),
+    (_PROXY_AUTH_RE, r"\g<1>" + _REDACTED),
+    (_APPID_RE, r"\g<1>" + _REDACTED),
+    (_CLIENT_SECRET_RE, r"\g<1>" + _REDACTED),
+    (_SQL_LITERAL_RE, _REDACTED),
 ]
 
 
 def _redact(text: str) -> str:
     """Apply all redaction patterns to a string and return the cleaned result."""
-    for pattern in _PATTERNS:
-        text = pattern.sub(r"\g<1>" + _REDACTED, text)
+    for pattern, replacement in _PATTERNS:
+        text = pattern.sub(replacement, text)
     return text
 
 

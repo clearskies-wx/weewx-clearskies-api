@@ -264,6 +264,12 @@ def load_settings(config_path: Path | None = None) -> Settings:
             "`/etc/weewx-clearskies/api.conf` and edit it."
         )
 
+    if not path.exists():
+        # Explicit config_path was passed but doesn't exist. Don't silently accept
+        # a typo'd path — configobj would create an empty config from a missing
+        # file and the service would start with all defaults, which is a footgun.
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+
     cfg = configobj.ConfigObj(str(path), interpolation=False)
     _check_for_secrets_in_conf(cfg)
 
