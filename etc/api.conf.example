@@ -1,0 +1,88 @@
+# weewx-clearskies-api configuration example
+# Copy to /etc/weewx-clearskies/api.conf and edit as needed.
+#
+# SECRETS DO NOT BELONG HERE. Use /etc/weewx-clearskies/secrets.env (mode 0600).
+# Naming convention: WEEWX_CLEARSKIES_<DOMAIN>_<FIELD>
+#   e.g. WEEWX_CLEARSKIES_PROXY_SECRET=<32-byte hex from `openssl rand -hex 32`>
+#        WEEWX_CLEARSKIES_DB_USER=clearskies_ro
+#        WEEWX_CLEARSKIES_DB_PASSWORD=<password>
+#
+# Per ADR-027: any leaf key matching _(KEY|SECRET|TOKEN|PASSWORD) in this
+# file will cause the service to refuse to start with a FATAL log message.
+#
+# Format: ConfigObj/INI. Section syntax [section], nested [[subsection]].
+# Re-running the configuration UI (weewx-clearskies-config) preserves
+# content below the MANAGED REGION END marker.
+#
+# Managed by weewx-clearskies-config on YYYY-MM-DD.
+# MANAGED REGION BEGIN
+
+
+[api]
+# Bind host for the public API listener.
+# Default 127.0.0.1 per ADR-037 (loopback, behind a reverse proxy).
+# For cross-host deploys: set to a LAN IP or hostname. The service then
+# also requires WEEWX_CLEARSKIES_PROXY_SECRET to be set in secrets.env.
+# Hostname values are resolved via socket.getaddrinfo (IPv4 + IPv6).
+bind_host = 127.0.0.1
+
+# Bind port for the public API. Default 8765.
+bind_port = 8765
+
+# Maximum request body size in bytes. Default 1 MiB (1048576).
+# Raise this only if /content/about or /content/legal payloads exceed 1 MiB.
+# Returns 413 application/problem+json when exceeded.
+max_request_bytes = 1048576
+
+# Additional CORS origins beyond the default same-origin.
+# Leave empty for same-origin-only (default, recommended when proxy serves
+# SPA and API from the same domain per ADR-037).
+# For cross-origin dashboard deploys, list allowed origins one per line or
+# comma-separated: cors_origins = https://dashboard.example.com
+cors_origins =
+
+
+[health]
+# Bind host for the health check port. Default loopback per ADR-030.
+# Health port is SEPARATE from the public API port so probes don't
+# pollute access logs and don't require authentication.
+bind_host = 127.0.0.1
+
+# Bind port for /health/live and /health/ready. Default 8081 per ADR-030.
+bind_port = 8081
+
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+# Default INFO. Override with CLEARSKIES_LOG_LEVEL env var per ADR-029.
+# DEBUG is a firehose — enable per-incident only.
+level = INFO
+
+
+[ratelimit]
+# Requests per minute per IP for unauthenticated paths.
+# Default 60. Bypassed when X-Clearskies-Proxy-Auth is valid.
+# IMPORTANT: In-process storage only (single-worker). Multi-worker deploys
+# need Redis (set CLEARSKIES_CACHE_URL). See security baseline §8.
+requests_per_minute = 60
+
+# Window size in seconds. Default 60 (1 minute).
+window_seconds = 60
+
+
+[database]
+# Database type: sqlite or mysql.
+# Default sqlite (matches most weewx installs).
+kind = sqlite
+
+# For sqlite: path to the weewx .sdb file.
+path = /var/lib/weewx/weewx.sdb
+
+# For mysql: connection details.
+# Credentials come from WEEWX_CLEARSKIES_DB_USER / WEEWX_CLEARSKIES_DB_PASSWORD env vars.
+# host = 127.0.0.1
+# port = 3306
+# name = weewx
+
+# MANAGED REGION END
+# Free-form region below — the configuration UI does not touch this.

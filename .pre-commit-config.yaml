@@ -1,0 +1,25 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Tag pin is acceptable here; pyproject.toml carries the real == lock on ruff.
+    # coding.md §1 SHA-pinning applies to GitHub Actions and Docker images, not pre-commit.
+    rev: v0.11.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          # Pin exact versions matching pyproject.toml so mypy stubs are consistent.
+          - fastapi==0.115.12
+          - pydantic==2.11.4
+          - pydantic-settings==2.9.1
+          - cachetools==5.5.2
+          # starlette version must match what fastapi==0.115.12 pins in its own deps.
+          # Run `uv pip show fastapi` after `uv sync` to confirm the exact version.
+          - starlette==0.41.3
+          - anyio==4.9.0
+        args: [--strict]

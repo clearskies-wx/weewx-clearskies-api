@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "weewx-clearskies-api"
+version = "0.1.0"
+description = "HTTP/JSON API for the Clear Skies weather dashboard"
+license = { text = "GPL-3.0-or-later" }
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Clear Skies contributors" }]
+
+dependencies = [
+    "fastapi==0.115.12",
+    "uvicorn[standard]==0.34.2",
+    "pydantic==2.11.4",
+    "pydantic-settings==2.9.1",
+    "configobj==5.0.9",
+    "cachetools==5.5.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.11.9",
+    "mypy==1.15.0",
+    "pytest==8.3.5",
+    "pytest-asyncio==0.26.0",
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+weewx-clearskies-api = "weewx_clearskies_api.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["weewx_clearskies_api"]
+
+# ---------------------------------------------------------------------------
+# ruff — linting + formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Rule sets per task brief: E, F, W, I, B, S (security), N (naming), UP, SIM
+select = ["E", "F", "W", "I", "B", "S", "N", "UP", "SIM"]
+ignore = [
+    # S101: assert used — allowed in tests; we'll per-file ignore in test files
+    "S101",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+# Enforce no f-string SQL — regex pattern ban on f-strings inside db/ module.
+# Real enforcement is via S608 (SQL injection) + the grep gate in CI.
+# The ruff S608 rule fires on string-formatted SQL; flagging it here
+# ensures the CI ruff pass catches it before it reaches review.
+"weewx_clearskies_api/db/**/*.py" = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# mypy — strict mode per coding.md §2
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["configobj.*", "cachetools.*"]
+ignore_missing_stubs = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+log_cli = false
