@@ -126,7 +126,13 @@ def test_writable_user_causes_exit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_readonly_user_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When INSERT raises OperationalError, probe passes without calling exit."""
+    """When INSERT raises OperationalError(1142), probe passes without calling exit.
+
+    Uses a proper pymysql error with code 1142 (ER_TABLEACCESS_DENIED_ERROR)
+    as the underlying origin, matching the real MariaDB privilege-denied path.
+    """
+    import pymysql.err  # noqa: PLC0415
+
     mock_engine = MagicMock()
     mock_engine.dialect.name = "mysql"
     mock_engine.url = MagicMock()
@@ -139,14 +145,18 @@ def test_readonly_user_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn.__exit__ = MagicMock(return_value=False)
     mock_conn.begin = MagicMock(return_value=mock_trans)
-    # Simulate INSERT denied — the read-only user case.
-    mock_conn.execute = MagicMock(
-        side_effect=OperationalError("INSERT command denied to user", None, None)
+
+    # Construct a realistic exception chain: SQLAlchemy wraps the pymysql error.
+    underlying = pymysql.err.OperationalError(
+        1142, "INSERT command denied to user 'clearskies_ro'@'%' for table 'archive'"
     )
+    sa_exc = OperationalError("INSERT command denied", None, None)
+    sa_exc.orig = underlying
+    mock_conn.execute = MagicMock(side_effect=sa_exc)
 
     mock_engine.connect = MagicMock(return_value=mock_conn)
 
-    # Should NOT raise SystemExit — INSERT was rejected (read-only user).
+    # Should NOT raise SystemExit — 1142 = privilege denied = read-only user.
     run_write_probe(mock_engine)
 
 
