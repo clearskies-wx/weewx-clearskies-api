@@ -12,7 +12,7 @@ requires-python = ">=3.12"
 authors = [{ name = "Clear Skies contributors" }]
 
 dependencies = [
-    "fastapi==0.115.12",
+    "fastapi==0.136.1",
     "uvicorn[standard]==0.34.2",
     "pydantic==2.11.4",
     "pydantic-settings==2.9.1",
