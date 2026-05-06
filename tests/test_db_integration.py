@@ -321,32 +321,23 @@ class TestWriteProbeRefusesStartupOnWritableUser:
         finally:
             engine.dispose()
 
-    @pytest.mark.xfail(
-        reason=(
-            "KNOWN PROBE BUG (route to api-dev): run_write_probe silently passes for "
-            "a writable MariaDB user when the archive table has usUnits+interval as "
-            "NOT NULL without defaults. The probe's INSERT INTO archive (dateTime) "
-            "fails with IntegrityError (constraint violation) which is incorrectly "
-            "treated as 'privilege denied'. Fix: catch IntegrityError separately as "
-            "'user has write access'. Tracking: Phase 2 task 2 closeout."
-        ),
-        strict=True,
-    )
-    def test_mariadb_writable_seed_user_probe_exits_nonzero_known_bug(self) -> None:
-        """Documents that the probe silently passes for a writable MariaDB user.
+    def test_mariadb_writable_seed_user_probe_exits_nonzero(self) -> None:
+        """Writable MariaDB seed user (GRANT ALL) → run_write_probe raises SystemExit.
 
-        This test is marked xfail because it FAILS (the probe does NOT exit
-        when it should). The failure mode: probe's INSERT fails with IntegrityError
-        (NOT NULL violation) rather than privilege-denied, so probe treats it as
-        read-only and accepts startup. The test will turn green once api-dev fixes
-        the probe to distinguish IntegrityError from OperationalError 1142.
+        The seed user (weewx@%) has GRANT ALL PRIVILEGES. The probe's INSERT
+        fails with OperationalError(1364, "Field has no default value") because
+        usUnits and interval are NOT NULL with no default. The probe now correctly
+        identifies 1364 as write-access evidence (not privilege denial) and calls
+        sys.exit(1).
         """
         _require_mariadb_password()
         engine = create_engine(_mariadb_rw_url(), future=True, pool_pre_ping=True)
         try:
-            # This should raise SystemExit(1) but currently doesn't.
-            with pytest.raises(SystemExit):
+            with pytest.raises(SystemExit) as exc_info:
                 run_write_probe(engine)
+            assert exc_info.value.code == 1, (
+                "run_write_probe must exit with code 1 when write access is detected"
+            )
         finally:
             engine.dispose()
 
