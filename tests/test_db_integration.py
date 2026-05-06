@@ -107,9 +107,15 @@ _MARIADB_SEED_PASSWORD = os.environ.get("MARIADB_PASSWORD", "")
 # clearskies_ro is the SELECT-only user created by mariadb-init/01-clearskies-ro.sql
 _MARIADB_RO_PASSWORD = os.environ.get("MARIADB_RO_PASSWORD", "clearskies_ro_test")
 
-# SQLite paths — these are populated by the seed-sqlite profile.
-_SQLITE_DATA_VOLUME = os.environ.get("SQLITE_DATA_PATH", "/tmp/clearskies-test-sqlite")
-_SQLITE_SDB_PATH = os.path.join(_SQLITE_DATA_VOLUME, "weewx.sdb")
+# SQLite path — populated by the seed-sqlite profile into a Docker named volume.
+# SQLITE_SDB_PATH can point directly at the .sdb file (preferred), or
+# SQLITE_DATA_PATH sets the directory and the file is assumed to be weewx.sdb.
+# On weather-dev, the volume is at /var/lib/docker/volumes/clearskies-dev_sqlite_data/_data/
+# which requires root; copy to /tmp/ and set SQLITE_SDB_PATH=/tmp/weewx.sdb.
+_SQLITE_SDB_PATH = os.environ.get(
+    "SQLITE_SDB_PATH",
+    os.path.join(os.environ.get("SQLITE_DATA_PATH", "/tmp"), "weewx.sdb"),
+)
 
 
 def _skip_if_backend_not_configured(backend: str) -> None:
@@ -130,7 +136,16 @@ def _require_mariadb_password() -> None:
 
 
 def _require_sqlite_file() -> None:
-    if not Path(_SQLITE_SDB_PATH).exists():
+    try:
+        exists = Path(_SQLITE_SDB_PATH).exists()
+    except PermissionError:
+        pytest.skip(
+            f"Skipping SQLite test: cannot access {_SQLITE_SDB_PATH} (PermissionError). "
+            "Copy the SQLite file to a readable location and set SQLITE_DATA_PATH. "
+            "Example: cp <volume_path>/weewx.sdb /tmp/ && export "
+            "SQLITE_DATA_PATH=/tmp SQLITE_SDB=weewx.sdb"
+        )
+    if not exists:
         pytest.skip(
             f"Skipping SQLite test: {_SQLITE_SDB_PATH} not found. "
             "Run 'docker compose --profile sqlite run --rm seed-sqlite' first."
