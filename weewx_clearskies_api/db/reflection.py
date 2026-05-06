@@ -34,7 +34,7 @@ import logging
 from dataclasses import dataclass, field
 
 from sqlalchemy import Engine, MetaData, Table
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InvalidRequestError, OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -258,6 +258,15 @@ class SchemaReflector:
         except OperationalError as exc:
             raise RuntimeError(
                 f"Schema reflection failed — cannot read the archive table: {exc}"
+            ) from exc
+        except InvalidRequestError as exc:
+            # SQLAlchemy raises InvalidRequestError when the table named in `only`
+            # does not exist in the database (e.g. fresh install before weewx runs).
+            raise RuntimeError(
+                f"Schema reflection: 'archive' table not found in the database. "
+                "Verify [database] name and connection settings in api.conf. "
+                "The weewx archive table must exist before clearskies-api starts. "
+                f"(SQLAlchemy: {exc})"
             ) from exc
 
         if "archive" not in meta.tables:
