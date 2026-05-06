@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.pool import StaticPool
 
 from weewx_clearskies_api.db.probe import run_write_probe
@@ -158,6 +158,48 @@ def test_readonly_sqlite_file_passes(tmp_path: Path) -> None:
         run_write_probe(engine)
     finally:
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Tests — IntegrityError (constraint violation) → user is writable → exit
+# ---------------------------------------------------------------------------
+
+
+def test_integrity_error_causes_exit() -> None:
+    """IntegrityError on INSERT means the DB engine accepted the statement.
+
+    A NOT NULL constraint violation means the user passed the privilege check —
+    the engine started evaluating the INSERT. This is write access. The probe
+    must call sys.exit(1), NOT treat it as 'privilege denied'.
+
+    This is the production bug case: weewx archive has usUnits + interval as
+    NOT NULL, so a writable user gets IntegrityError, not a clean success.
+    """
+    mock_engine = MagicMock()
+    mock_engine.dialect.name = "mysql"
+    mock_engine.url = MagicMock()
+    mock_engine.url.__str__ = lambda _: "mysql+pymysql://user:pass@127.0.0.1:3306/weewx"
+
+    mock_trans = MagicMock()
+    mock_trans.rollback = MagicMock()
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.begin = MagicMock(return_value=mock_trans)
+    # Simulate the real-schema case: INSERT is accepted by the privilege system
+    # but rejected by the NOT NULL constraint on usUnits/interval.
+    mock_conn.execute = MagicMock(
+        side_effect=IntegrityError(
+            "Column 'usUnits' cannot be null", None, None
+        )
+    )
+
+    mock_engine.connect = MagicMock(return_value=mock_conn)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_write_probe(mock_engine)
+    assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
