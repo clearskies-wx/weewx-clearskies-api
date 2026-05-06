@@ -84,5 +84,12 @@ path = /var/lib/weewx/weewx.sdb
 # port = 3306
 # name = weewx
 
+# Connection pool size for mysql/mariadb (SQLite uses NullPool regardless).
+# Raise if you see "QueuePool limit of size 5 overflow 10 reached" in the logs.
+# pool_size = 5
+#
+# Maximum overflow connections beyond pool_size. mysql/mariadb only.
+# max_overflow = 10
+
 # MANAGED REGION END
 # Free-form region below — the configuration UI does not touch this.
