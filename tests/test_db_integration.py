@@ -48,6 +48,12 @@ from sqlalchemy.exc import DatabaseError, OperationalError
 from weewx_clearskies_api.db.health import db_probe
 from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import SchemaReflector
+
+# Apply the "integration" marker to every test in this module so that
+# `pytest -m integration` selects them and `pytest -m 'not integration'`
+# excludes them. Without this, the marker in pyproject.toml is registered
+# but never applied — `pytest -m integration` selects zero tests.
+pytestmark = pytest.mark.integration
 from weewx_clearskies_api.db.session import wire_engine
 from weewx_clearskies_api.health import ProbeResult, _readiness_probes, create_health_app
 
