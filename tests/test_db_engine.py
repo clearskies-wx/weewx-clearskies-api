@@ -75,6 +75,33 @@ def test_validate_hostname_passthrough() -> None:
     _validate_db_host("localhost")       # should not raise
 
 
+def test_validate_host_port_typo_raises_with_port_message() -> None:
+    """host:port pattern raises ValueError pointing at [database] port.
+
+    Operators who put 'db.example.com:3306' in the host field should get
+    a message naming the [database] port config key, not a cryptic IP error.
+    """
+    with pytest.raises(ValueError, match="port"):
+        _validate_db_host("db.example.com:3306")
+
+
+def test_validate_host_port_typo_127_raises() -> None:
+    """127.0.0.1:3306 in the host field also raises with a port message."""
+    with pytest.raises(ValueError, match="port"):
+        _validate_db_host("127.0.0.1:3306")
+
+
+def test_validate_ipv6_two_colons_valid() -> None:
+    """IPv6 address with two colons (e.g. 2001:db8::5) is accepted."""
+    _validate_db_host("2001:db8::5")  # should not raise
+
+
+def test_validate_single_colon_non_ipv6_is_typo() -> None:
+    """Single colon without brackets is treated as host:port typo, not IPv6."""
+    with pytest.raises(ValueError, match="port"):
+        _validate_db_host("weewx-db:3306")
+
+
 # ---------------------------------------------------------------------------
 # _build_sqlite_url
 # ---------------------------------------------------------------------------

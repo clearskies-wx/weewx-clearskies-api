@@ -45,24 +45,57 @@ _ENV_DB_PASSWORD = "WEEWX_CLEARSKIES_DB_PASSWORD"
 
 
 def _validate_db_host(host: str) -> None:
-    """Validate the DB host when it looks like a bare IP address.
+    """Validate the DB host; reject obvious typos with actionable error messages.
 
-    Uses ipaddress.ip_address (coding.md §1) which accepts both IPv4 and
-    IPv6 literals.  Hostname strings are intentionally skipped — the driver
-    calls getaddrinfo at connect time, which handles both families.
+    Applies ipaddress.ip_address (coding.md §1) only when the value looks like
+    an IP literal. Hostname strings are passed through — the driver resolves
+    them via getaddrinfo at connect time.
+
+    Heuristics (tightened from the naive "any colon = IPv6"):
+
+    IPv6 literal: two or more colons, OR the substring "::".
+        Correct:  "::1", "2001:db8::1", "[::1]"
+        Not IPv6: "db.example.com:3306" (one colon = host:port typo)
+
+    IPv4 literal: exactly three dots AND every dot-separated segment is
+        all-digits. This avoids misclassifying rare-but-legal all-digit
+        hostnames (e.g. "12345") as IPv4 literals.
+        Correct:  "192.168.1.5", "127.0.0.1"
+        Not IPv4: "hostname.com" (has letters), "12345" (zero dots)
+
+    host:port typo: one colon in a non-bracket-wrapped value. This is the
+        common mistake of putting "db.host:3306" in the host field. Raise
+        with a message pointing at [database] port.
+
+    Anything else: treat as a hostname, skip ipaddress validation.
 
     Raises:
-        ValueError: When the host string looks like an IP but is malformed
-                    (e.g. has a typo that makes it neither a valid IP nor
-                    a plausible hostname).
+        ValueError: Malformed IP literal or host:port typo.
     """
-    # Heuristic: contains only digits and dots → treat as IPv4 literal to
-    # validate (catches "999.0.0.1"); contains colons → treat as IPv6 literal.
-    # Anything else is a hostname — let getaddrinfo deal with it.
     stripped = host.strip("[]")  # strip brackets in case caller passed [::1]
-    if stripped.replace(".", "").replace(":", "").isdigit() or ":" in stripped:
-        # Looks like an IP literal — validate it.
-        ipaddress.ip_address(stripped)  # raises ValueError on invalid
+    colon_count = stripped.count(":")
+
+    # Catch host:port typo before the IPv6 check.
+    if colon_count == 1 and not stripped.startswith("["):
+        raise ValueError(
+            f"[database] host {host!r} looks like a host:port combination. "
+            "The port belongs in [database] port, not in host. "
+            f"Example: host = {stripped.split(':')[0]}, "
+            f"port = {stripped.split(':')[1]}"
+        )
+
+    # IPv6 detection: two or more colons, or the "::" shorthand.
+    is_ipv6 = colon_count >= 2 or "::" in stripped
+    # IPv4 detection: exactly three dots with all-digit segments.
+    parts = stripped.split(".")
+    is_ipv4 = (
+        len(parts) == 4
+        and all(p.isdigit() for p in parts)
+    )
+
+    if is_ipv6 or is_ipv4:
+        # Validate with ipaddress — raises ValueError on malformed literals.
+        ipaddress.ip_address(stripped)
 
 
 def _build_sqlite_url(settings: DatabaseSettings) -> str:
