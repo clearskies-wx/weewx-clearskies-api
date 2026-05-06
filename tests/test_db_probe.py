@@ -168,12 +168,9 @@ def test_readonly_sqlite_file_passes(tmp_path: Path) -> None:
 def test_integrity_error_causes_exit() -> None:
     """IntegrityError on INSERT means the DB engine accepted the statement.
 
-    A NOT NULL constraint violation means the user passed the privilege check —
-    the engine started evaluating the INSERT. This is write access. The probe
-    must call sys.exit(1), NOT treat it as 'privilege denied'.
-
-    This is the production bug case: weewx archive has usUnits + interval as
-    NOT NULL, so a writable user gets IntegrityError, not a clean success.
+    Constraint violation (NOT NULL, UNIQUE, etc.) means the privilege check
+    passed — the engine started evaluating the row. Write access exists.
+    The probe must call sys.exit(1).
     """
     mock_engine = MagicMock()
     mock_engine.dialect.name = "mysql"
@@ -187,12 +184,8 @@ def test_integrity_error_causes_exit() -> None:
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn.__exit__ = MagicMock(return_value=False)
     mock_conn.begin = MagicMock(return_value=mock_trans)
-    # Simulate the real-schema case: INSERT is accepted by the privilege system
-    # but rejected by the NOT NULL constraint on usUnits/interval.
     mock_conn.execute = MagicMock(
-        side_effect=IntegrityError(
-            "Column 'usUnits' cannot be null", None, None
-        )
+        side_effect=IntegrityError("Column 'usUnits' cannot be null", None, None)
     )
 
     mock_engine.connect = MagicMock(return_value=mock_conn)
@@ -200,6 +193,80 @@ def test_integrity_error_causes_exit() -> None:
     with pytest.raises(SystemExit) as exc_info:
         run_write_probe(mock_engine)
     assert exc_info.value.code == 1
+
+
+def test_mariadb_1364_no_default_causes_exit() -> None:
+    """MariaDB OperationalError 1364 (no default value) must trigger exit.
+
+    On a real production weewx archive (usUnits + interval NOT NULL, no
+    default), a writable MariaDB user gets OperationalError(1364) — NOT
+    IntegrityError. Error 1364 means 'Field has no default value'; the
+    DB engine accepted the INSERT at the privilege level. Write access exists.
+
+    This is the critical case that the original probe missed.
+    """
+    import pymysql.err  # noqa: PLC0415
+
+    mock_engine = MagicMock()
+    mock_engine.dialect.name = "mysql"
+    mock_engine.url = MagicMock()
+    mock_engine.url.__str__ = lambda _: "mysql+pymysql://user:pass@127.0.0.1:3306/weewx"
+
+    mock_trans = MagicMock()
+    mock_trans.rollback = MagicMock()
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.begin = MagicMock(return_value=mock_trans)
+
+    # Construct the real exception chain: SQLAlchemy wraps the pymysql error.
+    underlying = pymysql.err.OperationalError(
+        1364, "Field 'usUnits' doesn't have a default value"
+    )
+    sa_exc = OperationalError("field has no default", None, None)
+    sa_exc.orig = underlying
+    mock_conn.execute = MagicMock(side_effect=sa_exc)
+
+    mock_engine.connect = MagicMock(return_value=mock_conn)
+
+    with pytest.raises(SystemExit) as exc_info:
+        run_write_probe(mock_engine)
+    assert exc_info.value.code == 1
+
+
+def test_mariadb_1142_privilege_denied_passes() -> None:
+    """MariaDB OperationalError 1142 (INSERT denied) means privilege denied.
+
+    Error 1142 is issued when the DB user lacks INSERT privilege. The probe
+    must pass (NOT exit) — this is the expected result for a read-only user.
+    """
+    import pymysql.err  # noqa: PLC0415
+
+    mock_engine = MagicMock()
+    mock_engine.dialect.name = "mysql"
+    mock_engine.url = MagicMock()
+    mock_engine.url.__str__ = lambda _: "mysql+pymysql://user:pass@127.0.0.1:3306/weewx"
+
+    mock_trans = MagicMock()
+    mock_trans.rollback = MagicMock()
+
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.begin = MagicMock(return_value=mock_trans)
+
+    underlying = pymysql.err.OperationalError(
+        1142, "INSERT command denied to user 'clearskies_ro'@'%' for table 'archive'"
+    )
+    sa_exc = OperationalError("INSERT command denied", None, None)
+    sa_exc.orig = underlying
+    mock_conn.execute = MagicMock(side_effect=sa_exc)
+
+    mock_engine.connect = MagicMock(return_value=mock_conn)
+
+    # Must NOT raise SystemExit — 1142 means the user has no INSERT privilege.
+    run_write_probe(mock_engine)
 
 
 # ---------------------------------------------------------------------------
