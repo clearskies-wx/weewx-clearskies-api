@@ -172,7 +172,28 @@ def _mariadb_rw_url() -> str:
 
 
 def _sqlite_ro_url() -> str:
+    """Return the SQLite read-only URL as engine.py builds it.
+
+    NOTE: This URL format (sqlite:////path?mode=ro&uri=true) works for
+    connection + queries but NOT for SQLAlchemy MetaData.reflect(). The correct
+    format for reflection is sqlite+pysqlite:///file:///path?mode=ro&uri=true.
+    The engine.py bug is documented and tracked. Tests that need reflection use
+    _sqlite_ro_url_for_reflection() instead.
+    """
     return f"sqlite:////{_SQLITE_SDB_PATH}?mode=ro&uri=true"
+
+
+def _sqlite_ro_url_for_reflection() -> str:
+    """Return a SQLite read-only URL that works with MetaData.reflect().
+
+    SQLAlchemy 2.x requires the 'file:' prefix in the URI for mode=ro to
+    work with reflection. The engine.py format (sqlite:////path?...) works
+    for queries but not for MetaData.reflect() (missing 'file:' scheme).
+
+    BUG: engine.py should use this format instead. Track via Phase 2 task 2
+    closeout → api-dev to fix _build_sqlite_url() in db/engine.py.
+    """
+    return f"sqlite+pysqlite:///file:///{_SQLITE_SDB_PATH}?mode=ro&uri=true"
 
 
 def _sqlite_rw_url() -> str:
@@ -196,12 +217,17 @@ def mariadb_ro_engine() -> Generator[Engine, None, None]:
 
 @pytest.fixture(scope="session")
 def sqlite_ro_engine() -> Generator[Engine, None, None]:
-    """Session-scoped Engine connected to the seeded SQLite file in read-only mode."""
+    """Session-scoped Engine connected to the seeded SQLite file in read-only mode.
+
+    Uses _sqlite_ro_url_for_reflection() which adds the 'file:' prefix needed
+    for SQLAlchemy MetaData.reflect() to work with mode=ro URIs. The probe
+    tests use the engine.py URL format directly (see TestWriteProbeAcceptsReadOnlyUser).
+    """
     _require_sqlite_file()
     from sqlalchemy.pool import NullPool
 
     engine = create_engine(
-        _sqlite_ro_url(),
+        _sqlite_ro_url_for_reflection(),
         poolclass=NullPool,
         future=True,
     )
