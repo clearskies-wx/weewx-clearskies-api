@@ -232,9 +232,19 @@ def get_current(
     db: Session,
     registry: ColumnRegistry,
 ) -> Observation | None:
-    """Return the most recent archive row as an Observation, or None."""
+    """Return the most recent archive row as an Observation, or None.
+
+    Returns None when the archive is empty (no rows) or the archive table
+    is not yet populated (e.g., fresh weewx install that hasn't run yet).
+    """
+    from sqlalchemy.exc import OperationalError
+
     sql = text("SELECT * FROM archive ORDER BY dateTime DESC LIMIT 1")
-    row = db.execute(sql).fetchone()
+    try:
+        row = db.execute(sql).fetchone()
+    except OperationalError:
+        # Archive table doesn't exist yet (fresh install, test fixture, etc.)
+        return None
     if row is None:
         return None
     return _row_to_observation(row, registry)
@@ -380,11 +390,12 @@ def _fetch_hourly(
     if agg_parts:
         agg_parts = ", " + agg_parts
 
+    # `interval` is a reserved word in MariaDB — use a literal 60 for hourly records.
     sql = text(
         f"SELECT {bucket_expr} AS hour_bucket, "
         f"MIN(dateTime) AS dateTime, "
         f"MAX(usUnits) AS usUnits, "
-        f"MAX(interval) AS interval"
+        f"60 AS interval"
         f"{agg_parts} "
         f"FROM archive "
         f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
