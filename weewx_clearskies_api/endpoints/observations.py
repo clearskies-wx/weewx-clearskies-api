@@ -4,8 +4,10 @@ Per ADR-018: URL-path versioned under /api/v1/.
 Per ADR-012: read-only, per-request sessions via get_db_session().
 Per ADR-019: units block embedded in every response, no server-side conversion.
 Per ADR-020: UTC ISO-8601 with Z on the wire.
-Per security-baseline §3.5: all query params validated via Pydantic with
-  ConfigDict(extra="forbid").
+Per security-baseline §3.5: query params validated via Pydantic with
+  ConfigDict(extra="forbid"), enforced through Depends() + model_validate()
+  on the raw query-param dict so FastAPI's routing layer does not silently
+  discard unknown keys before the model sees them.
 
 ruff: noqa: N815  (canonical field names are weewx camelCase per ADR-010)
 """
@@ -16,18 +18,17 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from weewx_clearskies_api.db.reflection import ColumnRegistry
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
-from weewx_clearskies_api.errors import build_problem_response
+from weewx_clearskies_api.models.params import ArchiveQueryParams
 from weewx_clearskies_api.models.responses import (
     ArchiveResponse,
     ObservationResponse,
-    PageInfo,
 )
 from weewx_clearskies_api.services.archive import (
     decode_cursor,
@@ -51,72 +52,32 @@ def _now_utc_z() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Query-param Pydantic models
+# Dependency: parse + validate /archive query params
+#
+# FastAPI's routing layer extracts only the declared param names before
+# populating a Depends() model, so extra="forbid" in a plain Depends(Model)
+# call never fires for unknown HTTP keys.  The fix is to validate the full
+# raw query-param dict via model_validate() inside a dependency function —
+# that way Pydantic sees every key the client sent and raises ValidationError
+# on any unknown one.  The ValidationError is caught here and surfaced as 400
+# problem+json via FastAPI's RequestValidationError handler.
 # ---------------------------------------------------------------------------
 
 
-class ArchiveParams(BaseModel):
-    """Validated query parameters for GET /archive.
+def _get_archive_params(request: Request) -> ArchiveQueryParams:
+    """Dependency: parse and validate /archive query params from the raw dict.
 
-    extra="forbid" per security-baseline §3.5 — unknown keys → 400.
+    Calling model_validate(dict(request.query_params)) passes every HTTP key
+    the client sent to Pydantic.  ConfigDict(extra="forbid") on ArchiveQueryParams
+    then rejects any key not in the model's field set (security-baseline §3.5).
     """
-
-    model_config = ConfigDict(extra="forbid")
-
-    from_: datetime | None = None
-    to: datetime | None = None
-    interval: str = "raw"
-    fields: str | None = None
-    limit: int = 1000
-    cursor: str | None = None
-    page: int | None = None
-
-    @field_validator("interval")
-    @classmethod
-    def validate_interval(cls, v: str) -> str:
-        allowed = {"raw", "hour", "day"}
-        if v not in allowed:
-            raise ValueError(f"interval must be one of {sorted(allowed)}")
-        return v
-
-    @field_validator("limit")
-    @classmethod
-    def validate_limit(cls, v: int) -> int:
-        if not (1 <= v <= 10000):
-            raise ValueError("limit must be between 1 and 10000")
-        return v
-
-    @field_validator("page")
-    @classmethod
-    def validate_page(cls, v: int | None) -> int | None:
-        if v is not None and v < 1:
-            raise ValueError("page must be >= 1")
-        return v
-
-    @model_validator(mode="after")
-    def check_cursor_page_exclusive(self) -> "ArchiveParams":
-        if self.cursor is not None and self.page is not None:
-            raise ValueError("cursor and page are mutually exclusive")
-        return self
-
-    def parsed_fields(self, registry: ColumnRegistry) -> list[str] | None:
-        """Parse and validate the `fields` param against the registry.
-
-        Returns a list of validated canonical field names, or None if absent.
-        Raises ValueError for any unknown field name.
-        """
-        if self.fields is None:
-            return None
-        names = [f.strip() for f in self.fields.split(",") if f.strip()]
-        mapped_names = {
-            info.canonical_name
-            for info in registry.stock.values()
-            if info.canonical_name is not None
-        }
-        unknown = [n for n in names if n not in mapped_names]
-        if unknown:
-            raise ValueError(f"Unknown field(s): {', '.join(unknown)}")
-        return names
+    try:
+        return ArchiveQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        # Re-raise as RequestValidationError so the existing RFC 9457 error
+        # handler shapes it as 400/422 problem+json.
+        from fastapi.exceptions import RequestValidationError
+        raise RequestValidationError(exc.errors()) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -163,45 +124,14 @@ def get_current_endpoint(
     response_model=ArchiveResponse,
 )
 def get_archive_endpoint(
-    request: Request,
     db: Annotated[Session, Depends(get_db_session)],
-    from_: Annotated[datetime | None, Query(alias="from")] = None,
-    to: datetime | None = None,
-    interval: str = "raw",
-    fields: str | None = None,
-    limit: int = 1000,
-    cursor: str | None = None,
-    page: int | None = None,
+    params: Annotated[ArchiveQueryParams, Depends(_get_archive_params)],
 ) -> ArchiveResponse:
     """Return archive records within a time window.
 
     Supports raw / hour / day interval aggregation and cursor + page pagination.
+    Unknown query parameters are rejected with 400 per security-baseline §3.5.
     """
-    # Reject unknown query parameters (security-baseline §3.5 / extra="forbid").
-    _ALLOWED_ARCHIVE_PARAMS = frozenset(
-        {"from", "to", "interval", "fields", "limit", "cursor", "page"}
-    )
-    unknown = set(request.query_params.keys()) - _ALLOWED_ARCHIVE_PARAMS
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown query parameter(s): {', '.join(sorted(unknown))}",
-        )
-
-    # Validate all params via Pydantic.
-    try:
-        params = ArchiveParams(
-            from_=from_,
-            to=to,
-            interval=interval,
-            fields=fields,
-            limit=limit,
-            cursor=cursor,
-            page=page,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     registry = get_registry()
 
     # Validate cursor if provided.
@@ -212,10 +142,21 @@ def get_archive_endpoint(
             raise HTTPException(status_code=400, detail=f"Invalid cursor: {exc}") from exc
 
     # Validate fields if provided.
-    try:
-        parsed_field_names = params.parsed_fields(registry)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    parsed_field_names: list[str] | None = None
+    if params.fields is not None:
+        names = [f.strip() for f in params.fields.split(",") if f.strip()]
+        mapped_names = {
+            info.canonical_name
+            for info in registry.stock.values()
+            if info.canonical_name is not None
+        }
+        unknown = [n for n in names if n not in mapped_names]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown field(s): {', '.join(unknown)}",
+            )
+        parsed_field_names = names
 
     units = get_units_block()
 

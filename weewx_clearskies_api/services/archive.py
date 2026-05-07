@@ -246,17 +246,24 @@ def get_current(
 ) -> Observation | None:
     """Return the most recent archive row as an Observation, or None.
 
-    Returns None when the archive is empty (no rows) or the archive table
-    is not yet populated (e.g., fresh weewx install that hasn't run yet).
+    Returns None when the archive is empty (no rows).  Also returns None when
+    the archive table does not exist yet (fresh weewx install before any data
+    has been collected — "no such table: archive").  All other OperationalErrors
+    (DB unreachable, permissions revoked, schema corruption) re-raise so the
+    caller surfaces them as 500.
     """
     from sqlalchemy.exc import OperationalError
 
     sql = text("SELECT * FROM archive ORDER BY dateTime DESC LIMIT 1")
     try:
         row = db.execute(sql).fetchone()
-    except OperationalError:
-        # Archive table doesn't exist yet (fresh install, test fixture, etc.)
-        return None
+    except OperationalError as exc:
+        # Only swallow "no such table: archive" — that is a fresh-install / empty-test
+        # condition, not a DB failure. All other OperationalErrors re-raise.
+        orig_msg = str(exc.orig).lower() if exc.orig is not None else str(exc).lower()
+        if "no such table" in orig_msg:
+            return None
+        raise
     if row is None:
         return None
     return _row_to_observation(row, registry)
