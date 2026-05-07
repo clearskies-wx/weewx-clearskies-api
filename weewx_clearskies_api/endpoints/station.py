@@ -70,15 +70,28 @@ def get_station(
                     int(max_ts), tz=UTC
                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
     except SQLAlchemyError as exc:
-        logger.error(
-            "DB error querying archive MIN/MAX dateTime: %s",
-            exc,
-            extra={"exc_type": type(exc).__name__},
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Database error querying archive timestamps.",
-        ) from exc
+        # "no such table: archive" happens when the archive table hasn't been
+        # created yet (weewx has never run to create its schema, or the operator
+        # pointed clearskies-api at a fresh DB).  Treat the same as an empty
+        # archive — return null firstRecord / lastRecord rather than 500.
+        # A connection error or other SQLAlchemy failure is still a 500.
+        exc_str = str(exc).lower()
+        if "no such table" in exc_str or "table" in exc_str and "not exist" in exc_str:
+            logger.warning(
+                "archive table not found when querying MIN/MAX dateTime; "
+                "returning null firstRecord/lastRecord (weewx may not have run yet): %s",
+                exc,
+            )
+        else:
+            logger.error(
+                "DB error querying archive MIN/MAX dateTime: %s",
+                exc,
+                extra={"exc_type": type(exc).__name__},
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Database error querying archive timestamps.",
+            ) from exc
 
     units = get_units_block()
 
