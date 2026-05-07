@@ -133,17 +133,23 @@ def _wire_test_db() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _wire_minimal_services() -> None:
+def _wire_minimal_services(request: pytest.FixtureRequest) -> None:
     """Autouse fixture that wires station metadata, units, and a test DB for
     every test in the suite.
 
-    This ensures tests that create their own FastAPI app (e.g. middleware
-    tests that call create_app() directly) don't hit RuntimeError from
-    uninitialised services when they call /station or other wired endpoints.
+    For integration tests (marked @pytest.mark.integration): wires only
+    station metadata (not DB) so the integration_client fixture's own
+    wire_engine() / wire_registry() are not overwritten by a test-sqlite DB.
 
-    Integration tests that need a real DB override wire_engine() and
-    wire_registry() in their own fixtures.
+    For unit tests: wires station metadata, units (US defaults), and an
+    in-memory SQLite DB so tests that create their own FastAPI app (e.g.
+    middleware tests) don't hit RuntimeError from uninitialised services.
     """
+    if request.node.get_closest_marker("integration"):
+        # Integration tests wire their own DB and units via integration_client;
+        # only wire station metadata which the integration fixtures don't set.
+        _wire_test_station()
+        return
     _wire_test_units()
     _wire_test_station()
     _wire_test_db()
