@@ -22,7 +22,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from weewx_clearskies_api.db.reflection import ColumnRegistry
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import ArchiveQueryParams
@@ -97,7 +96,6 @@ def _get_archive_params(request: Request) -> ArchiveQueryParams:
     response_model=ObservationResponse,
 )
 def get_current_endpoint(
-    request: Request,
     db: Annotated[Session, Depends(get_db_session)],
 ) -> ObservationResponse:
     """Return the most-recent archive row.

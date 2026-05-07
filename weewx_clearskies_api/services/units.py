@@ -425,9 +425,15 @@ def load_units_block(weewx_conf_path: str | Path) -> tuple[UnitsBlock, str]:
 
     try:
         cfg = configobj.ConfigObj(str(path), interpolation=False)
-    except Exception as exc:
+    except configobj.ConfigObjError as exc:
         raise WeewxConfNotFoundError(
-            f"FATAL: Failed to parse weewx.conf at {path}: {exc}"
+            f"FATAL: weewx.conf at {path} could not be parsed: {exc}. "
+            "Check the file is valid INI/configobj format."
+        ) from exc
+    except OSError as exc:
+        raise WeewxConfNotFoundError(
+            f"FATAL: Cannot read weewx.conf at {path}: {exc}. "
+            "Check file permissions (readable by the clearskies-api process)."
         ) from exc
 
     # Read target_unit from [StdConvert].

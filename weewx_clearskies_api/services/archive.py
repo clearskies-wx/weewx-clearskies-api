@@ -24,9 +24,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
-from weewx_clearskies_api.db.reflection import ColumnRegistry
+from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnRegistry
 from weewx_clearskies_api.models.responses import (
     ArchiveRecord,
     Observation,
@@ -114,15 +115,37 @@ DAY_AGGREGATOR: dict[str, str] = {
     "heatingVoltage": "avg",
     "referenceVoltage": "avg",
     "supplyVoltage": "avg",
+
+    # Newly first-class fields (added per user directive 2026-05-06).
+    # Judgment calls flagged in closeout report for lead review.
+    "cloudcover": "avg",          # percent — average
+    "cooldeg": "sum",             # degree-days — accumulation
+    "daySunshineDur": "sum",      # cumulative sunshine — brief says sum
+    "gustdir": "avg",             # direction — avg (JUDGMENT: max could be argued)
+    "heatdeg": "sum",             # degree-days — accumulation
+    "lightning_distance": "max",  # peak distance to nearest strike
+    "lightning_disturber_count": "sum",  # count — accumulation
+    "lightning_noise_count": "sum",      # count — accumulation
+    "lightning_strike_count": "sum",     # count — accumulation
+    "noise": "avg",               # dB — average ambient noise level
+    "pop": "avg",                 # percent — average probability
+    "rms": "avg",                 # speed2 — statistical mean
+    "vecavg": "avg",              # speed2 — vector-mean of averages
+    "vecdir": "avg",              # direction — average
 }
 
-# Observation canonical fields (excluding meta cols dateTime/usUnits/interval).
-_STOCK_OBS_FIELDS: frozenset[str] = frozenset(
-    DAY_AGGREGATOR.keys()
-    | {
-        "windGustDir", "altimeter", "pressure", "barometer",
-        "hailRate", "hail", "ET",
-    }
+# Meta columns — present in the archive table but NOT observation fields.
+_META_COLS: frozenset[str] = frozenset({"dateTime", "usUnits", "interval"})
+
+# First-class observation canonical names.
+# Derived from STOCK_COLUMN_MAP minus meta columns so this set stays in sync
+# with the stock-column lookup automatically; no hand-maintained second list.
+# Per the user directive 2026-05-06: every stock weewx column is first-class
+# on Observation; extras is operator-custom-only.
+_FIRST_CLASS_FIELDS: frozenset[str] = frozenset(
+    canonical
+    for db_col, canonical in STOCK_COLUMN_MAP.items()
+    if db_col not in _META_COLS
 )
 
 
@@ -163,20 +186,17 @@ def _epoch_to_utc_z(epoch: int | float) -> str:
     return datetime.fromtimestamp(float(epoch), tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-# First-class observation field names (subset of stock that the Observation
-# model declares).
-_FIRST_CLASS_FIELDS: frozenset[str] = frozenset({
-    "outTemp", "outHumidity", "windSpeed", "windDir", "windGust",
-    "windGustDir", "barometer", "pressure", "altimeter", "dewpoint",
-    "windchill", "heatindex", "rainRate", "rain", "radiation", "UV",
-    "inTemp", "inHumidity", "ET", "hail", "hailRate",
-})
-
-_META_COLS: frozenset[str] = frozenset({"dateTime", "usUnits", "interval"})
-
-
 def _row_to_observation(row: Any, registry: ColumnRegistry) -> Observation:
-    """Convert a raw DB row (mapping) to an Observation model."""
+    """Convert a raw DB row (mapping) to an Observation model.
+
+    Routing per user directive 2026-05-06 (two branches only, no middle bucket):
+      - Stock column (in registry.stock) → first-class field on Observation.
+        The Observation model now carries every canonical name in STOCK_COLUMN_MAP.
+        Columns the operator's archive doesn't have are simply absent from the row
+        dict; Observation's defaults fill them as None.
+      - Non-stock column (in registry.unmapped) → operator-custom → extras.
+        Stock weewx columns NEVER appear in extras.
+    """
     row_dict: dict[str, Any] = dict(row._mapping)  # noqa: SLF001
 
     timestamp_epoch = row_dict.get("dateTime")
@@ -189,9 +209,11 @@ def _row_to_observation(row: Any, registry: ColumnRegistry) -> Observation:
         if db_col in _META_COLS:
             continue
         col_info = registry.stock.get(db_col)
-        if col_info is not None and col_info.canonical_name in _FIRST_CLASS_FIELDS:
+        if col_info is not None:
+            # Stock column — always first-class, regardless of which specific field.
             obs_fields[col_info.canonical_name] = val
-        elif db_col in registry.unmapped:
+        else:
+            # Non-stock (operator-custom) column → extras.
             extras[db_col] = val
 
     obs_fields["extras"] = extras
@@ -501,7 +523,7 @@ def _fetch_daily(
         ts_str = _epoch_to_utc_z(dt_epoch) if dt_epoch is not None else ""
         obs_kwargs: dict[str, Any] = {"timestamp": ts_str, "source": "weewx", "extras": {}}
         for field_name in aggregable:
-            if field_name in day and field_name in _FIRST_CLASS_FIELDS:
+            if field_name in day:
                 obs_kwargs[field_name] = day[field_name]
         records.append(ArchiveRecord(**obs_kwargs, interval=1440))
 
@@ -528,7 +550,9 @@ def _fetch_daily(
                 ).scalar() or 0
                 total_pages = max(1, (total_records + limit - 1) // limit)
                 break
-            except Exception:
+            except (OperationalError, ProgrammingError):
+                # Table doesn't exist for this field (archive_day_* tables are
+                # per-observation; not all are guaranteed present). Try the next.
                 continue
 
     return records, PageInfo(
@@ -577,7 +601,8 @@ def _fetch_day_aggregates(
                 sql,
                 {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit, "off": offset},
             ).fetchall()
-        except Exception as exc:
+        except (OperationalError, ProgrammingError) as exc:
+            # Table doesn't exist for this field; skip and try the next one.
             logger.debug("Day summary table %r not available: %s", table_name, exc)
             continue
 

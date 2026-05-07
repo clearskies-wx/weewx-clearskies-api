@@ -35,15 +35,23 @@ def utc_isoformat(dt: datetime) -> str:
 
 
 class Observation(BaseModel):
-    """Canonical observation (ADR-010 §3.1).
+    """Canonical observation (ADR-010 §3.1 + OpenAPI Observation schema).
 
-    All numeric observation fields are Optional — weather data is genuinely
-    missing sometimes.  `extras` is always present (may be empty).
+    Full stock weewx column set per the user directive 2026-05-06: every column
+    in STOCK_COLUMN_MAP is first-class here.  Operator-custom columns route
+    through `extras`; stock weewx columns NEVER appear in `extras`.
+
+    All numeric fields Optional — weather data is genuinely missing sometimes.
+    `extras` is always present (may be empty).
+
+    ruff: noqa: N815  (weewx camelCase names per ADR-010)
     """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     timestamp: str  # UTC ISO-8601 with Z
+
+    # Core wview observation fields
     outTemp: float | None = None
     outHumidity: float | None = None
     windSpeed: float | None = None
@@ -62,9 +70,73 @@ class Observation(BaseModel):
     UV: float | None = None
     inTemp: float | None = None
     inHumidity: float | None = None
+
+    # wview_extended core fields
     ET: float | None = None
     hail: float | None = None
     hailRate: float | None = None
+    appTemp: float | None = None
+    cloudbase: float | None = None
+    cloudcover: float | None = None
+    windrun: float | None = None
+    maxSolarRad: float | None = None
+    sunshineDur: float | None = None
+    daySunshineDur: float | None = None
+    rainDur: float | None = None
+    THSW: float | None = None
+    humidex: float | None = None
+    pop: float | None = None
+    illuminance: float | None = None
+    noise: float | None = None
+
+    # Lightning fields (wview_extended)
+    lightning_strike_count: float | None = None
+    lightning_distance: float | None = None
+    lightning_noise_count: float | None = None
+    lightning_disturber_count: float | None = None
+
+    # Snow fields (wview_extended)
+    snow: float | None = None
+    snowDepth: float | None = None
+    snowRate: float | None = None
+
+    # Wind summary fields
+    vecdir: float | None = None
+    gustdir: float | None = None
+    vecavg: float | None = None
+    rms: float | None = None
+
+    # Degree-days
+    heatdeg: float | None = None
+    cooldeg: float | None = None
+
+    # Sensor expansion slots (wview_extended)
+    extraTemp1: float | None = None
+    extraTemp2: float | None = None
+    extraTemp3: float | None = None
+    extraHumid1: float | None = None
+    extraHumid2: float | None = None
+    soilTemp1: float | None = None
+    soilTemp2: float | None = None
+    soilTemp3: float | None = None
+    soilTemp4: float | None = None
+    soilMoist1: float | None = None
+    soilMoist2: float | None = None
+    soilMoist3: float | None = None
+    soilMoist4: float | None = None
+    leafTemp1: float | None = None
+    leafTemp2: float | None = None
+    leafWet1: float | None = None
+    leafWet2: float | None = None
+
+    # Electrical / system telemetry
+    consBatteryVoltage: float | None = None
+    heatingVoltage: float | None = None
+    referenceVoltage: float | None = None
+    supplyVoltage: float | None = None
+    rxCheckPercent: float | None = None
+
+    # Operator-custom columns (stock weewx columns NEVER appear here)
     extras: dict[str, Any] = {}
     source: str = "weewx"
 
