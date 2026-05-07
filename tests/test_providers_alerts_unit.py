@@ -995,7 +995,7 @@ class TestNwsModuleFetch:
         _reset_provider_state()
 
     def test_fetch_200_empty_features_returns_empty_list(self) -> None:
-        """fetch() with empty features returns [] dict list."""
+        """fetch() with empty features returns [] AlertRecord list."""
         import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
@@ -1007,8 +1007,8 @@ class TestNwsModuleFetch:
             result = nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
         assert result == [], f"Expected [], got {result!r}"
 
-    def test_fetch_200_with_alerts_returns_canonical_alert_dicts(self) -> None:
-        """fetch() with 2-alert fixture returns 2 canonical AlertRecord dicts."""
+    def test_fetch_200_with_alerts_returns_canonical_alert_records(self) -> None:
+        """fetch() with 2-alert fixture returns 2 canonical AlertRecord objects."""
         import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
@@ -1020,9 +1020,9 @@ class TestNwsModuleFetch:
             result = nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
         assert len(result) == 2, f"Expected 2 alerts, got {len(result)}"
         # Verify severity mapping is correct — both alerts in fixture are Minor/Moderate → advisory
-        for alert_dict in result:
-            assert alert_dict["severity"] in ("advisory", "watch", "warning"), (
-                f"canonical severity must be advisory/watch/warning, got {alert_dict['severity']!r}"
+        for alert_record in result:
+            assert alert_record.severity in ("advisory", "watch", "warning"), (
+                f"canonical severity must be advisory/watch/warning, got {alert_record.severity!r}"
             )
 
     def test_fetch_description_instruction_concatenated(self) -> None:
@@ -1038,7 +1038,7 @@ class TestNwsModuleFetch:
             result = nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
         # Alert 1 in the fixture has both description and instruction
         alert1 = result[0]
-        assert "Use extra caution" in alert1["description"], (
+        assert "Use extra caution" in alert1.description, (
             "instruction must be appended to description"
         )
 
@@ -1087,7 +1087,7 @@ class TestNwsModuleFetch:
                 nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
 
     def test_fetch_extreme_severity_maps_to_warning(self) -> None:
-        """fetch() with Extreme severity alert returns canonical 'warning' severity dict."""
+        """fetch() with Extreme severity alert returns canonical 'warning' severity AlertRecord."""
         import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
@@ -1097,7 +1097,7 @@ class TestNwsModuleFetch:
                 return_value=httpx.Response(200, json=fixture)
             )
             result = nws.fetch(lat=35.4, lon=-97.2, user_agent_contact="test@example.com")
-        warning_alerts = [a for a in result if a["severity"] == "warning"]
+        warning_alerts = [a for a in result if a.severity == "warning"]
         assert len(warning_alerts) >= 1, (
             "At least one 'warning' alert expected from Extreme severity fixture"
         )

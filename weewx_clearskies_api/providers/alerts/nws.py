@@ -42,6 +42,8 @@ import hashlib
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import AlertRecord
@@ -169,7 +171,7 @@ class _NwsAlertFeature(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str | None = None
-    type: str | None = None
+    type: Literal["Feature"]
     properties: _NwsAlertProperties
 
 
@@ -178,7 +180,7 @@ class _NwsAlertsActiveResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    type: str
+    type: Literal["FeatureCollection"]
     features: list[_NwsAlertFeature] = Field(default_factory=list)
     title: str | None = None
     updated: str | None = None
@@ -362,16 +364,15 @@ def fetch(
     lat: float,
     lon: float,
     user_agent_contact: str | None,
-) -> list[dict]:  # type: ignore[type-arg]
-    """Call NWS /alerts/active and return canonical AlertRecord dicts.
+) -> list[AlertRecord]:
+    """Call NWS /alerts/active and return canonical AlertRecord models.
 
-    Return type is list[dict] for JSON-serialisability across both cache
-    backends (ADR-017): MemoryCache stores dicts as-is; RedisCache serialises
-    via JSON. Callers (endpoint) reconstruct AlertRecord objects with
-    AlertRecord.model_validate(d).
+    Cache stores post-normalization dicts (JSON-serialisable for Redis per
+    ADR-017); on cache hit the dicts are reconstructed into AlertRecord models
+    before returning.  Callers always receive list[AlertRecord].
 
     Returns:
-        List of canonical AlertRecord dicts, possibly empty.
+        List of canonical AlertRecord models, possibly empty.
 
     Raises:
         QuotaExhausted: NWS returned 429 (rate limit).
@@ -383,14 +384,10 @@ def fetch(
         _warn_once_missing_contact()
 
     cache_key = _build_cache_key(lat, lon)
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        # MemoryCache may store list[AlertRecord] when tests pre-populate the cache.
-        # Normalise to list[dict] for uniform return type.
-        return [
-            item.model_dump() if isinstance(item, AlertRecord) else item
-            for item in cached
-        ]
+    cached_dicts = get_cache().get(cache_key)
+    if cached_dicts is not None:
+        # Cache always stores list[dict] (post model_dump()); reconstruct models.
+        return [AlertRecord.model_validate(d) for d in cached_dicts]
 
     _rate_limiter.acquire()
 
@@ -421,15 +418,18 @@ def fetch(
     canonical_records = [_to_canonical(feature.properties) for feature in wire.features]
 
     # Store as list of dicts for JSON-serialisable caching (ADR-017 §Decision).
-    canonical_dicts = [r.model_dump() for r in canonical_records]
-    get_cache().set(cache_key, canonical_dicts, ttl_seconds=_NWS_CACHE_TTL)
+    get_cache().set(
+        cache_key,
+        [record.model_dump() for record in canonical_records],
+        ttl_seconds=_NWS_CACHE_TTL,
+    )
 
     logger.info(
         "NWS alerts fetched: %d alert(s) for point=%s",
         len(canonical_records),
         point_str,
     )
-    return canonical_dicts
+    return canonical_records
 
 
 def _reset_http_client_for_tests() -> None:

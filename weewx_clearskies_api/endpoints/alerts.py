@@ -39,6 +39,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
+import pydantic
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
@@ -98,8 +99,8 @@ def _get_alerts_params(request: Request) -> AlertsQueryParams:
     """
     try:
         return AlertsQueryParams.model_validate(dict(request.query_params))
-    except Exception as exc:
-        raise RequestValidationError(exc.errors() if hasattr(exc, "errors") else []) from exc  # type: ignore[union-attr]
+    except pydantic.ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ def get_alerts(
     if provider_id == "nws":
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
 
-        raw_dicts = nws.fetch(
+        all_records = nws.fetch(
             lat=station.latitude,
             lon=station.longitude,
             user_agent_contact=_nws_user_agent_contact,
@@ -195,9 +196,6 @@ def get_alerts(
         # If we reach here, it means a bug in the startup sequence — treat as 502.
         logger.error("Unknown alerts provider at request time: %r", provider_id)
         raise HTTPException(status_code=502, detail=f"Unknown alerts provider: {provider_id!r}")
-
-    # Reconstruct AlertRecord objects from dicts (fetch() returns JSON-serialisable dicts).
-    all_records = [AlertRecord.model_validate(d) for d in raw_dicts]
 
     # --- Apply severity filter AFTER cache lookup (ADR-017) ---
     filtered_records = _filter_by_severity(all_records, params.severity)

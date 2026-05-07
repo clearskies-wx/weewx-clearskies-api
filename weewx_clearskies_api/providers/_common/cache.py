@@ -162,15 +162,17 @@ class RedisCache:
             ) from exc
 
         self._client = redis_lib.Redis.from_url(url, decode_responses=False)
+        # Store exception class ref so get()/set() can catch it without
+        # re-importing redis inside each method (redis is an optional dep).
+        self._redis_error_cls = redis_lib.exceptions.RedisError
         # Verify connectivity at construction; fail fast on misconfig.
         # This is the fail-closed startup pattern (ADR-012 spirit applied to cache).
         try:
             self._client.ping()
-        except Exception as exc:
-            # Catch broad here because redis-py raises different exception types
-            # depending on whether the server is unreachable, auth fails, etc.
-            # (ConnectionError, ResponseError, AuthenticationError, etc.)
-            # We translate to a single clear message for __main__.py to log+exit.
+        except redis_lib.exceptions.RedisError as exc:
+            # RedisError is the base class for ConnectionError, ResponseError,
+            # AuthenticationError, TimeoutError, etc.  Translating to a single
+            # clear message for __main__.py to log+exit.
             raise RuntimeError(
                 f"Redis ping failed for CLEARSKIES_CACHE_URL={url!r}: {exc}. "
                 "Verify the Redis server is reachable and the URL is correct."
@@ -179,7 +181,18 @@ class RedisCache:
 
     def get(self, key: str) -> Any | None:
         """Return cached value or None on miss/expiry."""
-        raw = self._client.get(key.encode())
+        try:
+            raw = self._client.get(key.encode())
+        except self._redis_error_cls as exc:
+            # Transient Redis failure — degrade to cache miss so the request still
+            # succeeds via a live provider call (ADR-029: WARNING for recoverable).
+            logger.warning(
+                "Redis get failed for key %s (%s: %s); treating as cache miss",
+                key,
+                type(exc).__name__,
+                exc,
+            )
+            return None
         if raw is None:
             logger.debug("Cache miss: %s", key)
             return None
@@ -194,7 +207,18 @@ class RedisCache:
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
         """Store value with per-entry TTL via Redis native EXPIRE."""
         raw = json.dumps(value)
-        self._client.set(key.encode(), raw.encode(), ex=ttl_seconds)
+        try:
+            self._client.set(key.encode(), raw.encode(), ex=ttl_seconds)
+        except self._redis_error_cls as exc:
+            # Transient Redis failure — swallow; next request will re-fetch from
+            # provider (ADR-029: WARNING for recoverable; cache write is non-fatal).
+            logger.warning(
+                "Redis set failed for key %s (%s: %s); cache write skipped",
+                key,
+                type(exc).__name__,
+                exc,
+            )
+            return
         logger.debug("Cache set: %s ttl=%ds", key, ttl_seconds)
 
 
