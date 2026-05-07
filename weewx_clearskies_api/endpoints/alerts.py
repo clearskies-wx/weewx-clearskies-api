@@ -185,7 +185,7 @@ def get_alerts(
     if provider_id == "nws":
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
 
-        all_records = nws.fetch(
+        raw_dicts = nws.fetch(
             lat=station.latitude,
             lon=station.longitude,
             user_agent_contact=_nws_user_agent_contact,
@@ -195,6 +195,9 @@ def get_alerts(
         # If we reach here, it means a bug in the startup sequence — treat as 502.
         logger.error("Unknown alerts provider at request time: %r", provider_id)
         raise HTTPException(status_code=502, detail=f"Unknown alerts provider: {provider_id!r}")
+
+    # Reconstruct AlertRecord objects from dicts (fetch() returns JSON-serialisable dicts).
+    all_records = [AlertRecord.model_validate(d) for d in raw_dicts]
 
     # --- Apply severity filter AFTER cache lookup (ADR-017) ---
     filtered_records = _filter_by_severity(all_records, params.severity)

@@ -362,18 +362,16 @@ def fetch(
     lat: float,
     lon: float,
     user_agent_contact: str | None,
-) -> list[AlertRecord]:
-    """Call NWS /alerts/active and return canonical AlertRecord list.
+) -> list[dict]:  # type: ignore[type-arg]
+    """Call NWS /alerts/active and return canonical AlertRecord dicts.
 
-    Caching, rate-limiting, and error translation are handled here:
-      - Cache hit → deserialise from JSON-dicts and return as AlertRecord list.
-      - Cache miss → call NWS, normalize, cache as dicts, return as AlertRecords.
-
-    Cache stores dicts (JSON-serialisable for Redis backend per ADR-017).
-    Return type is list[AlertRecord] for type safety at callers.
+    Return type is list[dict] for JSON-serialisability across both cache
+    backends (ADR-017): MemoryCache stores dicts as-is; RedisCache serialises
+    via JSON. Callers (endpoint) reconstruct AlertRecord objects with
+    AlertRecord.model_validate(d).
 
     Returns:
-        List of canonical AlertRecord objects, possibly empty.
+        List of canonical AlertRecord dicts, possibly empty.
 
     Raises:
         QuotaExhausted: NWS returned 429 (rate limit).
@@ -387,11 +385,10 @@ def fetch(
     cache_key = _build_cache_key(lat, lon)
     cached = get_cache().get(cache_key)
     if cached is not None:
-        # cached may be either list[dict] (from Redis JSON) or list[AlertRecord]
-        # (from MemoryCache, which stores Python objects).
-        # Normalise to list[AlertRecord] either way.
+        # MemoryCache may store list[AlertRecord] when tests pre-populate the cache.
+        # Normalise to list[dict] for uniform return type.
         return [
-            AlertRecord.model_validate(item) if isinstance(item, dict) else item
+            item.model_dump() if isinstance(item, AlertRecord) else item
             for item in cached
         ]
 
@@ -424,8 +421,6 @@ def fetch(
     canonical_records = [_to_canonical(feature.properties) for feature in wire.features]
 
     # Store as list of dicts for JSON-serialisable caching (ADR-017 §Decision).
-    # MemoryCache stores the Python objects as-is; RedisCache serialises via JSON.
-    # On cache-hit path above we normalise back to AlertRecord either way.
     canonical_dicts = [r.model_dump() for r in canonical_records]
     get_cache().set(cache_key, canonical_dicts, ttl_seconds=_NWS_CACHE_TTL)
 
@@ -434,7 +429,7 @@ def fetch(
         len(canonical_records),
         point_str,
     )
-    return canonical_records
+    return canonical_dicts
 
 
 def _reset_http_client_for_tests() -> None:
