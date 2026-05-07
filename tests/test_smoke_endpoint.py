@@ -1,7 +1,10 @@
-"""Tests for the smoke endpoint GET /api/v1/station.
+"""Tests for the station smoke endpoint GET /api/v1/station.
 
-Verifies the placeholder endpoint returns the expected shape
-and that the full middleware chain works end-to-end.
+Verifies the real station endpoint (3a-2 replacement of the placeholder)
+returns the expected shape and that the full middleware chain works end-to-end.
+
+Updated in 3a-2: placeholder assertion removed; real endpoint now backed by
+weewx.conf station metadata (wired in conftest test_app fixture).
 """
 
 from __future__ import annotations
@@ -52,8 +55,8 @@ def test_smoke_endpoint_returns_expected_shape(client: TestClient) -> None:
     assert isinstance(units, dict)
     assert all(isinstance(v, str) for v in units.values())
 
-    # Explicit placeholder marker in data.
-    assert data.get("_placeholder") is True
+    # Real endpoint: no placeholder marker.
+    assert "_placeholder" not in data
 
 
 def test_smoke_endpoint_has_request_id_header(client: TestClient) -> None:
