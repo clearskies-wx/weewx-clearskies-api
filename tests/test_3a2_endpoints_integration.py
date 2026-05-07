@@ -826,7 +826,7 @@ class TestStationIntegration:
                     "lastRecord must be null for empty archive"
                 )
         finally:
-            # Restore seeded engine for subsequent tests
+            # Restore seeded engine and all module-level state for subsequent tests
             from weewx_clearskies_api.db.reflection import SchemaReflector
             wire_engine(seeded_engine)
             reset_units()
@@ -843,6 +843,9 @@ class TestStationIntegration:
             reflector = SchemaReflector(seeded_engine)
             registry = reflector.reflect()
             wire_registry(registry)
+            # Restore content directory so subsequent tests can still find about.md
+            wire_content_directory(str(content_dir))
+            wire_hidden_pages([])
             empty_engine.dispose()
 
     def test_station_both_backends_min_max_query_consistent(
@@ -1296,12 +1299,16 @@ class TestContentEndpointsIntegration:
             database=db, weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
         )
         app = create_app(settings)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/api/v1/content/about")
-            assert resp.status_code == 404, (
-                f"Missing about.md must return 404, got {resp.status_code}"
-            )
-            _assert_problem_json(resp)
+        try:
+            with TestClient(app, raise_server_exceptions=False) as client:
+                resp = client.get("/api/v1/content/about")
+                assert resp.status_code == 404, (
+                    f"Missing about.md must return 404, got {resp.status_code}"
+                )
+                _assert_problem_json(resp)
+        finally:
+            # Restore content directory for subsequent tests
+            wire_content_directory(str(content_dir))
 
     def test_content_about_404_detail_does_not_leak_filesystem_path(
         self, seeded_engine: Engine, weewx_conf_path: Path,
@@ -1363,13 +1370,17 @@ class TestContentEndpointsIntegration:
             database=db, weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
         )
         app = create_app(settings)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/api/v1/content/about")
-            if resp.status_code == 404:
-                detail = resp.json().get("detail", "")
-                assert str(no_files_dir) not in detail, (
-                    f"404 detail must not leak filesystem path; got: {detail!r}"
-                )
+        try:
+            with TestClient(app, raise_server_exceptions=False) as client:
+                resp = client.get("/api/v1/content/about")
+                if resp.status_code == 404:
+                    detail = resp.json().get("detail", "")
+                    assert str(no_files_dir) not in detail, (
+                        f"404 detail must not leak filesystem path; got: {detail!r}"
+                    )
+        finally:
+            # Restore content directory for subsequent tests
+            wire_content_directory(str(content_dir))
 
     def test_content_generated_at_has_z_suffix(
         self, integration_client_3a2: TestClient
