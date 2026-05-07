@@ -331,3 +331,144 @@ class TestReportDirectoryIndexing:
         assert entry.modifiedAt.endswith("Z"), (
             f"modifiedAt {entry.modifiedAt!r} must end with Z per ADR-020"
         )
+
+
+class TestReportSortOrderWithinYear:
+    """Auditor finding 6: within-year sort: yearly precedes monthly; monthly DESC.
+
+    The existing sort test only covers across-year ordering (monthly 2025 before
+    yearly 2024). This class pins the within-year ordering: given yearly 2025 AND
+    monthly 2025 entries, yearly must sort first in the 2025 group.
+
+    Per brief §4: "Sort: yearly entries first within a year, then monthly DESC."
+    Per implementation: `kind_key = 0 if e.kind == 'yearly' else 1` — 0 sorts before 1.
+    """
+
+    def test_within_same_year_yearly_entry_sorts_before_monthly(
+        self, tmp_path: Path
+    ) -> None:
+        """Yearly NOAA-2025.txt sorts before NOAA-2025-01.txt and NOAA-2025-02.txt.
+
+        Fixture: NOAA-2025-01.txt + NOAA-2025-02.txt + NOAA-2025.txt
+        Expected order:
+          [0] kind=yearly, year=2025, month=None
+          [1] kind=monthly, year=2025, month=2
+          [2] kind=monthly, year=2025, month=1
+        """
+        reports_dir = tmp_path / "noaa"
+        reports_dir.mkdir()
+        (reports_dir / "NOAA-2025-01.txt").write_text("Jan 2025", encoding="utf-8")
+        (reports_dir / "NOAA-2025-02.txt").write_text("Feb 2025", encoding="utf-8")
+        (reports_dir / "NOAA-2025.txt").write_text("Full 2025", encoding="utf-8")
+
+        _wire(reports_dir)
+        from weewx_clearskies_api.services.reports import list_reports
+
+        index = list_reports()
+        entries = index.reports
+        assert len(entries) == 3, (
+            f"Expected 3 entries, got {len(entries)}: {entries}"
+        )
+
+        # Index 0: 2025 yearly — sort key=(−2025, 0, 0); yearly kind_key=0 < monthly kind_key=1
+        assert entries[0].kind == "yearly", (
+            f"entries[0] must be the yearly entry, got kind={entries[0].kind!r}. "
+            "Within-year sort rule: yearly precedes monthly."
+        )
+        assert entries[0].year == 2025
+        assert entries[0].month is None
+
+        # Index 1: 2025-02 monthly — month DESC so Feb before Jan
+        assert entries[1].kind == "monthly", (
+            f"entries[1] must be monthly, got kind={entries[1].kind!r}"
+        )
+        assert entries[1].year == 2025
+        assert entries[1].month == 2, (
+            f"entries[1] must be month=2 (highest month first), got month={entries[1].month}"
+        )
+
+        # Index 2: 2025-01 monthly
+        assert entries[2].kind == "monthly"
+        assert entries[2].year == 2025
+        assert entries[2].month == 1
+
+    def test_within_same_year_monthly_sorts_desc_after_yearly(
+        self, tmp_path: Path
+    ) -> None:
+        """Monthly entries within a year sort in month-DESC order after the yearly entry.
+
+        Uses a wider fixture (12 months + yearly) to confirm DESC order across
+        all 12 months — not just Jan vs Feb.
+        """
+        reports_dir = tmp_path / "noaa"
+        reports_dir.mkdir()
+        for month in range(1, 13):
+            (reports_dir / f"NOAA-2024-{month:02d}.txt").write_text(
+                f"Month {month}", encoding="utf-8"
+            )
+        (reports_dir / "NOAA-2024.txt").write_text("Full 2024", encoding="utf-8")
+
+        _wire(reports_dir)
+        from weewx_clearskies_api.services.reports import list_reports
+
+        index = list_reports()
+        entries = index.reports
+        assert len(entries) == 13, f"Expected 13 entries (12 monthly + 1 yearly), got {len(entries)}"
+
+        # First entry must be the yearly
+        assert entries[0].kind == "yearly" and entries[0].year == 2024, (
+            f"First entry must be 2024 yearly, got {entries[0]}"
+        )
+
+        # Remaining 12 entries must be monthly in DESC order (Dec … Jan)
+        monthly_entries = entries[1:]
+        expected_months = list(range(12, 0, -1))  # [12, 11, 10, ..., 1]
+        actual_months = [e.month for e in monthly_entries]
+        assert actual_months == expected_months, (
+            f"Monthly entries must be month-DESC after yearly entry. "
+            f"Expected {expected_months}, got {actual_months}"
+        )
+
+    def test_across_years_with_yearly_entries_year_desc_ordering(
+        self, tmp_path: Path
+    ) -> None:
+        """Multi-year fixture with yearly entries: year DESC, yearly-first within each year.
+
+        Fixture:
+          NOAA-2025.txt    (yearly)
+          NOAA-2025-01.txt (monthly)
+          NOAA-2024.txt    (yearly)
+          NOAA-2024-12.txt (monthly)
+
+        Expected:
+          [0] 2025 yearly
+          [1] 2025-01 monthly
+          [2] 2024 yearly
+          [3] 2024-12 monthly
+        """
+        reports_dir = tmp_path / "noaa"
+        reports_dir.mkdir()
+        (reports_dir / "NOAA-2025.txt").write_text("2025Y", encoding="utf-8")
+        (reports_dir / "NOAA-2025-01.txt").write_text("2025M01", encoding="utf-8")
+        (reports_dir / "NOAA-2024.txt").write_text("2024Y", encoding="utf-8")
+        (reports_dir / "NOAA-2024-12.txt").write_text("2024M12", encoding="utf-8")
+
+        _wire(reports_dir)
+        from weewx_clearskies_api.services.reports import list_reports
+
+        index = list_reports()
+        entries = index.reports
+        assert len(entries) == 4
+
+        assert entries[0].kind == "yearly" and entries[0].year == 2025, (
+            f"entries[0] must be 2025 yearly, got {entries[0]}"
+        )
+        assert entries[1].kind == "monthly" and entries[1].year == 2025 and entries[1].month == 1, (
+            f"entries[1] must be 2025-01, got {entries[1]}"
+        )
+        assert entries[2].kind == "yearly" and entries[2].year == 2024, (
+            f"entries[2] must be 2024 yearly, got {entries[2]}"
+        )
+        assert entries[3].kind == "monthly" and entries[3].year == 2024 and entries[3].month == 12, (
+            f"entries[3] must be 2024-12, got {entries[3]}"
+        )

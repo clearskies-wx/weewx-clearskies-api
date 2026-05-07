@@ -49,39 +49,99 @@ def _reset_units_cache() -> None:
 # ---------------------------------------------------------------------------
 
 # Format: { canonical_field: (US_unit, METRIC_unit, METRICWX_unit) }
+# Covers the full 69-field first-class Observation surface per canonical-data-model §2.1.
+# Source: docs/contracts/canonical-data-model.md §2.1 group→unit table.
 CANONICAL_UNIT_TABLE: dict[str, tuple[str, str, str]] = {
     # group_temperature
-    "outTemp":       ("°F", "°C",    "°C"),
-    "dewpoint":      ("°F", "°C",    "°C"),
-    "windchill":     ("°F", "°C",    "°C"),
-    "heatindex":     ("°F", "°C",    "°C"),
-    "inTemp":        ("°F", "°C",    "°C"),
+    "outTemp":                    ("°F",      "°C",    "°C"),
+    "dewpoint":                   ("°F",      "°C",    "°C"),
+    "windchill":                  ("°F",      "°C",    "°C"),
+    "heatindex":                  ("°F",      "°C",    "°C"),
+    "inTemp":                     ("°F",      "°C",    "°C"),
+    "appTemp":                    ("°F",      "°C",    "°C"),
+    "THSW":                       ("°F",      "°C",    "°C"),
+    "humidex":                    ("°F",      "°C",    "°C"),
+    "extraTemp1":                 ("°F",      "°C",    "°C"),
+    "extraTemp2":                 ("°F",      "°C",    "°C"),
+    "extraTemp3":                 ("°F",      "°C",    "°C"),
+    "soilTemp1":                  ("°F",      "°C",    "°C"),
+    "soilTemp2":                  ("°F",      "°C",    "°C"),
+    "soilTemp3":                  ("°F",      "°C",    "°C"),
+    "soilTemp4":                  ("°F",      "°C",    "°C"),
+    "leafTemp1":                  ("°F",      "°C",    "°C"),
+    "leafTemp2":                  ("°F",      "°C",    "°C"),
     # group_speed
-    "windSpeed":     ("mph", "km/h", "m/s"),
-    "windGust":      ("mph", "km/h", "m/s"),
+    "windSpeed":                  ("mph",     "km/h",  "m/s"),
+    "windGust":                   ("mph",     "km/h",  "m/s"),
+    "vecavg":                     ("mph",     "km/h",  "m/s"),
+    "rms":                        ("mph",     "km/h",  "m/s"),
     # group_direction
-    "windDir":       ("°",   "°",    "°"),
-    "windGustDir":   ("°",   "°",    "°"),
+    "windDir":                    ("°",       "°",     "°"),
+    "windGustDir":                ("°",       "°",     "°"),
+    "vecdir":                     ("°",       "°",     "°"),
+    "gustdir":                    ("°",       "°",     "°"),
     # group_pressure
-    "barometer":     ("inHg", "mbar", "mbar"),
-    "altimeter":     ("inHg", "mbar", "mbar"),
-    "pressure":      ("inHg", "mbar", "mbar"),
-    # group_rain
-    "rain":          ("in", "cm",   "mm"),
-    "ET":            ("in", "cm",   "mm"),
-    "hail":          ("in", "cm",   "mm"),
+    "barometer":                  ("inHg",    "mbar",  "mbar"),
+    "altimeter":                  ("inHg",    "mbar",  "mbar"),
+    "pressure":                   ("inHg",    "mbar",  "mbar"),
+    # group_rain (depth / accumulation)
+    "rain":                       ("in",      "cm",    "mm"),
+    "ET":                         ("in",      "cm",    "mm"),
+    "hail":                       ("in",      "cm",    "mm"),
+    "snow":                       ("in",      "cm",    "mm"),
+    "snowDepth":                  ("in",      "cm",    "mm"),
     # group_rainrate
-    "rainRate":      ("in/h", "cm/h", "mm/h"),
-    "hailRate":      ("in/h", "cm/h", "mm/h"),
+    "rainRate":                   ("in/h",    "cm/h",  "mm/h"),
+    "hailRate":                   ("in/h",    "cm/h",  "mm/h"),
+    "snowRate":                   ("in/h",    "cm/h",  "mm/h"),
     # group_radiation
-    "radiation":     ("W/m²", "W/m²", "W/m²"),
+    "radiation":                  ("W/m²",    "W/m²",  "W/m²"),
+    "maxSolarRad":                ("W/m²",    "W/m²",  "W/m²"),
     # group_uv
-    "UV":            ("uv_index", "uv_index", "uv_index"),
+    "UV":                         ("uv_index","uv_index","uv_index"),
     # group_percent
-    "outHumidity":   ("%", "%", "%"),
-    "inHumidity":    ("%", "%", "%"),
-    # group_interval
-    "interval":      ("minute", "minute", "minute"),
+    "outHumidity":                ("%",       "%",     "%"),
+    "inHumidity":                 ("%",       "%",     "%"),
+    "cloudcover":                 ("%",       "%",     "%"),
+    "pop":                        ("%",       "%",     "%"),
+    "rxCheckPercent":             ("%",       "%",     "%"),
+    "extraHumid1":                ("%",       "%",     "%"),
+    "extraHumid2":                ("%",       "%",     "%"),
+    # group_moisture
+    "soilMoist1":                 ("cb",      "cb",    "cb"),
+    "soilMoist2":                 ("cb",      "cb",    "cb"),
+    "soilMoist3":                 ("cb",      "cb",    "cb"),
+    "soilMoist4":                 ("cb",      "cb",    "cb"),
+    # group_count
+    "leafWet1":                   ("count",   "count", "count"),
+    "leafWet2":                   ("count",   "count", "count"),
+    "lightning_strike_count":     ("count",   "count", "count"),
+    "lightning_noise_count":      ("count",   "count", "count"),
+    "lightning_disturber_count":  ("count",   "count", "count"),
+    # group_distance
+    "windrun":                    ("mile",    "km",    "km"),
+    "lightning_distance":         ("mile",    "km",    "km"),
+    # group_altitude
+    "cloudbase":                  ("foot",    "meter", "meter"),
+    # group_volt
+    "consBatteryVoltage":         ("V",       "V",     "V"),
+    "heatingVoltage":             ("V",       "V",     "V"),
+    "referenceVoltage":           ("V",       "V",     "V"),
+    "supplyVoltage":              ("V",       "V",     "V"),
+    # group_db
+    "noise":                      ("dB",      "dB",    "dB"),
+    # group_deltatime
+    "sunshineDur":                ("s",       "s",     "s"),
+    "daySunshineDur":             ("s",       "s",     "s"),
+    "rainDur":                    ("s",       "s",     "s"),
+    # group_degree_day
+    "heatdeg":                    ("°F·day",  "°C·day","°C·day"),
+    "cooldeg":                    ("°F·day",  "°C·day","°C·day"),
+    # group_illuminance
+    "illuminance":                ("lx",      "lx",    "lx"),
+    # group_interval (meta — ArchiveRecord only, not Observation first-class observation field,
+    # but present in _GROUP_MEMBERS so it resolves in the units block)
+    "interval":                   ("minute",  "minute","minute"),
 }
 
 
@@ -517,4 +577,168 @@ class TestSystemPresetsConstant:
             assert actual == expected, (
                 f"_SYSTEM_PRESETS[{system!r}][{group!r}] = {actual!r}, "
                 f"expected {expected!r} per canonical-data-model.md §2.1"
+            )
+
+
+class TestExpandedObservationSurfaceUnits:
+    """Every newly-first-class field in the 69-field Observation surface resolves correctly.
+
+    Tests the expanded CANONICAL_UNIT_TABLE against all three target_unit systems.
+    This class pins the contract change from 2026-05-06 (user directive: all stock
+    weewx columns are first-class; extras is operator-custom-only).
+
+    Each parametrized test is independent so a single field failure is immediately
+    identifiable without hiding other failures.
+    """
+
+    def _load_units(self, tmp_path: Path, target_unit: str) -> dict:
+        """Helper: write a minimal weewx.conf and load units block."""
+        _reset_units_cache()
+        conf_path = _write_weewx_conf(
+            tmp_path, f"[StdConvert]\n    target_unit = {target_unit}\n"
+        )
+        from weewx_clearskies_api.services.units import load_units_block
+
+        units, _ = load_units_block(conf_path)
+        return units
+
+    def test_all_expanded_fields_resolve_to_us_unit(self, tmp_path: Path) -> None:
+        """Every entry in CANONICAL_UNIT_TABLE resolves to its US unit string."""
+        units = self._load_units(tmp_path, "US")
+        failures = []
+        for field, (us_unit, _metric, _metricwx) in CANONICAL_UNIT_TABLE.items():
+            if field == "interval":
+                continue  # group_interval maps via ArchiveRecord, not Observation
+            actual = units.get(field)
+            if actual != us_unit:
+                failures.append(f"{field!r}: expected {us_unit!r}, got {actual!r}")
+        assert not failures, (
+            "US unit resolution failed for:\n" + "\n".join(f"  {f}" for f in failures)
+        )
+
+    def test_all_expanded_fields_resolve_to_metric_unit(self, tmp_path: Path) -> None:
+        """Every entry in CANONICAL_UNIT_TABLE resolves to its METRIC unit string."""
+        units = self._load_units(tmp_path, "METRIC")
+        failures = []
+        for field, (_us, metric_unit, _metricwx) in CANONICAL_UNIT_TABLE.items():
+            if field == "interval":
+                continue
+            actual = units.get(field)
+            if actual != metric_unit:
+                failures.append(f"{field!r}: expected {metric_unit!r}, got {actual!r}")
+        assert not failures, (
+            "METRIC unit resolution failed for:\n" + "\n".join(f"  {f}" for f in failures)
+        )
+
+    def test_all_expanded_fields_resolve_to_metricwx_unit(self, tmp_path: Path) -> None:
+        """Every entry in CANONICAL_UNIT_TABLE resolves to its METRICWX unit string."""
+        units = self._load_units(tmp_path, "METRICWX")
+        failures = []
+        for field, (_us, _metric, metricwx_unit) in CANONICAL_UNIT_TABLE.items():
+            if field == "interval":
+                continue
+            actual = units.get(field)
+            if actual != metricwx_unit:
+                failures.append(f"{field!r}: expected {metricwx_unit!r}, got {actual!r}")
+        assert not failures, (
+            "METRICWX unit resolution failed for:\n" + "\n".join(f"  {f}" for f in failures)
+        )
+
+    def test_newly_first_class_fields_each_resolve_to_non_empty_unit_us(
+        self, tmp_path: Path
+    ) -> None:
+        """Fields that were formerly 'promotion candidates' now resolve to a unit in US mode.
+
+        These were previously absent from the units block (routed through extras).
+        After the 2026-05-06 contract change they must appear in the units block.
+        """
+        units = self._load_units(tmp_path, "US")
+        newly_first_class = [
+            "appTemp", "cloudbase", "cloudcover", "windrun", "maxSolarRad",
+            "sunshineDur", "daySunshineDur", "rainDur", "THSW", "humidex",
+            "pop", "illuminance", "noise",
+            "lightning_strike_count", "lightning_distance",
+            "lightning_noise_count", "lightning_disturber_count",
+            "snow", "snowDepth", "snowRate",
+            "vecdir", "gustdir", "vecavg", "rms",
+            "heatdeg", "cooldeg",
+            "extraTemp1", "extraTemp2", "extraTemp3",
+            "extraHumid1", "extraHumid2",
+            "soilTemp1", "soilTemp2", "soilTemp3", "soilTemp4",
+            "soilMoist1", "soilMoist2", "soilMoist3", "soilMoist4",
+            "leafTemp1", "leafTemp2",
+            "leafWet1", "leafWet2",
+            "consBatteryVoltage", "heatingVoltage", "referenceVoltage",
+            "supplyVoltage", "rxCheckPercent",
+        ]
+        missing_from_units_block = [f for f in newly_first_class if not units.get(f)]
+        assert not missing_from_units_block, (
+            "These newly-first-class fields must have a non-empty unit in the US units block "
+            "(they were formerly promotion candidates routed through extras, now they are "
+            "first-class per the 2026-05-06 contract change):\n"
+            + "\n".join(f"  {f}" for f in missing_from_units_block)
+        )
+
+    def test_degree_day_fields_us_unit_is_fahrenheit_day(
+        self, tmp_path: Path
+    ) -> None:
+        """heatdeg + cooldeg → °F·day in US mode per §2.1 group_degree_day."""
+        units = self._load_units(tmp_path, "US")
+        assert units.get("heatdeg") == "°F·day", (
+            f"heatdeg US unit must be '°F·day', got {units.get('heatdeg')!r}"
+        )
+        assert units.get("cooldeg") == "°F·day", (
+            f"cooldeg US unit must be '°F·day', got {units.get('cooldeg')!r}"
+        )
+
+    def test_degree_day_fields_metric_unit_is_celsius_day(
+        self, tmp_path: Path
+    ) -> None:
+        """heatdeg + cooldeg → °C·day in METRIC mode per §2.1."""
+        units = self._load_units(tmp_path, "METRIC")
+        assert units.get("heatdeg") == "°C·day"
+        assert units.get("cooldeg") == "°C·day"
+
+    def test_soil_moisture_fields_unit_is_cb_all_systems(
+        self, tmp_path: Path
+    ) -> None:
+        """soilMoist1..4 → cb (centibar) in all unit systems (unit-invariant)."""
+        for system in ("US", "METRIC", "METRICWX"):
+            _reset_units_cache()
+            units = self._load_units(tmp_path, system)
+            for field in ("soilMoist1", "soilMoist2", "soilMoist3", "soilMoist4"):
+                assert units.get(field) == "cb", (
+                    f"{system}: {field} must be 'cb', got {units.get(field)!r}"
+                )
+
+    def test_lightning_count_fields_unit_is_count_all_systems(
+        self, tmp_path: Path
+    ) -> None:
+        """lightning_*_count fields → 'count' in all unit systems (unit-invariant)."""
+        for system in ("US", "METRIC", "METRICWX"):
+            _reset_units_cache()
+            units = self._load_units(tmp_path, system)
+            for field in (
+                "lightning_strike_count", "lightning_noise_count",
+                "lightning_disturber_count",
+            ):
+                assert units.get(field) == "count", (
+                    f"{system}: {field} must be 'count', got {units.get(field)!r}"
+                )
+
+    def test_windrun_and_lightning_distance_differ_by_system(
+        self, tmp_path: Path
+    ) -> None:
+        """windrun + lightning_distance → 'mile' US, 'km' METRIC/METRICWX (group_distance)."""
+        for field in ("windrun", "lightning_distance"):
+            _reset_units_cache()
+            us_units = self._load_units(tmp_path, "US")
+            _reset_units_cache()
+            metric_units = self._load_units(tmp_path, "METRIC")
+
+            assert us_units.get(field) == "mile", (
+                f"US: {field} must be 'mile', got {us_units.get(field)!r}"
+            )
+            assert metric_units.get(field) == "km", (
+                f"METRIC: {field} must be 'km', got {metric_units.get(field)!r}"
             )

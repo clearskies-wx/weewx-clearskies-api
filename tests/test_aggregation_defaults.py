@@ -2,11 +2,17 @@
 
 Asserts that services/archive.py exposes a DAY_AGGREGATOR constant with the
 expected defaults per the brief:
-  outTemp  → aggregator for daily temperature (mean/meanmax)
+  outTemp  → avg (daily mean temperature)
   rain     → sum
   windGust → max
 
-Plus checks the full set of expected canonical fields are covered.
+Also asserts that DAY_AGGREGATOR and _FIRST_CLASS_FIELDS stay in sync: every
+_FIRST_CLASS_FIELDS entry has an aggregator, no orphan aggregator keys exist.
+
+daySunshineDur note: weewx writes this as a running cumulative (resets at midnight).
+The correct per-day aggregate is max (end-of-day value = daily total), NOT sum
+(which would double-count). api-dev commit 8b7649d flipped sum→max; this file
+asserts max.
 
 ADR references: brief §2 interval=day spec, brief §test-author-parallel-scope.
 """
@@ -26,16 +32,15 @@ class TestDayAggregatorConstant:
         assert DAY_AGGREGATOR is not None
         assert isinstance(DAY_AGGREGATOR, dict)
 
-    def test_rain_aggregator_is_sum_variant(self) -> None:
-        """rain → sum-type aggregator (accumulated rainfall over the day)."""
+    def test_rain_aggregator_is_sum(self) -> None:
+        """rain → sum (accumulated rainfall over the day)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "rain" in DAY_AGGREGATOR, (
             "DAY_AGGREGATOR must contain an entry for 'rain'"
         )
-        # rain aggregator must be a sum-type (not mean or max)
-        assert "sum" in DAY_AGGREGATOR["rain"].lower(), (
-            f"rain aggregator must be sum-type, got {DAY_AGGREGATOR['rain']!r}"
+        assert DAY_AGGREGATOR["rain"] == "sum", (
+            f"rain aggregator must be 'sum', got {DAY_AGGREGATOR['rain']!r}"
         )
 
     def test_wind_gust_aggregator_is_max(self) -> None:
@@ -47,16 +52,13 @@ class TestDayAggregatorConstant:
             f"windGust aggregator must be 'max', got {DAY_AGGREGATOR['windGust']!r}"
         )
 
-    def test_out_temp_aggregator_is_mean_type(self) -> None:
-        """outTemp → mean-type aggregator (the day's average temperature)."""
+    def test_out_temp_aggregator_is_avg(self) -> None:
+        """outTemp → avg (daily mean temperature from archive_day_outTemp)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "outTemp" in DAY_AGGREGATOR
-        # meanmax is the actual value (archive_day col avg used)
-        # Accept "mean", "avg", "meanmax" — all indicate central tendency
-        aggregator = DAY_AGGREGATOR["outTemp"].lower()
-        assert any(t in aggregator for t in ("mean", "avg")), (
-            f"outTemp aggregator must be mean-type, got {DAY_AGGREGATOR['outTemp']!r}"
+        assert DAY_AGGREGATOR["outTemp"] == "avg", (
+            f"outTemp aggregator must be 'avg', got {DAY_AGGREGATOR['outTemp']!r}"
         )
 
     def test_rain_rate_aggregator_is_max(self) -> None:
@@ -68,76 +70,156 @@ class TestDayAggregatorConstant:
             f"rainRate aggregator must be 'max', got {DAY_AGGREGATOR['rainRate']!r}"
         )
 
-    def test_out_humidity_aggregator_is_mean_type(self) -> None:
-        """outHumidity → mean-type aggregator (average humidity)."""
+    def test_out_humidity_aggregator_is_avg(self) -> None:
+        """outHumidity → avg (average humidity over the day)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "outHumidity" in DAY_AGGREGATOR
-        aggregator = DAY_AGGREGATOR["outHumidity"].lower()
-        assert any(t in aggregator for t in ("mean", "avg")), (
-            f"outHumidity aggregator must be mean-type, got {DAY_AGGREGATOR['outHumidity']!r}"
+        assert DAY_AGGREGATOR["outHumidity"] == "avg", (
+            f"outHumidity aggregator must be 'avg', got {DAY_AGGREGATOR['outHumidity']!r}"
         )
 
-    def test_barometer_aggregator_is_mean_type(self) -> None:
-        """barometer → mean-type aggregator (average pressure)."""
+    def test_barometer_aggregator_is_avg(self) -> None:
+        """barometer → avg (average pressure over the day)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "barometer" in DAY_AGGREGATOR
-        aggregator = DAY_AGGREGATOR["barometer"].lower()
-        assert any(t in aggregator for t in ("mean", "avg")), (
-            f"barometer aggregator must be mean-type, got {DAY_AGGREGATOR['barometer']!r}"
+        assert DAY_AGGREGATOR["barometer"] == "avg", (
+            f"barometer aggregator must be 'avg', got {DAY_AGGREGATOR['barometer']!r}"
         )
 
     def test_wind_speed_aggregator_is_max(self) -> None:
-        """windSpeed → max (meaningful daily wind stat)."""
+        """windSpeed → max (peak recorded wind speed; archive_day_windSpeed.max)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "windSpeed" in DAY_AGGREGATOR
         assert DAY_AGGREGATOR["windSpeed"] == "max"
 
-    def test_radiation_aggregator_is_present(self) -> None:
-        """radiation is in DAY_AGGREGATOR (max or mean — either acceptable)."""
+    def test_radiation_aggregator_is_max(self) -> None:
+        """radiation → max (peak solar irradiance in the day)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "radiation" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["radiation"] == "max"
 
-    def test_uv_aggregator_is_present(self) -> None:
-        """UV is in DAY_AGGREGATOR."""
+    def test_uv_aggregator_is_max(self) -> None:
+        """UV → max (peak UV index for the day)."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
         assert "UV" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["UV"] == "max"
 
-    def test_all_core_observation_fields_have_aggregator(self) -> None:
-        """Every core Observation field from canonical-data-model §3.1 has an entry."""
+    def test_day_sunshine_dur_aggregator_is_max_not_sum(self) -> None:
+        """daySunshineDur → max, NOT sum.
+
+        daySunshineDur is a running cumulative that resets at midnight.
+        The end-of-day value IS the daily total; summing across archive intervals
+        double-counts. max is the correct semantic.
+
+        This assertion pins the lead-confirmed flip in api-dev commit 8b7649d.
+        """
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
-        # Core fields from §3.1 that have numeric values and are aggregation-relevant
-        required_fields = {
-            "outTemp",
-            "outHumidity",
-            "windSpeed",
-            "windGust",
-            "barometer",
-            "rain",
-            "rainRate",
-            "radiation",
-            "UV",
-            "inTemp",
-            "inHumidity",
+        assert "daySunshineDur" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["daySunshineDur"] == "max", (
+            f"daySunshineDur must be 'max' (running cumulative — not 'sum'), "
+            f"got {DAY_AGGREGATOR['daySunshineDur']!r}"
+        )
+
+    def test_sunshine_dur_aggregator_is_sum(self) -> None:
+        """sunshineDur (per-interval sunshine) → sum (accumulation within the day)."""
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
+
+        assert "sunshineDur" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["sunshineDur"] == "sum", (
+            f"sunshineDur (per-interval duration) must be 'sum', "
+            f"got {DAY_AGGREGATOR['sunshineDur']!r}"
+        )
+
+    def test_et_aggregator_is_sum(self) -> None:
+        """ET (evapotranspiration) → sum (accumulation over the day)."""
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
+
+        assert "ET" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["ET"] == "sum"
+
+    def test_degree_day_fields_aggregator_is_sum(self) -> None:
+        """heatdeg + cooldeg → sum (degree-days accumulate over the day)."""
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
+
+        assert "heatdeg" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["heatdeg"] == "sum", (
+            f"heatdeg must be 'sum', got {DAY_AGGREGATOR['heatdeg']!r}"
+        )
+        assert "cooldeg" in DAY_AGGREGATOR
+        assert DAY_AGGREGATOR["cooldeg"] == "sum", (
+            f"cooldeg must be 'sum', got {DAY_AGGREGATOR['cooldeg']!r}"
+        )
+
+    def test_lightning_count_aggregator_is_sum(self) -> None:
+        """lightning_strike_count + noise/disturber counts → sum (count accumulation)."""
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
+
+        for field in (
+            "lightning_strike_count",
+            "lightning_noise_count",
+            "lightning_disturber_count",
+        ):
+            assert field in DAY_AGGREGATOR, f"{field!r} missing from DAY_AGGREGATOR"
+            assert DAY_AGGREGATOR[field] == "sum", (
+                f"{field} aggregator must be 'sum', got {DAY_AGGREGATOR[field]!r}"
+            )
+
+    def test_all_full_observation_fields_have_aggregator(self) -> None:
+        """Every field in the full 69-field Observation surface has a DAY_AGGREGATOR entry.
+
+        Derived from _FIRST_CLASS_FIELDS (which is auto-derived from STOCK_COLUMN_MAP
+        minus meta) so this test stays in sync with schema changes automatically.
+        """
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR, _FIRST_CLASS_FIELDS
+
+        # Fields that are intentionally absent from DAY_AGGREGATOR (no archive_day_* table):
+        # Direction fields (windDir, windGustDir, vecdir, gustdir) have archive_day tables
+        # but may not be included if the api-dev omits them — the test is lenient here.
+        # The following fields do NOT have archive_day_* tables in a stock weewx install
+        # and are intentionally excluded from DAY_AGGREGATOR:
+        explicitly_excluded: set[str] = {
+            # hail fields: wview_extended but uncommon; no archive_day_hail in stock schema.
+            # The dev included hail/hailRate/hailBatteryStatus in DAY_AGGREGATOR — so they
+            # ARE covered. This exclusion set is a safety valve for fields without day tables.
         }
-        missing = required_fields - set(DAY_AGGREGATOR.keys())
+
+        missing = _FIRST_CLASS_FIELDS - set(DAY_AGGREGATOR.keys()) - explicitly_excluded
         assert not missing, (
-            f"DAY_AGGREGATOR is missing entries for: {sorted(missing)}. "
-            "All core observation fields must have a default aggregator."
+            f"_FIRST_CLASS_FIELDS entries not in DAY_AGGREGATOR: {sorted(missing)}. "
+            "Every first-class Observation field needs a defined per-day aggregator. "
+            "Add missing entries to DAY_AGGREGATOR or add to the explicitly_excluded set "
+            "with a documented reason."
+        )
+
+    def test_no_orphan_aggregator_entries_not_in_first_class_fields(self) -> None:
+        """Every DAY_AGGREGATOR key is a member of _FIRST_CLASS_FIELDS.
+
+        Catches entries that were added to DAY_AGGREGATOR but whose canonical field
+        name was removed from or never added to _FIRST_CLASS_FIELDS (i.e., the name
+        is wrong, or the field was deleted from the stock column map).
+        """
+        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR, _FIRST_CLASS_FIELDS
+
+        orphans = set(DAY_AGGREGATOR.keys()) - _FIRST_CLASS_FIELDS
+        assert not orphans, (
+            f"DAY_AGGREGATOR has entries not in _FIRST_CLASS_FIELDS: {sorted(orphans)}. "
+            "These are orphan aggregator entries — their canonical names do not exist in "
+            "the stock column map. Remove them or fix the canonical name."
         )
 
     def test_all_aggregator_values_are_recognized_strings(self) -> None:
         """Every value in DAY_AGGREGATOR is a recognized aggregator string."""
         from weewx_clearskies_api.services.archive import DAY_AGGREGATOR
 
-        valid_prefixes = {"mean", "avg", "max", "min", "sum"}
+        valid_values = {"avg", "max", "min", "sum"}
         for field, aggregator in DAY_AGGREGATOR.items():
-            assert any(aggregator.lower().startswith(prefix) for prefix in valid_prefixes), (
+            assert aggregator in valid_values, (
                 f"DAY_AGGREGATOR[{field!r}] = {aggregator!r} is not a recognized "
-                f"aggregator. Valid prefixes: {valid_prefixes}"
+                f"aggregator. Valid values: {valid_values}"
             )

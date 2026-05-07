@@ -366,3 +366,129 @@ class TestRecordEntryShape:
             assert hasattr(entry, "label"), "RecordEntry must have 'label'"
             assert hasattr(entry, "canonicalField"), "RecordEntry must have 'canonicalField'"
             assert hasattr(entry, "brokenInLast30Days"), "RecordEntry must have 'brokenInLast30Days'"
+
+
+class TestExpandedObservationSurfaceRecordsSectionIsolation:
+    """The expanded 69-field Observation surface introduces fields not in any records section.
+
+    Records sections are hand-curated in SECTION_MAP — they are NOT auto-derived
+    from _FIRST_CLASS_FIELDS. This class verifies that newly-first-class fields
+    that are NOT in any section mapping do NOT appear in section output.
+
+    Catching a regression where someone accidentally auto-populates records sections
+    from _FIRST_CLASS_FIELDS instead of from the lead-confirmed SECTION_MAP constant.
+    """
+
+    def _make_db_session_returning(self, value: float, epoch: int) -> MagicMock:
+        session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchone.return_value = (value, epoch)
+        session.execute.return_value = mock_result
+        session.bind = MagicMock()
+        session.bind.dialect.name = "sqlite"
+        return session
+
+    def test_extra_temp1_does_not_appear_in_temperature_section(self) -> None:
+        """extraTemp1 is a first-class Observation field but NOT in temperature section records.
+
+        SECTION_MAP.temperature hard-codes: outTemp, dewpoint, windchill, heatindex.
+        extraTemp1 is a sensor-expansion slot that is NOT in the section mapping.
+        A regression that auto-populates from _FIRST_CLASS_FIELDS would incorrectly
+        add extraTemp1 to the temperature section.
+        """
+        from weewx_clearskies_api.services.records import get_records
+
+        # Give the registry the expanded first-class surface including extraTemp1
+        registry = _make_registry(FULL_OBSERVATION_FIELDS | {"extraTemp1"})
+        db = self._make_db_session_returning(72.3, 1778099700)
+        bundle = get_records(db, registry, period="all-time", section_filter=None)
+
+        if "temperature" in bundle.sections:
+            canonical_fields = [e.canonicalField for e in bundle.sections["temperature"]]
+            assert "extraTemp1" not in canonical_fields, (
+                "extraTemp1 must NOT appear in the temperature section records. "
+                "Records sections are hand-curated (SECTION_MAP), not auto-populated "
+                "from _FIRST_CLASS_FIELDS. Regression: auto-population from the "
+                "expanded Observation surface would incorrectly add sensor-expansion "
+                "fields to records sections."
+            )
+
+    def test_extra_temp2_not_in_temperature_section(self) -> None:
+        """extraTemp2 is first-class Observation but NOT in temperature records section."""
+        from weewx_clearskies_api.services.records import get_records
+
+        registry = _make_registry(FULL_OBSERVATION_FIELDS | {"extraTemp2", "extraTemp3"})
+        db = self._make_db_session_returning(72.3, 1778099700)
+        bundle = get_records(db, registry, period="all-time", section_filter=None)
+
+        if "temperature" in bundle.sections:
+            canonical_fields = [e.canonicalField for e in bundle.sections["temperature"]]
+            for field in ("extraTemp2", "extraTemp3"):
+                assert field not in canonical_fields, (
+                    f"{field} must NOT appear in temperature section records (sensor "
+                    "expansion slot, not in SECTION_MAP)"
+                )
+
+    def test_soil_temp_fields_not_in_temperature_section(self) -> None:
+        """soilTemp1..4 are first-class Observation fields but NOT in temperature records."""
+        from weewx_clearskies_api.services.records import get_records
+
+        registry = _make_registry(
+            FULL_OBSERVATION_FIELDS | {"soilTemp1", "soilTemp2", "soilTemp3", "soilTemp4"}
+        )
+        db = self._make_db_session_returning(72.3, 1778099700)
+        bundle = get_records(db, registry, period="all-time", section_filter=None)
+
+        if "temperature" in bundle.sections:
+            canonical_fields = [e.canonicalField for e in bundle.sections["temperature"]]
+            for field in ("soilTemp1", "soilTemp2", "soilTemp3", "soilTemp4"):
+                assert field not in canonical_fields, (
+                    f"{field} must NOT appear in temperature section records (soil sensor, "
+                    "not in SECTION_MAP)"
+                )
+
+    def test_lightning_fields_not_in_wind_section(self) -> None:
+        """lightning_strike_count is first-class but NOT in wind section records."""
+        from weewx_clearskies_api.services.records import get_records
+
+        registry = _make_registry(
+            FULL_OBSERVATION_FIELDS | {"lightning_strike_count", "lightning_distance"}
+        )
+        db = self._make_db_session_returning(72.3, 1778099700)
+        bundle = get_records(db, registry, period="all-time", section_filter=None)
+
+        if "wind" in bundle.sections:
+            canonical_fields = [e.canonicalField for e in bundle.sections["wind"]]
+            for field in ("lightning_strike_count", "lightning_distance"):
+                assert field not in canonical_fields, (
+                    f"{field} must NOT appear in wind section records"
+                )
+
+    def test_voltage_fields_not_in_any_standard_section(self) -> None:
+        """Electrical telemetry fields (voltage, rxCheckPercent) are first-class but in no section."""
+        from weewx_clearskies_api.services.records import get_records
+
+        registry = _make_registry(
+            FULL_OBSERVATION_FIELDS | {
+                "consBatteryVoltage", "heatingVoltage", "referenceVoltage",
+                "supplyVoltage", "rxCheckPercent",
+            }
+        )
+        db = self._make_db_session_returning(12.5, 1778099700)
+        bundle = get_records(db, registry, period="all-time", section_filter=None)
+
+        telemetry_fields = {
+            "consBatteryVoltage", "heatingVoltage", "referenceVoltage",
+            "supplyVoltage", "rxCheckPercent",
+        }
+        # Check no standard section contains any of these fields
+        standard_sections = {"temperature", "wind", "rain", "humidity", "barometer", "sun", "inside-temp"}
+        for section_name in standard_sections:
+            if section_name in bundle.sections:
+                canonical_fields = {e.canonicalField for e in bundle.sections[section_name]}
+                overlap = canonical_fields & telemetry_fields
+                assert not overlap, (
+                    f"Electrical telemetry fields {overlap} must NOT appear in the "
+                    f"{section_name!r} section — they are not in SECTION_MAP for any "
+                    "standard section."
+                )
