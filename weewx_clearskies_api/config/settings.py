@@ -202,6 +202,29 @@ class DatabaseSettings:
             raise ValueError("[database] max_overflow must be >= 0")
 
 
+class WeewxSettings:
+    """[weewx] section settings.
+
+    Holds the path to weewx.conf (read at startup by services/units.py) and
+    the reports directory path (used by the /reports endpoints).
+
+    Default weewx.conf path: /etc/weewx/weewx.conf (stock Debian deb install).
+    Default reports directory: /var/www/html/weewx/NOAA (stock Debian deb install
+    with SeasonsReport NOAA submodule).  Override to match your installation.
+    """
+
+    #: Path to weewx.conf.
+    config_path: str
+    #: Directory where weewx writes NOAA-*.txt report files.
+    reports_directory: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.config_path = str(section.get("config_path", "/etc/weewx/weewx.conf"))
+        self.reports_directory = str(
+            section.get("reports_directory", "/var/www/html/weewx/NOAA")
+        )
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -210,6 +233,7 @@ class Settings:
     logging: LoggingSettings
     ratelimit: RateLimitSettings
     database: DatabaseSettings
+    weewx: WeewxSettings
 
     def __init__(
         self,
@@ -218,12 +242,14 @@ class Settings:
         logging_settings: LoggingSettings,
         ratelimit: RateLimitSettings,
         database: DatabaseSettings,
+        weewx: WeewxSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
         self.logging = logging_settings
         self.ratelimit = ratelimit
         self.database = database
+        self.weewx = weewx if weewx is not None else WeewxSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -314,6 +340,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     log_cfg = LoggingSettings(dict(cfg.get("logging", {})))
     rl_cfg = RateLimitSettings(dict(cfg.get("ratelimit", {})))
     db_cfg = DatabaseSettings(dict(cfg.get("database", {})))
+    weewx_cfg = WeewxSettings(dict(cfg.get("weewx", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -321,6 +348,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         logging_settings=log_cfg,
         ratelimit=rl_cfg,
         database=db_cfg,
+        weewx=weewx_cfg,
     )
     settings.validate()
 

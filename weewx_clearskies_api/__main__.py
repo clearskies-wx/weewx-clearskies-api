@@ -48,9 +48,12 @@ from weewx_clearskies_api.db.engine import build_engine
 from weewx_clearskies_api.db.health import wire_db_health_probe
 from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import SchemaReflector
+from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
+from weewx_clearskies_api.services.reports import wire_reports_directory
+from weewx_clearskies_api.services.units import WeewxConfNotFoundError, load_units_block
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +213,7 @@ def main() -> None:
     # reflection failure (table missing, DB error) is fatal.
     reflector = SchemaReflector(engine)
     try:
-        reflector.reflect()
+        registry = reflector.reflect()
     except RuntimeError as exc:
         logger.critical(
             "FATAL: Schema reflection failed — clearskies-api cannot start. "
@@ -222,6 +225,21 @@ def main() -> None:
             exc,
         )
         sys.exit(1)
+
+    # Wire the column registry for DI use in endpoints.
+    wire_registry(registry)
+
+    # Step 6b: Load the units block from weewx.conf.  Fatal if missing — the
+    # units block is embedded in every response; serving without it is wrong.
+    try:
+        load_units_block(settings.weewx.config_path)
+    except WeewxConfNotFoundError as exc:
+        logger.critical("%s", exc)
+        sys.exit(1)
+
+    # Step 6c: Wire the reports directory.  Non-fatal — missing dir → empty
+    # /reports response, not a startup abort.
+    wire_reports_directory(settings.weewx.reports_directory)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()

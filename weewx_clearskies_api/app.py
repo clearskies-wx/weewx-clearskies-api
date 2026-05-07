@@ -39,6 +39,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from weewx_clearskies_api.config.settings import Settings
+from weewx_clearskies_api.endpoints.observations import router as observations_router
+from weewx_clearskies_api.endpoints.records import router as records_router
+from weewx_clearskies_api.endpoints.reports import router as reports_router
 from weewx_clearskies_api.endpoints.station import router as station_router
 from weewx_clearskies_api.errors import register_error_handlers
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
@@ -81,7 +84,13 @@ def create_app(settings: Settings) -> FastAPI:
 
     # Register API routers.
     # All endpoints at /api/v1/... per ADR-018.
+    # Route ordering: /reports/{year}/{month} BEFORE /reports/{year} so
+    # FastAPI matches the more-specific path first (brief §6 note).
     app.include_router(station_router, prefix="/api/v1")
+    app.include_router(observations_router, prefix="/api/v1")
+    app.include_router(records_router, prefix="/api/v1")
+    # reports_router declares monthly before yearly internally; both included here.
+    app.include_router(reports_router, prefix="/api/v1")
 
     # ---------------------------------------------------------------------------
     # Middleware registration order.

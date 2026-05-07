@@ -4,6 +4,8 @@ Public API:
   build_engine(settings)   — db/engine.py: construct the SQLAlchemy Engine.
   wire_engine(engine)      — db/session.py: register engine for DI.
   get_db_session()         — db/session.py: FastAPI DI dependency.
+  wire_registry(registry)  — db/registry.py: register ColumnRegistry for DI.
+  get_registry()           — db/registry.py: return the registered registry.
   run_write_probe(engine)  — db/probe.py: abort startup if user can write.
   SchemaReflector          — db/reflection.py: MetaData.reflect + registry.
   ColumnRegistry           — db/reflection.py: result of reflection.
@@ -15,15 +17,18 @@ from weewx_clearskies_api.db.engine import build_engine
 from weewx_clearskies_api.db.health import db_probe, wire_db_health_probe
 from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import ColumnRegistry, SchemaReflector
+from weewx_clearskies_api.db.registry import get_registry, wire_registry
 from weewx_clearskies_api.db.session import get_db_session, wire_engine
 
 __all__ = [
     "build_engine",
     "db_probe",
     "get_db_session",
+    "get_registry",
     "run_write_probe",
     "wire_db_health_probe",
     "wire_engine",
+    "wire_registry",
     "ColumnRegistry",
     "SchemaReflector",
 ]
