@@ -149,19 +149,22 @@ def _where(clause: str) -> str:
 def _day_bucket_sql(dialect_name: str) -> str:
     if dialect_name == "sqlite":
         return "strftime('%Y-%m-%d', datetime(dateTime, 'unixepoch'))"
+    # MariaDB DATE(FROM_UNIXTIME) has no format codes — no % escaping needed.
     return "DATE(FROM_UNIXTIME(dateTime))"
 
 
 def _month_bucket_sql(dialect_name: str) -> str:
     if dialect_name == "sqlite":
         return "strftime('%Y-%m', datetime(dateTime, 'unixepoch'))"
-    return "DATE_FORMAT(FROM_UNIXTIME(dateTime), '%Y-%m')"
+    # %% because SQLAlchemy text() escapes % to %% for pymysql pyformat driver.
+    return "DATE_FORMAT(FROM_UNIXTIME(dateTime), '%%Y-%%m')"
 
 
 def _hour_bucket_sql(dialect_name: str) -> str:
     if dialect_name == "sqlite":
         return "strftime('%Y-%m-%d %H:00:00', datetime(dateTime, 'unixepoch'))"
-    return "FROM_UNIXTIME(dateTime, '%Y-%m-%d %H:00:00')"
+    # %% because SQLAlchemy text() escapes % to %% for pymysql pyformat driver.
+    return "FROM_UNIXTIME(dateTime, '%%Y-%%m-%%d %%H:00:00')"
 
 
 # ---------------------------------------------------------------------------

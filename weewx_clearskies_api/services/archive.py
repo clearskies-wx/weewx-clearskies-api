@@ -217,10 +217,22 @@ class _HourDialect:
         self._name = dialect_name
 
     def hour_bucket_expr(self) -> str:
-        """SQL expression (trusted constant) that truncates dateTime to the hour."""
+        """SQL expression (trusted constant) that truncates dateTime to the hour.
+
+        Returns the raw SQL fragment to embed in a SQLAlchemy text() query.
+
+        Note on % escaping: SQLAlchemy text() compiles for the target driver.
+        pymysql (MariaDB) uses pyformat (%s / %(name)s) — SQLAlchemy escapes
+        any literal % in text() SQL to %% before sending to pymysql.  The
+        MariaDB variant therefore pre-doubles the % so the final wire SQL has
+        the correct single-% format codes MySQL expects.
+
+        SQLite uses qmark (?) params — no % escaping issue; single % is fine.
+        """
         if self._name == "sqlite":
             return "strftime('%Y-%m-%d %H:00:00', datetime(dateTime, 'unixepoch'))"
-        return "FROM_UNIXTIME(dateTime, '%Y-%m-%d %H:00:00')"
+        # Double the % so SQLAlchemy's pyformat escaping produces single % on the wire.
+        return "FROM_UNIXTIME(dateTime, '%%Y-%%m-%%d %%H:00:00')"
 
 
 # ---------------------------------------------------------------------------
@@ -390,12 +402,13 @@ def _fetch_hourly(
     if agg_parts:
         agg_parts = ", " + agg_parts
 
-    # `interval` is a reserved word in MariaDB — use a literal 60 for hourly records.
+    # `interval` is a reserved word in MariaDB.
+    # Use a quoted alias — backtick quoting is supported by both SQLite and MariaDB.
     sql = text(
         f"SELECT {bucket_expr} AS hour_bucket, "
         f"MIN(dateTime) AS dateTime, "
         f"MAX(usUnits) AS usUnits, "
-        f"60 AS interval"
+        f"60 AS `interval`"
         f"{agg_parts} "
         f"FROM archive "
         f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
