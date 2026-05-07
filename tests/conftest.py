@@ -92,14 +92,22 @@ def _wire_test_db() -> None:
     Required so that /station can run its MIN/MAX dateTime query without a
     live weewx database.  The table uses the real production schema column set
     so NOT NULL constraints surface correctly per the 'real schemas' rule.
-    """
-    from sqlalchemy import Column, Integer, Float, MetaData, Table, create_engine
 
+    StaticPool + check_same_thread=False ensures all connections share the same
+    in-memory SQLite database (required for in-memory SQLite with SQLAlchemy).
+    """
+    from sqlalchemy import Column, Float, Integer, MetaData, Table, create_engine
+    from sqlalchemy.pool import StaticPool
+
+    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry
     from weewx_clearskies_api.db.registry import wire_registry
-    from weewx_clearskies_api.db.reflection import ColumnRegistry, ColumnInfo, STOCK_COLUMN_MAP
     from weewx_clearskies_api.db.session import wire_engine
 
-    engine = create_engine("sqlite:///:memory:")
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     meta = MetaData()
     # Minimal archive table: dateTime (required), usUnits, interval are NOT NULL
     # in the real weewx schema.  Add them so the query runs without error.
@@ -114,7 +122,7 @@ def _wire_test_db() -> None:
     meta.create_all(engine)
     wire_engine(engine)
 
-    # Wire a minimal ColumnRegistry (empty stock = no columns in archive for unit tests).
+    # Wire a minimal ColumnRegistry.
     registry = ColumnRegistry()
     registry.stock = {
         col: ColumnInfo(db_name=col, canonical_name=canon, is_stock=True)
@@ -122,6 +130,23 @@ def _wire_test_db() -> None:
         if col in ("dateTime", "usUnits", "interval", "outTemp")
     }
     wire_registry(registry)
+
+
+@pytest.fixture(autouse=True)
+def _wire_minimal_services() -> None:
+    """Autouse fixture that wires station metadata, units, and a test DB for
+    every test in the suite.
+
+    This ensures tests that create their own FastAPI app (e.g. middleware
+    tests that call create_app() directly) don't hit RuntimeError from
+    uninitialised services when they call /station or other wired endpoints.
+
+    Integration tests that need a real DB override wire_engine() and
+    wire_registry() in their own fixtures.
+    """
+    _wire_test_units()
+    _wire_test_station()
+    _wire_test_db()
 
 
 @pytest.fixture()
@@ -132,17 +157,9 @@ def default_settings() -> Settings:
 
 @pytest.fixture()
 def test_app(default_settings: Settings) -> FastAPI:
-    """Full application stack for integration tests.
-
-    Wires station metadata, units block, and an in-memory SQLite DB so that
-    /station and other service-dependent endpoints work without a live
-    weewx.conf or DB in unit tests.
-    """
+    """Full application stack for integration tests."""
     from weewx_clearskies_api.app import create_app
 
-    _wire_test_units()
-    _wire_test_station()
-    _wire_test_db()
     return create_app(default_settings)
 
 
