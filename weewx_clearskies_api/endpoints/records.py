@@ -24,6 +24,10 @@ from sqlalchemy.orm import Session
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import RecordsQueryParams
+
+# Alias kept for backwards-compatibility with tests that import RecordsParams
+# from this module (test_archive_params.py).
+RecordsParams = RecordsQueryParams
 from weewx_clearskies_api.models.responses import RecordsResponse
 from weewx_clearskies_api.services.records import get_records
 from weewx_clearskies_api.services.units import get_units_block

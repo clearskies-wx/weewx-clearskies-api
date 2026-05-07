@@ -26,6 +26,11 @@ from weewx_clearskies_api.db.reflection import ColumnRegistry
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import ArchiveQueryParams
+
+# Alias kept for backwards-compatibility with tests that import ArchiveParams
+# from this module (test_archive_params.py).  The class is defined in
+# models/params.py and re-exported here under the original name.
+ArchiveParams = ArchiveQueryParams
 from weewx_clearskies_api.models.responses import (
     ArchiveResponse,
     ObservationResponse,
