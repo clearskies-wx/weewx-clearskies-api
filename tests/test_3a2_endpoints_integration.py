@@ -744,9 +744,20 @@ class TestStationIntegration:
             load_weewx_conf, reset_cache as reset_weewx_conf
         )
 
-        # Production-schema-shaped empty archive (all NOT NULL constraints present)
+        # Production-schema-shaped empty archive (all NOT NULL constraints present).
+        # StaticPool + check_same_thread=False ensures all connections share the
+        # same in-memory SQLite DB so the archive table created here is visible to
+        # get_db_session()'s per-request connection.  NullPool (which was used in
+        # the original test) creates a fresh ":memory:" DB per connection, causing
+        # the archive table to disappear and "no such table" to raise — which was
+        # the exact driver for commit b7642ae's speculative "no such table" catch.
+        # That catch was removed (F4); this pool switch is the correct fixture fix.
+        from sqlalchemy.pool import StaticPool as _StaticPool
         empty_engine = create_engine(
-            "sqlite:///:memory:", poolclass=NullPool, future=True
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=_StaticPool,
+            future=True,
         )
         with empty_engine.connect() as conn:
             conn.execute(text(
