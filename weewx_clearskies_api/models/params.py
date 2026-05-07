@@ -186,3 +186,47 @@ class MoonPhasesQueryParams(BaseModel):
 
     year: int | None = Field(default=None, ge=1900)
     month: int | None = Field(default=None, ge=1, le=12)
+
+
+# ---------------------------------------------------------------------------
+# /alerts query params
+# ---------------------------------------------------------------------------
+
+_SEVERITY_CHOICES = frozenset({"advisory", "watch", "warning"})
+# Severity order: higher index = more severe.
+# Severity filter: advisory returns all; watch returns watch+warning; warning returns warning only.
+# Exposed as a module-level constant so the /alerts endpoint can use it for filtering
+# without re-defining the mapping in a second place (DRY per coding.md §3).
+SEVERITY_ORDER = {"advisory": 0, "watch": 1, "warning": 2}
+
+
+class AlertsQueryParams(BaseModel):
+    """Validated query parameters for GET /alerts.
+
+    severity: Optional minimum severity filter.
+      advisory → return all alerts
+      watch    → return watch + warning alerts
+      warning  → return warning alerts only
+
+    extra="forbid" per security-baseline §3.5 (blocks unknown query keys).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    severity: str | None = None
+
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: str | None) -> str | None:
+        if v is not None and v not in _SEVERITY_CHOICES:
+            raise ValueError(
+                f"severity must be one of: {', '.join(sorted(_SEVERITY_CHOICES))}. "
+                f"Got {v!r}."
+            )
+        return v
+
+    def min_severity_level(self) -> int:
+        """Return the numeric severity level for the filter (0 = advisory, 1 = watch, 2 = warning)."""
+        if self.severity is None:
+            return 0
+        return SEVERITY_ORDER.get(self.severity, 0)

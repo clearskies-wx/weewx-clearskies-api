@@ -5,6 +5,7 @@ module registers exception handlers on the FastAPI application so that:
 
   - FastAPI HTTPException → problem+json (replaces FastAPI's default JSON format)
   - Pydantic RequestValidationError → 422 problem+json
+  - ProviderError → 502 or 503 ProviderProblem per ADR-038 taxonomy
   - Unhandled exceptions → 500 problem+json (full context logged, safe detail only)
 
 The `detail` field in the problem response is always operator-safe:
@@ -18,6 +19,20 @@ the logger at ERROR level. The request_id in the log record enables
 correlation with the response the client received.
 
 Per ADR-018: error format is non-versioned — consistent across /api/v1, /api/v2.
+
+ProviderProblem extension fields (ADR-018, OpenAPI ProviderProblem schema):
+  - providerId: stable provider id (e.g. "nws")
+  - domain: one of forecast/alerts/aqi/earthquakes/radar
+  - errorCode: class name from ADR-038 canonical taxonomy
+  - retryAfterSeconds: set only for QuotaExhausted
+
+HTTP status mapping (brief §behavior decision tree):
+  - QuotaExhausted         → 503 + Retry-After header
+  - GeographicallyUnsupported → 503
+  - KeyInvalid             → 502
+  - FieldUnsupported       → 502
+  - TransientNetworkError  → 502
+  - ProviderProtocolError  → 502
 """
 
 from __future__ import annotations
@@ -83,7 +98,65 @@ def register_error_handlers(app: FastAPI) -> None:
     """Register RFC 9457 exception handlers on the FastAPI app.
 
     Call this in create_app() after the app is constructed.
+    Includes the ProviderError handler for ADR-038 canonical taxonomy.
     """
+    # Import here to avoid circular import (providers._common.errors imports
+    # nothing from this module; this module imports from providers._common.errors).
+    from weewx_clearskies_api.providers._common.errors import (  # noqa: PLC0415
+        GeographicallyUnsupported,
+        ProviderError,
+        QuotaExhausted,
+    )
+
+    @app.exception_handler(ProviderError)
+    async def provider_error_handler(
+        request: Request, exc: ProviderError
+    ) -> JSONResponse:
+        """Handle canonical provider errors per ADR-038 §5 + ADR-018.
+
+        Status mapping:
+          503 → QuotaExhausted (with Retry-After), GeographicallyUnsupported
+          502 → KeyInvalid, FieldUnsupported, TransientNetworkError, ProviderProtocolError
+        """
+        status = 503 if isinstance(exc, (QuotaExhausted, GeographicallyUnsupported)) else 502
+        error_code = type(exc).__name__
+
+        body: dict[str, object] = {
+            "type": f"https://clearskies.weewx.org/errors/provider/{error_code.lower()}",
+            "title": error_code,
+            "status": status,
+            "detail": str(exc),
+            "providerId": exc.provider_id,
+            "domain": exc.domain,
+            "errorCode": error_code,
+        }
+        headers: dict[str, str] = {}
+        if exc.retry_after_seconds is not None:
+            body["retryAfterSeconds"] = exc.retry_after_seconds
+            headers["Retry-After"] = str(exc.retry_after_seconds)
+
+        log_level = logging.ERROR if status == 502 else logging.WARNING
+        logger.log(
+            log_level,
+            "Provider error %s [%s/%s]: %s",
+            error_code,
+            exc.domain,
+            exc.provider_id,
+            exc,
+            extra={
+                "provider_id": exc.provider_id,
+                "domain": exc.domain,
+                "error_code": error_code,
+                "http_status": status,
+            },
+        )
+
+        return JSONResponse(
+            status_code=status,
+            content=body,
+            media_type="application/problem+json",
+            headers=headers,
+        )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(

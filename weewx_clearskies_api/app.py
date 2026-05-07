@@ -39,6 +39,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from weewx_clearskies_api.config.settings import Settings
+from weewx_clearskies_api.endpoints.alerts import router as alerts_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
@@ -102,6 +103,8 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(pages_router, prefix="/api/v1")
     app.include_router(charts_router, prefix="/api/v1")
     app.include_router(content_router, prefix="/api/v1")
+    # 3b-1 new routers.
+    app.include_router(alerts_router, prefix="/api/v1")
 
     # ---------------------------------------------------------------------------
     # Middleware registration order.

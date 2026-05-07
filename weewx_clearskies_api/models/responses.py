@@ -516,3 +516,55 @@ class MarkdownResponse(BaseModel):
 
     data: MarkdownContent
     generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Alerts (ADR-016, canonical-data-model §3.6 + §3.11)
+# ---------------------------------------------------------------------------
+
+# ruff: noqa: N815  (field names use NWS/OpenAPI camelCase: senderName, areaDesc, etc.)
+
+
+class AlertRecord(BaseModel):
+    """Canonical alert record (ADR-010 §3.6, OpenAPI AlertRecord schema).
+
+    extra="ignore" so provider wire shapes that have extra fields don't break
+    normalization.  Required fields per OpenAPI: id, headline, severity, event,
+    effective, source.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    headline: str
+    description: str = ""
+    severity: str  # enum: advisory | watch | warning
+    urgency: str | None = None
+    certainty: str | None = None
+    event: str
+    effective: str  # UTC ISO-8601 with Z
+    expires: str | None = None  # UTC ISO-8601 with Z
+    senderName: str | None = None
+    areaDesc: str | None = None
+    category: str | None = None
+    source: str
+
+
+class AlertList(BaseModel):
+    """AlertList container (ADR-010 §3.11, OpenAPI AlertList schema)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    alerts: list[AlertRecord]
+    retrievedAt: str  # UTC ISO-8601 with Z
+    source: str  # provider_id or "none"
+
+
+class AlertListResponse(BaseModel):
+    """AlertListResponse envelope (OpenAPI AlertListResponse schema)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    data: AlertList
+    source: str  # mirrors data.source
+    generatedAt: str  # UTC ISO-8601 with Z

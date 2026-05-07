@@ -32,6 +32,9 @@ Startup sequence (ADR-012):
     6e. wire reports dir      — non-fatal; empty /reports on missing dir.
     6f. wire content dir      — non-fatal; 404 /content/* on missing dir.
     6g. wire hidden pages     — pages excluded from /pages response.
+    6h. wire cache            — construct MemoryCache or RedisCache (fail-closed).
+    6i. wire providers        — register configured provider CAPABILITY declarations.
+    6j. wire alerts settings  — pass settings to alerts endpoint.
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
 """
@@ -57,9 +60,14 @@ from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import SchemaReflector
 from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
+from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
+from weewx_clearskies_api.providers._common.cache import ConfigError as CacheConfigError
+from weewx_clearskies_api.providers._common.cache import wire_cache_from_env
+from weewx_clearskies_api.providers._common.capability import ProviderCapability, wire_providers
+from weewx_clearskies_api.providers._common.dispatch import get_provider_module
 from weewx_clearskies_api.services.almanac import wire_ephemeris_directory
 from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
@@ -185,6 +193,40 @@ def _run_server(settings: Settings) -> None:
     asyncio.run(_serve_all())
 
 
+def _wire_providers_from_config(settings: Settings) -> None:
+    """Build the provider declarations list from operator config and register.
+
+    Single source per domain per ADR-016.  If [alerts] provider is set,
+    look up the module via dispatch and register its CAPABILITY.
+
+    Future rounds extend this with forecast, aqi, earthquakes, radar.
+
+    Failure modes:
+      - [alerts] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
+      - [alerts] provider absent → empty declarations list; /alerts returns
+        source="none" per ADR-016 §Out-of-scope.
+    """
+    declarations: list[ProviderCapability] = []
+
+    if settings.alerts.provider:
+        provider_id = settings.alerts.provider
+        try:
+            module = get_provider_module(domain="alerts", provider_id=provider_id)
+        except KeyError as exc:
+            logger.critical(
+                "FATAL: Unknown alerts provider %r in api.conf — clearskies-api cannot start. "
+                "Cause: %s. "
+                "Check [alerts] provider in api.conf. "
+                "Supported values: nws, aeris, openweathermap.",
+                provider_id,
+                exc,
+            )
+            sys.exit(1)
+        declarations.append(module.CAPABILITY)
+
+    wire_providers(declarations)
+
+
 def main() -> None:
     """Main entry point.
 
@@ -283,8 +325,38 @@ def main() -> None:
     # /content/* requests.
     wire_content_directory(settings.content.directory)
 
-    # Step 6h: Wire hidden pages list.
+    # Step 6g: Wire hidden pages list.
     wire_hidden_pages(settings.pages.hidden)
+
+    # Step 6h: Wire cache backend (ADR-017).
+    # MemoryCache by default; RedisCache when CLEARSKIES_CACHE_URL is set.
+    # Fail-closed: unreachable Redis → CRITICAL log + exit 1 (same as write-probe).
+    try:
+        wire_cache_from_env()
+    except CacheConfigError as exc:
+        logger.critical(
+            "FATAL: Cache configuration error — clearskies-api cannot start. "
+            "Cause: %s. "
+            "Fix CLEARSKIES_CACHE_URL in your environment or secrets.env.",
+            exc,
+        )
+        sys.exit(1)
+    except RuntimeError as exc:
+        logger.critical(
+            "FATAL: Cache backend connection failed — clearskies-api cannot start. "
+            "Cause: %s. "
+            "Verify Redis is running and CLEARSKIES_CACHE_URL is correct.",
+            exc,
+        )
+        sys.exit(1)
+
+    # Step 6i: Wire provider capability registry (ADR-038 §4).
+    # Registers configured providers' CAPABILITY declarations.
+    # Fail-closed: unknown provider id → CRITICAL log + exit 1.
+    _wire_providers_from_config(settings)
+
+    # Step 6j: Pass settings to alerts endpoint for provider dispatch.
+    wire_alerts_settings(settings)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()

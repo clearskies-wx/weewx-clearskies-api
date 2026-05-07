@@ -1,13 +1,15 @@
-"""Capabilities endpoint (3a-2).
+"""Capabilities endpoint (3a-2, extended 3b-1).
 
 GET /capabilities — runtime capability registry per ADR-038.
 
 Data sources:
   - weewxColumns: registry.stock (auto-mapped stock columns present in archive).
-  - canonicalFieldsAvailable: union of canonical names from registry.stock.
-  - providers: empty [] until 3b populates per-provider modules.
+  - canonicalFieldsAvailable: union of canonical names from:
+      - registry.stock (weewx archive columns)
+      - provider-supplied canonical fields (populated this round via wire_providers)
+  - providers: list of CapabilityDeclaration per configured provider (3b-1).
 
-No DB hit at request time — registry is in-memory from startup reflection.
+No DB hit at request time — all registries are in-memory from startup.
 No query params.
 """
 
@@ -20,11 +22,13 @@ from fastapi import APIRouter
 
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.models.responses import (
+    CapabilityDeclaration,
     CapabilityRegistry,
     CapabilityResponse,
     WeewxColumnEntry,
     utc_isoformat,
 )
+from weewx_clearskies_api.providers._common.capability import get_provider_registry
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +39,15 @@ router = APIRouter()
 def get_capabilities() -> CapabilityResponse:
     """Return the runtime capability registry (no DB hit, no query params).
 
-    providers is [] until 3b wires per-provider modules per ADR-038.
+    providers: populated from the provider registry (wire_providers() at startup).
+    canonicalFieldsAvailable: union of stock weewx columns AND provider-supplied
+      canonical fields per CapabilityRegistry schema.
     Operator-mapped custom columns (registry.unmapped) are not in weewxColumns
     or canonicalFieldsAvailable — that surface opens when the operator-mapping
     UI ships in Phase 4 (ADR-027 + ADR-035).
     """
     registry = get_registry()
+    provider_registry = get_provider_registry()
 
     weewx_columns = [
         WeewxColumnEntry(
@@ -50,11 +57,30 @@ def get_capabilities() -> CapabilityResponse:
         for info in registry.stock.values()
     ]
 
-    canonical_fields_available = [col.canonicalField for col in weewx_columns]
+    # canonicalFieldsAvailable = union of weewx-archive canonical fields
+    # + provider-supplied canonical fields (ADR-038 §4, CapabilityRegistry schema).
+    stock_fields = {col.canonicalField for col in weewx_columns}
+    provider_fields: set[str] = set()
+    for cap in provider_registry:
+        provider_fields.update(cap.supplied_canonical_fields)
+
+    canonical_fields_available = sorted(stock_fields | provider_fields)
+
+    providers = [
+        CapabilityDeclaration(
+            providerId=cap.provider_id,
+            domain=cap.domain,
+            suppliedCanonicalFields=list(cap.supplied_canonical_fields),
+            geographicCoverage=cap.geographic_coverage,
+            defaultPollIntervalSeconds=cap.default_poll_interval_seconds,
+            operatorNotes=cap.operator_notes,
+        )
+        for cap in provider_registry
+    ]
 
     return CapabilityResponse(
         data=CapabilityRegistry(
-            providers=[],
+            providers=providers,
             weewxColumns=weewx_columns,
             canonicalFieldsAvailable=canonical_fields_available,
         ),

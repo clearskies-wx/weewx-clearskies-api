@@ -30,6 +30,16 @@ import configobj
 
 logger = logging.getLogger(__name__)
 
+
+class ConfigError(Exception):
+    """Raised for operator configuration errors that prevent startup.
+
+    Used by:
+      - cache.py: unsupported CLEARSKIES_CACHE_URL scheme
+      - __main__.py catches and exits non-zero (same pattern as write-probe)
+    """
+
+
 # ---------------------------------------------------------------------------
 # Sentinel config paths (ADR-027 search order)
 # ---------------------------------------------------------------------------
@@ -301,6 +311,39 @@ class PagesSettings:
         self.hidden = list(raw_hidden)
 
 
+class AlertsSettings:
+    """[alerts] section settings (3b-1).
+
+    Provider id and NWS-specific knobs.  Secrets (Aeris client_id/secret,
+    OWM API key) are NOT stored here — they live in secrets.env per ADR-027.
+    NWS is keyless so this round doesn't exercise the secrets path.
+
+    nws_user_agent_contact: operator's email or URL for NWS User-Agent.
+    Per ADR-006, NO project-level default — operator responsibility.
+    """
+
+    #: Provider id: "nws", "aeris", "openweathermap", or absent.
+    provider: str | None
+    #: NWS User-Agent contact (email or URL).  Optional but recommended.
+    nws_user_agent_contact: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip()
+        self.provider = raw_provider if raw_provider else None
+
+        raw_contact = str(section.get("nws_user_agent_contact", "")).strip()
+        self.nws_user_agent_contact = raw_contact if raw_contact else None
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"nws", "aeris", "openweathermap"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[alerts] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values: 'nws', 'aeris', 'openweathermap'."
+            )
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -314,6 +357,7 @@ class Settings:
     almanac: AlmanacSettings
     content: ContentSettings
     pages: PagesSettings
+    alerts: AlertsSettings
 
     def __init__(
         self,
@@ -327,6 +371,7 @@ class Settings:
         almanac: AlmanacSettings | None = None,
         content: ContentSettings | None = None,
         pages: PagesSettings | None = None,
+        alerts: AlertsSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
@@ -338,6 +383,7 @@ class Settings:
         self.almanac = almanac if almanac is not None else AlmanacSettings({})
         self.content = content if content is not None else ContentSettings({})
         self.pages = pages if pages is not None else PagesSettings({})
+        self.alerts = alerts if alerts is not None else AlertsSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -345,6 +391,7 @@ class Settings:
         self.health.validate()
         self.ratelimit.validate()
         self.database.validate()
+        self.alerts.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +480,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     almanac_cfg = AlmanacSettings(dict(cfg.get("almanac", {})))
     content_cfg = ContentSettings(dict(cfg.get("content", {})))
     pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
+    alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -445,6 +493,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         almanac=almanac_cfg,
         content=content_cfg,
         pages=pages_cfg,
+        alerts=alerts_cfg,
     )
     settings.validate()
 
