@@ -1,7 +1,7 @@
 """Units-block resolution per ADR-019 + canonical-data-model §2.
 
-Loaded at startup (never per-request).  Reads weewx.conf once via ConfigObj,
-extracts:
+Loaded at startup (never per-request).  Reads weewx.conf once via the shared
+services/weewx_conf.py ConfigObj cache, extracts:
   1. [StdConvert] target_unit  → one of "US" | "METRIC" | "METRICWX"
   2. Per-skin [StdReport] [[<skin>]] [[[Units]]] [[[[Groups]]]] overrides
 
@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Final
 
 import configobj
+
+from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_weewx_conf
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +401,8 @@ def load_units_block(weewx_conf_path: str | Path) -> tuple[UnitsBlock, str]:
     """Load and cache the units block from weewx.conf.
 
     Called once at startup.  Subsequent calls return the cached value.
+    Uses the shared weewx.conf ConfigObj from services/weewx_conf.py — if it
+    has already been loaded by __main__.py, no re-parse occurs.
 
     Args:
         weewx_conf_path: Path to weewx.conf.
@@ -415,34 +419,20 @@ def load_units_block(weewx_conf_path: str | Path) -> tuple[UnitsBlock, str]:
     if _cached_units_block is not None and _cached_target_unit is not None:
         return _cached_units_block, _cached_target_unit
 
-    path = Path(weewx_conf_path)
-    if not path.exists():
-        raise WeewxConfNotFoundError(
-            f"FATAL: weewx.conf not found at {path}. "
-            "Set [weewx] config_path in api.conf to the correct path, "
-            "or ensure weewx.conf exists at the default location /etc/weewx/weewx.conf."
-        )
-
+    # Load via the shared ConfigObj cache (avoids double-parse when __main__.py
+    # has already called load_weewx_conf).
     try:
-        cfg = configobj.ConfigObj(str(path), interpolation=False)
-    except configobj.ConfigObjError as exc:
-        raise WeewxConfNotFoundError(
-            f"FATAL: weewx.conf at {path} could not be parsed: {exc}. "
-            "Check the file is valid INI/configobj format."
-        ) from exc
-    except OSError as exc:
-        raise WeewxConfNotFoundError(
-            f"FATAL: Cannot read weewx.conf at {path}: {exc}. "
-            "Check file permissions (readable by the clearskies-api process)."
-        ) from exc
+        cfg = load_weewx_conf(weewx_conf_path)
+    except WeewxConfLoadError as exc:
+        # Re-raise under WeewxConfNotFoundError so existing callers / tests
+        # that catch WeewxConfNotFoundError still work.
+        raise WeewxConfNotFoundError(str(exc)) from exc
 
     # Read target_unit from [StdConvert].
     std_convert = cfg.get("StdConvert")
     if not isinstance(std_convert, dict):
         logger.warning(
-            "weewx.conf at %s has no [StdConvert] section; "
-            "defaulting to US unit system.",
-            path,
+            "weewx.conf has no [StdConvert] section; defaulting to US unit system."
         )
         target_unit = "US"
     else:
@@ -465,7 +455,6 @@ def load_units_block(weewx_conf_path: str | Path) -> tuple[UnitsBlock, str]:
         "Units block loaded from weewx.conf",
         extra={
             "target_unit": target_unit,
-            "weewx_conf_path": str(path),
             "field_count": len(units_block),
         },
     )
@@ -503,7 +492,13 @@ def get_target_unit() -> str:
 
 
 def reset_cache() -> None:
-    """Reset the module-level cache.  Used in tests only."""
+    """Reset the module-level cache.  Used in tests only.
+
+    Also resets the shared weewx_conf cache so tests that call load_units_block
+    with different weewx.conf paths don't get stale data.
+    """
     global _cached_units_block, _cached_target_unit  # noqa: PLW0603
     _cached_units_block = None
     _cached_target_unit = None
+    from weewx_clearskies_api.services.weewx_conf import reset_cache as _reset_weewx_conf
+    _reset_weewx_conf()

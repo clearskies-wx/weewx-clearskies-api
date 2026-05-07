@@ -25,8 +25,15 @@ Startup sequence (ADR-012):
     4. run write-probe        — exits 1 if the DB user has write privileges.
     5. run schema reflection  — MetaData.reflect() on the archive table;
                                 logs warnings on unmapped columns; does NOT exit.
-    6. register DB probe      — health subsystem wired with SELECT 1 probe.
-    7. start uvicorn          — public API + health app.
+    6. load weewx.conf        — shared ConfigObj parse for units + station.
+    6b. load units block      — resolves per-field unit strings from weewx.conf.
+    6c. load station metadata — reads [Station] from weewx.conf (fatal if missing).
+    6d. wire ephemeris        — loads de421.bsp for almanac (fatal if not available).
+    6e. wire reports dir      — non-fatal; empty /reports on missing dir.
+    6f. wire content dir      — non-fatal; 404 /content/* on missing dir.
+    6g. wire hidden pages     — pages excluded from /pages response.
+    7. register DB probe      — health subsystem wired with SELECT 1 probe.
+    8. start uvicorn          — public API + health app.
 """
 
 from __future__ import annotations
@@ -50,10 +57,15 @@ from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import SchemaReflector
 from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
+from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
+from weewx_clearskies_api.services.almanac import wire_ephemeris_directory
+from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
-from weewx_clearskies_api.services.units import WeewxConfNotFoundError, load_units_block
+from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
+from weewx_clearskies_api.services.units import WeewxConfNotFoundError, get_target_unit, load_units_block
+from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_weewx_conf
 
 logger = logging.getLogger(__name__)
 
@@ -229,17 +241,50 @@ def main() -> None:
     # Wire the column registry for DI use in endpoints.
     wire_registry(registry)
 
-    # Step 6b: Load the units block from weewx.conf.  Fatal if missing — the
-    # units block is embedded in every response; serving without it is wrong.
+    # Step 6b: Load weewx.conf (shared ConfigObj cache for units + station).
+    # Fatal if missing — required by both units and station metadata loaders.
+    try:
+        weewx_cfg = load_weewx_conf(settings.weewx.config_path)
+    except WeewxConfLoadError as exc:
+        logger.critical("%s", exc)
+        sys.exit(1)
+
+    # Step 6c: Load the units block from weewx.conf.  Fatal if missing.
     try:
         load_units_block(settings.weewx.config_path)
     except WeewxConfNotFoundError as exc:
         logger.critical("%s", exc)
         sys.exit(1)
 
-    # Step 6c: Wire the reports directory.  Non-fatal — missing dir → empty
+    # Step 6d: Load station metadata from weewx.conf [Station].  Fatal if
+    # required fields are missing (no location/latitude/longitude = misconfigured).
+    try:
+        load_station_metadata(
+            cfg=weewx_cfg,
+            api_station_id=settings.station.station_id,
+            api_timezone=settings.station.timezone,
+            unit_system=get_target_unit(),
+        )
+    except StationConfigError as exc:
+        logger.critical("%s", exc)
+        sys.exit(1)
+
+    # Step 6e: Wire ephemeris directory for almanac endpoints (ADR-014).
+    # Fatal if directory not writable and de421.bsp not present, or if
+    # download fails on first run. wire_ephemeris_directory calls sys.exit(1)
+    # on fatal failure.
+    wire_ephemeris_directory(settings.almanac.ephemeris_directory)
+
+    # Step 6f: Wire reports directory.  Non-fatal — missing dir → empty
     # /reports response, not a startup abort.
     wire_reports_directory(settings.weewx.reports_directory)
+
+    # Step 6g: Wire content directory.  Non-fatal — missing dir → 404 on
+    # /content/* requests.
+    wire_content_directory(settings.content.directory)
+
+    # Step 6h: Wire hidden pages list.
+    wire_hidden_pages(settings.pages.hidden)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()

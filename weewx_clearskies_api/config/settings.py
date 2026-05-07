@@ -225,6 +225,82 @@ class WeewxSettings:
         )
 
 
+class StationSettings:
+    """[station] section settings (3a-2).
+
+    Optional overrides for station identity.  Absent → clearskies-api derives
+    from weewx.conf [Station].
+    """
+
+    #: Optional station_id override.  Absent → slug of weewx.conf location.
+    station_id: str | None
+    #: Optional IANA TZ override (api.conf is highest priority per ADR-020).
+    timezone: str | None
+    #: Comma-separated slugs (or INI list) of built-in pages to hide.
+    hidden_pages: list[str]
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_id = str(section.get("station_id", "")).strip()
+        self.station_id = raw_id if raw_id else None
+
+        raw_tz = str(section.get("timezone", "")).strip()
+        self.timezone = raw_tz if raw_tz else None
+
+        raw_hidden = section.get("hidden", [])
+        if isinstance(raw_hidden, str):
+            raw_hidden = [s.strip() for s in raw_hidden.split(",") if s.strip()]
+        self.hidden_pages = list(raw_hidden)
+
+
+class AlmanacSettings:
+    """[almanac] section settings (3a-2).
+
+    Ephemeris cache directory.  Default /var/cache/weewx-clearskies/skyfield/.
+    """
+
+    #: Directory where de421.bsp is cached (or pre-placed for offline installs).
+    ephemeris_directory: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.ephemeris_directory = str(
+            section.get(
+                "ephemeris_directory",
+                "/var/cache/weewx-clearskies/skyfield/",
+            )
+        )
+
+
+class ContentSettings:
+    """[content] section settings (3a-2).
+
+    Directory containing about.md and legal.md.  Default /etc/weewx-clearskies/content/.
+    """
+
+    #: Directory containing operator-authored markdown files.
+    directory: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.directory = str(
+            section.get("directory", "/etc/weewx-clearskies/content/")
+        )
+
+
+class PagesSettings:
+    """[pages] section settings (3a-2).
+
+    Per-page hide control.
+    """
+
+    #: Comma-separated slugs (or INI list) of built-in pages to hide.
+    hidden: list[str]
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_hidden = section.get("hidden", [])
+        if isinstance(raw_hidden, str):
+            raw_hidden = [s.strip() for s in raw_hidden.split(",") if s.strip()]
+        self.hidden = list(raw_hidden)
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -234,6 +310,10 @@ class Settings:
     ratelimit: RateLimitSettings
     database: DatabaseSettings
     weewx: WeewxSettings
+    station: StationSettings
+    almanac: AlmanacSettings
+    content: ContentSettings
+    pages: PagesSettings
 
     def __init__(
         self,
@@ -243,6 +323,10 @@ class Settings:
         ratelimit: RateLimitSettings,
         database: DatabaseSettings,
         weewx: WeewxSettings | None = None,
+        station: StationSettings | None = None,
+        almanac: AlmanacSettings | None = None,
+        content: ContentSettings | None = None,
+        pages: PagesSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
@@ -250,6 +334,10 @@ class Settings:
         self.ratelimit = ratelimit
         self.database = database
         self.weewx = weewx if weewx is not None else WeewxSettings({})
+        self.station = station if station is not None else StationSettings({})
+        self.almanac = almanac if almanac is not None else AlmanacSettings({})
+        self.content = content if content is not None else ContentSettings({})
+        self.pages = pages if pages is not None else PagesSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -341,6 +429,10 @@ def load_settings(config_path: Path | None = None) -> Settings:
     rl_cfg = RateLimitSettings(dict(cfg.get("ratelimit", {})))
     db_cfg = DatabaseSettings(dict(cfg.get("database", {})))
     weewx_cfg = WeewxSettings(dict(cfg.get("weewx", {})))
+    station_cfg = StationSettings(dict(cfg.get("station", {})))
+    almanac_cfg = AlmanacSettings(dict(cfg.get("almanac", {})))
+    content_cfg = ContentSettings(dict(cfg.get("content", {})))
+    pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -349,6 +441,10 @@ def load_settings(config_path: Path | None = None) -> Settings:
         ratelimit=rl_cfg,
         database=db_cfg,
         weewx=weewx_cfg,
+        station=station_cfg,
+        almanac=almanac_cfg,
+        content=content_cfg,
+        pages=pages_cfg,
     )
     settings.validate()
 

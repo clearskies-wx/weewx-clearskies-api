@@ -1,67 +1,99 @@
-"""Station metadata endpoint.
+"""Station metadata endpoint (3a-2 — replaces task-1 placeholder).
 
-PLACEHOLDER — returns a hardcoded StationResponse envelope matching
-docs/contracts/openapi-v1.yaml::StationResponse + ::StationMetadata.
-The purpose is to prove the middleware chain works end-to-end.
+GET /station — singleton per ADR-011.  No query params.
 
-Phase 2 Task 3 will replace this with a real DB-backed response assembled
-from weewx archive reflection (ADR-035) and api.conf values (ADR-027).
+Data sources (per the brief):
+  - stationId / name / lat / lon / alt / timezone / unitSystem / hardware:
+    cached StationInfo from services.station (loaded at startup from weewx.conf).
+  - firstRecord / lastRecord: MIN(dateTime) / MAX(dateTime) from archive via
+    get_db_session() (ADR-012: never bypass the session factory).
+  - units block: get_units_block() from services.units.
 
-Response shape (openapi-v1.yaml lines 1502-1508, 1090-1117):
-  StationResponse envelope:
-    data      → StationMetadata (required: stationId, name, latitude,
-                longitude, altitude [number], timezone, unitSystem)
-    units     → UnitsBlock (additionalProperties: string — field→unit map)
-    generatedAt → ISO-8601 UTC string
+Altitude is passed through in whatever unit weewx uses — ADR-019 is authoritative.
+The OpenAPI description "Meters above mean sea level" is a contract typo that the
+lead will fix in a separate post-3a-2 commit.  See brief §6 (resolved call #6).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import logging
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+
+from weewx_clearskies_api.db.session import get_db_session
+from weewx_clearskies_api.models.responses import (
+    StationMetadata,
+    StationResponse,
+    utc_isoformat,
+)
+from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.units import get_units_block
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.get(
-    "/station",
-    summary="Station metadata",
-    tags=["station"],
-    # PLACEHOLDER: no real DB query. Replace in Phase 2 Task 3.
-)
-async def get_station() -> dict[str, object]:
-    """Return station metadata wrapped in a StationResponse envelope.
+@router.get("/station", summary="Station identity and metadata", tags=["Station"])
+def get_station() -> StationResponse:
+    """Return station metadata.
 
-    PLACEHOLDER: returns hardcoded values to prove the middleware chain
-    works end-to-end. Phase 2 Task 3 wires real DB-backed data.
+    Singleton per ADR-011 (no query params, no ?station= filtering).
+    firstRecord / lastRecord come from a DB query; all other fields from
+    the startup-cached StationInfo.
     """
-    # Hardcoded placeholder.
-    # Shape matches StationResponse from openapi-v1.yaml (envelope wraps StationMetadata).
-    # StationMetadata required fields per spec lines 1090-1117:
-    #   stationId (string), name (string), latitude (number, -90..90),
-    #   longitude (number, -180..180), altitude (number — meters, NOT an object),
-    #   timezone (IANA string), unitSystem (enum: US | METRIC | METRICWX).
-    # UnitsBlock (lines 794-803): additionalProperties: string — field→unit string map.
-    return {
-        "data": {
-            "stationId": "placeholder",
-            "name": "My Weather Station (placeholder)",
-            "latitude": 0.0,
-            "longitude": 0.0,
-            "altitude": 0.0,
-            "timezone": "UTC",
-            "unitSystem": "METRIC",
-            "timezoneOffsetMinutes": 0,
-            "firstRecord": None,
-            "lastRecord": None,
-            "hardware": None,
-            "_placeholder": True,
-        },
-        "units": {
-            "outTemp": "°C",
-            "outHumidity": "%",
-            "windSpeed": "m/s",
-            "barometer": "hPa",
-            "rain": "mm",
-        },
-        "generatedAt": "1970-01-01T00:00:00Z",
-    }
+    info = get_station_info()
+
+    # --- MIN / MAX dateTime from archive (ADR-012: use get_db_session) ---
+    first_record: str | None = None
+    last_record: str | None = None
+    try:
+        with get_db_session() as session:
+            row = session.execute(
+                text("SELECT MIN(dateTime), MAX(dateTime) FROM archive")
+            ).fetchone()
+            if row is not None:
+                min_ts, max_ts = row[0], row[1]
+                if min_ts is not None:
+                    first_record = datetime.fromtimestamp(
+                        int(min_ts), tz=UTC
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                if max_ts is not None:
+                    last_record = datetime.fromtimestamp(
+                        int(max_ts), tz=UTC
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except SQLAlchemyError as exc:
+        logger.error(
+            "DB error querying archive MIN/MAX dateTime: %s",
+            exc,
+            extra={"exc_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Database error querying archive timestamps.",
+        ) from exc
+
+    units = get_units_block()
+
+    metadata = StationMetadata(
+        stationId=info.station_id,
+        name=info.name,
+        latitude=info.latitude,
+        longitude=info.longitude,
+        altitude=info.altitude,
+        timezone=info.timezone,
+        timezoneOffsetMinutes=info.timezone_offset_minutes,
+        unitSystem=info.unit_system,
+        firstRecord=first_record,
+        lastRecord=last_record,
+        hardware=info.hardware,
+    )
+
+    return StationResponse(
+        data=metadata,
+        units=units,
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )

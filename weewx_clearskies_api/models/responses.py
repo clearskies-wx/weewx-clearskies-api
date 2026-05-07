@@ -273,3 +273,246 @@ class YearlyReportResponse(BaseModel):
 
     data: NOAAYearlyReport
     generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Almanac
+# ---------------------------------------------------------------------------
+
+
+class SunSnapshot(BaseModel):
+    """Sun data block within AlmanacSnapshot."""
+
+    rise: str | None = None
+    set: str | None = None
+    transit: str | None = None
+    civilTwilightDawn: str | None = None
+    civilTwilightDusk: str | None = None
+    azimuth: float | None = None
+    altitude: float | None = None
+    rightAscension: float | None = None
+    declination: float | None = None
+    daylightMinutes: int | None = None
+    daylightDeltaVsYesterdayMinutes: int | None = None
+    nextEquinox: str | None = None
+    nextSolstice: str | None = None
+
+
+class MoonSnapshot(BaseModel):
+    """Moon data block within AlmanacSnapshot."""
+
+    rise: str | None = None
+    set: str | None = None
+    transit: str | None = None
+    azimuth: float | None = None
+    altitude: float | None = None
+    rightAscension: float | None = None
+    declination: float | None = None
+    phaseName: str | None = None
+    illuminationPercent: float | None = None
+    nextFullMoon: str | None = None
+    nextNewMoon: str | None = None
+
+
+class AlmanacSnapshot(BaseModel):
+    """AlmanacSnapshot matching OpenAPI AlmanacSnapshot schema."""
+
+    date: str
+    sun: SunSnapshot
+    moon: MoonSnapshot
+
+
+class AlmanacResponse(BaseModel):
+    """AlmanacResponse envelope."""
+
+    data: AlmanacSnapshot
+    generatedAt: str
+
+
+class SunTimesDay(BaseModel):
+    """One day in a SunTimesSeries."""
+
+    date: str
+    sunrise: str | None = None
+    sunset: str | None = None
+    daylightMinutes: int | None = None
+
+
+class SunTimesSeries(BaseModel):
+    """SunTimesSeries matching OpenAPI schema."""
+
+    year: int
+    days: list[SunTimesDay]
+
+
+class SunTimesResponse(BaseModel):
+    """SunTimesResponse envelope."""
+
+    data: SunTimesSeries
+    generatedAt: str
+
+
+class MoonPhaseDay(BaseModel):
+    """One day in a MoonPhaseCalendar."""
+
+    date: str
+    phaseName: str
+    illuminationPercent: float
+
+
+class MoonPhaseCalendar(BaseModel):
+    """MoonPhaseCalendar matching OpenAPI schema."""
+
+    year: int
+    month: int | None = None
+    days: list[MoonPhaseDay]
+
+
+class MoonPhaseResponse(BaseModel):
+    """MoonPhaseResponse envelope."""
+
+    data: MoonPhaseCalendar
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Station
+# ---------------------------------------------------------------------------
+
+
+class StationMetadata(BaseModel):
+    """StationMetadata matching OpenAPI StationMetadata schema."""
+
+    stationId: str
+    name: str
+    latitude: float
+    longitude: float
+    altitude: float
+    timezone: str
+    timezoneOffsetMinutes: int
+    unitSystem: str
+    firstRecord: str | None = None
+    lastRecord: str | None = None
+    hardware: str | None = None
+
+
+class StationResponse(BaseModel):
+    """StationResponse envelope."""
+
+    data: StationMetadata
+    units: dict[str, str]
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Capabilities
+# ---------------------------------------------------------------------------
+
+
+class WeewxColumnEntry(BaseModel):
+    """One weewx archive column entry in CapabilityRegistry."""
+
+    canonicalField: str
+    archiveColumn: str
+
+
+class CapabilityDeclaration(BaseModel):
+    """Per ADR-038: one configured provider module."""
+
+    providerId: str
+    domain: str
+    suppliedCanonicalFields: list[str]
+    geographicCoverage: str
+    defaultPollIntervalSeconds: int | None = None
+    operatorNotes: str | None = None
+
+
+class CapabilityRegistry(BaseModel):
+    """CapabilityRegistry matching OpenAPI CapabilityRegistry schema."""
+
+    providers: list[CapabilityDeclaration]
+    weewxColumns: list[WeewxColumnEntry]
+    canonicalFieldsAvailable: list[str]
+
+
+class CapabilityResponse(BaseModel):
+    """CapabilityResponse envelope."""
+
+    data: CapabilityRegistry
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
+
+class PageMetadata(BaseModel):
+    """PageMetadata matching OpenAPI PageMetadata schema."""
+
+    slug: str
+    name: str
+    icon: str
+    navPosition: int
+    builtIn: bool
+    hidden: bool = False
+
+
+class PageList(BaseModel):
+    """PageList matching OpenAPI PageList schema."""
+
+    pages: list[PageMetadata]
+
+
+class PageListResponse(BaseModel):
+    """PageListResponse envelope."""
+
+    data: PageList
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Charts
+# ---------------------------------------------------------------------------
+
+
+class ChartGroup(BaseModel):
+    """ChartGroup matching OpenAPI ChartGroup schema."""
+
+    id: str
+    name: str
+    builtIn: bool
+    members: list[str]
+    defaultRange: str | None = None
+
+
+class ChartGroupList(BaseModel):
+    """ChartGroupList matching OpenAPI ChartGroupList schema."""
+
+    groups: list[ChartGroup]
+
+
+class ChartGroupResponse(BaseModel):
+    """ChartGroupResponse envelope."""
+
+    data: ChartGroupList
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
+# Content (markdown passthrough)
+# ---------------------------------------------------------------------------
+
+
+class MarkdownContent(BaseModel):
+    """MarkdownContent matching OpenAPI MarkdownContent schema."""
+
+    markdown: str
+    updatedAt: str | None = None
+
+
+class MarkdownResponse(BaseModel):
+    """MarkdownResponse envelope."""
+
+    data: MarkdownContent
+    generatedAt: str

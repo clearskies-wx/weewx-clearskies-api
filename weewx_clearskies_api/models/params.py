@@ -1,4 +1,4 @@
-"""Pydantic parameter models for the DB-backed endpoints.
+"""Pydantic parameter models for the DB-backed and almanac endpoints.
 
 All models use ConfigDict(extra="forbid") per security-baseline §3.5 —
 unknown query keys are rejected with 422 (reshaped to 400 problem+json by
@@ -10,7 +10,7 @@ ruff: noqa: N815  (canonical field names use weewx camelCase per ADR-010)
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -123,3 +123,57 @@ class ReportYearlyParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     year: int = Field(ge=1900)
+
+
+# ---------------------------------------------------------------------------
+# /almanac query params
+# ---------------------------------------------------------------------------
+
+
+class AlmanacQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: date | None = None
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def validate_date(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            try:
+                return date.fromisoformat(v)
+            except ValueError as exc:
+                raise ValueError(
+                    f"date must be a valid ISO date (YYYY-MM-DD), got {v!r}"
+                ) from exc
+        return v
+
+
+# ---------------------------------------------------------------------------
+# /almanac/sun-times query params
+# ---------------------------------------------------------------------------
+
+
+class SunTimesQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/sun-times."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=1900)
+
+
+# ---------------------------------------------------------------------------
+# /almanac/moon-phases query params
+# ---------------------------------------------------------------------------
+
+
+class MoonPhasesQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/moon-phases."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=1900)
+    month: int | None = Field(default=None, ge=1, le=12)
