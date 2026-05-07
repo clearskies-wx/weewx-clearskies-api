@@ -10,6 +10,7 @@ ruff: noqa: N815  (canonical field names use weewx camelCase per ADR-010)
 from __future__ import annotations
 
 import re
+import datetime as _datetime_mod
 from datetime import UTC, date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -131,20 +132,28 @@ class ReportYearlyParams(BaseModel):
 
 
 class AlmanacQueryParams(BaseModel):
-    """Validated query parameters for GET /almanac."""
+    """Validated query parameters for GET /almanac.
+
+    The 'date' field uses `_datetime_mod.date` (fully qualified) as its type
+    annotation to avoid a Pydantic 2 forward-reference resolution bug that
+    fires when a field name ('date') shadows the imported stdlib type name
+    ('date' from datetime) under 'from __future__ import annotations'.
+    See: https://github.com/pydantic/pydantic/issues/8900
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    date: date | None = None
+    # Fully-qualified type reference avoids Pydantic forward-ref shadowing bug.
+    date: _datetime_mod.date | None = None
 
     @field_validator("date", mode="before")
     @classmethod
-    def validate_date(cls, v: object) -> object:
+    def validate_date_field(cls, v: object) -> object:
         if v is None:
             return v
         if isinstance(v, str):
             try:
-                return date.fromisoformat(v)
+                return _datetime_mod.date.fromisoformat(v)
             except ValueError as exc:
                 raise ValueError(
                     f"date must be a valid ISO date (YYYY-MM-DD), got {v!r}"
