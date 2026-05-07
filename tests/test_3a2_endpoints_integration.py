@@ -1240,7 +1240,7 @@ class TestContentEndpointsIntegration:
 
     def test_content_about_missing_file_returns_404_problem_json(
         self, seeded_engine: Engine, weewx_conf_path: Path,
-        tmp_path_factory: pytest.TempPathFactory,
+        content_dir: Path, tmp_path_factory: pytest.TempPathFactory,
     ) -> None:
         """/content/about when about.md absent → 404 problem+json."""
         from weewx_clearskies_api.app import create_app
@@ -1312,7 +1312,7 @@ class TestContentEndpointsIntegration:
 
     def test_content_about_404_detail_does_not_leak_filesystem_path(
         self, seeded_engine: Engine, weewx_conf_path: Path,
-        tmp_path_factory: pytest.TempPathFactory,
+        content_dir: Path, tmp_path_factory: pytest.TempPathFactory,
     ) -> None:
         """404 detail for missing about.md must NOT contain the filesystem path."""
         from weewx_clearskies_api.app import create_app
