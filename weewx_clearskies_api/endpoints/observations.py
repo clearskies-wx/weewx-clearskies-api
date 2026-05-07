@@ -177,6 +177,17 @@ def get_archive_endpoint(
 
     Supports raw / hour / day interval aggregation and cursor + page pagination.
     """
+    # Reject unknown query parameters (security-baseline §3.5 / extra="forbid").
+    _ALLOWED_ARCHIVE_PARAMS = frozenset(
+        {"from", "to", "interval", "fields", "limit", "cursor", "page"}
+    )
+    unknown = set(request.query_params.keys()) - _ALLOWED_ARCHIVE_PARAMS
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown query parameter(s): {', '.join(sorted(unknown))}",
+        )
+
     # Validate all params via Pydantic.
     try:
         params = ArchiveParams(

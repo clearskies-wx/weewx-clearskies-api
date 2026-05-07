@@ -216,7 +216,7 @@ class _HourDialect:
     def __init__(self, dialect_name: str) -> None:
         self._name = dialect_name
 
-    def bucket_expr(self) -> str:
+    def hour_bucket_expr(self) -> str:
         """SQL expression (trusted constant) that truncates dateTime to the hour."""
         if self._name == "sqlite":
             return "strftime('%Y-%m-%d %H:00:00', datetime(dateTime, 'unixepoch'))"
@@ -357,10 +357,16 @@ def _fetch_hourly(
     fields: list[str] | None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     dialect = _HourDialect(db.bind.dialect.name)  # type: ignore[union-attr]
-    bucket_expr = dialect.bucket_expr()  # trusted dialect constant
+    bucket_expr = dialect.hour_bucket_expr()  # trusted dialect constant
 
     # Build the SELECT list from trusted stock column names.
-    stock_cols = _stock_obs_columns(registry)
+    # Only include stock columns that map to first-class numeric observation fields
+    # to avoid AVG() on text columns.
+    stock_cols = [
+        col for col in _stock_obs_columns(registry)
+        if registry.stock.get(col) is not None
+        and registry.stock[col].canonical_name in _FIRST_CLASS_FIELDS
+    ]
     if fields is not None:
         field_set = set(fields)
         stock_cols = [
