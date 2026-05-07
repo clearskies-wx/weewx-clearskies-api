@@ -211,6 +211,14 @@ def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, N
     units_mod._cached_target_unit = "US"
 
     # Wire cache (no-provider path; memory default)
+    from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
+        reset_provider_registry_for_tests,
+    )
+
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
+
     wire_cache_from_env()
     wire_providers([])
 
@@ -218,6 +226,10 @@ def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, N
     wire_alerts_settings(settings)
     app = create_app(settings)
     yield app
+
+    # Teardown: reset state (symmetric with integration_app_nws)
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
 
 
 @pytest.fixture
