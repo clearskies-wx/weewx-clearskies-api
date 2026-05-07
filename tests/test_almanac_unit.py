@@ -18,16 +18,69 @@ USNO reference dates used for sunrise/sunset assertions:
   - 2024-12-21 at lat=42.375, lon=-72.519 (UTC-5 in winter)
     USNO: rise 07:12 EST = 12:12Z, set 16:10 EST = 21:10Z
     Source: USNO RS_OneYear 2024-12-21.
+
+Ephemeris: tests that call compute_almanac / compute_sun_times_year /
+compute_moon_phases require the de421.bsp ephemeris to have been loaded via
+wire_ephemeris_directory() first. These tests use the CLEARSKIES_EPHEMERIS_DIR
+environment variable (set in weather-dev CI) to locate the ephemeris directory.
+If the env var is unset AND the default cache dir is not readable, the tests
+skip gracefully.
 """
 
 from __future__ import annotations
 
 import datetime
+import os
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Skip gate for skyfield-dependent tests
+# Ephemeris wiring fixture
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EPH_DIRS = [
+    "/var/cache/weewx-clearskies/skyfield/",
+    os.path.expanduser("~/.cache/weewx-clearskies/skyfield/"),
+]
+
+
+def _find_ephemeris_dir() -> str | None:
+    """Find a directory containing de421.bsp, or None if not available."""
+    env_dir = os.environ.get("CLEARSKIES_EPHEMERIS_DIR", "").strip()
+    if env_dir:
+        candidate = os.path.join(env_dir, "de421.bsp")
+        if os.path.exists(candidate):
+            return env_dir
+
+    for d in _DEFAULT_EPH_DIRS:
+        if os.path.exists(os.path.join(d, "de421.bsp")):
+            return d
+    return None
+
+
+@pytest.fixture(scope="module", autouse=False)
+def wired_ephemeris() -> None:
+    """Wire the ephemeris for tests that require it.
+
+    Skips if de421.bsp cannot be found. The module-level cache means the
+    ephemeris is only loaded once per test session.
+    """
+    eph_dir = _find_ephemeris_dir()
+    if eph_dir is None:
+        pytest.skip(
+            "de421.bsp not found; set CLEARSKIES_EPHEMERIS_DIR env var to a "
+            "directory containing de421.bsp to run almanac compute tests"
+        )
+    from weewx_clearskies_api.services.almanac import (
+        reset_cache,
+        wire_ephemeris_directory,
+    )
+    reset_cache()
+    wire_ephemeris_directory(eph_dir)
+
+
+# ---------------------------------------------------------------------------
+# Skip gate for skyfield import
 # ---------------------------------------------------------------------------
 
 _SKYFIELD_MISSING = False
@@ -229,6 +282,7 @@ class TestAlmanacParamModels:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("wired_ephemeris")
 class TestSunTimesYearLoop:
     """Year-loop returns correct entry count for leap and non-leap years."""
 
@@ -282,6 +336,7 @@ class TestSunTimesYearLoop:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("wired_ephemeris")
 class TestMoonPhasesMonthVsYear:
     """Moon-phase calendar returns correct span based on month presence."""
 
@@ -334,6 +389,7 @@ class TestMoonPhasesMonthVsYear:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("wired_ephemeris")
 class TestPolarEdgeCases:
     """Polar-day / polar-night edge cases return correct daylightMinutes + null fields."""
 
@@ -409,6 +465,7 @@ class TestPolarEdgeCases:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("wired_ephemeris")
 class TestSunriseSetUsnoReference:
     """Sunrise/sunset computed values match USNO almanac within ±1 minute.
 
