@@ -157,7 +157,7 @@ def _make_integration_settings(provider: str | None = None) -> Any:
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with no provider configured."""
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
@@ -220,14 +220,14 @@ def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, N
     yield app
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def integration_client_no_provider(
     integration_app_no_provider: FastAPI,
 ) -> TestClient:
     return TestClient(integration_app_no_provider, raise_server_exceptions=False)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def integration_app_nws(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with NWS provider configured."""
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
@@ -303,7 +303,7 @@ def integration_app_nws(db_engine: Engine) -> Generator[FastAPI, None, None]:
     reset_provider_registry_for_tests()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def integration_client_nws(integration_app_nws: FastAPI) -> TestClient:
     return TestClient(integration_app_nws, raise_server_exceptions=False)
 
