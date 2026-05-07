@@ -555,13 +555,16 @@ class TestStationMetadataRequiredFields:
 
 
 class TestConfigobjCommaParsingCompat:
-    """load_station_metadata must handle configobj list values for altitude.
+    """load_station_metadata must handle configobj list values for scalar fields.
 
     Bug discovered during 3a-2 test authoring: configobj parses unquoted
-    comma-separated values as Python lists. Real weewx.conf files use
-    altitude = 700, foot (unquoted) which becomes ['700', 'foot'] in configobj.
-    The implementation must handle this without raising AttributeError.
-    Routed to api-dev as a defect found by test-author.
+    comma-separated values as Python lists. Real weewx.conf files use:
+      altitude = 700, foot      → ['700', 'foot']
+      location = Belchertown, MA → ['Belchertown', 'MA']
+      station_type = Davis Vantage Pro2, USA → ['Davis Vantage Pro2', 'USA']
+
+    The _get_str_field helper (F1 remediation) normalises both the list and
+    string forms back to a plain comma-separated string.
     """
 
     def test_quoted_altitude_value_parses_correctly(self, tmp_path: Path) -> None:
@@ -614,18 +617,80 @@ class TestConfigobjCommaParsingCompat:
         )
         from weewx_clearskies_api.services.station import load_station_metadata
         # This should NOT raise AttributeError
-        try:
-            info = load_station_metadata(
-                cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
-            )
-            assert info.altitude == 700.0, (
-                f"Altitude from list-form ['700', 'foot'] must parse to 700.0, "
-                f"got {info.altitude!r}"
-            )
-        except AttributeError as exc:
-            pytest.fail(
-                f"load_station_metadata raised AttributeError on list-form altitude: {exc}. "
-                "This is a real bug: the implementation does not handle configobj list "
-                "values for comma-separated fields like 'altitude = 700, foot'. "
-                "Routed to api-dev for fix."
-            )
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.altitude == 700.0, (
+            f"Altitude from list-form ['700', 'foot'] must parse to 700.0, "
+            f"got {info.altitude!r}"
+        )
+
+    def test_unquoted_location_with_comma_parses_to_joined_string(
+        self, tmp_path: Path
+    ) -> None:
+        """Unquoted location = Belchertown, MA (real weewx.conf) parses to 'Belchertown, MA'.
+
+        configobj parses this as ['Belchertown', 'MA'].  The _get_str_field helper
+        (F1 remediation) must rejoin the list back to a string.  Calling .strip()
+        on the list would previously raise AttributeError.
+        """
+        _reset_station_cache()
+        conf_file = tmp_path / "weewx_unquoted_loc.conf"
+        conf_file.write_text(
+            "[Station]\n"
+            "    location = Belchertown, MA\n"
+            "    latitude = 42.375\n"
+            "    longitude = -72.519\n"
+            '    altitude = "700, foot"\n',
+            encoding="utf-8",
+        )
+        import configobj
+        cfg = configobj.ConfigObj(str(conf_file), interpolation=False)
+        # Verify configobj actually produces a list for the unquoted location.
+        assert isinstance(cfg["Station"]["location"], list), (
+            "configobj should parse unquoted 'location = Belchertown, MA' as a list; "
+            "if this fails, configobj behavior has changed"
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.name == "Belchertown, MA", (
+            f"Unquoted 'location = Belchertown, MA' must parse to 'Belchertown, MA', "
+            f"got {info.name!r}. "
+            "This is the F1 regression: _get_str_field must rejoin list → string."
+        )
+
+    def test_unquoted_station_type_with_comma_parses_to_joined_string(
+        self, tmp_path: Path
+    ) -> None:
+        """Unquoted station_type = Davis Vantage Pro2, USA parses to the full string.
+
+        configobj parses this as ['Davis Vantage Pro2', 'USA'].  The _get_str_field
+        helper must rejoin it rather than calling .strip() on the list.
+        """
+        _reset_station_cache()
+        conf_file = tmp_path / "weewx_unquoted_hw.conf"
+        conf_file.write_text(
+            "[Station]\n"
+            '    location = "Test Station"\n'
+            "    latitude = 42.375\n"
+            "    longitude = -72.519\n"
+            '    altitude = "700, foot"\n'
+            "    station_type = Davis Vantage Pro2, USA\n",
+            encoding="utf-8",
+        )
+        import configobj
+        cfg = configobj.ConfigObj(str(conf_file), interpolation=False)
+        # Verify configobj parses the unquoted value as a list.
+        assert isinstance(cfg["Station"]["station_type"], list), (
+            "configobj should parse 'station_type = Davis Vantage Pro2, USA' as a list"
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.hardware == "Davis Vantage Pro2, USA", (
+            f"Unquoted station_type with comma must rejoin to 'Davis Vantage Pro2, USA', "
+            f"got {info.hardware!r}"
+        )

@@ -468,7 +468,7 @@ class TestPolarEdgeCases:
 @pytest.mark.usefixtures("wired_ephemeris")
 @pytest.mark.usefixtures("wired_ephemeris")
 class TestSunriseSetUsnoReference:
-    """Sunrise/sunset computed values match USNO almanac within ±5 minutes.
+    """Sunrise/sunset computed values match USNO almanac within ±7 minutes.
 
     Reference station: Belchertown MA, lat=42.375, lon=-72.519, alt_m=0
     Reference source: https://aa.usno.navy.mil/data/RS_OneYear
@@ -479,15 +479,11 @@ class TestSunriseSetUsnoReference:
     from USNO's RS_OneYear output (which uses a slightly different refraction
     model and assumes the station horizon, not a mathematical horizon). We
     use ±7 minutes to capture algorithm-vs-reference differences while still
-    catching major computation errors. The brief's ±1 minute applies to
-    skyfield-vs-USNO algorithm differences; actual differences observed here
-    are 3-6 minutes, suggesting USNO uses a different refraction correction.
+    catching major computation errors.
 
-    Note on UTC windowing: the implementation uses UTC midnight-to-midnight.
-    For western hemisphere stations, summer solstice sunset falls AFTER UTC
-    midnight on the next day, so it is NOT captured in the Jun 21 UTC window.
-    Jun 21 sunset test is omitted for this reason; Dec 21 works because
-    sunset (21:19Z) is well within the Dec 21 UTC window.
+    F2 fix: tests now pass station_tz="America/New_York" to build station-local
+    day windows.  The summer solstice sunset (00:29Z Jun 22 = 20:29 EDT Jun 21)
+    is now correctly captured within the Jun 21 station-local window.
 
     USNO RS_OneYear values for lat=42.375, lon=-72.519°W, elev=0m:
     2024-06-21: rise 09:15Z (05:15 EDT), set ~00:29Z Jun 22 (20:29 EDT Jun 21)
@@ -508,6 +504,7 @@ class TestSunriseSetUsnoReference:
             lat=42.375,
             lon=-72.519,
             alt_m=0.0,
+            station_tz="America/New_York",
         )
         rise = result.sun.rise
         assert rise is not None, (
@@ -523,6 +520,39 @@ class TestSunriseSetUsnoReference:
         )
 
     @skip_if_no_skyfield
+    def test_sunset_2024_06_21_belchertown_within_7_minutes_of_usno(self) -> None:
+        """Sunset 2024-06-21 Belchertown MA matches USNO (~00:29Z Jun 22 ±7 min).
+
+        With the F2 fix (station-local day window), the Jun 21 sunset at
+        00:29Z Jun 22 (20:29 EDT) is captured within the [Jun 21 04:00Z,
+        Jun 22 04:00Z] window.  Previously this test was omitted because the
+        UTC window missed it — now it must pass.
+
+        USNO RS_OneYear gives set ~00:29Z Jun 22 = 20:29 EDT Jun 21.
+        """
+        from weewx_clearskies_api.services.almanac import compute_almanac
+        result = compute_almanac(
+            d=datetime.date(2024, 6, 21),
+            lat=42.375,
+            lon=-72.519,
+            alt_m=0.0,
+            station_tz="America/New_York",
+        )
+        sunset = result.sun.set
+        assert sunset is not None, (
+            "Sunset must not be None for Belchertown MA summer solstice with "
+            "station-local windowing (F2 fix)"
+        )
+        sunset_dt = datetime.datetime.fromisoformat(sunset.replace("Z", "+00:00"))
+        # USNO: ~00:29Z on Jun 22
+        usno_set = datetime.datetime(2024, 6, 22, 0, 29, 0, tzinfo=datetime.timezone.utc)
+        delta_minutes = abs((sunset_dt - usno_set).total_seconds()) / 60
+        assert delta_minutes <= 7.0, (
+            f"Sunset {sunset!r} differs from USNO 00:29Z Jun 22 by {delta_minutes:.1f} min "
+            f"(tolerance ±7 min)."
+        )
+
+    @skip_if_no_skyfield
     def test_sunrise_2024_12_21_belchertown_within_7_minutes_of_usno(self) -> None:
         """Sunrise 2024-12-21 Belchertown MA matches USNO (12:18Z ±7 min).
 
@@ -535,6 +565,7 @@ class TestSunriseSetUsnoReference:
             lat=42.375,
             lon=-72.519,
             alt_m=0.0,
+            station_tz="America/New_York",
         )
         rise = result.sun.rise
         assert rise is not None, "sunrise must not be null for mid-latitude winter solstice"
@@ -551,8 +582,8 @@ class TestSunriseSetUsnoReference:
     def test_sunset_2024_12_21_belchertown_within_7_minutes_of_usno(self) -> None:
         """Sunset 2024-12-21 Belchertown MA matches USNO (21:19Z ±7 min).
 
-        Dec 21 sunset (21:19Z) falls within the UTC midnight-to-midnight window,
-        so the implementation captures it correctly. USNO RS_OneYear gives 21:19Z.
+        Dec 21 sunset (21:19Z) falls within both the UTC window and the
+        station-local window.  USNO RS_OneYear gives 21:19Z.
         Observed skyfield value: 21:18:58Z — within 1 minute.
         """
         from weewx_clearskies_api.services.almanac import compute_almanac
@@ -561,6 +592,7 @@ class TestSunriseSetUsnoReference:
             lat=42.375,
             lon=-72.519,
             alt_m=0.0,
+            station_tz="America/New_York",
         )
         sunset = result.sun.set
         assert sunset is not None, "sunset must not be null for mid-latitude winter solstice"
@@ -574,17 +606,20 @@ class TestSunriseSetUsnoReference:
         )
 
     @skip_if_no_skyfield
-    def test_summer_solstice_sunset_not_in_utc_window_is_none_or_previous_evening(
+    def test_summer_solstice_sunset_captured_with_station_local_window(
         self,
     ) -> None:
-        """Jun 21 sunset: documents UTC windowing limitation for western hemisphere.
+        """Jun 21 sunset is captured correctly when using a station-local day window.
 
-        The implementation uses UTC midnight-to-midnight (00:00Z to 23:59Z for
-        Jun 21). For Belchertown MA (UTC-4 in summer), the Jun 21 sunset
-        (20:29 EDT = 00:29Z Jun 22) falls OUTSIDE this window. The implementation
-        returns either None or the PREVIOUS evening's sunset (Jun 20 = ~00:28Z
-        Jun 21). This test documents the behavior, not asserts against it —
-        it's a known implementation constraint for western stations near solstice.
+        With the F2 fix, the day window is [Jun 21 00:00 EDT, Jun 22 00:00 EDT]
+        = [Jun 21 04:00Z, Jun 22 04:00Z].  Belchertown MA sunset on Jun 21 is
+        ~00:29Z Jun 22 (20:29 EDT), which falls inside this window.  The old
+        UTC midnight-to-midnight window missed it, returning daylightMinutes=0
+        or the previous evening's sunset.
+
+        Expected: daylightMinutes ≥ 870 (the longest day of the year for this
+        latitude is ~927 minutes; requiring ≥ 870 detects the "UTC window misses
+        sunset" bug while allowing for algorithm-vs-USNO differences).
         """
         from weewx_clearskies_api.services.almanac import compute_almanac
         result = compute_almanac(
@@ -592,9 +627,154 @@ class TestSunriseSetUsnoReference:
             lat=42.375,
             lon=-72.519,
             alt_m=0.0,
+            station_tz="America/New_York",  # EDT in summer = UTC-4
         )
-        # Just verify the function doesn't crash and returns a non-negative daylight count
-        # The actual value may be 0 (if set is not found) or the previous evening's set
         assert result.sun.daylight_minutes is not None, (
-            "daylightMinutes must not be None even when UTC windowing misses sunset"
+            "daylightMinutes must not be None for summer solstice"
         )
+        assert result.sun.daylight_minutes >= 870, (
+            f"Summer solstice (Jun 21, Belchertown MA, EDT) must have "
+            f"daylightMinutes ≥ 870 with station-local windowing; "
+            f"got {result.sun.daylight_minutes}. If this is ~0, the F2 fix "
+            f"(station-local day window) did not take effect."
+        )
+        # Sunset must be present (was None with UTC windowing bug)
+        assert result.sun.set is not None, (
+            "Sunset must not be None for Belchertown MA summer solstice "
+            "(F2 regression: station-local window must capture 00:29Z Jun 22)"
+        )
+
+    @skip_if_no_skyfield
+    def test_winter_solstice_no_regression_with_station_local_window(
+        self,
+    ) -> None:
+        """Dec 21 (EDT station, EST in winter = UTC-5): both sunrise and sunset captured.
+
+        The winter solstice is less pathological for EDT stations (sunrise and
+        sunset both fall well within the UTC window), but this test ensures the
+        station-local window fix does not regress the winter case.
+
+        USNO reference for 2024-12-21 at Belchertown MA:
+          rise 12:18Z (07:18 EST), set 21:19Z (16:19 EST).
+        """
+        from weewx_clearskies_api.services.almanac import compute_almanac
+        result = compute_almanac(
+            d=datetime.date(2024, 12, 21),
+            lat=42.375,
+            lon=-72.519,
+            alt_m=0.0,
+            station_tz="America/New_York",  # EST in winter = UTC-5
+        )
+        assert result.sun.rise is not None, (
+            "sunrise must not be None for winter solstice"
+        )
+        assert result.sun.set is not None, (
+            "sunset must not be None for winter solstice"
+        )
+        # The shortest day of the year — must be significantly less than 870 min
+        assert result.sun.daylight_minutes is not None
+        assert result.sun.daylight_minutes > 0, (
+            f"daylightMinutes must be > 0 for winter solstice, "
+            f"got {result.sun.daylight_minutes}"
+        )
+        assert result.sun.daylight_minutes < 600, (
+            f"Winter solstice must be a short day (< 600 min); "
+            f"got {result.sun.daylight_minutes}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Year-boundary tests for sun-times (F2 — station-local year boundaries)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("wired_ephemeris")
+class TestSunTimesYearBoundary:
+    """Year boundaries in compute_sun_times_year are station-local, not UTC.
+
+    An EDT station (UTC-4) on Jan 1 00:00 local = Jan 1 04:00Z.  The station-
+    local year 2026 runs from 2026-01-01 to 2026-12-31 inclusive (station time),
+    spanning [2026-01-01 05:00Z, 2027-01-01 05:00Z] in winter (EST, UTC-5).
+    The year loop must not include 2025-12-31 as a "2026" entry.
+    """
+
+    @skip_if_no_skyfield
+    def test_sun_times_year_first_entry_is_jan_1_station_local(self) -> None:
+        """compute_sun_times_year year=2026 first entry is 2026-01-01 (station-local)."""
+        from weewx_clearskies_api.services.almanac import compute_sun_times_year
+        days = compute_sun_times_year(
+            year=2026, lat=42.375, lon=-72.519, alt_m=0.0,
+            station_tz="America/New_York",
+        )
+        assert days[0].date_str == "2026-01-01", (
+            f"First entry must be 2026-01-01, got {days[0].date_str!r}. "
+            "If 2025-12-31, the year loop is using UTC boundaries (F2 regression)."
+        )
+
+    @skip_if_no_skyfield
+    def test_sun_times_year_last_entry_is_dec_31_station_local(self) -> None:
+        """compute_sun_times_year year=2026 last entry is 2026-12-31 (station-local)."""
+        from weewx_clearskies_api.services.almanac import compute_sun_times_year
+        days = compute_sun_times_year(
+            year=2026, lat=42.375, lon=-72.519, alt_m=0.0,
+            station_tz="America/New_York",
+        )
+        assert days[-1].date_str == "2026-12-31", (
+            f"Last entry must be 2026-12-31, got {days[-1].date_str!r}."
+        )
+
+    @skip_if_no_skyfield
+    def test_sun_times_year_entry_count_station_local_2026(self) -> None:
+        """compute_sun_times_year(2026) returns 365 entries (2026 is a non-leap year)."""
+        from weewx_clearskies_api.services.almanac import compute_sun_times_year
+        days = compute_sun_times_year(
+            year=2026, lat=42.375, lon=-72.519, alt_m=0.0,
+            station_tz="America/New_York",
+        )
+        assert len(days) == 365, (
+            f"2026 is a non-leap year — expected 365 entries, got {len(days)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# F3 negative-path test: bare exceptions propagate (no silent null fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("wired_ephemeris")
+class TestAlmanacExceptionPropagation:
+    """Exceptions in Skyfield compute paths propagate to FastAPI, not silently swallowed.
+
+    F3 fix: the nine bare `except Exception:` arms in almanac.py were removed.
+    This test verifies that a real exception (not a "no events" empty array)
+    propagates up instead of being logged at DEBUG and converted to null/zero.
+    """
+
+    @skip_if_no_skyfield
+    def test_synthetic_value_error_propagates_not_silently_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A ValueError raised inside Skyfield's find_discrete propagates from compute_almanac.
+
+        The old behavior: the bare `except Exception:` arm caught it, logged at DEBUG
+        (invisible at INFO level), and returned null/zero.
+        The new behavior: it propagates.  FastAPI's RFC 9457 handler turns it into
+        a 500 problem+json response.
+        """
+        from skyfield import almanac as sf_almanac
+        from weewx_clearskies_api.services.almanac import compute_almanac
+
+        def _raise_value_error(*_args: object, **_kwargs: object) -> None:
+            raise ValueError("Synthetic Skyfield compute failure (F3 test)")
+
+        # Patch find_discrete so the very first call during rise/set compute raises.
+        monkeypatch.setattr(sf_almanac, "find_discrete", _raise_value_error)
+
+        with pytest.raises(ValueError, match="Synthetic Skyfield compute failure"):
+            compute_almanac(
+                d=datetime.date(2024, 6, 21),
+                lat=42.375,
+                lon=-72.519,
+                alt_m=0.0,
+                station_tz="America/New_York",
+            )

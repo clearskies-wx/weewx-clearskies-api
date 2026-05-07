@@ -14,6 +14,12 @@ Timezone source priority (ADR-020):
   4. UTC + WARN
 
 NO timezonefinder — that is Phase 4 setup-wizard scope per ADR-020 §Consequences.
+
+configobj comma-normalisation (F1 remediation):
+  Real weewx.conf files write fields like `location = Belchertown, MA` unquoted.
+  configobj parses any unquoted comma-containing value as a Python list.
+  _get_str_field() handles both the string and list forms so that location,
+  station_type, and timezone all survive the list-parse path.
 """
 
 from __future__ import annotations
@@ -92,6 +98,27 @@ _cached_station: StationInfo | None = None
 # ---------------------------------------------------------------------------
 # Slug helper
 # ---------------------------------------------------------------------------
+
+
+def _get_str_field(section: dict, key: str, default: str = "") -> str:  # type: ignore[type-arg]
+    """Read a scalar string field from a configobj section.
+
+    configobj parses unquoted comma-containing values (e.g.
+    ``location = Belchertown, MA``) as Python lists.  This helper
+    normalises both the list and string forms back to a plain string.
+
+    Args:
+        section: The configobj section dict.
+        key: The key to look up.
+        default: Returned when the key is absent.
+
+    Returns:
+        Stripped string value.
+    """
+    raw = section.get(key, default)
+    if isinstance(raw, list):
+        raw = ", ".join(str(item).strip() for item in raw)
+    return str(raw).strip()
 
 
 def _slugify(value: str) -> str:
@@ -244,7 +271,9 @@ def load_station_metadata(
         )
 
     # --- Required: location (maps to name) ---
-    raw_location = station_section.get("location", "").strip()
+    # Use _get_str_field so "location = Belchertown, MA" (unquoted in real
+    # weewx.conf) is normalised from configobj's list form back to a string.
+    raw_location = _get_str_field(station_section, "location")
     if not raw_location:
         raise StationConfigError(
             "FATAL: weewx.conf [Station] location is missing or empty. "
@@ -305,12 +334,16 @@ def load_station_metadata(
         station_id = _slugify(raw_location)
 
     # --- Timezone ---
-    weewx_tz = station_section.get("timezone", "").strip() or None
+    # Use _get_str_field — an IANA timezone with a comma is not a real case, but
+    # consistent use of the helper costs nothing and avoids a future surprise.
+    weewx_tz = _get_str_field(station_section, "timezone") or None
     timezone = _resolve_timezone(api_timezone, weewx_tz)
     tz_offset = _tz_offset_minutes(timezone)
 
     # --- Optional: hardware (station_type) ---
-    raw_hardware = station_section.get("station_type", "").strip()
+    # Use _get_str_field — "station_type = Davis Vantage Pro2, USA" (unquoted)
+    # would produce a list without this.
+    raw_hardware = _get_str_field(station_section, "station_type")
     hardware: str | None = raw_hardware if raw_hardware else None
 
     info = StationInfo(

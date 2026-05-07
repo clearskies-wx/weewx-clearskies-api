@@ -129,8 +129,9 @@ def get_almanac(
     """Sun and moon snapshot for a given date (Skyfield-computed, no DB hit)."""
     target_date = params.date if params.date is not None else _today_in_station_tz()
     lat, lon, alt = _station_location()
+    station_tz = get_station_info().timezone
 
-    day = almanac_svc.compute_almanac(target_date, lat, lon, alt)
+    day = almanac_svc.compute_almanac(target_date, lat, lon, alt, station_tz=station_tz)
 
     sun = SunSnapshot(
         rise=day.sun.rise,
@@ -174,8 +175,9 @@ def get_sun_times(
     """Year-long sunrise / sunset / daylight series (no DB hit)."""
     year = params.year if params.year is not None else _current_year_in_station_tz()
     lat, lon, alt = _station_location()
+    station_tz = get_station_info().timezone
 
-    days_raw = almanac_svc.compute_sun_times_year(year, lat, lon, alt)
+    days_raw = almanac_svc.compute_sun_times_year(year, lat, lon, alt, station_tz=station_tz)
     days = [
         SunTimesDay(
             date=d.date_str,
@@ -200,8 +202,9 @@ def get_moon_phases(
     year = params.year if params.year is not None else _current_year_in_station_tz()
     month = params.month  # None = full year
     lat, lon, _alt = _station_location()
+    station_tz = get_station_info().timezone
 
-    days_raw = almanac_svc.compute_moon_phases(year, lat, lon, month)
+    days_raw = almanac_svc.compute_moon_phases(year, lat, lon, month, station_tz=station_tz)
     days = [
         MoonPhaseDay(
             date=d.date_str,

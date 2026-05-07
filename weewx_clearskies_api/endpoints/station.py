@@ -70,28 +70,23 @@ def get_station(
                     int(max_ts), tz=UTC
                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
     except SQLAlchemyError as exc:
-        # "no such table: archive" happens when the archive table hasn't been
-        # created yet (weewx has never run to create its schema, or the operator
-        # pointed clearskies-api at a fresh DB).  Treat the same as an empty
-        # archive — return null firstRecord / lastRecord rather than 500.
-        # A connection error or other SQLAlchemy failure is still a 500.
-        exc_str = str(exc).lower()
-        if "no such table" in exc_str or "table" in exc_str and "not exist" in exc_str:
-            logger.warning(
-                "archive table not found when querying MIN/MAX dateTime; "
-                "returning null firstRecord/lastRecord (weewx may not have run yet): %s",
-                exc,
-            )
-        else:
-            logger.error(
-                "DB error querying archive MIN/MAX dateTime: %s",
-                exc,
-                extra={"exc_type": type(exc).__name__},
-            )
-            raise HTTPException(
-                status_code=500,
-                detail="Database error querying archive timestamps.",
-            ) from exc
+        # Any SQLAlchemy error on this query is a 500 per the brief contract
+        # ("DB error on MIN/MAX query → 500 + RFC 9457; do not 200 with stale
+        # or null values").  The "no such table" branch that previously lived
+        # here was speculative: the startup reflector (ADR-012 / __main__.py
+        # lines 227–239) fails-closed if the archive table is absent, so
+        # production never reaches this point without a valid archive table.
+        # An empty archive returns NULL from MIN/MAX (no exception) — that
+        # case is handled by the row[0] is None check above.
+        logger.error(
+            "DB error querying archive MIN/MAX dateTime: %s",
+            exc,
+            extra={"exc_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Database error querying archive timestamps.",
+        ) from exc
 
     units = get_units_block()
 
