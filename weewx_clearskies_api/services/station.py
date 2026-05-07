@@ -280,7 +280,15 @@ def load_station_metadata(
         ) from exc
 
     # --- Altitude (required by OpenAPI; use 0 with WARN if absent) ---
-    raw_altitude = station_section.get("altitude", "").strip()
+    # configobj parses "altitude = 700, foot" as a list ['700', 'foot'] because
+    # the comma is the INI list separator.  Handle both the string and list forms.
+    raw_altitude_val = station_section.get("altitude", "")
+    if isinstance(raw_altitude_val, list):
+        # List form: ['700', 'foot'] or ['700'] — join back for _parse_altitude.
+        raw_altitude = ", ".join(str(x) for x in raw_altitude_val)
+    else:
+        raw_altitude = str(raw_altitude_val).strip()
+
     if not raw_altitude:
         logger.warning(
             "weewx.conf [Station] altitude is missing; defaulting to 0. "
