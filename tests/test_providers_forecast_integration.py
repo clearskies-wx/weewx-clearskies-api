@@ -617,3 +617,239 @@ class TestIntegrationForecastRedisBackend:
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
+
+
+
+# ===========================================================================
+# Integration test: /forecast with Aeris configured + respx-mocked (3b-4)
+# ===========================================================================
+
+# Aeris fixture loader (different fixture directory from openmeteo)
+_AERIS_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "providers" / "aeris"
+
+# Aeris integration test uses Seattle coordinates to match captured fixtures.
+_AERIS_LAT = 47.6062
+_AERIS_LON = -122.3321
+_AERIS_LOCATION = f"{round(_AERIS_LAT, 4)},{round(_AERIS_LON, 4)}"
+_AERIS_BASE_URL = f"https://data.api.xweather.com/forecasts/{_AERIS_LOCATION}"
+
+
+def _load_aeris_fixture(name: str) -> dict[str, Any]:
+    """Load a JSON fixture from tests/fixtures/providers/aeris/."""
+    path = _AERIS_FIXTURES_DIR / name
+    with path.open("r", encoding="utf-8") as fh:
+        return json.loads(fh.read())
+
+
+def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
+    """Wire the full integration stack for Aeris endpoint tests."""
+    from weewx_clearskies_api.app import create_app  # noqa: PLC0415
+    from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
+        AlertsSettings,
+        ApiSettings,
+        DatabaseSettings,
+        ForecastSettings,
+        HealthSettings,
+        LoggingSettings,
+        RateLimitSettings,
+        Settings,
+    )
+    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
+    from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+        reset_cache_for_tests,
+        wire_cache_from_env,
+    )
+    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
+        reset_provider_registry_for_tests,
+        wire_providers,
+    )
+    from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
+    from weewx_clearskies_api.services.units import (  # noqa: PLC0415
+        _GROUP_MEMBERS,
+        _SYSTEM_PRESETS,
+        reset_cache as reset_units_cache,
+    )
+    from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+
+    # Reset state
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
+    _reset_http_client_for_tests()
+    forecast_aeris._rate_limiter._calls.clear()
+
+    # Wire DB
+    wire_engine(engine)
+    registry = ColumnRegistry()
+    registry.stock = {
+        col: ColumnInfo(db_name=col, canonical_name=canon, is_stock=True)
+        for col, canon in STOCK_COLUMN_MAP.items()
+    }
+    wire_registry(registry)
+
+    # Wire station with Seattle coordinates matching Aeris fixtures
+    reset_cache()
+    station_mod._cached_station = StationInfo(
+        station_id="aeris-integration-test",
+        name="Aeris Integration Test Station",
+        latitude=_AERIS_LAT,
+        longitude=_AERIS_LON,
+        altitude=100.0,
+        timezone="America/Los_Angeles",
+        timezone_offset_minutes=-420,
+        unit_system="US",
+        hardware=None,
+    )
+
+    # Wire units
+    reset_units_cache()
+    system_map = _SYSTEM_PRESETS["US"]
+    block: dict[str, str] = {}
+    for group, unit in system_map.items():
+        for field in _GROUP_MEMBERS.get(group, []):
+            block[field] = unit
+    units_mod._cached_units_block = block
+    units_mod._cached_target_unit = "US"
+
+    # Wire cache
+    wire_cache_from_env()
+
+    # Wire Aeris capability
+    wire_providers([forecast_aeris.CAPABILITY])
+
+    settings = Settings(
+        api=ApiSettings({}),
+        health=HealthSettings({}),
+        logging_settings=LoggingSettings({}),
+        ratelimit=RateLimitSettings({}),
+        database=DatabaseSettings({}),
+        alerts=AlertsSettings({}),
+        forecast=ForecastSettings({"provider": "aeris"}),
+    )
+    app = create_app(settings)
+
+    # Wire Aeris credentials to the endpoint module
+    # (matches what __main__.py does via wire_forecast_settings)
+    from weewx_clearskies_api.endpoints import forecast as forecast_ep  # noqa: PLC0415
+    if hasattr(forecast_ep, "wire_aeris_credentials"):
+        forecast_ep.wire_aeris_credentials(
+            client_id="INTEGRATION_TEST_CLIENT_ID",
+            client_secret="INTEGRATION_TEST_CLIENT_SECRET",
+        )
+
+    return settings, app
+
+
+@pytest.fixture
+def integration_app_aeris(db_engine: Engine) -> Any:
+    """Integration app with Aeris forecast provider configured."""
+    from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+
+    _, app = _wire_aeris_integration_stack(db_engine)
+    yield app
+
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
+    _reset_http_client_for_tests()
+
+
+@pytest.fixture
+def integration_client_aeris(integration_app_aeris: Any) -> TestClient:
+    """TestClient for the Aeris-configured integration app."""
+    return TestClient(integration_app_aeris, raise_server_exceptions=False)
+
+
+class TestIntegrationForecastAerisDispatch:
+    """/forecast with Aeris configured dispatches through aeris.fetch() -> 200 source=aeris.
+
+    Per brief Test author parallel scope: extend test_providers_forecast_integration.py
+    with the aeris happy path through the dispatch branch (brief scope items 3-4).
+
+    These tests verify the aeris dispatch branch in endpoints/forecast.py
+    (wire_aeris_credentials() + elif provider_id == aeris branch per brief spec).
+    """
+
+    def test_aeris_configured_returns_200_with_source_aeris(
+        self, integration_client_aeris: TestClient
+    ) -> None:
+        """Aeris configured + respx-mocked -> /forecast returns 200 source=aeris."""
+        hourly_data = _load_aeris_fixture("forecasts_hourly.json")
+        daynight_data = _load_aeris_fixture("forecasts_daynight.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_BASE_URL, params={"filter": "1hr"}).mock(
+                return_value=httpx.Response(200, json=hourly_data)
+            )
+            mock.get(_AERIS_BASE_URL, params={"filter": "daynight"}).mock(
+                return_value=httpx.Response(200, json=daynight_data)
+            )
+            response = integration_client_aeris.get("/api/v1/forecast")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["data"]["source"] == "aeris"
+
+    def test_aeris_dispatch_returns_non_empty_hourly_and_daily(
+        self, integration_client_aeris: TestClient
+    ) -> None:
+        """Aeris dispatch -> bundle has non-empty hourly and daily arrays."""
+        hourly_data = _load_aeris_fixture("forecasts_hourly.json")
+        daynight_data = _load_aeris_fixture("forecasts_daynight.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_BASE_URL, params={"filter": "1hr"}).mock(
+                return_value=httpx.Response(200, json=hourly_data)
+            )
+            mock.get(_AERIS_BASE_URL, params={"filter": "daynight"}).mock(
+                return_value=httpx.Response(200, json=daynight_data)
+            )
+            response = integration_client_aeris.get("/api/v1/forecast")
+
+        body = response.json()
+        assert len(body["data"]["hourly"]) > 0
+        assert len(body["data"]["daily"]) > 0
+
+    def test_aeris_dispatch_discussion_is_null_for_free_tier_fixture(
+        self, integration_client_aeris: TestClient
+    ) -> None:
+        """Free-tier Aeris fixture -> discussion=null in response (no summary field)."""
+        hourly_data = _load_aeris_fixture("forecasts_hourly.json")
+        daynight_data = _load_aeris_fixture("forecasts_daynight.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_BASE_URL, params={"filter": "1hr"}).mock(
+                return_value=httpx.Response(200, json=hourly_data)
+            )
+            mock.get(_AERIS_BASE_URL, params={"filter": "daynight"}).mock(
+                return_value=httpx.Response(200, json=daynight_data)
+            )
+            response = integration_client_aeris.get("/api/v1/forecast")
+
+        body = response.json()
+        assert body["data"]["discussion"] is None
+
+    def test_aeris_dispatch_envelope_source_and_data_source_match(
+        self, integration_client_aeris: TestClient
+    ) -> None:
+        """Response envelope source=aeris matches data.source=aeris."""
+        hourly_data = _load_aeris_fixture("forecasts_hourly.json")
+        daynight_data = _load_aeris_fixture("forecasts_daynight.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_BASE_URL, params={"filter": "1hr"}).mock(
+                return_value=httpx.Response(200, json=hourly_data)
+            )
+            mock.get(_AERIS_BASE_URL, params={"filter": "daynight"}).mock(
+                return_value=httpx.Response(200, json=daynight_data)
+            )
+            response = integration_client_aeris.get("/api/v1/forecast")
+
+        body = response.json()
+        assert body["source"] == "aeris"
+        assert body["data"]["source"] == "aeris"
