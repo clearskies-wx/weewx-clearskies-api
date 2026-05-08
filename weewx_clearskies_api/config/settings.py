@@ -345,23 +345,35 @@ class AlertsSettings:
 
 
 class ForecastSettings:
-    """[forecast] section settings (3b-2).
+    """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact).
 
-    Provider id.  No provider-specific knobs for Open-Meteo (keyless, URL
-    hard-coded to the public host).  Future rounds may add knobs for keyed
-    providers (Aeris client_id, etc.); those will go in secrets.env per ADR-027.
+    Provider id and NWS-specific knobs.  No provider-specific knobs for
+    Open-Meteo (keyless, URL hard-coded to the public host).  Future rounds
+    may add knobs for keyed providers (Aeris client_id, etc.); those will go
+    in secrets.env per ADR-027.
+
+    nws_user_agent_contact: operator's email or URL for NWS User-Agent.
+    Per ADR-006, NO project-level default — operator responsibility.
+    Same contact can be pasted into [alerts] nws_user_agent_contact and
+    [forecast] nws_user_agent_contact; future ADR-027 amendment may
+    consolidate to a shared [nws] section if duplication grows (brief call 12).
 
     Accepts all five ADR-007 day-1 forecast providers even though only
-    "openmeteo" is in dispatch this round.  Providers not yet in dispatch
-    raise KeyError at startup (fail-closed, same pattern as AlertsSettings).
+    "openmeteo" and "nws" are in dispatch this round.  Providers not yet in
+    dispatch raise KeyError at startup (fail-closed, same pattern as AlertsSettings).
     """
 
     #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", "wunderground", or absent.
     provider: str | None
+    #: NWS User-Agent contact (email or URL).  Optional but recommended (ADR-006).
+    nws_user_agent_contact: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
         self.provider = raw_provider if raw_provider else None
+
+        raw_contact = str(section.get("nws_user_agent_contact", "")).strip()
+        self.nws_user_agent_contact = raw_contact if raw_contact else None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""

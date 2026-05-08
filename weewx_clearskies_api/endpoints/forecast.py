@@ -6,13 +6,16 @@ Behavior decision tree per brief §per-endpoint spec:
      discussion=null, source="none". No upstream call. No error.
   2. Provider configured, Open-Meteo returns 200 → normalize hourly + daily
      per canonical-data-model §4.1.2 / §4.1.3; slice to hours/days; return 200.
-  3. Network failure / 5xx after retries → 502 ProviderProblem (TransientNetworkError)
-  4. Open-Meteo returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After
-  5. Open-Meteo returns 400 with error envelope → 502 ProviderProblem (ProviderProtocolError)
-  6. Pydantic validation failure on wire model → 502 ProviderProblem (ProviderProtocolError)
+  3. Provider configured, NWS returns 200 → normalize hourly + daily + discussion
+     per canonical-data-model §4.1.2 / §4.1.3 / §4.1.4; return 200.
+  4. Network failure / 5xx after retries → 502 ProviderProblem (TransientNetworkError)
+  5. Provider returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After
+  6. Provider returns 400/error envelope → 502 ProviderProblem (ProviderProtocolError)
+  7. Pydantic validation failure on wire model → 502 ProviderProblem (ProviderProtocolError)
+  8. NWS /points 404 → 503 ProviderProblem (GeographicallyUnsupported)
 
 Slice-after-cache pattern (ADR-017 §Cache key):
-  Cache stores the FULL bundle (every hourly + daily point Open-Meteo returned).
+  Cache stores the FULL bundle (every hourly + daily point returned by provider).
   Endpoint applies the operator's hours / days slice on the cached canonical bundle.
   One cache entry per (station, target_unit), not one per (hours, days) tuple.
 
@@ -29,6 +32,12 @@ Provider discovery: endpoint reads the capability registry at request time.
   _wire_providers_from_config() at startup registers the configured provider's
   CAPABILITY; this endpoint checks the registry for a "forecast" domain entry.
   Tests that need the openmeteo path call wire_providers([openmeteo.CAPABILITY]).
+  Tests that need the nws path call wire_providers([nws_forecast.CAPABILITY]).
+
+NWS user-agent contact: wired separately via wire_forecast_settings() in
+  __main__.py after settings load.  Tests without a full startup use None (no
+  contact), which triggers a one-time WARNING log but works correctly.
+  Mirrors the pattern in endpoints/alerts.py (wire_alerts_settings).
 """
 
 from __future__ import annotations
@@ -54,6 +63,34 @@ from weewx_clearskies_api.services.units import get_target_unit, get_units_block
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Module-level NWS UA contact wiring (populated at startup)
+# Mirrors the pattern from endpoints/alerts.py (wire_nws_user_agent_contact).
+# ---------------------------------------------------------------------------
+
+_nws_user_agent_contact: str | None = None
+
+
+def wire_nws_user_agent_contact(contact: str | None) -> None:
+    """Store the NWS User-Agent contact string for use by the forecast endpoint.
+
+    Called from wire_forecast_settings() which is called in __main__.py after
+    settings load.  Tests that don't care about the UA leave this as None.
+    """
+    global _nws_user_agent_contact  # noqa: PLW0603
+    _nws_user_agent_contact = contact
+
+
+def wire_forecast_settings(settings: object) -> None:
+    """Wire forecast-related settings from the Settings object.
+
+    Convenience wrapper for __main__.py — extracts nws_user_agent_contact
+    from settings.forecast and calls wire_nws_user_agent_contact().
+    Mirrors wire_alerts_settings() in endpoints/alerts.py.
+    """
+    contact = getattr(getattr(settings, "forecast", None), "nws_user_agent_contact", None)
+    wire_nws_user_agent_contact(contact)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +193,18 @@ def get_forecast(
             lon=station.longitude,
             target_unit=target_unit,
             timezone=station.timezone,
+        )
+    elif provider_id == "nws":
+        from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
+
+        # fetch() returns the FULL canonical bundle (all NWS hourly + daily + discussion).
+        # Cache stores the full bundle; slice is applied below after cache lookup.
+        # _nws_user_agent_contact is set at startup via wire_forecast_settings().
+        bundle = forecast_nws.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            target_unit=target_unit,
+            user_agent_contact=_nws_user_agent_contact,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.

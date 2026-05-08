@@ -1,0 +1,8 @@
+{
+    "type": "https://api.weather.gov/problems/InvalidPoint",
+    "title": "Invalid Point",
+    "status": 404,
+    "detail": "The requested point -33.8688,151.2093 is not a valid coordinate for NWS data. The NWS API only covers the continental United States, Alaska, Hawaii, and US territories.",
+    "instance": "https://api.weather.gov/requests/abc123",
+    "correlationId": "abc123"
+}
