@@ -88,8 +88,17 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 
 def _reset_provider_state() -> None:
-    """Reset provider registry, cache, rate limiter to clean state between tests."""
-    from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
+    """Reset provider registry, cache, rate limiter, and re-wire memory cache.
+
+    Re-wiring is part of "reset" (matches 3b-2 openmeteo unit test pattern):
+    every test that calls fetch() needs a wired cache, and reset-without-rewire
+    surfaces as RuntimeError("Cache not initialised") at fetch's first
+    get_cache().get() call.
+    """
+    from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+        reset_cache_for_tests,
+        wire_cache_from_env,
+    )
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
@@ -101,6 +110,33 @@ def _reset_provider_state() -> None:
     _reset_http_client_for_tests()
     # Clear rate limiter deque so consecutive tests don't trip each other.
     _nws._rate_limiter._calls.clear()
+    # Re-wire a clean memory cache for the next test (CLEARSKIES_CACHE_URL unset
+    # in the unit test env → MemoryCache).
+    wire_cache_from_env()
+
+
+def _wire_test_station(latitude: float = 47.6062, longitude: float = -122.3321) -> None:
+    """Wire station info so endpoint tests have lat/lon for outbound NWS calls.
+
+    Default Seattle coordinates match the recorded fixtures' /points URL.
+    Endpoint tests that need a non-US location (e.g. GeographicallyUnsupported)
+    pass overrides via this helper or set _cached_station directly.
+    """
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
+    import weewx_clearskies_api.services.station as station_mod  # noqa: PLC0415
+
+    reset_cache()
+    station_mod._cached_station = StationInfo(
+        station_id="test-station",
+        name="Test Station",
+        latitude=latitude,
+        longitude=longitude,
+        altitude=100.0,
+        timezone="America/Los_Angeles",
+        timezone_offset_minutes=-420,
+        unit_system="US",
+        hardware=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,16 +170,20 @@ def _make_forecast_settings(provider: str | None = None) -> Any:
 
 @pytest.fixture()
 def forecast_client_nws() -> Any:
-    """TestClient for the forecast endpoint with NWS provider configured."""
+    """TestClient for the forecast endpoint with NWS provider configured.
+
+    Wires station info to default Seattle coordinates so /points URL matches
+    the recorded fixtures.  Tests needing a non-US location call
+    _wire_test_station(latitude=..., longitude=...) inside the test body.
+    """
     from fastapi.testclient import TestClient  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
     from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
 
     _reset_provider_state()
+    _wire_test_station()
     settings = _make_forecast_settings(provider="nws")
-    wire_cache_from_env()
     wire_providers([forecast_nws.CAPABILITY])
     app = create_app(settings)
     return TestClient(app, raise_server_exceptions=False)
@@ -154,12 +194,11 @@ def forecast_client_no_provider() -> Any:
     """TestClient for the forecast endpoint with NO provider configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
 
     _reset_provider_state()
+    _wire_test_station()
     settings = _make_forecast_settings(provider=None)
-    wire_cache_from_env()
     wire_providers([])
     app = create_app(settings)
     return TestClient(app, raise_server_exceptions=False)
@@ -1204,12 +1243,18 @@ class TestFetchCacheHit:
         except ImportError:
             pytest.skip("fakeredis not installed")
 
+        import redis as redis_lib  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import RedisCache  # noqa: PLC0415
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
 
         _reset_provider_state()
-        fake_server = fakeredis.FakeServer()
-        cache_mod._cache = RedisCache(url="redis://localhost:6379/0", _fake_server=fake_server)
+        # Bypass RedisCache.__init__'s real-Redis ping; assign fake client directly
+        # (matches 3b-1 alerts unit test pattern in test_providers_alerts_unit.py).
+        fake_client = fakeredis.FakeRedis(decode_responses=False)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = fake_client  # type: ignore[attr-defined]
+        redis_cache._redis_error_cls = redis_lib.exceptions.RedisError  # type: ignore[attr-defined]
+        cache_mod._cache = redis_cache
         self._run_cache_hit_test()
 
 
