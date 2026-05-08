@@ -21,7 +21,7 @@ Endpoints covered:
   - GET /api/v1/capabilities  nws forecast + nws alerts both configured → both providers
   - Startup: [forecast] provider = nws → wiring succeeds cleanly
   - Startup: [forecast] provider = nws + no nws_user_agent_contact → starts OK, WARN on /forecast
-  - Startup: [forecast] provider = aeris → KeyError at dispatch (not yet wired)
+  - Startup: [forecast] provider = aeris → now in dispatch (3b-4 wired; test updated)
   - Redis backend: /forecast end-to-end against real Redis
 
 ADR references: ADR-006, ADR-007, ADR-012, ADR-017, ADR-018, ADR-019, ADR-038.
@@ -697,18 +697,19 @@ class TestIntegrationStartupWiring:
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
 
-    def test_startup_with_aeris_as_forecast_provider_raises_key_error(
-        self, db_engine: Engine
-    ) -> None:
-        """[forecast] provider = aeris → KeyError at dispatch (aeris not yet wired).
+    def test_aeris_now_in_dispatch_table(self, db_engine: Engine) -> None:
+        """Verify ('forecast', 'aeris') is now in the dispatch table (3b-4 addition).
 
-        Per brief §Failure modes: ForecastSettings accepts all ADR-007 day-1 providers,
-        but dispatch lookup raises KeyError for providers not yet wired.
-        aeris is ADR-007 day-1 but not yet implemented (future 3b round).
+        This test replaces test_startup_with_aeris_as_forecast_provider_raises_key_error
+        from 3b-3, which expected KeyError because aeris was not yet wired.
+        3b-4 scope item 2 adds the ('forecast', 'aeris') row to dispatch.py;
+        the old KeyError expectation is now stale and was updated here.
         """
         from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
-        with pytest.raises(KeyError):
-            get_provider_module(domain="forecast", provider_id="aeris")
+        module = get_provider_module(domain="forecast", provider_id="aeris")
+        assert module is not None
+        assert hasattr(module, "CAPABILITY")
+        assert hasattr(module, "fetch")
 
     def test_startup_with_unknown_provider_id_raises_at_validate(
         self, db_engine: Engine
