@@ -513,12 +513,13 @@ class TestOwmValiddate:
     """_owm_validdate derives station-local YYYY-MM-DD correctly."""
 
     def test_negative_offset_shifts_date_backward(self) -> None:
-        """epoch 2026-05-09 07:00:00 UTC + offset -25200s → 2026-05-09 (midnight PDT)."""
+        """epoch UTC + negative tz_offset → station-local date is one day earlier."""
         from weewx_clearskies_api.providers.forecast.openweathermap import _owm_validdate  # noqa: PLC0415
-        # 2026-05-09 07:00:00 UTC = midnight PDT (-7h = -25200s)
-        epoch = 1746766800  # 2026-05-09T07:00:00Z
+        # 1746766800 = 2025-05-09T05:00:00Z UTC
+        # + tz_offset -25200 (-7h PDT) → local time = 2025-05-08 22:00:00 → date 2025-05-08
+        epoch = 1746766800
         result = _owm_validdate(epoch, -25200)
-        assert result == "2026-05-09"
+        assert result == "2025-05-08"
 
     def test_positive_offset_shifts_date_forward(self) -> None:
         """epoch 2026-05-08 21:00:00 UTC + offset +3600s → 2026-05-08 22:00 local."""
@@ -687,8 +688,8 @@ class TestEpochToUtcIso8601:
         result = epoch_to_utc_iso8601(
             1746734400, provider_id="openweathermap", domain="forecast"
         )
-        # 1746734400 = 2026-05-08T20:00:00Z
-        assert result == "2026-05-08T20:00:00Z"
+        # 1746734400 = 2025-05-08T20:00:00Z
+        assert result == "2025-05-08T20:00:00Z"
 
     def test_valid_epoch_string_ends_with_z(self) -> None:
         """Result always ends with Z (UTC suffix per ADR-020)."""
@@ -747,7 +748,8 @@ class TestOwmToHourlyPoint:
         )
         period = _OWMHourlyPeriod.model_validate(self._make_hourly_period())
         point = _owm_to_hourly_point(period, target_unit="US")
-        assert point.validTime == "2026-05-08T20:00:00Z"
+        # 1746734400 = 2025-05-08T20:00:00Z
+        assert point.validTime == "2025-05-08T20:00:00Z"
 
     def test_out_temp_maps_from_temp(self) -> None:
         """outTemp = period.temp."""
@@ -969,9 +971,10 @@ class TestOwmToDailyPoint:
         """validDate = station-local YYYY-MM-DD, not UTC date."""
         from weewx_clearskies_api.providers.forecast.openweathermap import _owm_to_daily_point  # noqa: PLC0415
         period = self._make_daily_period()
-        # dt=1746766800 UTC, tz_offset=-25200 → local midnight PDT = 2026-05-09
+        # dt=1746766800 = 2025-05-09T05:00:00Z UTC; tz_offset=-25200 (-7h PDT)
+        # → station-local = 2025-05-08 22:00:00 → date 2025-05-08
         point = _owm_to_daily_point(period, target_unit="US", tz_offset_seconds=-25200)
-        assert point.validDate == "2026-05-09"
+        assert point.validDate == "2025-05-08"
 
     def test_temp_max_maps_from_temp_max(self) -> None:
         """tempMax = daily[].temp.max."""
