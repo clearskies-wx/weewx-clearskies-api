@@ -73,11 +73,11 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
-    _reset_module_state_for_tests()
+    _reset_http_client_for_tests()
 
 
 # ---------------------------------------------------------------------------
@@ -422,12 +422,12 @@ class TestTargetUnitParamMapping:
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
-            _reset_module_state_for_tests,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
 
         from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
         wire_cache_from_env()
@@ -1036,13 +1036,13 @@ class TestModuleFetchCacheHit:
         )
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
             _build_cache_key,
-            _reset_module_state_for_tests,
+            _reset_http_client_for_tests,
             fetch,
         )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
 
         # Inject MemoryCache and pre-populate with a serialized bundle
         cache = MemoryCache()
@@ -1093,13 +1093,13 @@ class TestModuleFetchCacheHit:
         )
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
             _build_cache_key,
-            _reset_module_state_for_tests,
+            _reset_http_client_for_tests,
             fetch,
         )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
 
         # Build a fakeredis-backed RedisCache by patching redis.Redis.from_url
         fake_redis = fakeredis.FakeRedis()

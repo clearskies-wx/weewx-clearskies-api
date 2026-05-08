@@ -180,12 +180,12 @@ def _wire_integration_stack(
         _SYSTEM_PRESETS,
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
-    _reset_module_state_for_tests()
+    _reset_http_client_for_tests()
 
     # Wire DB
     wire_engine(engine)
@@ -261,14 +261,14 @@ def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, N
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
     _, app = _wire_integration_stack(db_engine, provider=None)
     yield app
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
-    _reset_module_state_for_tests()
+    _reset_http_client_for_tests()
 
 
 @pytest.fixture
@@ -285,14 +285,14 @@ def integration_app_openmeteo(db_engine: Engine) -> Generator[FastAPI, None, Non
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
     _, app = _wire_integration_stack(db_engine, provider="openmeteo")
     yield app
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
-    _reset_module_state_for_tests()
+    _reset_http_client_for_tests()
 
 
 @pytest.fixture
@@ -309,7 +309,7 @@ def integration_app_both_providers(db_engine: Engine) -> Generator[FastAPI, None
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
     _, app = _wire_integration_stack(
         db_engine,
@@ -320,7 +320,7 @@ def integration_app_both_providers(db_engine: Engine) -> Generator[FastAPI, None
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
-    _reset_module_state_for_tests()
+    _reset_http_client_for_tests()
 
 
 @pytest.fixture
@@ -509,11 +509,11 @@ class TestIntegrationStartupWiring:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
         wire_cache_from_env()
 
         # Simulate what _wire_providers_from_config does for forecast
@@ -527,7 +527,7 @@ class TestIntegrationStartupWiring:
         # Cleanup
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
 
     def test_startup_with_unknown_provider_id_raises_at_validate(
         self, db_engine: Engine
@@ -576,11 +576,11 @@ class TestIntegrationForecastRedisBackend:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_module_state_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
 
         # Wire real Redis
         redis_cache = RedisCache(url=_REDIS_URL)
@@ -607,4 +607,4 @@ class TestIntegrationForecastRedisBackend:
         # Cleanup
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
-        _reset_module_state_for_tests()
+        _reset_http_client_for_tests()
