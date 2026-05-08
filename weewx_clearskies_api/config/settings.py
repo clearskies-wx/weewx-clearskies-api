@@ -345,28 +345,38 @@ class AlertsSettings:
 
 
 class ForecastSettings:
-    """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact).
+    """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
+    extended 3b-4 with Aeris credentials).
 
-    Provider id and NWS-specific knobs.  No provider-specific knobs for
-    Open-Meteo (keyless, URL hard-coded to the public host).  Future rounds
-    may add knobs for keyed providers (Aeris client_id, etc.); those will go
-    in secrets.env per ADR-027.
+    Provider id and NWS-specific knobs. Open-Meteo is keyless (no knobs).
+    Aeris credentials are loaded from env vars at __init__ time per ADR-027 §3
+    (secrets never in INI; sourced from secrets.env loaded by process manager).
+
+    Naming deviation (brief Q1, user decision 2026-05-08):
+      WEEWX_CLEARSKIES_AERIS_CLIENT_ID and WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET
+      are provider-scoped (not domain-scoped as ADR-027 §3's literal schema
+      prescribes).  Rationale: Aeris credentials are provider-wide — the same
+      key works for /forecasts, /alerts, and /observations.  Domain-scoped names
+      would force the operator to paste identical keys into two env vars.
+      Deviation documented here and in providers/forecast/aeris.py; no ADR amendment.
 
     nws_user_agent_contact: operator's email or URL for NWS User-Agent.
     Per ADR-006, NO project-level default — operator responsibility.
-    Same contact can be pasted into [alerts] nws_user_agent_contact and
-    [forecast] nws_user_agent_contact; future ADR-027 amendment may
-    consolidate to a shared [nws] section if duplication grows (brief call 12).
 
     Accepts all five ADR-007 day-1 forecast providers even though only
-    "openmeteo" and "nws" are in dispatch this round.  Providers not yet in
-    dispatch raise KeyError at startup (fail-closed, same pattern as AlertsSettings).
+    "openmeteo", "nws", and "aeris" are in dispatch this round. Providers not
+    yet in dispatch raise KeyError at startup (fail-closed, same pattern as
+    AlertsSettings).
     """
 
     #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", "wunderground", or absent.
     provider: str | None
     #: NWS User-Agent contact (email or URL).  Optional but recommended (ADR-006).
     nws_user_agent_contact: str | None
+    #: Aeris client_id from env var WEEWX_CLEARSKIES_AERIS_CLIENT_ID (ADR-027 §3).
+    aeris_client_id: str | None
+    #: Aeris client_secret from env var WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET (ADR-027 §3).
+    aeris_client_secret: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -374,6 +384,14 @@ class ForecastSettings:
 
         raw_contact = str(section.get("nws_user_agent_contact", "")).strip()
         self.nws_user_agent_contact = raw_contact if raw_contact else None
+
+        # Aeris credentials — env vars only, never from the [forecast] INI section.
+        # Per ADR-027 §3: secrets come from the process manager's secrets.env file.
+        raw_aeris_id = os.environ.get("WEEWX_CLEARSKIES_AERIS_CLIENT_ID", "").strip()
+        self.aeris_client_id = raw_aeris_id if raw_aeris_id else None
+
+        raw_aeris_secret = os.environ.get("WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET", "").strip()
+        self.aeris_client_secret = raw_aeris_secret if raw_aeris_secret else None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
