@@ -68,16 +68,20 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 
 def _reset_provider_state() -> None:
-    """Reset provider registry and cache to a clean state between tests."""
+    """Reset provider registry, cache, and rate limiter to a clean state between tests."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
     _reset_http_client_for_tests()
+    # Clear the sliding-window rate limiter deque so consecutive tests don't
+    # trip each other.  The deque is internal state on the module-level singleton.
+    _om._rate_limiter._calls.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +428,12 @@ class TestTargetUnitParamMapping:
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
             _reset_http_client_for_tests,
         )
+        import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
+        _om._rate_limiter._calls.clear()
 
         from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
         wire_cache_from_env()
@@ -1043,6 +1049,8 @@ class TestModuleFetchCacheHit:
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
+        import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
+        _om._rate_limiter._calls.clear()
 
         # Inject MemoryCache and pre-populate with a serialized bundle
         cache = MemoryCache()
@@ -1100,6 +1108,8 @@ class TestModuleFetchCacheHit:
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
+        import weewx_clearskies_api.providers.forecast.openmeteo as _om2  # noqa: PLC0415
+        _om2._rate_limiter._calls.clear()
 
         # Build a fakeredis-backed RedisCache by patching redis.Redis.from_url
         fake_redis = fakeredis.FakeRedis()
