@@ -368,13 +368,19 @@ class TestIntegrationForecastOpenWeatherMap:
     def test_owm_returns_48_hourly_and_8_daily(
         self, integration_client_owm: TestClient
     ) -> None:
-        """/forecast with OWM → 48 hourly + 8 daily in bundle."""
+        """/forecast with OWM → 48 hourly + 8 daily in bundle.
+
+        Uses ?days=8 to request all 8 daily entries from OWM; the endpoint's
+        default days=7 (ForecastQueryParams default) would otherwise slice the
+        bundle to 7.  Hourly uses the default hours=48 which matches OWM's
+        natural supply.
+        """
         fixture = _load_fixture("onecall.json")
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OWM_ONECALL_URL).mock(
                 return_value=httpx.Response(200, json=fixture)
             )
-            response = integration_client_owm.get("/api/v1/forecast")
+            response = integration_client_owm.get("/api/v1/forecast?days=8")
         body = response.json()
         assert len(body["data"]["hourly"]) == 48
         assert len(body["data"]["daily"]) == 8
