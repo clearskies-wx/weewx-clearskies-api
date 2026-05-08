@@ -291,8 +291,12 @@ class TestWindMaxMpsHelpers:
     def _make_period(self, **kwargs: Any) -> Any:
         """Build a minimal _AerisDayNightPeriod with only the supplied fields."""
         from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
-        # dateTimeISO is required
-        data = {"dateTimeISO": "2026-05-08T07:00:00-07:00", **kwargs}
+        # dateTimeISO + timestamp are required (3b-4 audit F4 — match brief)
+        data = {
+            "dateTimeISO": "2026-05-08T07:00:00-07:00",
+            "timestamp": 1746716400,
+            **kwargs,
+        }
         return _AerisDayNightPeriod.model_validate(data)
 
     def test_wind_speed_max_mps_uses_mps_field_when_present(self) -> None:
@@ -361,6 +365,7 @@ class TestWireShapePydanticModels:
         from weewx_clearskies_api.providers.forecast.aeris import _AerisHourlyPeriod  # noqa: PLC0415
         raw = {
             "dateTimeISO": "2026-05-08T13:00:00-07:00",
+            "timestamp": 1746738000,
             "tempC": 14.3,
             "EXTRA_FIELD_THAT_DOES_NOT_EXIST": "should_be_ignored",
         }
@@ -391,6 +396,7 @@ class TestWireShapePydanticModels:
         from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
         raw = {
             "dateTimeISO": "2026-05-08T07:00:00-07:00",
+            "timestamp": 1746716400,
             "maxTempF": 65.0,
             "UNKNOWN_PAID_TIER_FIELD": "ignored",
         }
