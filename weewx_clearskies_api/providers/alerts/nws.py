@@ -41,7 +41,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -49,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from weewx_clearskies_api.models.responses import AlertRecord
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     ProviderProtocolError,
     TransientNetworkError,
@@ -271,32 +271,17 @@ def _build_cache_key(lat: float, lon: float) -> str:
 # Datetime normalization (ADR-020)
 # ---------------------------------------------------------------------------
 
-
+# Shared helper lifted to providers/_common/datetime_utils.py per
+# rules/coding.md §3 DRY rule; forecast/nws.py imports from there too.
+# Local alias so existing call sites (_to_canonical below) are unchanged.
 def _to_utc_iso8601(s: str) -> str:
     """Convert NWS timestamp (ISO-8601 with offset) → UTC ISO-8601 with Z suffix.
 
-    NWS always emits timestamps with a timezone offset (e.g. 2026-04-30T16:00:00-07:00).
-    ADR-020 mandates UTC ISO-8601 with explicit Z on the wire.
-
-    Raises:
-        ProviderProtocolError: Timestamp can't be parsed or has no timezone offset.
+    Thin wrapper around the shared to_utc_iso8601_from_offset helper so
+    existing call sites in this module are unchanged.  The underlying
+    implementation lives at providers/_common/datetime_utils.py.
     """
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError as exc:
-        raise ProviderProtocolError(
-            f"NWS timestamp parse failed for {s!r}: {exc}",
-            provider_id=PROVIDER_ID,
-            domain=DOMAIN,
-        ) from exc
-    if dt.tzinfo is None:
-        # NWS always emits offset; bare-naive is a protocol violation.
-        raise ProviderProtocolError(
-            f"NWS timestamp {s!r} has no timezone offset",
-            provider_id=PROVIDER_ID,
-            domain=DOMAIN,
-        )
-    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return to_utc_iso8601_from_offset(s, provider_id=PROVIDER_ID, domain=DOMAIN)
 
 
 # ---------------------------------------------------------------------------
