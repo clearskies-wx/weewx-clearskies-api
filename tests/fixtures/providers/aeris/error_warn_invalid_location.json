@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "error": {
+    "code": "warn_location",
+    "description": "The requested location could not be resolved to an authoritative data point."
+  },
+  "response": []
+}

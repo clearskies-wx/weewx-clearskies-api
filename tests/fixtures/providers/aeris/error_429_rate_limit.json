@@ -1,0 +1,8 @@
+{
+  "success": false,
+  "error": {
+    "code": "maxhits_min",
+    "description": "API rate limit exceeded. You have exceeded the maximum number of API requests per minute for your account."
+  },
+  "response": []
+}
