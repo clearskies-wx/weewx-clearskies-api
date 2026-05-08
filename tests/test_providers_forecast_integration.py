@@ -542,17 +542,23 @@ class TestIntegrationStartupWiring:
             settings.validate()
         assert "unknown_provider_xyz" in str(exc_info.value)
 
-    def test_startup_with_nws_as_forecast_provider_raises_key_error(
+    def test_startup_with_nws_as_forecast_provider_now_in_dispatch(
         self, db_engine: Engine
     ) -> None:
-        """[forecast] provider = nws → KeyError at dispatch lookup (nws not in forecast dispatch).
+        """[forecast] provider = nws → dispatch lookup succeeds (nws wired in 3b-3).
 
-        Per brief §Failure modes: ForecastSettings accepts all ADR-007 day-1 providers,
-        but dispatch lookup raises KeyError for providers not yet wired.
+        This test was previously checking that nws raised KeyError (3b-2 era — nws was
+        not yet in the forecast dispatch table).  After 3b-3 wired providers/forecast/nws.py,
+        dispatch lookup for ('forecast', 'nws') now succeeds.  The test is updated to
+        assert the new (correct) behavior.
+
+        For providers still NOT wired, see test_startup_with_aeris_as_forecast_provider
+        in test_providers_forecast_nws_integration.py.
         """
         from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
-        with pytest.raises(KeyError):
-            get_provider_module(domain="forecast", provider_id="nws")
+        module = get_provider_module(domain="forecast", provider_id="nws")
+        assert hasattr(module, "CAPABILITY")
+        assert hasattr(module, "fetch")
 
 
 # ===========================================================================

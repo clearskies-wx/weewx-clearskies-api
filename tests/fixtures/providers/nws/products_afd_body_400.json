@@ -1,0 +1,8 @@
+{
+    "type": "https://api.weather.gov/problems/NotFound",
+    "title": "Product Not Found",
+    "status": 400,
+    "detail": "The requested product was not found.",
+    "instance": "https://api.weather.gov/requests/def456",
+    "correlationId": "def456"
+}
