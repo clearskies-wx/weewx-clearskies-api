@@ -795,6 +795,27 @@ class TestToCanonical:
 # ===========================================================================
 
 
+def _mock_aeris_both_calls(
+    mock: Any,
+    hourly_data: dict[str, Any],
+    daynight_data: dict[str, Any],
+) -> None:
+    """Register respx routes for both Aeris outbound calls.
+
+    Both hourly and daynight use the same base URL path; respx matches
+    on the filter= query param to distinguish them.
+    """
+    mock.get(
+        _AERIS_HOURLY_URL,
+        params={"filter": "1hr"},
+    ).mock(return_value=httpx.Response(200, json=hourly_data))
+
+    mock.get(
+        _AERIS_DAYNIGHT_URL,
+        params={"filter": "daynight"},
+    ).mock(return_value=httpx.Response(200, json=daynight_data))
+
+
 class TestFetchCacheMissAndHit:
     """fetch() with respx-mocked HTTP — cache miss and cache hit paths."""
 
@@ -808,13 +829,8 @@ class TestFetchCacheMissAndHit:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
-                return_value=httpx.Response(200, json=hourly_data)
-            )
-            respx.get(_AERIS_DAYNIGHT_URL).mock(
-                return_value=httpx.Response(200, json=daynight_data)
-            )
+        with respx.mock(assert_all_called=False) as mock:
+            _mock_aeris_both_calls(mock, hourly_data, daynight_data)
             bundle = aeris.fetch(
                 lat=_LAT,
                 lon=_LON,
@@ -822,9 +838,8 @@ class TestFetchCacheMissAndHit:
                 client_id=_TEST_CLIENT_ID,
                 client_secret=_TEST_CLIENT_SECRET,
             )
-
-        # Two outbound calls made
-        assert respx.calls.call_count == 2
+            # Check call count inside context where calls are tracked
+            assert mock.calls.call_count == 2
 
         # Bundle has correct structure
         assert bundle.source == "aeris"
@@ -847,25 +862,21 @@ class TestFetchCacheMissAndHit:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         # Prime the cache with a real fetch
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
-                return_value=httpx.Response(200, json=hourly_data)
-            )
-            respx.get(_AERIS_DAYNIGHT_URL).mock(
-                return_value=httpx.Response(200, json=daynight_data)
-            )
+        with respx.mock(assert_all_called=False) as mock:
+            _mock_aeris_both_calls(mock, hourly_data, daynight_data)
             aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
             )
 
         # Second call — should hit cache with zero HTTP calls
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock2:
             bundle = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
             )
-        assert respx.calls.call_count == 0   # No calls in second mock context
+            assert mock2.calls.call_count == 0   # No calls on cache hit
+
         assert bundle.source == "aeris"
 
     def test_cached_bundle_with_discussion_none_round_trips_correctly(self) -> None:
@@ -877,20 +888,15 @@ class TestFetchCacheMissAndHit:
 
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
-                return_value=httpx.Response(200, json=hourly_data)
-            )
-            respx.get(_AERIS_DAYNIGHT_URL).mock(
-                return_value=httpx.Response(200, json=daynight_data)
-            )
+        with respx.mock(assert_all_called=False) as mock:
+            _mock_aeris_both_calls(mock, hourly_data, daynight_data)
             bundle1 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
             )
 
         # Cache-hit call
-        with respx.mock:
+        with respx.mock(assert_all_called=False):
             bundle2 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
@@ -908,13 +914,8 @@ class TestFetchCacheMissAndHit:
 
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
-                return_value=httpx.Response(200, json=hourly_data)
-            )
-            respx.get(_AERIS_DAYNIGHT_URL).mock(
-                return_value=httpx.Response(200, json=daynight_data)
-            )
+        with respx.mock(assert_all_called=False) as mock:
+            _mock_aeris_both_calls(mock, hourly_data, daynight_data)
             bundle1 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
@@ -923,7 +924,7 @@ class TestFetchCacheMissAndHit:
         assert bundle1.discussion is not None
 
         # Cache-hit call should reconstruct the discussion
-        with respx.mock:
+        with respx.mock(assert_all_called=False):
             bundle2 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
@@ -942,13 +943,13 @@ class TestFetchMissingCredentials:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
 
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=None, client_secret=_TEST_CLIENT_SECRET,
                 )
-        assert respx.calls.call_count == 0
+            assert mock.calls.call_count == 0
 
     def test_missing_client_secret_raises_key_invalid(self) -> None:
         """client_secret=None with valid id → KeyInvalid before any HTTP call."""
@@ -956,13 +957,13 @@ class TestFetchMissingCredentials:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
 
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=None,
                 )
-        assert respx.calls.call_count == 0
+            assert mock.calls.call_count == 0
 
     def test_both_credentials_missing_raises_key_invalid(self) -> None:
         """Both client_id=None and client_secret=None → KeyInvalid immediately."""
@@ -970,13 +971,13 @@ class TestFetchMissingCredentials:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
 
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=None, client_secret=None,
                 )
-        assert respx.calls.call_count == 0
+            assert mock.calls.call_count == 0
 
     def test_empty_string_client_id_raises_key_invalid(self) -> None:
         """Empty string client_id (falsy) → KeyInvalid (brief lead-call 12)."""
@@ -984,12 +985,13 @@ class TestFetchMissingCredentials:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
 
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id="", client_secret=_TEST_CLIENT_SECRET,
                 )
+            assert mock.calls.call_count == 0
 
 
 class TestFetchErrorPaths:
@@ -1002,8 +1004,8 @@ class TestFetchErrorPaths:
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         error_data = _load_fixture("error_401_invalid_credentials.json")
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(401, json=error_data)
             )
             with pytest.raises(KeyInvalid):
@@ -1019,8 +1021,8 @@ class TestFetchErrorPaths:
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
         error_data = _load_fixture("error_429_rate_limit.json")
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(429, json=error_data)
             )
             with pytest.raises(QuotaExhausted):
@@ -1035,8 +1037,8 @@ class TestFetchErrorPaths:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(500, json={"error": "Internal Server Error"})
             )
             with pytest.raises(TransientNetworkError):
@@ -1057,8 +1059,8 @@ class TestFetchErrorPaths:
             "response": [],
         }
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(200, json=error_envelope)
             )
             with pytest.raises(ProviderProtocolError):
@@ -1073,12 +1075,12 @@ class TestFetchErrorPaths:
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         warn_fixture = _load_fixture("error_warn_invalid_location.json")
 
-        with respx.mock:
+        with respx.mock(assert_all_called=False) as mock:
             # Both hourly and daynight return warn_location
-            respx.get(_AERIS_HOURLY_URL).mock(
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(200, json=warn_fixture)
             )
-            respx.get(_AERIS_DAYNIGHT_URL).mock(
+            mock.get(_AERIS_DAYNIGHT_URL, params={"filter": "daynight"}).mock(
                 return_value=httpx.Response(200, json=warn_fixture)
             )
             bundle = aeris.fetch(
@@ -1104,8 +1106,8 @@ class TestFetchErrorPaths:
             "response": [{"periods": [{"tempF": 58.0}]}],  # no dateTimeISO
         }
 
-        with respx.mock:
-            respx.get(_AERIS_HOURLY_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
                 return_value=httpx.Response(200, json=malformed)
             )
             with pytest.raises(ProviderProtocolError):
