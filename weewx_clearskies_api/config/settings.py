@@ -346,11 +346,12 @@ class AlertsSettings:
 
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
-    extended 3b-4 with Aeris credentials).
+    extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
 
     Provider id and NWS-specific knobs. Open-Meteo is keyless (no knobs).
-    Aeris credentials are loaded from env vars at __init__ time per ADR-027 §3
-    (secrets never in INI; sourced from secrets.env loaded by process manager).
+    Aeris and OWM credentials are loaded from env vars at __init__ time per
+    ADR-027 §3 (secrets never in INI; sourced from secrets.env loaded by the
+    process manager).
 
     Naming deviation (brief Q1, user decision 2026-05-08):
       WEEWX_CLEARSKIES_AERIS_CLIENT_ID and WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET
@@ -360,13 +361,19 @@ class ForecastSettings:
       would force the operator to paste identical keys into two env vars.
       Deviation documented here and in providers/forecast/aeris.py; no ADR amendment.
 
+    OWM naming (brief Q2, user decision 2026-05-08):
+      WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID is provider-scoped, long-form.
+      Matches the module filename (openweathermap.py) and dispatch key
+      ("openweathermap").  Consistent with the 3b-4 Aeris precedent.
+      No ADR amendment needed — same deviation class as Aeris.
+
     nws_user_agent_contact: operator's email or URL for NWS User-Agent.
     Per ADR-006, NO project-level default — operator responsibility.
 
     Accepts all five ADR-007 day-1 forecast providers even though only
-    "openmeteo", "nws", and "aeris" are in dispatch this round. Providers not
-    yet in dispatch raise KeyError at startup (fail-closed, same pattern as
-    AlertsSettings).
+    "openmeteo", "nws", "aeris", and "openweathermap" are in dispatch this
+    round. Providers not yet in dispatch raise KeyError at startup
+    (fail-closed, same pattern as AlertsSettings).
     """
 
     #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", "wunderground", or absent.
@@ -377,6 +384,9 @@ class ForecastSettings:
     aeris_client_id: str | None
     #: Aeris client_secret from env var WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET (ADR-027 §3).
     aeris_client_secret: str | None
+    #: OWM appid from env var WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID (ADR-027 §3).
+    #: Long-form provider-scoped naming per brief Q2 user decision 2026-05-08.
+    openweathermap_appid: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -392,6 +402,11 @@ class ForecastSettings:
 
         raw_aeris_secret = os.environ.get("WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET", "").strip()
         self.aeris_client_secret = raw_aeris_secret if raw_aeris_secret else None
+
+        # OWM appid — env var only, never from INI. Long-form provider-scoped name
+        # per brief Q2 user decision 2026-05-08 (matches module filename + dispatch key).
+        raw_owm_appid = os.environ.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID", "").strip()
+        self.openweathermap_appid = raw_owm_appid if raw_owm_appid else None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
