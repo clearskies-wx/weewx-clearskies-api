@@ -235,8 +235,35 @@ class ProviderHTTPClient:
                 )
 
             if 400 <= status < 500:
+                # Log the response body at ERROR before raising so operators
+                # can diagnose the 400-class failure. Many providers carry a
+                # useful explanation in the body (Open-Meteo: {"error": true,
+                # "reason": "..."}; Aeris: {"success": false, "error": {...}};
+                # NWS: {"title": "...", "detail": "..."}). Body is truncated to
+                # 500 chars to avoid log bloat. NOTE: when a future round adds
+                # a keyed forecast provider (Aeris/OWM/Wunderground), audit
+                # whether 4xx response bodies could echo back auth credentials
+                # — if so, the redaction filter or this log-body step needs an
+                # extension. Open-Meteo is keyless; this is safe today.
+                body_excerpt = response.text[:500] if response.text else ""
+                logger.error(
+                    "Provider %s 4xx %d body: %s",
+                    self.provider_id,
+                    status,
+                    body_excerpt,
+                    extra={
+                        "provider_id": self.provider_id,
+                        "domain": self.domain,
+                        "url": url,
+                        "status_code": status,
+                        "body_excerpt": body_excerpt,
+                    },
+                )
+                detail = f"Provider {self.provider_id} returned unexpected {status}"
+                if body_excerpt:
+                    detail = f"{detail}: {body_excerpt[:200]}"
                 raise ProviderProtocolError(
-                    f"Provider {self.provider_id} returned unexpected {status}",
+                    detail,
                     provider_id=self.provider_id,
                     domain=self.domain,
                 )

@@ -75,6 +75,7 @@ from weewx_clearskies_api.models.responses import (
     DailyForecastPoint,
     ForecastBundle,
     HourlyForecastPoint,
+    utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import ProviderCapability
@@ -441,9 +442,9 @@ def _local_iso_to_utc_iso8601(local_iso: str, utc_offset_seconds: int) -> str:
     return utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _now_utc_iso8601() -> str:
-    """Return the current UTC time as ISO-8601 with Z suffix."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+# NB: use utc_isoformat() from models/responses.py for "now → ISO-8601 Z"
+# string formatting per the brief's helper-reuse instruction and rules/coding.md
+# §3 DRY rule. Imported at module top.
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +582,7 @@ def _to_canonical(
         daily=daily_points,
         discussion=None,          # Open-Meteo supplies none, ever
         source=PROVIDER_ID,
-        generatedAt=_now_utc_iso8601(),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )
 
 

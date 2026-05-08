@@ -39,10 +39,8 @@ ADR references: ADR-007, ADR-010, ADR-017, ADR-018, ADR-019, ADR-020, ADR-038.
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 import respx
