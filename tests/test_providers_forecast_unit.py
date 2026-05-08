@@ -1068,7 +1068,7 @@ class TestModuleFetchCacheHit:
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
         cache_mod._cache = cache
 
-        with respx.mock(base_url="https://api.open-meteo.com") as mock:
+        with respx.mock(base_url="https://api.open-meteo.com", assert_all_called=False) as mock:
             mock.get("/v1/forecast").mock(
                 return_value=httpx.Response(200, json={})
             )
@@ -1139,7 +1139,7 @@ class TestModuleFetchCacheHit:
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
         cache_mod._cache = cache
 
-        with respx.mock(base_url="https://api.open-meteo.com") as mock:
+        with respx.mock(base_url="https://api.open-meteo.com", assert_all_called=False) as mock:
             mock.get("/v1/forecast").mock(
                 return_value=httpx.Response(200, json={})
             )
