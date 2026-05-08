@@ -1470,8 +1470,9 @@ class TestFetchErrorPaths:
 
         # Leading night(1) skipped; day periods are 2 and 4; 2 full pairs.
         assert len(result.daily) == 2
-        # First daily point comes from period 2 (isDaytime=True, startTime=2026-05-09T06:00:00-07:00)
-        assert result.daily[0].validDate == "2026-05-09"
+        # First daily point comes from period 2 (isDaytime=True, Thursday,
+        # startTime=2026-05-08T06:00:00-07:00; validDate is station-local date part).
+        assert result.daily[0].validDate == "2026-05-08"
         assert result.daily[0].tempMax == 67.0
 
 
