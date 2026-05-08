@@ -522,14 +522,12 @@ class TestOwmValiddate:
         assert result == "2025-05-08"
 
     def test_positive_offset_shifts_date_forward(self) -> None:
-        """epoch 2026-05-08 21:00:00 UTC + offset +3600s → 2026-05-08 22:00 local."""
+        """epoch UTC + positive tz_offset → station-local time is later."""
         from weewx_clearskies_api.providers.forecast.openweathermap import _owm_validdate  # noqa: PLC0415
-        # 2026-05-08 23:00:00 UTC + 1h = 2026-05-09 00:00:00 local → date 2026-05-09
-        epoch_utc = 1746748800  # 2026-05-09 00:00:00 UTC exactly? No let's be precise.
-        # 1746748800 = 2026-05-09 00:00:00 UTC
-        # With +3600 offset → local time is 01:00:00 on 2026-05-09 → date stays 2026-05-09
+        # 1746748800 = 2025-05-09T00:00:00Z UTC
+        # With +3600 (+1h) offset → local time = 2025-05-09 01:00:00 → date 2025-05-09
         result = _owm_validdate(1746748800, 3600)
-        assert result == "2026-05-09"
+        assert result == "2025-05-09"
 
     def test_zero_offset_uses_utc_date(self) -> None:
         """epoch + 0 offset → pure UTC date."""
