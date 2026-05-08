@@ -3,7 +3,7 @@
 Strips the following from every log record before it is formatted:
   - The value of Authorization headers
   - The value of X-Clearskies-Proxy-Auth headers
-  - Query-string values for 'appid' and 'client_secret'
+  - Query-string values for 'appid', 'client_id', and 'client_secret'
   - SQL parameter values (logged query templates only — never the bound values)
 
 This is defense-in-depth; the primary control is "don't log secrets in the
@@ -50,6 +50,14 @@ _APPID_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match client_id= query parameter value (F13 from 3b-1, fires on first keyed provider)
+# Pattern mirrors _CLIENT_SECRET_RE; both are Aeris query-param credentials.
+# Fires this round (3b-4) because Aeris is the first keyed provider on this project.
+_CLIENT_ID_RE = re.compile(
+    r"((?:^|[?&])client_id=)[^&\s\n\"']+",
+    re.IGNORECASE,
+)
+
 # Match client_secret= query parameter value
 _CLIENT_SECRET_RE = re.compile(
     r"((?:^|[?&])client_secret=)[^&\s\n\"']+",
@@ -82,6 +90,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (_AUTH_HEADER_RE, r"\g<1>" + _REDACTED),
     (_PROXY_AUTH_RE, r"\g<1>" + _REDACTED),
     (_APPID_RE, r"\g<1>" + _REDACTED),
+    (_CLIENT_ID_RE, r"\g<1>" + _REDACTED),
     (_CLIENT_SECRET_RE, r"\g<1>" + _REDACTED),
     (_SQL_LITERAL_RE, _REDACTED),
 ]
