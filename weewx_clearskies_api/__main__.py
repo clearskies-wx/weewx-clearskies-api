@@ -196,15 +196,21 @@ def _run_server(settings: Settings) -> None:
 def _wire_providers_from_config(settings: Settings) -> None:
     """Build the provider declarations list from operator config and register.
 
-    Single source per domain per ADR-016.  If [alerts] provider is set,
-    look up the module via dispatch and register its CAPABILITY.
+    Single source per domain per ADR-016 / ADR-007.  If [alerts] or [forecast]
+    provider is set, look up the module via dispatch and register its CAPABILITY.
 
-    Future rounds extend this with forecast, aqi, earthquakes, radar.
+    Future rounds extend this with aqi, earthquakes, radar.
 
     Failure modes:
       - [alerts] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
-      - [alerts] provider absent → empty declarations list; /alerts returns
+      - [alerts] provider absent → empty contribution; /alerts returns
         source="none" per ADR-016 §Out-of-scope.
+      - [forecast] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
+      - [forecast] provider = <ADR-007-listed-but-not-yet-wired> (e.g. "nws")
+        → ForecastSettings.validate() accepts the id; dispatch KeyError fires
+        at startup (fail-closed, same pattern as alerts case).
+      - [forecast] provider absent → empty contribution; /forecast returns
+        source="none" per ADR-007.
     """
     declarations: list[ProviderCapability] = []
 
@@ -224,6 +230,25 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
+    if settings.forecast.provider:
+        provider_id = settings.forecast.provider
+        try:
+            module = get_provider_module(domain="forecast", provider_id=provider_id)
+        except KeyError as exc:
+            logger.critical(
+                "FATAL: Unknown forecast provider %r in api.conf — clearskies-api cannot start. "
+                "Cause: %s. "
+                "Check [forecast] provider in api.conf. "
+                "Currently wired: openmeteo. "
+                "Accepted by config (ADR-007 day-1 set) but not yet wired: "
+                "nws, aeris, openweathermap, wunderground.",
+                provider_id,
+                exc,
+            )
+            sys.exit(1)
+        declarations.append(module.CAPABILITY)
+
+    # Future rounds extend this with aqi, earthquakes, radar.
     wire_providers(declarations)
 
 

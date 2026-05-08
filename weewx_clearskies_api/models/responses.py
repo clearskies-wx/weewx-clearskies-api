@@ -519,6 +519,119 @@ class MarkdownResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Forecast (ADR-007, canonical-data-model §3.3, §3.4, §3.5, §3.10)
+# ---------------------------------------------------------------------------
+
+# ruff: noqa: N815  (field names use canonical camelCase: validTime, outTemp, etc.)
+
+
+class HourlyForecastPoint(BaseModel):
+    """Canonical hourly forecast record (ADR-010 §3.3, OpenAPI HourlyForecastPoint schema).
+
+    extra="ignore" so provider-specific wire fields don't break normalization.
+    Required fields per OpenAPI: validTime, source.
+    All forecast numeric fields are Optional — providers may not supply all.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    validTime: str                      # UTC ISO-8601 with Z
+    outTemp: float | None = None
+    outHumidity: float | None = None
+    windSpeed: float | None = None
+    windDir: float | None = None
+    windGust: float | None = None
+    precipProbability: float | None = None   # 0-100
+    precipAmount: float | None = None
+    precipType: str | None = None            # "rain" | "snow" | "freezing-rain" | null
+    cloudCover: float | None = None          # 0-100
+    weatherCode: str | None = None           # WMO code as string (opaque to api)
+    weatherText: str | None = None           # Human-readable (decoded from WMO)
+    source: str
+    extras: dict[str, Any] = {}
+
+
+class DailyForecastPoint(BaseModel):
+    """Canonical daily forecast record (ADR-010 §3.4, OpenAPI DailyForecastPoint schema).
+
+    extra="ignore" so provider-specific wire fields don't break normalization.
+    Required fields per OpenAPI: validDate, source.
+    validDate is station-local "YYYY-MM-DD" (ADR-020: date-only fields stay local).
+    sunrise/sunset are UTC ISO-8601 with Z (full datetime fields).
+    narrative is always None for Open-Meteo (no per-day narrative supplied).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    validDate: str                           # station-local "YYYY-MM-DD"
+    tempMax: float | None = None
+    tempMin: float | None = None
+    precipAmount: float | None = None
+    precipProbabilityMax: float | None = None  # 0-100
+    windSpeedMax: float | None = None
+    windGustMax: float | None = None
+    sunrise: str | None = None               # UTC ISO-8601 with Z
+    sunset: str | None = None                # UTC ISO-8601 with Z
+    uvIndexMax: float | None = None
+    weatherCode: str | None = None           # WMO code as string
+    weatherText: str | None = None
+    narrative: str | None = None             # per-day summary (NWS/some Aeris plans; null here)
+    source: str
+    extras: dict[str, Any] = {}
+
+
+class ForecastDiscussion(BaseModel):
+    """Canonical forecast discussion (ADR-010 §3.5, OpenAPI ForecastDiscussion schema).
+
+    Always null for Open-Meteo (no discussion endpoint).
+    Defined here for completeness and for future NWS / Aeris rounds.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    headline: str | None = None
+    body: str
+    issuedAt: str                # UTC ISO-8601 with Z
+    validFrom: str | None = None # UTC ISO-8601 with Z
+    validUntil: str | None = None
+    senderName: str | None = None
+    source: str
+
+
+class ForecastBundle(BaseModel):
+    """ForecastBundle container (ADR-010 §3.10, OpenAPI ForecastBundle schema).
+
+    extra="ignore" for round-trip safety through cache (model_dump → model_validate).
+    discussion is always None for Open-Meteo; ForecastDiscussion for providers
+    that supply it (NWS AFD, some Aeris plans).
+    source: provider_id (e.g. "openmeteo") or "none" when no provider is configured.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    hourly: list[HourlyForecastPoint] = []
+    daily: list[DailyForecastPoint] = []
+    discussion: ForecastDiscussion | None = None
+    source: str
+    generatedAt: str                # UTC ISO-8601 with Z
+
+
+class ForecastResponse(BaseModel):
+    """ForecastResponse envelope (OpenAPI ForecastResponse schema).
+
+    data: ForecastBundle (hourly + daily + discussion + source + generatedAt).
+    units: UnitsBlock from services/units.py — same wiring as observations + records.
+    source: mirrors data.source (provider_id or "none").
+    generatedAt: UTC ISO-8601 with Z.
+    """
+
+    data: ForecastBundle
+    units: dict[str, str]
+    source: str
+    generatedAt: str                # UTC ISO-8601 with Z
+
+
+# ---------------------------------------------------------------------------
 # Alerts (ADR-016, canonical-data-model §3.6 + §3.11)
 # ---------------------------------------------------------------------------
 

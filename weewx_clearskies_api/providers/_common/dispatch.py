@@ -6,7 +6,10 @@ no runtime plugin loading; outside contributors PR into the bundled set).
 
 Adding a new provider = importing the new module and adding one row here.
 When 3b round 2 adds Aeris alerts: one new import + one new row.
-When forecast domain lands: five new rows.
+When forecast domain lands: five new rows (one per provider per ADR-007 day-1 set).
+  Currently only openmeteo is wired; future rounds add nws, aeris, openweathermap,
+  wunderground.  ForecastSettings.validate() accepts all five; dispatch KeyError
+  at startup catches the "accepted but not yet wired" case (fail-closed per brief).
 """
 
 from __future__ import annotations
@@ -14,9 +17,11 @@ from __future__ import annotations
 from types import ModuleType
 
 from weewx_clearskies_api.providers.alerts import nws as alerts_nws
+from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
 
 PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("alerts", "nws"): alerts_nws,
+    ("forecast", "openmeteo"): forecast_openmeteo,
 }
 
 

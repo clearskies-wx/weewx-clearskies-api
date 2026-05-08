@@ -344,6 +344,35 @@ class AlertsSettings:
             )
 
 
+class ForecastSettings:
+    """[forecast] section settings (3b-2).
+
+    Provider id.  No provider-specific knobs for Open-Meteo (keyless, URL
+    hard-coded to the public host).  Future rounds may add knobs for keyed
+    providers (Aeris client_id, etc.); those will go in secrets.env per ADR-027.
+
+    Accepts all five ADR-007 day-1 forecast providers even though only
+    "openmeteo" is in dispatch this round.  Providers not yet in dispatch
+    raise KeyError at startup (fail-closed, same pattern as AlertsSettings).
+    """
+
+    #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", "wunderground", or absent.
+    provider: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip()
+        self.provider = raw_provider if raw_provider else None
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"openmeteo", "nws", "aeris", "openweathermap", "wunderground"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[forecast] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values: 'openmeteo', 'nws', 'aeris', 'openweathermap', 'wunderground'."
+            )
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -358,6 +387,7 @@ class Settings:
     content: ContentSettings
     pages: PagesSettings
     alerts: AlertsSettings
+    forecast: ForecastSettings
 
     def __init__(
         self,
@@ -372,6 +402,7 @@ class Settings:
         content: ContentSettings | None = None,
         pages: PagesSettings | None = None,
         alerts: AlertsSettings | None = None,
+        forecast: ForecastSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
@@ -384,6 +415,7 @@ class Settings:
         self.content = content if content is not None else ContentSettings({})
         self.pages = pages if pages is not None else PagesSettings({})
         self.alerts = alerts if alerts is not None else AlertsSettings({})
+        self.forecast = forecast if forecast is not None else ForecastSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -392,6 +424,7 @@ class Settings:
         self.ratelimit.validate()
         self.database.validate()
         self.alerts.validate()
+        self.forecast.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +514,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     content_cfg = ContentSettings(dict(cfg.get("content", {})))
     pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
+    forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -494,6 +528,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         content=content_cfg,
         pages=pages_cfg,
         alerts=alerts_cfg,
+        forecast=forecast_cfg,
     )
     settings.validate()
 

@@ -1,0 +1,9 @@
+{
+    "generationtime_ms": 0.123,
+    "utc_offset_seconds": -25200,
+    "timezone": "America/Los_Angeles",
+    "hourly": {
+        "time": ["2026-05-07T00:00"],
+        "temperature_2m": [52.9]
+    }
+}

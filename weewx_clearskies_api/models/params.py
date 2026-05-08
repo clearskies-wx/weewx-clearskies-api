@@ -192,6 +192,38 @@ class MoonPhasesQueryParams(BaseModel):
 # /alerts query params
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# /forecast query params
+# ---------------------------------------------------------------------------
+
+# Open-Meteo supports forecast_days=0..16 (docs/reference/api-docs/openmeteo.md).
+# Hourly max = 16 days × 24 h = 384 hours.
+_FORECAST_MAX_HOURS = 384
+_FORECAST_MAX_DAYS = 16
+
+
+class ForecastQueryParams(BaseModel):
+    """Validated query parameters for GET /forecast.
+
+    hours: Number of hourly forecast points (default 48, max 384).
+    days: Number of daily forecast points (default 7, max 16).
+
+    extra="forbid" per security-baseline §3.5 — unknown query keys are
+    rejected with 422 (reshaped to 400 problem+json by the error handler).
+
+    Slice-after-cache pattern (ADR-017 §Cache key brief §lead-call 13):
+    These params are applied at the endpoint layer after cache lookup.
+    The module always asks Open-Meteo for the full default forecast window
+    so the cache entry is operator-uniform.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    hours: int = Field(default=48, ge=0, le=_FORECAST_MAX_HOURS)
+    days: int = Field(default=7, ge=0, le=_FORECAST_MAX_DAYS)
+
+
+
 _SEVERITY_CHOICES = frozenset({"advisory", "watch", "warning"})
 # Severity order: higher index = more severe.
 # Severity filter: advisory returns all; watch returns watch+warning; warning returns warning only.
