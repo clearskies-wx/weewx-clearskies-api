@@ -1440,59 +1440,35 @@ class TestQ1PathNon401KeyInvalidReRaises:
 class TestRedactionFilter:
     """appid query param is redacted in logged URLs (3b-1 filter, lead-call 6 brief)."""
 
-    def test_url_with_appid_param_is_redacted_in_log(self, caplog: Any) -> None:
-        """A URL containing ?appid=ABC123 logs as ?appid=[REDACTED]."""
-        from weewx_clearskies_api.logging.redaction_filter import CredentialRedactionFilter  # noqa: PLC0415
-
-        f = CredentialRedactionFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="Fetching https://api.openweathermap.org/data/3.0/onecall?lat=47.6&lon=-122.3&appid=ABC123&units=imperial",
-            args=(),
-            exc_info=None,
+    def test_url_with_appid_param_is_redacted(self) -> None:
+        """A URL containing ?appid=ABC123 → appid=[REDACTED] after redaction."""
+        from weewx_clearskies_api.logging.redaction_filter import _redact  # noqa: PLC0415
+        url = (
+            "https://api.openweathermap.org/data/3.0/onecall"
+            "?lat=47.6&lon=-122.3&appid=ABC123&units=imperial"
         )
-        f.filter(record)
-        assert "[REDACTED]" in record.msg
-        assert "ABC123" not in record.msg
+        redacted = _redact(url)
+        assert "ABC123" not in redacted
+        assert "appid=[REDACTED]" in redacted
 
-    def test_appid_in_middle_of_query_string_is_redacted(self, caplog: Any) -> None:
+    def test_appid_in_middle_of_query_string_is_redacted(self) -> None:
         """appid in the middle of a query string (before other params) is redacted."""
-        from weewx_clearskies_api.logging.redaction_filter import CredentialRedactionFilter  # noqa: PLC0415
+        from weewx_clearskies_api.logging.redaction_filter import _redact  # noqa: PLC0415
+        url = "/data/3.0/onecall?appid=MYSECRETKEY123&units=imperial&exclude=minutely"
+        redacted = _redact(url)
+        assert "MYSECRETKEY123" not in redacted
+        assert "appid=[REDACTED]" in redacted
 
-        f = CredentialRedactionFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="GET /data/3.0/onecall?appid=MYSECRETKEY123&units=imperial&exclude=minutely",
-            args=(),
-            exc_info=None,
+    def test_appid_only_in_owm_url_shape_is_redacted(self) -> None:
+        """OWM uses only appid (not client_secret); appid redaction works correctly."""
+        from weewx_clearskies_api.logging.redaction_filter import _redact  # noqa: PLC0415
+        url = (
+            "https://api.openweathermap.org/data/3.0/onecall"
+            "?lat=47.6&lon=-122.3&appid=OWMKEY999"
         )
-        f.filter(record)
-        assert "MYSECRETKEY123" not in record.msg
-        assert "[REDACTED]" in record.msg
-
-    def test_appid_only_not_client_secret_in_owm_url(self) -> None:
-        """OWM uses only appid (not client_secret); redaction still works for appid."""
-        from weewx_clearskies_api.logging.redaction_filter import CredentialRedactionFilter  # noqa: PLC0415
-
-        f = CredentialRedactionFilter()
-        record = logging.LogRecord(
-            name="test",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg="Calling https://api.openweathermap.org/data/3.0/onecall?lat=47.6&lon=-122.3&appid=OWMKEY999",
-            args=(),
-            exc_info=None,
-        )
-        f.filter(record)
-        assert "OWMKEY999" not in record.msg
-        assert "appid=[REDACTED]" in record.msg
+        redacted = _redact(url)
+        assert "OWMKEY999" not in redacted
+        assert "appid=[REDACTED]" in redacted
 
 
 # ===========================================================================
