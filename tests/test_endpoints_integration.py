@@ -681,14 +681,24 @@ class TestArchiveEndpoint:
             f"Expected {expected_count} rows in the from/to window, got {len(data)}"
         )
 
-    def test_archive_default_without_params_returns_seed_rows(
+    def test_archive_with_seed_window_returns_seed_rows(
         self, integration_client: TestClient
     ) -> None:
-        """/archive without params returns rows (non-empty for seeded archive)."""
-        resp = integration_client.get("/api/v1/archive")
+        """/archive with the seed window's from/to returns the seeded rows.
+
+        Seed data is at fixed timestamps (2026-05-06T20:15-20:35Z); the endpoint's
+        default window is (now - 24h, now) per services/archive.py:308, which
+        drifts past the seed timestamps as time advances.  Passing the seed
+        window explicitly is the correct way to test "seeded archive returns
+        rows."
+        """
+        resp = integration_client.get(
+            "/api/v1/archive",
+            params={"from": "2026-05-06T20:00:00Z", "to": "2026-05-06T21:00:00Z"},
+        )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert len(data) > 0, "Seeded archive must return at least one row"
+        assert len(data) > 0, "Seeded archive must return at least one row in the seed window"
 
     def test_archive_page_info_has_limit(self, integration_client: TestClient) -> None:
         """/archive page object has 'limit' field (required per OpenAPI)."""
@@ -795,14 +805,24 @@ class TestArchiveEndpoint:
     def test_archive_cursor_pagination_yields_all_rows_exactly_once(
         self, integration_client: TestClient
     ) -> None:
-        """Cursor-based pagination walks all rows exactly once (no duplicates)."""
+        """Cursor-based pagination walks all rows exactly once (no duplicates).
+
+        Passes from/to covering the seed window because the endpoint's default
+        window is (now - 24h, now) per services/archive.py:308 and drifts past
+        the seed timestamps as time advances.
+        """
         # Use a small limit to force multiple pages (5 seed rows, limit=2)
         limit = 2
         all_timestamps: list[str] = []
         cursor: str | None = None
 
         for _ in range(10):  # Safety cap: max 10 pages for 5 seed rows
-            params: dict[str, Any] = {"limit": limit, "interval": "raw"}
+            params: dict[str, Any] = {
+                "limit": limit,
+                "interval": "raw",
+                "from": "2026-05-06T20:00:00Z",
+                "to": "2026-05-06T21:00:00Z",
+            }
             if cursor:
                 params["cursor"] = cursor
 
@@ -824,7 +844,7 @@ class TestArchiveEndpoint:
         assert len(all_timestamps) == len(set(all_timestamps)), (
             "Cursor pagination must not yield duplicate rows"
         )
-        # Assert count matches seed (within the default time window)
+        # Assert count matches seed (within the explicit seed window)
         assert len(all_timestamps) > 0, (
             "Cursor pagination must return at least some rows"
         )
