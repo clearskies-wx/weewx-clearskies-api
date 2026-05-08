@@ -747,8 +747,9 @@ class TestIntegrationForecastNwsRedisBackend:
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
 
-        # Wire real Redis.
+        # Wire real Redis and flush to clear any prior-test state.
         redis_cache = RedisCache(url=_REDIS_URL)
+        redis_cache._client.flushdb()  # type: ignore[attr-defined]
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
         cache_mod._cache = redis_cache
 
@@ -766,6 +767,7 @@ class TestIntegrationForecastNwsRedisBackend:
         assert body["data"]["source"] == "nws"
 
         # Cleanup.
+        redis_cache._client.flushdb()  # type: ignore[attr-defined]
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
@@ -792,6 +794,7 @@ class TestIntegrationForecastNwsRedisBackend:
         _reset_http_client_for_tests()
 
         redis_cache = RedisCache(url=_REDIS_URL)
+        redis_cache._client.flushdb()  # type: ignore[attr-defined]  # ensure cold cache for first request
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
         cache_mod._cache = redis_cache
 
@@ -822,6 +825,7 @@ class TestIntegrationForecastNwsRedisBackend:
         )
 
         # Cleanup.
+        redis_cache._client.flushdb()  # type: ignore[attr-defined]
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
