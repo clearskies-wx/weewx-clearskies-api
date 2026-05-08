@@ -31,11 +31,19 @@ class ProviderError(Exception):
         provider_id: str,
         domain: str,
         retry_after_seconds: int | None = None,
+        status_code: int | None = None,
     ) -> None:
         super().__init__(message)
         self.provider_id = provider_id
         self.domain = domain
         self.retry_after_seconds = retry_after_seconds
+        # status_code is set by ProviderHTTPClient when the exception comes from
+        # an HTTP boundary (4xx/5xx).  Provider modules that need to dispatch
+        # on HTTP status (e.g. forecast/nws translates /points 404 →
+        # GeographicallyUnsupported) should match against `exc.status_code`,
+        # NOT against the human-readable message string.  None when raised
+        # outside an HTTP context (e.g. wire-shape validation).
+        self.status_code = status_code
 
 
 class QuotaExhausted(ProviderError):

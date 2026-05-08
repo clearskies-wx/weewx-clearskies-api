@@ -225,6 +225,7 @@ class ProviderHTTPClient:
                     provider_id=self.provider_id,
                     domain=self.domain,
                     retry_after_seconds=retry_seconds,
+                    status_code=status,
                 )
 
             if status in (401, 403):
@@ -232,6 +233,7 @@ class ProviderHTTPClient:
                     f"Provider {self.provider_id} returned {status} (auth failure)",
                     provider_id=self.provider_id,
                     domain=self.domain,
+                    status_code=status,
                 )
 
             if 400 <= status < 500:
@@ -266,6 +268,7 @@ class ProviderHTTPClient:
                     detail,
                     provider_id=self.provider_id,
                     domain=self.domain,
+                    status_code=status,
                 )
 
             # --- 5xx: retry ---
@@ -301,6 +304,7 @@ class ProviderHTTPClient:
             f"after {self._max_retries + 1} attempts",
             provider_id=self.provider_id,
             domain=self.domain,
+            status_code=last_response.status_code,
         )
 
     def close(self) -> None:

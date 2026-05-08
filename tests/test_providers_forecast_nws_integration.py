@@ -93,8 +93,22 @@ def _require_redis() -> None:
         import redis as redis_lib  # noqa: PLC0415
         r = redis_lib.Redis.from_url(_REDIS_URL)
         r.ping()
-    except Exception:  # noqa: BLE001
-        pytest.skip(f"Redis not reachable at {_REDIS_URL}; start redis compose profile")
+    except (ImportError, ConnectionError, OSError) as exc:
+        pytest.skip(
+            f"Redis not reachable at {_REDIS_URL} ({type(exc).__name__}); "
+            "start redis compose profile"
+        )
+    except Exception as exc:  # noqa: BLE001 — narrow to redis-py errors below if not caught above
+        # redis_lib.exceptions.RedisError is a separate hierarchy from
+        # ConnectionError; catch its base class here.  Import-after-use to
+        # keep the test skippable when redis-py itself is missing (caught above).
+        import redis as _redis_lib  # noqa: PLC0415
+        if isinstance(exc, _redis_lib.exceptions.RedisError):
+            pytest.skip(
+                f"Redis not reachable at {_REDIS_URL} ({type(exc).__name__}); "
+                "start redis compose profile"
+            )
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +447,10 @@ class TestIntegrationForecastNws:
             response = integration_client_nws.get("/api/v1/forecast")
         body = response.json()
         assert body["data"]["discussion"] is not None
-        assert body["data"]["discussion"]["senderName"] == "KSEW"
+        # Per canonical-data-model §4.1.4 NWS column: senderName is the
+        # "NWS [Location]" composite parsed from the AFD body's
+        # "National Weather Service [Location]" line.
+        assert body["data"]["discussion"]["senderName"] == "NWS Seattle WA"
 
     def test_nws_units_block_is_dict(
         self, integration_client_nws: TestClient

@@ -88,6 +88,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import urllib.parse
 from typing import Any, Literal
 
@@ -500,7 +501,10 @@ def _extract_icon_shortname(icon_url: str | None) -> str | None:
         # Strip intensity comma-suffix: "sct,30" → "sct".
         shortname = basename.split(",", 1)[0]
         return shortname if shortname else None
-    except Exception:  # noqa: BLE001
+    except (AttributeError, TypeError, ValueError):
+        # AttributeError: non-string passed despite type hint
+        # TypeError: urllib internals on unexpected types
+        # ValueError: urlparse on truly degenerate inputs
         return None
 
 
@@ -624,6 +628,91 @@ def _get_precip_type_from_icon(icon_url: str | None) -> str | None:
             )
             _mixed_precip_shortnames_logged.add(shortname)
     return precip_type
+
+
+# ---------------------------------------------------------------------------
+# AFD body parsing (canonical §4.1.4 NWS column)
+# ---------------------------------------------------------------------------
+
+# WMO header lines to skip when extracting the AFD body's first line.
+# Real AFD productText starts:
+#   000\n                          ← WMO sentinel
+#   FXUS66 KSEW 080340\n           ← WMO ID + station + DDDDZZ datetime
+#   AFDSEW\n                       ← product code
+#   \n
+#   Area Forecast Discussion\n     ← FIRST CONTENT LINE — the AFD title
+#   National Weather Service Seattle WA\n
+#   840 PM PDT Thu May 7 2026\n
+#   ...
+_AFD_WMO_SENTINEL_RE = re.compile(r"^\d{3}$")
+_AFD_WMO_ID_RE = re.compile(r"^[A-Z]{3,4}\d{2}\s+[A-Z]{4}")  # "FXUS66 KSEW ..."
+_AFD_PRODUCT_CODE_RE = re.compile(r"^AFD[A-Z]{3,4}$")        # "AFDSEW"
+# The AFD body header line that names the sender — line is typically
+# "National Weather Service Seattle WA" or "National Weather Service Boston/Norton MA".
+_AFD_SENDER_PREFIX = "National Weather Service "
+
+
+def _extract_afd_headline_and_sender(
+    product_text: str,
+) -> tuple[str | None, str | None]:
+    """Extract canonical headline + senderName from AFD productText.
+
+    Per canonical-data-model §4.1.4 NWS column:
+      headline    = productText first line  (after WMO wire header)
+      senderName  = wmoCollectiveId + issuingOffice composite,
+                    e.g. "NWS Seattle WA" (from the AFD body's
+                    "National Weather Service [Location]" line abbreviated).
+
+    AFD wire format starts with:
+      "000\\n"                       (WMO sentinel)
+      "FXUS66 KSEW DDDDZZ ...\\n"    (WMO collective ID + originating station + time)
+      "AFDSEW\\n"                    (product code: AFD + 3-4 letter office suffix)
+      "\\n"                          (blank)
+      "Area Forecast Discussion\\n"  ← first real content line
+      "National Weather Service Seattle WA\\n"
+      "[Issuance time line]\\n"
+      ".SYNOPSIS...\\n"
+      ...
+
+    This helper:
+      - Skips leading blanks, the WMO sentinel, the WMO ID line, and the
+        AFD product code line.
+      - Returns the first remaining non-blank line as headline.
+      - Scans the body for a line starting with "National Weather Service "
+        and abbreviates it to "NWS [Location]" for senderName.
+
+    Both fields are None if extraction fails (malformed AFD body).
+    Caller falls back to wmoCollectiveId/issuingOffice in that case.
+
+    Pure function; tested in isolation.
+    """
+    if not product_text:
+        return None, None
+
+    headline: str | None = None
+    sender: str | None = None
+
+    for raw_line in product_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if headline is None:
+            # Still skipping wire-format header.  Skip sentinel, WMO ID, product code.
+            if _AFD_WMO_SENTINEL_RE.match(line):
+                continue
+            if _AFD_WMO_ID_RE.match(line):
+                continue
+            if _AFD_PRODUCT_CODE_RE.match(line):
+                continue
+            # First non-header content line.
+            headline = line
+        if sender is None and line.startswith(_AFD_SENDER_PREFIX):
+            location = line[len(_AFD_SENDER_PREFIX):].strip()
+            sender = f"NWS {location}" if location else "NWS"
+        if headline is not None and sender is not None:
+            break
+
+    return headline, sender
 
 
 # ---------------------------------------------------------------------------
@@ -753,12 +842,13 @@ def _zip_daily(
 
         temp_min: float | None = night.temperature if night is not None else None
 
-        # precipProbabilityMax: max across day + night, treat null as 0.
+        # precipProbabilityMax: max across day + night, treat null as 0
+        # (brief call 18).  Real-zero stays as 0 — canonical §4.1.3 has no
+        # 0-collapses-to-null rule, and a clear-day "0%" is meaningfully
+        # distinct from "data unavailable" for the dashboard consumer.
         day_prob = _get_precip_probability(day) or 0.0
         night_prob = (_get_precip_probability(night) or 0.0) if night is not None else 0.0
-        precip_prob_max = max(day_prob, night_prob)
-        # Canonical: None if both zero (no explicit precip probability in either).
-        precip_prob_max_val: float | None = precip_prob_max if precip_prob_max > 0 else None
+        precip_prob_max_val: float = max(day_prob, night_prob)
 
         # windSpeedMax: upper bound across day + night.
         day_wind = _parse_wind_speed(day.windSpeed)
@@ -910,6 +1000,18 @@ def fetch(
     user_agent = _build_user_agent(user_agent_contact)
     client = _get_http_client(user_agent)
 
+    # Rate-limiter: single acquire() per fetch() despite the 5 outbound HTTP
+    # calls that follow on a cache miss.  Accepted deviation from
+    # RateLimiter's "acquire before each outbound call" docstring contract:
+    # NWS forecast TTL = 30 min (ADR-017), so the real call rate per station
+    # is ~1 cache-miss-burst per 30 min, far below the polite-guard ceiling
+    # of 5 calls/sec.  Per-call acquires would inflate the deque without
+    # changing the practical guarantee.  NWS doesn't publish a real per-second
+    # quota; the limiter is here as a polite floor, not a hard quota gate.
+    # If a future provider with a published per-second quota lands (e.g.
+    # Aeris paid plans), it should call acquire() before each outbound call
+    # literally — see RateLimiter.acquire() docstring in providers/_common/
+    # rate_limiter.py.
     _rate_limiter.acquire()
 
     # --- Step 1: /points/{lat},{lon} ---
@@ -927,7 +1029,11 @@ def fetch(
         # 4xx responses including 404.  NWS /points 404 = non-US lat/lon
         # (brief call 13, ADR-007 §Per-module behavior NWS row).
         # Re-raise as GeographicallyUnsupported → 503 per canonical taxonomy.
-        if "404" in str(exc):
+        # Match against exc.status_code (structured attribute set by
+        # ProviderHTTPClient) — NOT the message string, which is brittle
+        # under wrapper-message refactors.  Pattern documented in
+        # providers/_common/errors.py ProviderError.__init__ docstring.
+        if exc.status_code == 404:
             raise GeographicallyUnsupported(
                 f"NWS /points returned 404 for lat={lat4},lon={lon4} — "
                 "location is outside NWS coverage (USA + territories only). "
@@ -1043,11 +1149,21 @@ def fetch(
                     provider_id=PROVIDER_ID,
                     domain=DOMAIN,
                 )
+                # Per canonical §4.1.4 NWS column:
+                #   headline    = productText first line (after WMO wire header)
+                #   senderName  = "NWS [Location]" composite from body header
+                # Fall back to wmoCollectiveId / issuingOffice when AFD body
+                # parsing returns None (malformed or non-standard format).
+                parsed_headline, parsed_sender = _extract_afd_headline_and_sender(
+                    afd_body_wire.productText
+                )
+                headline = parsed_headline or afd_body_wire.wmoCollectiveId
+                sender_name = parsed_sender or afd_body_wire.issuingOffice
                 discussion = ForecastDiscussion(
-                    headline=afd_body_wire.wmoCollectiveId,
+                    headline=headline,
                     body=afd_body_wire.productText,
                     issuedAt=issued_at,
-                    senderName=afd_body_wire.issuingOffice,
+                    senderName=sender_name,
                     source=PROVIDER_ID,
                 )
             except (ValidationError, ValueError, ProviderProtocolError) as exc:

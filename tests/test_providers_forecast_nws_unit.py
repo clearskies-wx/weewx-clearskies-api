@@ -892,6 +892,56 @@ class TestTargetUnitToNwsUnits:
 
 
 # ===========================================================================
+# 8b. AFD body parse — _extract_afd_headline_and_sender (canonical §4.1.4)
+# ===========================================================================
+
+
+class TestExtractAfdHeadlineAndSender:
+    """_extract_afd_headline_and_sender parses headline + sender per canonical §4.1.4."""
+
+    def test_real_fixture_headline_is_first_line_after_wire_header(self) -> None:
+        """products_afd_body.json: headline = 'Area Forecast Discussion'."""
+        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        body = _load_fixture("products_afd_body.json")["productText"]
+        headline, _ = _extract_afd_headline_and_sender(body)
+        assert headline == "Area Forecast Discussion"
+
+    def test_real_fixture_sender_is_nws_location_composite(self) -> None:
+        """products_afd_body.json: senderName = 'NWS Seattle WA'."""
+        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        body = _load_fixture("products_afd_body.json")["productText"]
+        _, sender = _extract_afd_headline_and_sender(body)
+        assert sender == "NWS Seattle WA"
+
+    def test_empty_input_returns_none_none(self) -> None:
+        """Empty productText → (None, None)."""
+        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        assert _extract_afd_headline_and_sender("") == (None, None)
+
+    def test_body_without_nws_line_falls_back_to_none_sender(self) -> None:
+        """productText missing 'National Weather Service' line → sender is None."""
+        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        body = (
+            "000\n"
+            "FXUS66 KXXX 010000\n"
+            "AFDXXX\n\n"
+            "Some weather content.\n"
+            "More content.\n"
+        )
+        headline, sender = _extract_afd_headline_and_sender(body)
+        assert headline == "Some weather content."
+        assert sender is None
+
+    def test_body_with_only_wire_header_returns_none_headline(self) -> None:
+        """productText with only WMO wire-format header → (None, None)."""
+        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        body = "000\nFXUS66 KXXX 010000\nAFDXXX\n"
+        headline, sender = _extract_afd_headline_and_sender(body)
+        assert headline is None
+        assert sender is None
+
+
+# ===========================================================================
 # 9. Wire-shape Pydantic models validate against real fixtures
 # ===========================================================================
 
@@ -1102,8 +1152,14 @@ class TestFetchHappyPath:
             result = fetch(lat=_LAT, lon=_LON, target_unit="US", user_agent_contact="test@example.com")
 
         assert isinstance(result.discussion, ForecastDiscussion)
-        assert result.discussion.senderName == "KSEW"
-        assert result.discussion.headline == "FXUS66"
+        # Per canonical-data-model §4.1.4 NWS column:
+        #   headline   = productText first line (after WMO wire header)
+        #   senderName = "NWS [Location]" composite (e.g. "NWS Seattle WA")
+        # Verified against fixture products_afd_body.json — body line 1
+        # (after header) is "Area Forecast Discussion" and the body line
+        # "National Weather Service Seattle WA" yields the abbreviated sender.
+        assert result.discussion.senderName == "NWS Seattle WA"
+        assert result.discussion.headline == "Area Forecast Discussion"
         assert result.discussion.issuedAt == "2026-05-08T03:40:00Z"
 
     def test_happy_path_source_is_nws(self) -> None:
