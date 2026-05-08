@@ -181,11 +181,14 @@ def _wire_integration_stack(
         reset_cache as reset_units_cache,
     )
     from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
     _reset_http_client_for_tests()
+    # Clear the rate limiter deque so consecutive tests don't trip each other.
+    _om._rate_limiter._calls.clear()
 
     # Wire DB
     wire_engine(engine)

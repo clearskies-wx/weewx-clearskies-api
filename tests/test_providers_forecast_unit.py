@@ -1073,8 +1073,11 @@ class TestModuleFetchCacheHit:
                 return_value=httpx.Response(200, json={})
             )
             result = fetch(lat=47.6062, lon=-122.3321, target_unit="US", timezone="America/Los_Angeles")
-            assert mock.call_count == 0, (
-                f"Cache hit should skip HTTP call; got {mock.call_count} calls"
+            # Cache hit: the mock route should have been called zero times.
+            # respx.mock tracks calls on each route; the mock router's routes list
+            # provides the called state.
+            assert len(mock.calls) == 0, (
+                f"Cache hit should skip HTTP call; got {len(mock.calls)} calls"
             )
 
         assert isinstance(result, ForecastBundle)
@@ -1141,8 +1144,8 @@ class TestModuleFetchCacheHit:
                 return_value=httpx.Response(200, json={})
             )
             result = fetch(lat=47.6062, lon=-122.3321, target_unit="US", timezone="America/Los_Angeles")
-            assert mock.call_count == 0, (
-                f"Redis cache hit should skip HTTP call; got {mock.call_count} calls"
+            assert len(mock.calls) == 0, (
+                f"Redis cache hit should skip HTTP call; got {len(mock.calls)} calls"
             )
 
         assert isinstance(result, ForecastBundle)
