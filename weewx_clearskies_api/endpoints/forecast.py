@@ -13,6 +13,9 @@ Behavior decision tree per brief §per-endpoint spec:
   6. Provider returns 400/error envelope → 502 ProviderProblem (ProviderProtocolError)
   7. Pydantic validation failure on wire model → 502 ProviderProblem (ProviderProtocolError)
   8. NWS /points 404 → 503 ProviderProblem (GeographicallyUnsupported)
+  9. Aeris credentials unset → 502 ProviderProblem (KeyInvalid)
+ 10. Aeris returns 401 → 502 ProviderProblem (KeyInvalid)
+ 11. Aeris returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After
 
 Slice-after-cache pattern (ADR-017 §Cache key):
   Cache stores the FULL bundle (every hourly + daily point returned by provider).
@@ -38,6 +41,11 @@ NWS user-agent contact: wired separately via wire_forecast_settings() in
   __main__.py after settings load.  Tests without a full startup use None (no
   contact), which triggers a one-time WARNING log but works correctly.
   Mirrors the pattern in endpoints/alerts.py (wire_alerts_settings).
+
+Aeris credentials: wired via wire_aeris_credentials() (called from
+  wire_forecast_settings()). Module-level _aeris_client_id and
+  _aeris_client_secret are passed to aeris.fetch() from the dispatch branch.
+  Missing credentials → KeyInvalid at fetch time (brief lead-call 12).
 """
 
 from __future__ import annotations
@@ -82,15 +90,44 @@ def wire_nws_user_agent_contact(contact: str | None) -> None:
     _nws_user_agent_contact = contact
 
 
+# ---------------------------------------------------------------------------
+# Module-level Aeris credentials wiring (populated at startup)
+# Mirrors wire_nws_user_agent_contact pattern. Both credentials are set
+# together so the provider module sees a consistent pair at fetch time.
+# ---------------------------------------------------------------------------
+
+_aeris_client_id: str | None = None
+_aeris_client_secret: str | None = None
+
+
+def wire_aeris_credentials(client_id: str | None, client_secret: str | None) -> None:
+    """Store Aeris credentials read from env vars at startup.
+
+    Per ADR-027 §3, secrets come from env vars (loaded by systemd
+    EnvironmentFile / docker-compose env_file).  Tests that don't care
+    about Aeris leave both as None; if [forecast] provider = aeris and
+    credentials are unset, the module raises KeyInvalid at fetch time
+    per brief lead-call 12 (loud failure beats silent disable).
+    """
+    global _aeris_client_id, _aeris_client_secret  # noqa: PLW0603
+    _aeris_client_id = client_id
+    _aeris_client_secret = client_secret
+
+
 def wire_forecast_settings(settings: object) -> None:
     """Wire forecast-related settings from the Settings object.
 
     Convenience wrapper for __main__.py — extracts nws_user_agent_contact
-    from settings.forecast and calls wire_nws_user_agent_contact().
-    Mirrors wire_alerts_settings() in endpoints/alerts.py.
+    and Aeris credentials from settings.forecast and calls the per-provider
+    wire_*() helpers. Mirrors wire_alerts_settings() in endpoints/alerts.py.
     """
-    contact = getattr(getattr(settings, "forecast", None), "nws_user_agent_contact", None)
+    forecast_settings = getattr(settings, "forecast", None)
+    contact = getattr(forecast_settings, "nws_user_agent_contact", None)
     wire_nws_user_agent_contact(contact)
+
+    aeris_id = getattr(forecast_settings, "aeris_client_id", None)
+    aeris_secret = getattr(forecast_settings, "aeris_client_secret", None)
+    wire_aeris_credentials(aeris_id, aeris_secret)
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +242,20 @@ def get_forecast(
             lon=station.longitude,
             target_unit=target_unit,
             user_agent_contact=_nws_user_agent_contact,
+        )
+    elif provider_id == "aeris":
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
+
+        # fetch() returns the FULL canonical bundle (hourly + daily from two upstream
+        # calls: filter=1hr and filter=daynight). Cache stores the full bundle;
+        # slice is applied below after cache lookup.
+        # _aeris_client_id + _aeris_client_secret set at startup via wire_forecast_settings().
+        bundle = aeris.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            target_unit=target_unit,
+            client_id=_aeris_client_id,
+            client_secret=_aeris_client_secret,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
