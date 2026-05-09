@@ -681,8 +681,11 @@ def _owm_to_daily_point(
         weather_code = str(entry.id)
         precip_type = _owm_weather_code_to_precip_type(entry.id)
 
-    # narrative: daily[].summary per canonical §4.1.3 (lead-call 21)
-    narrative: str | None = day.summary if day.summary and day.summary.strip() else None
+    # narrative: daily[].summary per canonical §4.1.3 (lead-call 21).
+    # Strip leading/trailing whitespace to match _safe_weather_text_daily's
+    # treatment of weatherText — both fields must agree when summary is supplied
+    # (brief lead-call 21).  3b-5 audit F3 remediation 2026-05-09.
+    narrative: str | None = day.summary.strip() if day.summary and day.summary.strip() else None
 
     return DailyForecastPoint(
         validDate=valid_date,
