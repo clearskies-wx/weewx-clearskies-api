@@ -153,6 +153,44 @@ class TestRedactionFilter:
         assert "bob" not in doc["message"]
         assert "[REDACTED]" in doc["message"]
 
+    def test_redaction_apikey_query_param_at_start(self) -> None:
+        """URL with ?apiKey=ABC123 → apiKey=[REDACTED] in log output.
+
+        Covers Wunderground's apiKey= query param credential (F13, 3b-6).
+        Pattern: ?apiKey= at start of query string.
+        """
+        log, buf = self._make_redacting_logger("test_apikey_start_redact")
+        log.info("Calling provider: https://api.weather.com/v3/wx/forecast/daily/5day?geocode=47.6062,-122.3321&format=json&apiKey=ABC123")
+        doc = json.loads(buf.getvalue().strip())
+        assert "ABC123" not in doc["message"]
+        assert "[REDACTED]" in doc["message"]
+
+    def test_redaction_apikey_query_param_mid_string(self) -> None:
+        """URL with ?stationId=K1&apiKey=XYZ789 → only apiKey value redacted.
+
+        Covers Wunderground's apiKey= when it appears mid-querystring after another param.
+        The stationId value must survive; only the apiKey value is redacted.
+        """
+        log, buf = self._make_redacting_logger("test_apikey_mid_redact")
+        log.info("PWS call: https://api.weather.com/v2/pws/observations/current?stationId=KMAHANOV10&apiKey=XYZ789&format=json")
+        doc = json.loads(buf.getvalue().strip())
+        assert "XYZ789" not in doc["message"]
+        assert "KMAHANOV10" in doc["message"]
+        assert "[REDACTED]" in doc["message"]
+
+    def test_redaction_apikey_followed_by_another_param(self) -> None:
+        """URL with ?apiKey=NOPE&format=json → apiKey value redacted but format=json preserved.
+
+        Covers the case where apiKey= is followed by another query parameter.
+        The regex must not consume the trailing &format=json into the redacted value.
+        """
+        log, buf = self._make_redacting_logger("test_apikey_followed_redact")
+        log.info("Request: https://api.weather.com/v3/wx/forecast/daily/5day?geocode=47.6,-122.3&units=e&apiKey=NOPE&format=json")
+        doc = json.loads(buf.getvalue().strip())
+        assert "NOPE" not in doc["message"]
+        assert "format=json" in doc["message"]
+        assert "[REDACTED]" in doc["message"]
+
 
 class TestRequestIdFilter:
     """Verify RequestIdFilter injects the context variable into records."""
