@@ -493,6 +493,40 @@ class TestIntegrationQ1BasicTierEmptyBundle:
         )
         _reset_owm_state()
 
+    def test_endpoint_missing_appid_returns_502_key_invalid(
+        self, db_engine: Engine
+    ) -> None:
+        """OWM provider configured but appid unset → /api/v1/forecast returns 502 ProviderProblem KeyInvalid.
+
+        Brief §Per-endpoint spec decision-tree branch 12: when [forecast]
+        provider=openweathermap is set but WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID
+        is unset, the endpoint translates the module's KeyInvalid to a
+        502 ProviderProblem with errorCode="KeyInvalid" (RFC 9457).
+
+        3b-5 audit F1 remediation 2026-05-09: prior coverage exercised the
+        module-level KeyInvalid only; the endpoint-level translation was
+        asserted nowhere.
+        """
+        from weewx_clearskies_api.endpoints import forecast as forecast_endpoint  # noqa: PLC0415
+
+        # Explicitly clear any leftover appid state from prior tests.
+        forecast_endpoint.wire_openweathermap_credentials(None)
+        _, app = _wire_integration_stack(db_engine, forecast_provider="openweathermap")
+        client = TestClient(app, raise_server_exceptions=False)
+
+        # No respx mock — the request never reaches OWM (KeyInvalid raised
+        # before any outbound call).
+        response = client.get("/api/v1/forecast")
+
+        assert response.status_code == 502, (
+            f"Expected 502 for missing appid, got {response.status_code}"
+        )
+        body = response.json()
+        assert body.get("errorCode") == "KeyInvalid", (
+            f"Expected errorCode='KeyInvalid', got {body.get('errorCode')!r}"
+        )
+        _reset_owm_state()
+
 
 # ===========================================================================
 # Integration test: memory cache — miss → fetch → hit (both backends)
