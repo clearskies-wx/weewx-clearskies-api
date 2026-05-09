@@ -64,6 +64,16 @@ _CLIENT_SECRET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match apiKey= query parameter value (Wunderground PWS API)
+# Pattern mirrors _APPID_RE / _CLIENT_ID_RE shape; both are query-param
+# credentials.  Fires this round (3b-6) because Wunderground is the third
+# keyed provider on this project.  re.IGNORECASE covers apikey= and APIKEY=
+# variants that may appear in URL-encoded log lines.
+_APIKEY_RE = re.compile(
+    r"((?:^|[?&])apiKey=)[^&\s\n\"']+",
+    re.IGNORECASE,
+)
+
 # Match SQL quoted literals when someone accidentally logs a bound query.
 # Catches patterns like: WHERE name = 'alice', VALUES (42, 'bob')
 #
@@ -92,6 +102,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (_APPID_RE, r"\g<1>" + _REDACTED),
     (_CLIENT_ID_RE, r"\g<1>" + _REDACTED),
     (_CLIENT_SECRET_RE, r"\g<1>" + _REDACTED),
+    (_APIKEY_RE, r"\g<1>" + _REDACTED),
     (_SQL_LITERAL_RE, _REDACTED),
 ]
 
