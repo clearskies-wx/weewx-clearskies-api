@@ -35,6 +35,12 @@ NWS user-agent contact: wired separately via wire_nws_user_agent_contact() in
 Aeris credentials: wired via wire_aeris_credentials() called from
   wire_alerts_settings() at startup.  Tests that don't exercise the Aeris
   path leave these as None; aeris.fetch() will raise KeyInvalid if invoked.
+
+OWM credentials: wired via wire_openweathermap_credentials() called from
+  wire_alerts_settings() at startup (3b-8).  Mirror of endpoints/forecast.py
+  wire_openweathermap_credentials(). Tests that don't exercise the OWM path
+  leave _openweathermap_appid as None; openweathermap.fetch() will raise
+  KeyInvalid if invoked.
 """
 
 from __future__ import annotations
@@ -98,12 +104,31 @@ def wire_aeris_credentials(client_id: str | None, client_secret: str | None) -> 
     _aeris_client_secret = client_secret
 
 
+# ---------------------------------------------------------------------------
+# Module-level OWM credential wiring (populated at startup, 3b-8)
+# ---------------------------------------------------------------------------
+
+_openweathermap_appid: str | None = None
+
+
+def wire_openweathermap_credentials(appid: str | None) -> None:
+    """Store OWM appid for the alerts endpoint dispatch.
+
+    Called from wire_alerts_settings() at startup. Tests that don't exercise
+    the OWM path leave this as None; openweathermap.fetch() will raise KeyInvalid.
+    Mirror of endpoints/forecast.py wire_openweathermap_credentials() (3b-5).
+    """
+    global _openweathermap_appid  # noqa: PLW0603
+    _openweathermap_appid = appid
+
+
 def wire_alerts_settings(settings: object) -> None:
     """Wire alerts-related settings from the Settings object.
 
     Convenience wrapper for __main__.py — extracts nws_user_agent_contact
     from settings.alerts and calls wire_nws_user_agent_contact(); also
-    extracts Aeris credentials and calls wire_aeris_credentials().
+    extracts Aeris credentials and calls wire_aeris_credentials(); also
+    extracts OWM appid and calls wire_openweathermap_credentials().
     """
     alerts_section = getattr(settings, "alerts", None)
     contact = getattr(alerts_section, "nws_user_agent_contact", None)
@@ -112,6 +137,9 @@ def wire_alerts_settings(settings: object) -> None:
     aeris_id = getattr(alerts_section, "aeris_client_id", None)
     aeris_secret = getattr(alerts_section, "aeris_client_secret", None)
     wire_aeris_credentials(aeris_id, aeris_secret)
+
+    owm_appid = getattr(alerts_section, "openweathermap_appid", None)
+    wire_openweathermap_credentials(owm_appid)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +257,14 @@ def get_alerts(
             lon=station.longitude,
             client_id=_aeris_client_id,
             client_secret=_aeris_client_secret,
+        )
+    elif provider_id == "openweathermap":
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
+
+        all_records = openweathermap.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            appid=_openweathermap_appid,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
