@@ -5,7 +5,7 @@ Phase-2 simple: explicit dict, NOT entry-points (per ADR-038 §Internal contract
 no runtime plugin loading; outside contributors PR into the bundled set).
 
 Adding a new provider = importing the new module and adding one row here.
-When 3b round 2 adds Aeris alerts: one new import + one new row.
+Aeris alerts wired in 3b round 7 (this round).
 When forecast domain lands: five new rows (one per provider per ADR-007 day-1 set).
   Wired so far: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from types import ModuleType
 
+from weewx_clearskies_api.providers.alerts import aeris as alerts_aeris
 from weewx_clearskies_api.providers.alerts import nws as alerts_nws
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
@@ -25,6 +26,7 @@ from weewx_clearskies_api.providers.forecast import openweathermap as forecast_o
 from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 
 PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
+    ("alerts", "aeris"): alerts_aeris,
     ("alerts", "nws"): alerts_nws,
     ("forecast", "openmeteo"): forecast_openmeteo,
     ("forecast", "nws"): forecast_nws,
