@@ -550,7 +550,7 @@ class TestTagsFieldDroppedSilently:
             "Canonical AlertRecord must not have a 'tags' attribute (tags dropped per §3.6)"
         )
         # Assert record's fields don't include anything tag-like
-        from weewx_clearskies_api.providers._common.canonical import AlertRecord  # noqa: PLC0415
+        from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
         alert_fields = set(AlertRecord.model_fields.keys())
         assert "tags" not in alert_fields, (
             "AlertRecord Pydantic model must not have a 'tags' field"
