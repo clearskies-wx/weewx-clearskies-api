@@ -296,15 +296,11 @@ def _wire_integration_stack(
 
 
 def _make_valid_aeris_alerts_fixture() -> dict[str, Any]:
-    """Build a valid Aeris alerts envelope with one watch-severity alert.
+    """Build a valid Aeris alerts envelope with one watch + one advisory alert.
 
-    NOTE: emergency field is OMITTED because the original brief specified
-    emergency: str | None = None. The boolean False wire type has been fixed
-    in _AerisAlertDetails (now bool | str | None) but this fixture intentionally
-    omits the field to keep the happy-path clean and independent of that fix.
-
-    The unit test test_boolean_emergency_in_record_raises_provider_protocol_error
-    exercises the bug path explicitly.
+    Severity dispatch (canonical-data-model §4.3 amended 2026-05-09):
+      - First alert `TO.A` → suffix `A` → 'watch' (Tornado Watch).
+      - Second alert `WI.Y` → suffix `Y` → 'advisory' (Wind Advisory).
     """
     return {
         "success": True,
@@ -315,13 +311,12 @@ def _make_valid_aeris_alerts_fixture() -> dict[str, Any]:
                 "dataSource": "noaa_nws",
                 "active": True,
                 "details": {
-                    "type": "TO.W",
+                    "type": "TO.A",  # VTEC suffix .A → watch
                     "name": "TORNADO WATCH",
                     "loc": "WAZ001",
-                    "priority": 2,
+                    "priority": 2,  # NOAA hazard-map display priority (NOT severity)
                     "color": "FFFF00",
                     "body": "A Tornado Watch is in effect for portions of western Washington.",
-                    # emergency field omitted — avoids bool type issue
                 },
                 "timestamps": {
                     "issued": 1778400000,
@@ -338,7 +333,7 @@ def _make_valid_aeris_alerts_fixture() -> dict[str, Any]:
                 "dataSource": "noaa_nws",
                 "active": True,
                 "details": {
-                    "type": "WI.Y",
+                    "type": "WI.Y",  # VTEC suffix .Y → advisory
                     "name": "WIND ADVISORY",
                     "loc": "WAZ002",
                     "priority": 4,
@@ -360,7 +355,7 @@ def _make_valid_aeris_alerts_fixture() -> dict[str, Any]:
 
 
 def _make_warning_alert_fixture() -> dict[str, Any]:
-    """Build a fixture with a single warning-severity alert (priority=1)."""
+    """Build a fixture with a single warning-severity alert (TO.W → 'warning')."""
     return {
         "success": True,
         "error": None,
@@ -370,7 +365,7 @@ def _make_warning_alert_fixture() -> dict[str, Any]:
                 "dataSource": "noaa_nws",
                 "active": True,
                 "details": {
-                    "type": "TO.W",
+                    "type": "TO.W",  # VTEC suffix .W → warning
                     "name": "TORNADO WARNING",
                     "loc": "WAZ001",
                     "priority": 1,
@@ -596,9 +591,10 @@ class TestIntegrationAerisAlertsEndpoint:
     def test_aeris_alerts_severity_filter_warning_returns_warning_only(
         self, db_engine: Engine
     ) -> None:
-        """?severity=warning returns only warning records (priority 1 mapped to warning).
+        """?severity=warning returns only warning records (TO.W → 'warning').
 
         Uses a fresh app (not shared fixture) to control cache state.
+        Severity dispatch via details.type VTEC suffix per canonical §4.3 amended 2026-05-09.
         """
         from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
@@ -608,7 +604,8 @@ class TestIntegrationAerisAlertsEndpoint:
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
 
-        # Mix of warning (priority 1) and advisory (priority 4) alerts
+        # Mix of warning (TO.W → suffix .W) and advisory (WI.Y → suffix .Y) alerts.
+        # Severity is now derived from details.type VTEC suffix (canonical §4.3 amended 2026-05-09).
         mixed_data = {
             "success": True,
             "error": None,
@@ -618,9 +615,9 @@ class TestIntegrationAerisAlertsEndpoint:
                     "dataSource": "noaa_nws",
                     "active": True,
                     "details": {
-                        "type": "TOR",
+                        "type": "TO.W",  # VTEC suffix .W → warning
                         "name": "TORNADO WARNING",
-                        "priority": 1,  # → "warning"
+                        "priority": 1,
                         "body": "Tornado warning in effect.",
                     },
                     "timestamps": {
@@ -634,9 +631,9 @@ class TestIntegrationAerisAlertsEndpoint:
                     "dataSource": "noaa_nws",
                     "active": True,
                     "details": {
-                        "type": "WI.Y",
+                        "type": "WI.Y",  # VTEC suffix .Y → advisory
                         "name": "WIND ADVISORY",
-                        "priority": 4,  # → "advisory" (unknown to 1-5 map → falls through, still advisory)
+                        "priority": 4,
                         "body": "Wind advisory in effect.",
                     },
                     "timestamps": {

@@ -43,11 +43,33 @@ Cache layer (ADR-017):
 senderName disjunction (brief call 19, Q2 user decision 2026-05-09):
   Prefer details.emergency when non-empty string; else place.name when
   present; else None. Canonical §3.6 senderName is nullable; canonical wins.
+  Real-wire amendment 2026-05-09: details.emergency is a JSON boolean (False)
+  when no emergency text is set; isinstance(..., str) check filters it out.
 
-Severity mapping (brief call 12, canonical-data-model §4.3):
-  details.priority integer → canonical enum:
-    1 → "warning" (Extreme), 2 → "watch" (Severe), 3-5 → "advisory".
-  Unknown integer → "advisory" with WARNING log.
+Severity mapping (canonical-data-model §4.3 — amended 2026-05-09):
+  details.priority is NOT a severity field — it's a NOAA hazard-map
+  display-priority code (60=Wind Advisory, 96=Fire Weather Watch, etc.).
+  Severity is encoded as the SUFFIX on details.type:
+    US/CA (NWS VTEC): "XX.YY.Z" where Z is the action/severity code:
+      .W → "warning" (Warning)
+      .A → "watch" (Watch)
+      .Y → "advisory" (Advisory)
+      .S → "advisory" (Statement)
+    Non-US (Aeris severity suffix):
+      .EX → "warning" (Extreme)
+      .SV → "watch" (Severe)
+      .MD → "advisory" (Moderate)
+      .MN → "advisory" (Minor)
+  Unknown suffix or no suffix → "advisory" with WARNING log.
+
+Real-wire amendment 2026-05-09 (3b-7 fixture-capture evidence):
+  - details.urgency / details.certainty / details.category are NOT documented
+    Aeris response fields and were absent from real-wire capture; PARTIAL-DOMAIN
+    per L1 rule extension. CAPABILITY drops urgency + certainty.
+  - The category field is named details.cat in real wire, not details.category.
+  - details.emergency is bool | str (False when no text, string when set).
+  - event field maps from details.name (human-readable, e.g. "FIRE WEATHER WATCH"),
+    not details.type (structured code like "FW.A").
 
 Description (brief call 13):
   details.body straight passthrough. No NWS-style instruction-append.
@@ -108,15 +130,14 @@ CAPABILITY = ProviderCapability(
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
     supplied_canonical_fields=(
-        # Paid-tier-max-surface per brief lead-call 16 (L1 rule).
-        # urgency/certainty/category declared even if real fixture lacks them;
-        # lead handles PARTIAL-DOMAIN at audit time if absent.
+        # Real-wire amendment 2026-05-09: urgency + certainty are NOT documented
+        # Aeris response fields (per Aeris docs + 3b-7 fixture capture).
+        # PARTIAL-DOMAIN per L1 rule extension. category IS supplied (via the
+        # details.cat wire field; canonical-data-model §4.3 amended).
         "id",
         "headline",
         "description",
         "severity",
-        "urgency",
-        "certainty",
         "event",
         "effective",
         "expires",
@@ -136,7 +157,9 @@ CAPABILITY = ProviderCapability(
         "Returns active alerts only per Aeris api-docs §Alerts. "
         "warn_location responses (off-grid lat/lon) return empty list. "
         "Coverage per ADR-016 day-1 table: US + Canada + Europe (NWS + Environment "
-        "Canada + MeteoAlarm + UK Met redistributed)."
+        "Canada + MeteoAlarm + UK Met redistributed). "
+        "urgency and certainty are not provided by Aeris (PARTIAL-DOMAIN); "
+        "always null on the canonical bundle for this provider."
     ),
 )
 
@@ -155,16 +178,31 @@ _rate_limiter = RateLimiter(
 )
 
 # ---------------------------------------------------------------------------
-# Severity normalization map (canonical-data-model §4.3, brief lead-call 12)
-# Aeris details.priority integer → canonical enum.
+# Severity dispatch tables (canonical-data-model §4.3, amended 2026-05-09)
+#
+# Severity is encoded as the SUFFIX on details.type, NOT in details.priority.
+# US/CA alerts use NWS VTEC format "XX.YY.Z" where Z is the action/severity
+# code; non-US alerts use Aeris's documented EX/SV/MD/MN suffix scheme.
+# Real fixture: "FW.A" (Fire Weather Watch) → suffix "A" → "watch".
+# api-docs example: "AW.TS.MD" (Moderate Thunderstorm) → suffix "MD" → "advisory".
 # ---------------------------------------------------------------------------
 
-_AERIS_SEVERITY_MAP: dict[int, str] = {
-    1: "warning",   # Extreme
-    2: "watch",     # Severe
-    3: "advisory",  # Moderate
-    4: "advisory",  # Minor
-    5: "advisory",  # Unknown/Other
+# US/Canadian alerts: NWS VTEC suffix codes
+# Reference: https://www.weather.gov/vtec/
+_VTEC_SUFFIX_TO_SEVERITY: dict[str, str] = {
+    "W": "warning",    # Warning
+    "A": "watch",      # Watch
+    "Y": "advisory",   # Advisory
+    "S": "advisory",   # Statement
+}
+
+# Non-US alerts: Aeris severity suffix codes
+# Reference: https://www.xweather.com/docs/weather-api/endpoints/alerts
+_AERIS_SUFFIX_TO_SEVERITY: dict[str, str] = {
+    "EX": "warning",   # Extreme
+    "SV": "watch",     # Severe
+    "MD": "advisory",  # Moderate
+    "MN": "advisory",  # Minor
 }
 
 # ---------------------------------------------------------------------------
@@ -178,20 +216,19 @@ _AERIS_SEVERITY_MAP: dict[int, str] = {
 class _AerisAlertDetails(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    type: str | None = None              # event short code ("WIN", "TOR") — maps to event
-    name: str | None = None              # human-readable headline
+    type: str | None = None              # VTEC code (e.g. "FW.A") — used to derive severity
+    name: str | None = None              # human-readable name (e.g. "FIRE WEATHER WATCH") — maps to event/headline
     loc: str | None = None
-    priority: int | None = None          # severity, mapped via _AERIS_SEVERITY_MAP
+    priority: int | None = None          # NOAA hazard-map display-priority (NOT severity); kept for diagnostics
     color: str | None = None
     body: str | None = None              # description passthrough (brief call 13)
     # emergency: real Aeris wire returns boolean False when no emergency text is set.
     # Type declared as bool | str | None to accept both wire forms.
-    # Brief spec said str | None; real-capture fixture (alerts.md) showed boolean False.
-    # senderName logic in _to_canonical treats any falsy value as "use place.name fallback".
+    # Real-capture fixture (alerts.md) showed boolean False; canonical-data-model §4.3 amended.
+    # senderName logic in _to_canonical uses isinstance(..., str) check; falsy/bool falls
+    # through to place.name fallback.
     emergency: bool | str | None = None  # senderName primary candidate (brief call 19, Q2)
-    urgency: str | None = None           # CAP vocab passthrough (may be absent — call 16)
-    certainty: str | None = None         # CAP vocab passthrough (may be absent — call 16)
-    category: str | None = None          # CAP vocab passthrough (may be absent — call 16)
+    cat: str | None = None               # category — real wire uses 'cat', not 'category' (§4.3 amended)
 
 
 class _AerisAlertTimestamps(BaseModel):
@@ -344,32 +381,56 @@ def _parse_aeris_envelope_raw(response: Any) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Severity normalization (canonical-data-model §4.3, brief lead-call 12)
+# Severity normalization (canonical-data-model §4.3, amended 2026-05-09)
 # ---------------------------------------------------------------------------
 
 
-def _normalize_severity(priority: int | None) -> str:
-    """Map Aeris details.priority integer to canonical {advisory, watch, warning}.
+def _parse_severity_from_type(type_code: str | None) -> str:
+    """Parse the severity suffix from Aeris details.type and map to canonical enum.
 
-    Unknown values default to 'advisory' (least-severe canonical) per NWS
-    precedent in 3b-1.  Logs at WARNING so a future Aeris schema change
-    surfaces in operator logs without breaking the response.
+    Aeris details.type is a dotted code (e.g. "FW.A", "AW.TS.MD"). The LAST
+    segment is the severity/action suffix:
+
+      - US/Canadian alerts use NWS VTEC: W=Warning, A=Watch, Y=Advisory, S=Statement
+      - Non-US alerts use Aeris: EX=Extreme, SV=Severe, MD=Moderate, MN=Minor
+
+    Try VTEC first (one-letter), then Aeris severity (two-letter). Unknown
+    suffix or no suffix → 'advisory' (least-severe canonical) with WARNING log
+    to surface schema drift to operator.
+
+    Args:
+        type_code: Aeris details.type string (e.g. "FW.A") or None.
+
+    Returns:
+        Canonical severity enum: "warning" | "watch" | "advisory".
     """
-    if priority is None:
+    if not type_code:
         logger.warning(
-            "Aeris alert has null priority; defaulting to 'advisory'. "
-            "This may indicate a schema change — check the severity mapping.",
+            "Aeris alert has null/empty details.type; defaulting severity to 'advisory'. "
+            "This may indicate a schema change — check the severity dispatch."
         )
         return "advisory"
-    canonical = _AERIS_SEVERITY_MAP.get(priority)
-    if canonical is None:
-        logger.warning(
-            "Unknown Aeris priority %r; defaulting to 'advisory'. "
-            "This may indicate a schema change — check the severity mapping.",
-            priority,
-        )
-        return "advisory"
-    return canonical
+
+    parts = type_code.split(".")
+    suffix = parts[-1] if parts else ""
+
+    # Try VTEC (single-letter, US/Canadian) first
+    if suffix in _VTEC_SUFFIX_TO_SEVERITY:
+        return _VTEC_SUFFIX_TO_SEVERITY[suffix]
+
+    # Try Aeris severity (two-letter, non-US)
+    if suffix in _AERIS_SUFFIX_TO_SEVERITY:
+        return _AERIS_SUFFIX_TO_SEVERITY[suffix]
+
+    # Unknown suffix → advisory + WARNING log
+    logger.warning(
+        "Unknown Aeris details.type suffix %r (full type=%r); "
+        "defaulting severity to 'advisory'. This may indicate a schema change — "
+        "check VTEC and Aeris suffix dispatch tables.",
+        suffix,
+        type_code,
+    )
+    return "advisory"
 
 
 # ---------------------------------------------------------------------------
@@ -380,19 +441,19 @@ def _normalize_severity(priority: int | None) -> str:
 def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
     """Map one Aeris alert record to a canonical AlertRecord.
 
-    Field mapping per canonical-data-model §4.3:
+    Field mapping per canonical-data-model §4.3 (amended 2026-05-09):
       id = id (top-level)
       headline = details.name
       description = details.body (passthrough, no append — brief call 13)
-      severity = details.priority via _AERIS_SEVERITY_MAP (brief call 12)
-      urgency = details.urgency (CAP vocab passthrough)
-      certainty = details.certainty (CAP vocab passthrough)
-      event = details.type (short code, passthrough — operationalization call)
+      severity = _parse_severity_from_type(details.type) — VTEC or Aeris suffix dispatch
+      urgency = None (PARTIAL-DOMAIN — Aeris does not provide)
+      certainty = None (PARTIAL-DOMAIN — Aeris does not provide)
+      event = details.name (human-readable; details.type is the structured code)
       effective = timestamps.issuedISO via to_utc_iso8601_from_offset (call 14)
       expires = timestamps.expiresISO via to_utc_iso8601_from_offset (call 14)
-      senderName = details.emergency or place.name or None (call 19, Q2)
+      senderName = details.emergency (string only) ⇢ place.name ⇢ None (call 19, Q2)
       areaDesc = place.name (passthrough)
-      category = details.category (CAP vocab passthrough)
+      category = details.cat (real wire field name, NOT details.category)
       source = "aeris" (provider_id literal)
     """
     # Effective timestamp: use ISO form for offset-aware UTC conversion
@@ -437,15 +498,15 @@ def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
         id=record.id,
         headline=record.details.name or "",
         description=record.details.body or "",
-        severity=_normalize_severity(record.details.priority),
-        urgency=record.details.urgency,
-        certainty=record.details.certainty,
-        event=record.details.type or "",
+        severity=_parse_severity_from_type(record.details.type),
+        urgency=None,   # PARTIAL-DOMAIN — Aeris does not provide (canonical §4.3 amended 2026-05-09)
+        certainty=None, # PARTIAL-DOMAIN — Aeris does not provide (canonical §4.3 amended 2026-05-09)
+        event=record.details.name or "",
         effective=effective or "",
         expires=expires,
         senderName=sender_name,
         areaDesc=area_desc,
-        category=record.details.category,
+        category=record.details.cat,   # real wire uses 'cat', not 'category' (§4.3 amended)
         source=PROVIDER_ID,
     )
 

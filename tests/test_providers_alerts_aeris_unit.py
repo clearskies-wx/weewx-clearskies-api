@@ -11,10 +11,11 @@ Covers per the task-3b-7 brief §Test plan (unit tests section):
   - All fields in real fixture validate; urgency/certainty/category are absent
     from real free-tier wire (PARTIAL-DOMAIN call 16 confirmed).
 
-  Severity normalization:
-  - Priority 1→warning, 2→watch, 3→advisory, 4→advisory, 5→advisory.
-  - Unknown integer (e.g. 96 from real fixture) → "advisory" + WARNING log.
-  - None priority → "advisory" + WARNING log.
+  Severity normalization (canonical-data-model §4.3 amended 2026-05-09):
+  - VTEC suffix dispatch: .W→warning, .A→watch, .Y→advisory, .S→advisory.
+  - Aeris suffix dispatch (non-US): .EX→warning, .SV→watch, .MD/.MN→advisory.
+  - Unknown suffix (e.g. real fixture "FW.A" → "watch") and no-suffix → "advisory" + WARNING log.
+  - None / empty type code → "advisory" + WARNING log.
 
   Datetime conversion:
   - Offset-aware ISO string → UTC Z via to_utc_iso8601_from_offset.
@@ -68,13 +69,12 @@ No DB, no live network. respx mocks outbound httpx calls.
 Wire-shape rule: fixtures loaded from tests/fixtures/providers/aeris/*.json
 (real Aeris response shapes per rules/clearskies-process.md).
 
-Wire-shape findings from real capture (see alerts.md sidecar):
-  - details.priority=96 (not 1-5) → all real Aeris calls hit "unknown priority" path.
-  - details.emergency=False (boolean) → Pydantic str|None rejects it → ValidationError.
-    This is a real bug in _AerisAlertDetails: should be bool | str | None.
-    Tests assert the actual current behaviour (ValidationError raised on real fixture
-    when emergency=False is present) AND the corrected behaviour once api-dev fixes it.
-  - details.urgency/certainty/category absent from real free-tier wire.
+Wire-shape findings from real capture (see alerts.md sidecar) — RESOLVED via 2026-05-09 amendment:
+  - details.priority is NOT severity; it's a NOAA hazard-map display-priority code.
+    Severity now derives from the suffix on details.type (VTEC for US/CA, EX/SV/MD/MN for non-US).
+  - details.emergency type is bool | str | None (real wire returns False when no text).
+  - details.urgency/certainty are not Aeris response fields; PARTIAL-DOMAIN — always None.
+  - category reads from details.cat (real wire field name), not details.category.
 
 ADR references: ADR-006, ADR-016, ADR-017, ADR-018, ADR-038.
 """
@@ -142,83 +142,132 @@ _TEST_CLIENT_SECRET = "TEST_CLIENT_SECRET"
 
 
 # ===========================================================================
-# 1. Severity normalization — _normalize_severity
+# 1. Severity normalization — _parse_severity_from_type (amended 2026-05-09)
 # ===========================================================================
 
 
-class TestAerisSeverityNormalization:
-    """_normalize_severity maps Aeris details.priority integer to canonical enum."""
+class TestAerisSeverityFromType:
+    """_parse_severity_from_type parses details.type suffix to canonical severity enum.
 
-    def test_priority_1_maps_to_warning(self) -> None:
-        """Priority 1 (Extreme) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(1) == "warning"
+    canonical-data-model §4.3 amendment 2026-05-09: severity is encoded in the
+    details.type suffix (VTEC for US/CA, EX/SV/MD/MN for non-US), not the
+    details.priority field which is a NOAA hazard-map display-priority code.
+    """
 
-    def test_priority_2_maps_to_watch(self) -> None:
-        """Priority 2 (Severe) → 'watch'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(2) == "watch"
+    # --- US/Canadian VTEC suffixes ---
 
-    def test_priority_3_maps_to_advisory(self) -> None:
-        """Priority 3 (Moderate) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(3) == "advisory"
+    def test_vtec_warning_suffix_maps_to_warning(self) -> None:
+        """`TO.W` (Tornado Warning, VTEC `.W`) → 'warning'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("TO.W") == "warning"
 
-    def test_priority_4_maps_to_advisory(self) -> None:
-        """Priority 4 (Minor) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(4) == "advisory"
+    def test_vtec_watch_suffix_maps_to_watch(self) -> None:
+        """`FW.A` (Fire Weather Watch, VTEC `.A`) → 'watch'. Real fixture case."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("FW.A") == "watch"
 
-    def test_priority_5_maps_to_advisory(self) -> None:
-        """Priority 5 (Unknown/lowest) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(5) == "advisory"
+    def test_vtec_advisory_suffix_maps_to_advisory(self) -> None:
+        """`WI.Y` (Wind Advisory, VTEC `.Y`) → 'advisory'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("WI.Y") == "advisory"
 
-    def test_severity_map_covers_all_five_entries(self) -> None:
-        """_AERIS_SEVERITY_MAP has keys 1-5."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AERIS_SEVERITY_MAP  # noqa: PLC0415
-        for priority in (1, 2, 3, 4, 5):
-            assert priority in _AERIS_SEVERITY_MAP, (
-                f"_AERIS_SEVERITY_MAP missing priority {priority}"
+    def test_vtec_statement_suffix_maps_to_advisory(self) -> None:
+        """`SV.S` (Severe Weather Statement, VTEC `.S`) → 'advisory'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("SV.S") == "advisory"
+
+    # --- Non-US Aeris severity suffixes ---
+
+    def test_aeris_extreme_suffix_maps_to_warning(self) -> None:
+        """`AW.TS.EX` (Extreme thunderstorm) → 'warning'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("AW.TS.EX") == "warning"
+
+    def test_aeris_severe_suffix_maps_to_watch(self) -> None:
+        """`AW.TS.SV` (Severe thunderstorm) → 'watch'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("AW.TS.SV") == "watch"
+
+    def test_aeris_moderate_suffix_maps_to_advisory(self) -> None:
+        """`AW.TS.MD` (Moderate thunderstorm — api-docs example) → 'advisory'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("AW.TS.MD") == "advisory"
+
+    def test_aeris_minor_suffix_maps_to_advisory(self) -> None:
+        """`AW.TS.MN` (Minor thunderstorm) → 'advisory'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("AW.TS.MN") == "advisory"
+
+    # --- Dispatch-table coverage ---
+
+    def test_vtec_dispatch_table_covers_all_four_codes(self) -> None:
+        """_VTEC_SUFFIX_TO_SEVERITY has W, A, Y, S keys (NWS VTEC action codes)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _VTEC_SUFFIX_TO_SEVERITY  # noqa: PLC0415
+        for suffix in ("W", "A", "Y", "S"):
+            assert suffix in _VTEC_SUFFIX_TO_SEVERITY, (
+                f"_VTEC_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
             )
 
-    def test_unknown_integer_96_defaults_to_advisory(self) -> None:
-        """Real fixture priority=96 (Fire Weather Watch) is unknown → 'advisory' default.
+    def test_aeris_dispatch_table_covers_all_four_codes(self) -> None:
+        """_AERIS_SUFFIX_TO_SEVERITY has EX, SV, MD, MN keys (Aeris non-US severity codes)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _AERIS_SUFFIX_TO_SEVERITY  # noqa: PLC0415
+        for suffix in ("EX", "SV", "MD", "MN"):
+            assert suffix in _AERIS_SUFFIX_TO_SEVERITY, (
+                f"_AERIS_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
+            )
 
-        NOTE: This is a known brief-divergence. The canonical §4.3 severity map
-        is 1-5 but real Aeris uses values like 60, 96. The implementation correctly
-        falls through to the 'advisory' default. See alerts.md sidecar for details.
-        """
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(96) == "advisory"
+    # --- Unknown / empty / fallback ---
 
-    def test_unknown_integer_60_defaults_to_advisory(self) -> None:
-        """Priority 60 (Wind Advisory per api-docs example) → 'advisory' (unknown fallback)."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(60) == "advisory"
+    def test_unknown_suffix_defaults_to_advisory(self) -> None:
+        """Unknown suffix → 'advisory' default."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("XX.YY.ZZ") == "advisory"
 
-    def test_unknown_integer_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Unknown priority emits WARNING log to surface schema drift to operator."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
+    def test_no_suffix_defaults_to_advisory(self) -> None:
+        """type code with no dot (e.g. 'TOR') → suffix='TOR', not in dispatch tables → advisory."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("TOR") == "advisory"
+
+    def test_unknown_suffix_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unknown suffix emits WARNING log to surface schema drift to operator."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
-            _normalize_severity(96)
-        assert any("96" in record.message for record in caplog.records), (
-            "Expected WARNING log mentioning priority 96 for unknown Aeris priority"
+            _parse_severity_from_type("XX.YY.ZZ")
+        assert any("ZZ" in record.message for record in caplog.records), (
+            "Expected WARNING log mentioning unknown suffix"
         )
 
-    def test_none_priority_defaults_to_advisory(self) -> None:
-        """None priority → 'advisory' default."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
-        assert _normalize_severity(None) == "advisory"
+    def test_none_type_defaults_to_advisory(self) -> None:
+        """None type → 'advisory' default with WARNING log."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type(None) == "advisory"
 
-    def test_none_priority_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        """None priority emits WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import _normalize_severity  # noqa: PLC0415
+    def test_empty_type_defaults_to_advisory(self) -> None:
+        """Empty string type → 'advisory' default with WARNING log."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        assert _parse_severity_from_type("") == "advisory"
+
+    def test_none_type_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """None/empty type emits WARNING log."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
-            _normalize_severity(None)
-        assert any("null" in record.message.lower() or "none" in record.message.lower()
+            _parse_severity_from_type(None)
+        assert any("null" in record.message.lower() or "empty" in record.message.lower()
                    for record in caplog.records), (
-            "Expected WARNING log for null/None priority"
+            "Expected WARNING log for null/empty type"
+        )
+
+    # --- Real-fixture integration ---
+
+    def test_real_fixture_type_FW_A_yields_watch(self) -> None:
+        """Real fixture 'FW.A' (Fire Weather Watch) → severity 'watch'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        fixture = _load_fixture("alerts.json")
+        first_raw = fixture["response"][0]
+        record = _AerisAlertRecord.model_validate(first_raw)
+        result = _to_canonical(record)
+        assert result.severity == "watch", (
+            f"Real fixture FW.A should yield severity='watch', got {result.severity!r}"
         )
 
 
@@ -490,7 +539,13 @@ class TestAerisDescriptionPassthrough:
 
 
 class TestAerisFieldPassthrough:
-    """urgency, certainty, category pass through; absent in real fixture (PARTIAL-DOMAIN)."""
+    """category passes through from details.cat; urgency/certainty are PARTIAL-DOMAIN (always None).
+
+    canonical-data-model §4.3 amendment 2026-05-09:
+      - urgency, certainty: not Aeris response fields → always None on canonical record.
+      - category: real-wire field is `details.cat` (NOT `details.category`).
+      - event: maps from `details.name` (human-readable), NOT `details.type` (structured code).
+    """
 
     def _make_record_with_fields(self, **details_overrides: Any) -> Any:
         """Build a minimal record with overridden details fields."""
@@ -511,77 +566,63 @@ class TestAerisFieldPassthrough:
             },
         })
 
-    def test_urgency_none_when_absent_from_wire(self) -> None:
-        """urgency absent from wire → None on canonical record (real fixture shape)."""
+    def test_urgency_always_none_partial_domain(self) -> None:
+        """urgency is PARTIAL-DOMAIN — always None on canonical record (Aeris doesn't supply)."""
         from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields()  # no urgency in details
+        record = self._make_record_with_fields()
         result = _to_canonical(record)
         assert result.urgency is None, (
-            f"Expected urgency=None when absent from wire, got {result.urgency!r}"
+            f"Expected urgency=None (PARTIAL-DOMAIN), got {result.urgency!r}"
         )
 
-    def test_certainty_none_when_absent_from_wire(self) -> None:
-        """certainty absent from wire → None on canonical record (real fixture shape)."""
+    def test_certainty_always_none_partial_domain(self) -> None:
+        """certainty is PARTIAL-DOMAIN — always None on canonical record (Aeris doesn't supply)."""
         from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields()  # no certainty in details
+        record = self._make_record_with_fields()
         result = _to_canonical(record)
         assert result.certainty is None, (
-            f"Expected certainty=None when absent from wire, got {result.certainty!r}"
+            f"Expected certainty=None (PARTIAL-DOMAIN), got {result.certainty!r}"
         )
 
-    def test_category_none_when_absent_from_wire(self) -> None:
-        """category absent from wire → None on canonical record (real fixture shape).
-
-        Note: Aeris uses 'details.cat' in real wire (e.g. 'fire'), NOT 'details.category'.
-        The implementation reads details.category which is always None in real wire.
-        See alerts.md sidecar for this wire-shape divergence.
-        """
+    def test_category_none_when_cat_absent_from_wire(self) -> None:
+        """`details.cat` absent → category=None on canonical record."""
         from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields()  # no category in details
+        record = self._make_record_with_fields()  # no cat in details
         result = _to_canonical(record)
         assert result.category is None, (
-            f"Expected category=None when absent from wire, got {result.category!r}"
+            f"Expected category=None when cat absent from wire, got {result.category!r}"
         )
 
-    def test_urgency_passed_through_when_present(self) -> None:
-        """urgency present in wire → passed through on canonical record."""
+    def test_category_passed_through_from_cat_field(self) -> None:
+        """`details.cat` present in wire → passed through to canonical category field."""
         from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields(urgency="Expected")
+        record = self._make_record_with_fields(cat="fire")
         result = _to_canonical(record)
-        assert result.urgency == "Expected", (
-            f"Expected urgency='Expected', got {result.urgency!r}"
+        assert result.category == "fire", (
+            f"Expected category='fire' from details.cat, got {result.category!r}"
         )
 
-    def test_certainty_passed_through_when_present(self) -> None:
-        """certainty present in wire → passed through on canonical record."""
-        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields(certainty="Likely")
+    def test_real_fixture_yields_category_fire(self) -> None:
+        """Real fixture has details.cat='fire' → canonical category='fire'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        fixture = _load_fixture("alerts.json")
+        record = _AerisAlertRecord.model_validate(fixture["response"][0])
         result = _to_canonical(record)
-        assert result.certainty == "Likely", (
-            f"Expected certainty='Likely', got {result.certainty!r}"
+        assert result.category == "fire", (
+            f"Real fixture details.cat='fire' should yield category='fire', got {result.category!r}"
         )
 
-    def test_category_passed_through_when_present_as_category_field(self) -> None:
-        """details.category present in wire → passed through on canonical record.
+    def test_event_from_details_name(self) -> None:
+        """event = details.name (human-readable), NOT details.type (structured code).
 
-        Note: This is the field name the canonical model maps to.
-        Real Aeris wire uses 'cat' not 'category' — but if 'category' is present,
-        it IS passed through. The impl reads details.category correctly.
+        canonical-data-model §4.3 amendment 2026-05-09: event maps from the
+        human-readable name field, not the VTEC/structured type code.
         """
         from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields(category="Met")
+        record = self._make_record_with_fields(type="FW.A", name="FIRE WEATHER WATCH")
         result = _to_canonical(record)
-        assert result.category == "Met", (
-            f"Expected category='Met', got {result.category!r}"
-        )
-
-    def test_event_from_details_type(self) -> None:
-        """event = details.type short code passthrough (e.g. 'FW.A' for Fire Weather Watch)."""
-        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
-        record = self._make_record_with_fields(type="FW.A")
-        result = _to_canonical(record)
-        assert result.event == "FW.A", (
-            f"Expected event='FW.A', got {result.event!r}"
+        assert result.event == "FIRE WEATHER WATCH", (
+            f"Expected event='FIRE WEATHER WATCH' (from details.name), got {result.event!r}"
         )
 
     def test_source_is_aeris_provider_id(self) -> None:
@@ -644,35 +685,35 @@ class TestAerisWireShapePydantic:
         assert first["details"]["type"] == "FW.A"
         assert first["timestamps"]["issuedISO"] == "2026-05-09T23:54:00-05:00"
 
-    def test_real_fixture_urgency_certainty_category_absent(self) -> None:
-        """Real fixture details has no urgency/certainty/category fields (PARTIAL-DOMAIN call 16)."""
+    def test_real_fixture_urgency_certainty_absent(self) -> None:
+        """Real fixture details has no urgency/certainty fields (PARTIAL-DOMAIN per amended §4.3)."""
         fixture = _load_fixture("alerts.json")
         details = fixture["response"][0]["details"]
         assert "urgency" not in details, (
-            "urgency should be absent from real Aeris free-tier alert wire shape"
+            "urgency should be absent from real Aeris alert wire shape (not a documented response field)"
         )
         assert "certainty" not in details, (
-            "certainty should be absent from real Aeris free-tier alert wire shape"
-        )
-        assert "category" not in details, (
-            "category field absent; real wire uses 'cat' not 'category'"
+            "certainty should be absent from real Aeris alert wire shape (not a documented response field)"
         )
 
-    def test_real_fixture_has_cat_field_not_category(self) -> None:
-        """Real wire uses 'cat' (not 'category') for the category-like field.
+    def test_real_fixture_has_cat_field_carrying_category(self) -> None:
+        """Real wire uses 'cat' for the category field (canonical §4.3 amended 2026-05-09).
 
-        The canonical model maps category=details.category, but real Aeris returns
-        'details.cat'. This means category is always None in practice. See sidecar.
+        canonical-data-model §4.3 originally mapped category=details.category but the
+        real wire field name is 'cat'. Amendment routes category=details.cat.
         """
         fixture = _load_fixture("alerts.json")
         details = fixture["response"][0]["details"]
         assert "cat" in details, "Real fixture must have 'cat' field"
         assert details["cat"] == "fire"
+        assert "category" not in details, "Real wire uses 'cat', not 'category'"
 
     def test_real_fixture_emergency_is_boolean_false(self) -> None:
-        """Real fixture details.emergency = False (boolean, not string/null).
+        """Real fixture details.emergency = False (boolean).
 
-        This triggers a ValidationError in _AerisAlertRecord since emergency: str|None.
+        The wire-shape model now declares emergency: bool | str | None; boolean
+        False loads cleanly. senderName logic uses isinstance(..., str) to skip
+        boolean values and fall through to place.name fallback.
         """
         fixture = _load_fixture("alerts.json")
         details = fixture["response"][0]["details"]
@@ -815,7 +856,7 @@ class TestFetchCacheMissAndHit:
 
         assert len(records) == 1
         assert records[0].source == "aeris"
-        assert records[0].event == "WI.Y"
+        assert records[0].event == "Wind Advisory"  # event = details.name (amended §4.3)
 
     def test_cache_hit_returns_records_without_outbound_call(self) -> None:
         """Cache hit: no HTTP call made; cached records returned."""
