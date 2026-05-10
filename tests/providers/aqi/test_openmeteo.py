@@ -941,3 +941,9 @@ class TestCapabilityDeclaration:
         assert len(aqi_entries) == 1, (
             f"Expected 1 openmeteo aqi entry in registry, found {len(aqi_entries)}"
         )
+        # Teardown: reset provider registry so downstream tests (e.g.
+        # test_3a2_endpoints_integration.py TestCapabilitiesIntegration which
+        # asserts providers==[] ) don't see a polluted global registry.
+        # This test runs before the 3a2 integration module's capabilities tests
+        # in the full pytest run; without cleanup the registry leak causes F.
+        _reset_provider_state()
