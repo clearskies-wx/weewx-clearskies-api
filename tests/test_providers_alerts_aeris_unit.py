@@ -1241,16 +1241,23 @@ class TestCapabilityRegistry:
                 f"CAPABILITY.supplied_canonical_fields missing {field!r}"
             )
 
-    def test_capability_supplied_canonical_fields_includes_paid_tier_max_surface(self) -> None:
-        """CAPABILITY declares urgency/certainty/category even if absent in free-tier fixture.
+    def test_capability_partial_domain_excludes_urgency_and_certainty(self) -> None:
+        """CAPABILITY excludes urgency + certainty per PARTIAL-DOMAIN (canonical §4.3 amended 2026-05-09).
 
-        L1 rule (paid-tier-max-surface): declare the full surface; auditor handles PARTIAL-DOMAIN.
+        Aeris does not document or return urgency / certainty fields. PARTIAL-DOMAIN per
+        L1 rule extension drops them from CAPABILITY (auditor accepts; canonical §4.3 amended).
+        category remains in CAPABILITY because Aeris DOES supply it via `details.cat`.
         """
         from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
-        for field in ("urgency", "certainty", "category"):
-            assert field in CAPABILITY.supplied_canonical_fields, (
-                f"CAPABILITY must declare {field!r} even if absent in free-tier fixture (L1 rule)"
-            )
+        assert "urgency" not in CAPABILITY.supplied_canonical_fields, (
+            "PARTIAL-DOMAIN: urgency must be excluded from CAPABILITY (Aeris does not supply)"
+        )
+        assert "certainty" not in CAPABILITY.supplied_canonical_fields, (
+            "PARTIAL-DOMAIN: certainty must be excluded from CAPABILITY (Aeris does not supply)"
+        )
+        assert "category" in CAPABILITY.supplied_canonical_fields, (
+            "category MUST be in CAPABILITY — Aeris supplies it via details.cat (canonical §4.3 amended)"
+        )
 
     def test_wire_providers_registers_aeris_alerts_capability(self) -> None:
         """wire_providers([aeris.CAPABILITY]) → registry contains aeris alerts entry."""
