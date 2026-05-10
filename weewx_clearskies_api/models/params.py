@@ -262,3 +262,41 @@ class AlertsQueryParams(BaseModel):
         if self.severity is None:
             return 0
         return SEVERITY_ORDER.get(self.severity, 0)
+
+
+# ---------------------------------------------------------------------------
+# /aqi/current query params
+# ---------------------------------------------------------------------------
+
+
+class AQIQueryParams(BaseModel):
+    """Validated query parameters for GET /aqi/current.
+
+    No query parameters accepted — extra="forbid" rejects unknown keys (422).
+    Implements the security-baseline §3.5 Depends-wrapper pattern.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# ---------------------------------------------------------------------------
+# /aqi/history query params
+# ---------------------------------------------------------------------------
+
+
+class AQIHistoryQueryParams(BaseModel):
+    """Validated query parameters for GET /aqi/history.
+
+    Per OpenAPI /aqi/history parameters: from, to, limit, cursor, page.
+    extra="forbid" rejects unknown keys (422).
+    Handler always returns 501 regardless of params; validation happens first
+    so invalid params return 422, valid params return 501.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: datetime | None = Field(default=None, alias="from")
+    to: datetime | None = None
+    limit: int = Field(default=1000, ge=1, le=10000)
+    cursor: str | None = None
+    page: int | None = Field(default=None, ge=1)

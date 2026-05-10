@@ -681,3 +681,50 @@ class AlertListResponse(BaseModel):
     data: AlertList
     source: str  # mirrors data.source
     generatedAt: str  # UTC ISO-8601 with Z
+
+
+# ---------------------------------------------------------------------------
+# AQI (ADR-013, canonical-data-model §3.8)
+# ---------------------------------------------------------------------------
+
+# ruff: noqa: N815  (field names use canonical camelCase: aqiCategory, etc.)
+
+
+class AQIReading(BaseModel):
+    """Canonical AQI reading (ADR-010 §3.8, OpenAPI AQIReading schema).
+
+    EPA 0–500 scale per ADR-013.
+    extra="ignore" so provider wire shapes that have extra fields don't break
+    normalization.  Required fields per OpenAPI: observedAt, source.
+    All AQI numeric fields are Optional — providers may not supply all.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    aqi: float | None = None
+    aqiCategory: str | None = None      # EPA category — canonical §3.8 spelling
+    aqiMainPollutant: str | None = None  # canonical pollutant id: PM2.5/PM10/O3/NO2/SO2/CO
+    aqiLocation: str | None = None       # free-form provider location label (PARTIAL-DOMAIN for Open-Meteo)
+    pollutantPM25: float | None = None   # µg/m³ (group_concentration)
+    pollutantPM10: float | None = None   # µg/m³ (group_concentration)
+    pollutantO3: float | None = None     # ppm (group_fraction; converted from µg/m³ at ingest)
+    pollutantNO2: float | None = None    # ppm (group_fraction; converted from µg/m³ at ingest)
+    pollutantSO2: float | None = None    # ppm (group_fraction; converted from µg/m³ at ingest)
+    pollutantCO: float | None = None     # ppm (group_fraction; converted from µg/m³ at ingest)
+    observedAt: str                      # UTC ISO-8601 with Z; required per OpenAPI
+    source: str                          # "weewx" (Path A) or provider_id (Path B)
+
+
+class AQIResponse(BaseModel):
+    """AQIResponse envelope (OpenAPI AQIResponse schema).
+
+    data: AQIReading or None (null when no AQI provider configured or no reading).
+    units: UnitsBlock — pollutant unit declarations.
+    source: provider_id or "none".
+    generatedAt: UTC ISO-8601 with Z.
+    """
+
+    data: AQIReading | None
+    units: dict[str, str]
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
