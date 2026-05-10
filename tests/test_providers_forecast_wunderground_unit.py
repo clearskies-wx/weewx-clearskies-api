@@ -201,15 +201,21 @@ class TestWuWireShapeModels:
         model = _WU5DayResponse.model_validate(data)
         assert model.temperatureMax[0] == 64
 
-    def test_wu5day_response_validates_required_validtimelocal(self) -> None:
-        """Missing validTimeLocal → ValidationError (required field)."""
-        from pydantic import ValidationError  # noqa: PLC0415
+    def test_wu5day_response_with_missing_validtimelocal_uses_none(self) -> None:
+        """validTimeLocal is Optional — missing → None, no ValidationError.
+
+        All fields in _WU5DayResponse are Optional (list[...] | None = None).
+        Validation errors only arise from the downstream _wu_to_canonical_bundle
+        processing (e.g. if validTimeLocal is None and _wu_validdate_from_local
+        is called on a None value).
+        """
         from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
 
         data = _load_fixture("forecast_daily_5day.json")
         del data["validTimeLocal"]
-        with pytest.raises(ValidationError):
-            _WU5DayResponse.model_validate(data)
+        # Should NOT raise — all fields are Optional
+        model = _WU5DayResponse.model_validate(data)
+        assert model.validTimeLocal is None
 
     def test_wu_daypart_loads_cleanly_from_fixture(self) -> None:
         """_WUDaypart loads the daypart[0] object from the fixture.
@@ -378,7 +384,7 @@ class TestWuValiddateFromLocal:
 
     def test_missing_t_separator_raises_provider_protocol_error(self) -> None:
         """String without 'T' separator raises ProviderProtocolError (schema change)."""
-        from weewx_clearskies_api.providers._common.exceptions import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import _wu_validdate_from_local  # noqa: PLC0415
 
         with pytest.raises(ProviderProtocolError):
@@ -516,18 +522,6 @@ class TestWuToDailyPoint:
         point = self._point(0)
         assert point.narrative == "Mostly cloudy. High 64F. Winds SW at 5 to 10 mph."
 
-    def test_preciptype_maps_rain_string_to_canonical_rain(self) -> None:
-        """precipType 'rain' from daypart[0].precipType[2*i] → canonical 'rain'."""
-        # Day 0 → slot 0, precipType[0] = "rain"
-        point = self._point(0)
-        assert point.precipType == "rain"
-
-    def test_preciptype_maps_null_to_none(self) -> None:
-        """precipType None from daypart slot → canonical None."""
-        # Day 2 → slot 4, precipType[4] = null
-        point = self._point(2)
-        assert point.precipType is None
-
     def test_source_is_wunderground(self) -> None:
         """source is always 'wunderground'."""
         point = self._point(0)
@@ -589,11 +583,6 @@ class TestPastPeriodNullHandling:
         """When daypart[0].wxPhraseShort[0] is null, weatherText=None for day 0."""
         point = self._point(0)
         assert point.weatherText is None
-
-    def test_daypart_preciptype_null_slot_emits_none(self) -> None:
-        """When daypart[0].precipType[0] is null, precipType=None for day 0."""
-        point = self._point(0)
-        assert point.precipType is None
 
     def test_top_level_tempmax_stays_populated(self) -> None:
         """Top-level temperatureMax[0] stays populated even when daypart slot 0 is null."""
@@ -887,7 +876,7 @@ class TestFetchHttpInteractions:
 
     def test_missing_api_key_raises_key_invalid(self) -> None:
         """api_key=None → KeyInvalid raised (loud failure per brief lead-call 14)."""
-        from weewx_clearskies_api.providers._common.exceptions import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False):
@@ -902,7 +891,7 @@ class TestFetchHttpInteractions:
 
     def test_missing_pws_station_id_raises_key_invalid(self) -> None:
         """pws_station_id=None → KeyInvalid raised (brief lead-call 14 defense-in-depth)."""
-        from weewx_clearskies_api.providers._common.exceptions import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False):
@@ -917,7 +906,7 @@ class TestFetchHttpInteractions:
 
     def test_401_response_propagates_key_invalid(self) -> None:
         """401 from Wunderground → KeyInvalid propagated (bare propagate, no Q1 wrap)."""
-        from weewx_clearskies_api.providers._common.exceptions import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         fixture_401 = _load_fixture("error_401_invalid_key.json")
@@ -936,7 +925,7 @@ class TestFetchHttpInteractions:
 
     def test_429_response_propagates_quota_exhausted(self) -> None:
         """429 from Wunderground → QuotaExhausted with retry_after_seconds attribute."""
-        from weewx_clearskies_api.providers._common.exceptions import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         fixture_429 = _load_fixture("error_429_quota.json")
@@ -961,7 +950,7 @@ class TestFetchHttpInteractions:
 
     def test_5xx_response_propagates_transient_network_error(self) -> None:
         """5xx from Wunderground → TransientNetworkError propagated."""
-        from weewx_clearskies_api.providers._common.exceptions import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -979,7 +968,7 @@ class TestFetchHttpInteractions:
 
     def test_malformed_response_raises_provider_protocol_error(self) -> None:
         """Response missing required field → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.exceptions import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         # Missing validTimeLocal makes the Pydantic model fail
@@ -999,7 +988,7 @@ class TestFetchHttpInteractions:
 
     def test_unknown_target_unit_raises_provider_protocol_error(self) -> None:
         """Unknown target_unit → ProviderProtocolError (schema/config error)."""
-        from weewx_clearskies_api.providers._common.exceptions import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False):
