@@ -85,7 +85,6 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -800,6 +799,36 @@ class TestAerisWireShapePydantic:
         assert env.error["code"] == "warn_location"
         assert env.response == []
 
+    def test_real_fixture_with_boolean_emergency_succeeds_end_to_end(self) -> None:
+        """Real fixture (emergency=False boolean) flows through fetch() without ValidationError.
+
+        Pre-amendment _AerisAlertDetails declared `emergency: str | None`; real wire's boolean
+        false triggered ValidationError → ProviderProtocolError. Post-amendment
+        (`bool | str | None`), the real fixture parses cleanly. senderName falls back to
+        `place.name` because the isinstance(..., str) check skips the boolean.
+
+        End-to-end coverage complementing the model-level test in TestAerisSenderNameDisjunction.
+        """
+        _reset_provider_state()
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
+        # Use the real fixture shape including emergency=False
+        real_fixture = _load_fixture("alerts.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_ALERTS_URL).mock(
+                return_value=httpx.Response(200, json=real_fixture)
+            )
+            # After amendment: no exception; returns list with 1 AlertRecord
+            records = aeris.fetch(
+                lat=_LAT, lon=_LON,
+                client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+            )
+        assert len(records) == 1, f"Expected 1 record from real fixture, got {len(records)}"
+        # senderName falls back to place.name ("valley") because emergency=False is falsy
+        assert records[0].senderName == "valley", (
+            f"Expected senderName='valley', got {records[0].senderName!r}"
+        )
+
 
 # ===========================================================================
 # 7. Cache hit/miss — fetch() with respx-mocked HTTP
@@ -1175,33 +1204,6 @@ class TestFetchEnvelopeErrorPaths:
                     lat=_LAT, lon=_LON,
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
                 )
-
-    def test_real_fixture_with_boolean_emergency_succeeds_after_fix(self) -> None:
-        """Real fixture emergency=False (boolean) → accepted after api-dev fix.
-
-        After api-dev fix (bool | str | None), fetch() with the real fixture
-        succeeds and returns AlertRecord list. senderName falls back to place.name.
-        (Previously this raised ProviderProtocolError — documented bug in alerts.md.)
-        """
-        _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
-        # Use the real fixture shape including emergency=False
-        real_fixture = _load_fixture("alerts.json")
-
-        with respx.mock(assert_all_called=False) as mock:
-            mock.get(_AERIS_ALERTS_URL).mock(
-                return_value=httpx.Response(200, json=real_fixture)
-            )
-            # After fix: no exception; returns list with 1 AlertRecord
-            records = aeris.fetch(
-                lat=_LAT, lon=_LON,
-                client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
-            )
-        assert len(records) == 1, f"Expected 1 record from real fixture, got {len(records)}"
-        # senderName falls back to place.name ("valley") because emergency=False is falsy
-        assert records[0].senderName == "valley", (
-            f"Expected senderName='valley', got {records[0].senderName!r}"
-        )
 
 
 # ===========================================================================

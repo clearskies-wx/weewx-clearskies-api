@@ -27,12 +27,13 @@ End-to-end paths covered:
 
 Wire-shape notes:
   - The "valid" Aeris fixture used in happy-path integration tests OMITS
-    emergency=False (the boolean bug documented in alerts.md sidecar).
-    This avoids the ValidationError → ProviderProtocolError that would
-    occur with the real fixture. The unit test
-    test_boolean_emergency_in_record_raises_provider_protocol_error covers
-    the bug path. Once api-dev fixes _AerisAlertDetails to bool|str|None,
-    the real fixture can be used here too.
+    the `emergency` field for clean test isolation. The real fixture
+    (`alerts.json`) has `emergency=false` (boolean) and is safe to load
+    via the post-2026-05-09-amendment `_AerisAlertDetails` model
+    (`bool | str | None`). Boolean-emergency wire-shape coverage lives in
+    the unit suite under `TestAerisWireShapePydantic`; integration
+    fixtures are stripped only to make assertions on senderName etc.
+    independent of that wire-shape behaviour.
 
 ADR references: ADR-006, ADR-012, ADR-016, ADR-017, ADR-038.
 """

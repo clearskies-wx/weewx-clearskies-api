@@ -258,7 +258,6 @@ class _AerisAlertRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str
-    dataSource: str | None = None        # not in canonical mapping; preserved for debug log
     active: bool | None = None
     details: _AerisAlertDetails
     timestamps: _AerisAlertTimestamps
