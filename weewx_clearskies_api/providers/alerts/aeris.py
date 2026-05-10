@@ -184,7 +184,11 @@ class _AerisAlertDetails(BaseModel):
     priority: int | None = None          # severity, mapped via _AERIS_SEVERITY_MAP
     color: str | None = None
     body: str | None = None              # description passthrough (brief call 13)
-    emergency: str | None = None         # senderName primary candidate (brief call 19, Q2)
+    # emergency: real Aeris wire returns boolean False when no emergency text is set.
+    # Type declared as bool | str | None to accept both wire forms.
+    # Brief spec said str | None; real-capture fixture (alerts.md) showed boolean False.
+    # senderName logic in _to_canonical treats any falsy value as "use place.name fallback".
+    emergency: bool | str | None = None  # senderName primary candidate (brief call 19, Q2)
     urgency: str | None = None           # CAP vocab passthrough (may be absent — call 16)
     certainty: str | None = None         # CAP vocab passthrough (may be absent — call 16)
     category: str | None = None          # CAP vocab passthrough (may be absent — call 16)
@@ -413,10 +417,14 @@ def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
         )
 
     # senderName disjunction (brief call 19, Q2 user decision 2026-05-09):
-    # prefer details.emergency when non-empty; else place.name; else None.
+    # prefer details.emergency when non-empty string; else place.name; else None.
+    # emergency may be: a non-empty string (use it), an empty string/None/False boolean
+    # (real wire returns False when no emergency text — treat as absent), or a truthy
+    # string that is all-whitespace (strip and treat as absent).
     sender_name: str | None = None
-    if record.details.emergency and record.details.emergency.strip():
-        sender_name = record.details.emergency.strip()
+    emergency = record.details.emergency
+    if isinstance(emergency, str) and emergency.strip():
+        sender_name = emergency.strip()
     elif record.place and record.place.name and record.place.name.strip():
         sender_name = record.place.name.strip()
 
