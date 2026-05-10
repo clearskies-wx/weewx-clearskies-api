@@ -1,0 +1,43 @@
+{
+  "latitude": 47.600006,
+  "longitude": -122.3,
+  "generationtime_ms": 0.24759769439697266,
+  "utc_offset_seconds": 0,
+  "timezone": "GMT",
+  "timezone_abbreviation": "GMT",
+  "elevation": 59.0,
+  "current_units": {
+    "time": "iso8601",
+    "interval": "seconds",
+    "us_aqi": "USAQI",
+    "us_aqi_pm2_5": "USAQI",
+    "us_aqi_pm10": "USAQI",
+    "us_aqi_nitrogen_dioxide": "USAQI",
+    "us_aqi_ozone": "USAQI",
+    "us_aqi_sulphur_dioxide": "USAQI",
+    "us_aqi_carbon_monoxide": "USAQI",
+    "pm10": "μg/m³",
+    "pm2_5": "μg/m³",
+    "carbon_monoxide": "μg/m³",
+    "nitrogen_dioxide": "μg/m³",
+    "sulphur_dioxide": "μg/m³",
+    "ozone": "μg/m³"
+  },
+  "current": {
+    "time": "2026-05-10T22:00",
+    "interval": 3600,
+    "us_aqi": 73,
+    "us_aqi_pm2_5": null,
+    "us_aqi_pm10": null,
+    "us_aqi_nitrogen_dioxide": null,
+    "us_aqi_ozone": null,
+    "us_aqi_sulphur_dioxide": null,
+    "us_aqi_carbon_monoxide": null,
+    "pm10": null,
+    "pm2_5": null,
+    "carbon_monoxide": null,
+    "nitrogen_dioxide": null,
+    "sulphur_dioxide": null,
+    "ozone": null
+  }
+}
