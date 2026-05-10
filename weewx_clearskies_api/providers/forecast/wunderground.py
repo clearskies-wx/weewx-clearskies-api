@@ -57,12 +57,6 @@ Daypart index alignment (brief lead-call 16, 17, 21, 23, 27):
   Daily canonical fields use daypart[0][2*i] (Day period) for daytime values.
   Past-period slots may be null; canonical-nullable applies per brief.
 
-precipType derivation (brief lead-call 17):
-  Wunderground returns "rain"/"snow"/"precip"/"ice" (or null) per daypart slot.
-  "precip" → "rain" (mixed/general; logged DEBUG once per encounter).
-  "ice"    → "freezing-rain" (ice category per canonical §3.3; LOG DEBUG once).
-  Other/null → None (log DEBUG once on first encounter of unknown string).
-
 sunrise/sunset (brief lead-call 25):
   Top-level sunriseTimeUtc[i] / sunsetTimeUtc[i] are epoch UTC seconds.
   Convert via epoch_to_utc_iso8601() from _common/datetime_utils.py.
@@ -174,22 +168,6 @@ CAPABILITY = ProviderCapability(
         "KeyInvalid 502 propagation."
     ),
 )
-
-# ---------------------------------------------------------------------------
-# precipType lookup table (brief lead-call 17)
-# Canonical §3.3 enum: "rain" / "snow" / "sleet" / "freezing-rain" / "hail" / None
-# ---------------------------------------------------------------------------
-
-_WU_PRECIP_TYPE_MAP: dict[str, str | None] = {
-    "rain": "rain",
-    "snow": "snow",
-    "precip": "rain",         # mixed/general; logged DEBUG once per encounter
-    "ice": "freezing-rain",   # ice on ground; freezing-rain is broader ice category
-}
-
-# Track which values have been logged to avoid log spam
-_logged_unknown_precip: set[str] = set()
-_logged_mixed_precip: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # Wire-shape Pydantic models (security-baseline §3.5)
@@ -330,57 +308,6 @@ def _build_cache_key(lat: float, lon: float, target_unit: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — precipType derivation (brief lead-call 17)
-# ---------------------------------------------------------------------------
-
-
-def _wu_precip_type_to_canonical(value: str | None) -> str | None:
-    """Map Wunderground daypart precipType value to canonical §3.3 enum.
-
-    Mapping:
-      "rain"   → "rain"
-      "snow"   → "snow"
-      "precip" → "rain"  (mixed/general; log DEBUG once per encounter)
-      "ice"    → "freezing-rain"  (broader ice category per canonical §3.3)
-      other/null → None  (log DEBUG once on first encounter of unknown string)
-
-    Per brief lead-call 17 + canonical §3.3 enum values used literally.
-    """
-    if value is None:
-        return None
-
-    result = _WU_PRECIP_TYPE_MAP.get(value)
-
-    if result is not None:
-        # Log mixed/ambiguous values once per process for observability
-        if value == "precip" and value not in _logged_mixed_precip:
-            _logged_mixed_precip.add(value)
-            logger.debug(
-                "Wunderground precipType 'precip' (mixed/general precipitation) "
-                "mapped to 'rain' (canonical §3.3 has no mixed-precip enum; "
-                "track for future canonical amendment)",
-            )
-        elif value == "ice" and value not in _logged_mixed_precip:
-            _logged_mixed_precip.add(value)
-            logger.debug(
-                "Wunderground precipType 'ice' mapped to 'freezing-rain' "
-                "(ice-on-ground category; canonical §3.3 freezing-rain is the "
-                "broader ice class; sleet is more specific to pellets)",
-            )
-        return result
-
-    # Unknown value — log once, return None
-    if value not in _logged_unknown_precip:
-        _logged_unknown_precip.add(value)
-        logger.debug(
-            "Wunderground unknown precipType %r → None "
-            "(update _WU_PRECIP_TYPE_MAP if this is a known precip type)",
-            value,
-        )
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Helper — validDate extraction (brief lead-call 28)
 # ---------------------------------------------------------------------------
 
@@ -511,9 +438,6 @@ def _wu_to_daily_point(
             weather_code = str(icon_code)
 
         weather_text = _safe_get(daypart.wxPhraseShort, dp_idx)
-        # precipType: DailyForecastPoint has no precipType field (HourlyForecastPoint-
-        # only per canonical §3.3/§3.4); _wu_precip_type_to_canonical() helper is
-        # defined for this module per brief lead-call 17 but not applied to daily points.
 
     return DailyForecastPoint(
         validDate=valid_date,
@@ -568,12 +492,27 @@ def _wu_to_canonical_bundle(
         elif isinstance(raw_dp, _WUDaypart):
             daypart = raw_dp
 
-    # Determine how many days are in the response (should be 5 for /5day)
-    n_days = 0
-    if wire.validTimeLocal:
-        n_days = len(wire.validTimeLocal)
-    elif wire.temperatureMax:
-        n_days = len(wire.temperatureMax)
+    # validTimeLocal is the validDate source per canonical §3.4 (validDate is
+    # required, non-nullable).  If it is missing or has a None slot, the per-day
+    # DailyForecastPoint construction would raise Pydantic ValidationError —
+    # surface as canonical ProviderProtocolError instead so the boundary
+    # translates correctly to a 502 ProviderProblem (3b-6 audit F1 remediation).
+    if wire.validTimeLocal is None:
+        raise ProviderProtocolError(
+            "Wunderground response missing validTimeLocal — required for validDate "
+            "derivation per canonical §3.4; provider schema may have changed",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        )
+    if any(slot is None for slot in wire.validTimeLocal):
+        raise ProviderProtocolError(
+            "Wunderground validTimeLocal contains None slot — required non-null "
+            "per canonical §3.4 validDate; provider schema may have changed",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        )
+
+    n_days = len(wire.validTimeLocal)
 
     daily_points = [
         _wu_to_daily_point(wire, i, daypart)

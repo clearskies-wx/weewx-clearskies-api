@@ -3,7 +3,7 @@
 Strips the following from every log record before it is formatted:
   - The value of Authorization headers
   - The value of X-Clearskies-Proxy-Auth headers
-  - Query-string values for 'appid', 'client_id', and 'client_secret'
+  - Query-string values for 'appid', 'apiKey', 'client_id', and 'client_secret'
   - SQL parameter values (logged query templates only — never the bound values)
 
 This is defense-in-depth; the primary control is "don't log secrets in the

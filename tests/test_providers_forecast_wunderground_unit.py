@@ -8,10 +8,6 @@ Covers per the task-3b-6 brief §Test author parallel scope:
   - _WU5DayResponse: missing validTimeLocal → ValidationError.
 
   Pure-compute helpers:
-  - _wu_precip_type_to_canonical: "rain" → "rain"; "snow" → "snow";
-    "precip" → "rain" (DEBUG logged once); "ice" → "freezing-rain" (DEBUG logged once);
-    None → None; unknown string → None (DEBUG logged once).
-  - _wu_precip_type_to_canonical: log-once behavior (second call doesn't re-log).
   - _wu_validdate_from_local: YYYY-MM-DD extracted correctly from "2026-04-30T07:00:00-0700".
   - _wu_validdate_from_local: date-part is already station-local (no UTC conversion needed).
   - _wu_validdate_from_local: missing "T" separator → ProviderProtocolError.
@@ -30,13 +26,12 @@ Covers per the task-3b-6 brief §Test author parallel scope:
   - weatherCode from str(daypart[0].iconCode[2*i]).
   - weatherText from daypart[0].wxPhraseShort[2*i].
   - narrative from top-level narrative[i].
-  - precipType derivation: daypart[0].precipType[2*i] mapped via _wu_precip_type_to_canonical.
   - source is always "wunderground".
   - extras is always empty dict.
 
   Past-period null handling:
   - When daypart[0] slot i is null: daypart-derived fields (precipProbabilityMax,
-    windSpeedMax, uvIndexMax, weatherCode, weatherText, precipType) emit as None.
+    windSpeedMax, uvIndexMax, weatherCode, weatherText) emit as None.
   - Top-level fields (tempMax, tempMin, precipAmount, narrative, validDate) stay populated.
   - sunrise/sunset emit as None when sunriseTimeUtc/sunsetTimeUtc slot is null.
 
@@ -131,9 +126,6 @@ def _reset_provider_state() -> None:
     _reset_http_client_for_tests()
     # Clear rate-limiter deque so consecutive tests don't trip each other.
     _wu._rate_limiter._calls.clear()
-    # Clear logged-unknown-precip sets so DEBUG-logging tests don't silently pass.
-    _wu._logged_unknown_precip.clear()
-    _wu._logged_mixed_precip.clear()
     # Re-wire a clean memory cache (CLEARSKIES_CACHE_URL unset in unit test env).
     wire_cache_from_env()
 
@@ -261,109 +253,7 @@ class TestWuWireShapeModels:
 
 
 # ===========================================================================
-# 2. _wu_precip_type_to_canonical — all string mappings
-# ===========================================================================
-
-
-class TestWuPrecipTypeToCanonical:
-    """_wu_precip_type_to_canonical maps Wunderground precipType values to canonical §3.3 enum."""
-
-    def test_rain_maps_to_rain(self) -> None:
-        """'rain' → 'rain' (direct match)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        assert _wu_precip_type_to_canonical("rain") == "rain"
-
-    def test_snow_maps_to_snow(self) -> None:
-        """'snow' → 'snow' (direct match)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        assert _wu_precip_type_to_canonical("snow") == "snow"
-
-    def test_precip_maps_to_rain_with_debug_log(self, caplog: Any) -> None:
-        """'precip' → 'rain' (mixed/general); DEBUG log emitted once per brief lead-call 17."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_mixed_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        with caplog.at_level(
-            logging.DEBUG,
-            logger="weewx_clearskies_api.providers.forecast.wunderground",
-        ):
-            result = _wu_precip_type_to_canonical("precip")
-        assert result == "rain"
-        assert "precip" in _wu._logged_mixed_precip
-
-    def test_precip_only_logged_once(self) -> None:
-        """Second call with 'precip' doesn't re-log (log-once behavior)."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_mixed_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        _wu_precip_type_to_canonical("precip")
-        count_before = len(_wu._logged_mixed_precip)
-        _wu_precip_type_to_canonical("precip")
-        assert len(_wu._logged_mixed_precip) == count_before
-
-    def test_ice_maps_to_freezing_rain_with_debug_log(self, caplog: Any) -> None:
-        """'ice' → 'freezing-rain'; DEBUG log emitted once per brief lead-call 17."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_mixed_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        with caplog.at_level(
-            logging.DEBUG,
-            logger="weewx_clearskies_api.providers.forecast.wunderground",
-        ):
-            result = _wu_precip_type_to_canonical("ice")
-        assert result == "freezing-rain"
-        assert "ice" in _wu._logged_mixed_precip
-
-    def test_ice_only_logged_once(self) -> None:
-        """Second call with 'ice' doesn't re-log."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_mixed_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        _wu_precip_type_to_canonical("ice")
-        count_before = len(_wu._logged_mixed_precip)
-        _wu_precip_type_to_canonical("ice")
-        assert len(_wu._logged_mixed_precip) == count_before
-
-    def test_none_maps_to_none(self) -> None:
-        """None → None (no precipitation)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        assert _wu_precip_type_to_canonical(None) is None
-
-    def test_unknown_string_logs_debug_and_returns_none(self, caplog: Any) -> None:
-        """Unknown string 'hail_special' → None; DEBUG log emitted once."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_unknown_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        with caplog.at_level(
-            logging.DEBUG,
-            logger="weewx_clearskies_api.providers.forecast.wunderground",
-        ):
-            result = _wu_precip_type_to_canonical("hail_special")
-        assert result is None
-        assert "hail_special" in _wu._logged_unknown_precip
-
-    def test_unknown_string_only_logged_once(self) -> None:
-        """Second call with unknown string doesn't double-add to logged set."""
-        import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-        _wu._logged_unknown_precip.clear()
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_precip_type_to_canonical  # noqa: PLC0415
-
-        _wu_precip_type_to_canonical("future_type")
-        count_before = len(_wu._logged_unknown_precip)
-        _wu_precip_type_to_canonical("future_type")
-        assert len(_wu._logged_unknown_precip) == count_before
-
-
-# ===========================================================================
-# 3. _wu_validdate_from_local — date extraction
+# 2. _wu_validdate_from_local — date extraction
 # ===========================================================================
 
 
@@ -405,7 +295,7 @@ class TestWuValiddateFromLocal:
 
 
 # ===========================================================================
-# 4. _wu_to_daily_point — canonical translation
+# 3. _wu_to_daily_point — canonical translation
 # ===========================================================================
 
 
@@ -534,7 +424,7 @@ class TestWuToDailyPoint:
 
 
 # ===========================================================================
-# 5. Past-period null handling
+# 4. Past-period null handling
 # ===========================================================================
 
 
@@ -611,7 +501,7 @@ class TestPastPeriodNullHandling:
 
 
 # ===========================================================================
-# 6. _wu_to_canonical_bundle — full bundle assembly
+# 5. _wu_to_canonical_bundle — full bundle assembly
 # ===========================================================================
 
 
@@ -677,9 +567,52 @@ class TestWuToCanonicalBundle:
         for day in bundle.daily:
             assert day.source == "wunderground"
 
+    def test_missing_validtimelocal_raises_provider_protocol_error(self) -> None:
+        """Wire response with no validTimeLocal → ProviderProtocolError, not Pydantic ValidationError.
+
+        3b-6 audit F1: validTimeLocal is the validDate source per canonical §3.4
+        (validDate required, non-nullable). If the wire response omits the array
+        entirely, the per-day DailyForecastPoint construction would have raised
+        Pydantic ValidationError leaking past the provider boundary as 500.
+        Bundle-level guard surfaces it as canonical ProviderProtocolError → 502.
+        """
+        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _wu_to_canonical_bundle,
+        )
+
+        data = _load_fixture("forecast_daily_5day.json")
+        del data["validTimeLocal"]
+        wire = _WU5DayResponse.model_validate(data)
+
+        with pytest.raises(ProviderProtocolError, match="missing validTimeLocal"):
+            _wu_to_canonical_bundle(wire)
+
+    def test_validtimelocal_with_none_slot_raises_provider_protocol_error(self) -> None:
+        """validTimeLocal with a None slot → ProviderProtocolError, not ValidationError.
+
+        3b-6 audit F1: per-slot null in the validTimeLocal array would have
+        produced validDate=None at DailyForecastPoint construction → Pydantic
+        ValidationError. Bundle-level guard catches it explicitly.
+        """
+        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _wu_to_canonical_bundle,
+        )
+
+        data = _load_fixture("forecast_daily_5day.json")
+        # Null out a mid-array slot to confirm the guard fires regardless of position.
+        data["validTimeLocal"][2] = None
+        wire = _WU5DayResponse.model_validate(data)
+
+        with pytest.raises(ProviderProtocolError, match="None slot"):
+            _wu_to_canonical_bundle(wire)
+
 
 # ===========================================================================
-# 7. units= mapping — US, METRIC, METRICWX
+# 6. units= mapping — US, METRIC, METRICWX
 # ===========================================================================
 
 
@@ -766,7 +699,7 @@ class TestUnitsMapping:
 
 
 # ===========================================================================
-# 8. fetch() — respx-mocked HTTP interactions
+# 7. fetch() — respx-mocked HTTP interactions
 # ===========================================================================
 
 
@@ -1007,7 +940,7 @@ class TestFetchHttpInteractions:
 
 
 # ===========================================================================
-# 9. CAPABILITY assertions
+# 8. CAPABILITY assertions
 # ===========================================================================
 
 
