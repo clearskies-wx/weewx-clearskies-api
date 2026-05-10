@@ -401,30 +401,30 @@ class TestAerisSenderNameDisjunction:
             f"Expected None when both emergency and place.name absent, got {result.senderName!r}"
         )
 
-    def test_real_fixture_has_boolean_emergency_causing_validation_error(self) -> None:
-        """Real fixture has emergency=False (boolean) → ValidationError on str|None field.
+    def test_real_fixture_boolean_emergency_accepted_and_falls_back_to_place_name(self) -> None:
+        """Real fixture has emergency=False (boolean) → accepted by bool|str|None field.
 
-        This is a known bug: _AerisAlertDetails declares emergency: str | None = None
-        but real Aeris wire returns emergency: false (boolean). When this occurs,
-        _AerisAlertRecord.model_validate() raises ValidationError, which is then
-        caught and re-raised as ProviderProtocolError.
+        After api-dev fix (bool | str | None), _AerisAlertRecord.model_validate()
+        succeeds with emergency=False (boolean). senderName falls back to place.name
+        because False is not a non-empty string (isinstance check).
 
-        Bug routed to api-dev: fix is emergency: bool | str | None = None,
-        with _to_canonical's senderName disjunction checking
-        `isinstance(emergency, str)` before treating as a string candidate.
+        Real fixture: place.name="valley" → senderName="valley".
         """
-        from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
         fixture = _load_fixture("alerts.json")
         first_raw = fixture["response"][0]
         # Confirm emergency=False is boolean in real fixture
         assert first_raw["details"]["emergency"] is False, (
             "Real fixture must have emergency=False (boolean) to test this path"
         )
-        # _AerisAlertRecord.model_validate must raise ValidationError
-        # because str|None does not accept bool
-        with pytest.raises(ValidationError):
-            _AerisAlertRecord.model_validate(first_raw)
+        # After fix: model_validate succeeds (bool|str|None accepts bool)
+        record = _AerisAlertRecord.model_validate(first_raw)
+        assert record.details.emergency is False
+        # senderName falls back to place.name because False is not a non-empty string
+        canonical = _to_canonical(record)
+        assert canonical.senderName == "valley", (
+            f"Expected senderName='valley' (place.name fallback), got {canonical.senderName!r}"
+        )
 
 
 # ===========================================================================
@@ -1135,17 +1135,15 @@ class TestFetchEnvelopeErrorPaths:
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
                 )
 
-    def test_boolean_emergency_in_record_raises_provider_protocol_error(self) -> None:
-        """Real fixture emergency=False (boolean) → ValidationError → ProviderProtocolError.
+    def test_real_fixture_with_boolean_emergency_succeeds_after_fix(self) -> None:
+        """Real fixture emergency=False (boolean) → accepted after api-dev fix.
 
-        This is the bug documented in alerts.md: _AerisAlertDetails declares
-        emergency: str | None but real wire returns boolean. Until api-dev fixes
-        the type to bool | str | None, any real Aeris response with emergency=false
-        will raise ProviderProtocolError at the record-validation step.
+        After api-dev fix (bool | str | None), fetch() with the real fixture
+        succeeds and returns AlertRecord list. senderName falls back to place.name.
+        (Previously this raised ProviderProtocolError — documented bug in alerts.md.)
         """
         _reset_provider_state()
         from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         # Use the real fixture shape including emergency=False
         real_fixture = _load_fixture("alerts.json")
 
@@ -1153,11 +1151,16 @@ class TestFetchEnvelopeErrorPaths:
             mock.get(_AERIS_ALERTS_URL).mock(
                 return_value=httpx.Response(200, json=real_fixture)
             )
-            with pytest.raises(ProviderProtocolError):
-                aeris.fetch(
-                    lat=_LAT, lon=_LON,
-                    client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
-                )
+            # After fix: no exception; returns list with 1 AlertRecord
+            records = aeris.fetch(
+                lat=_LAT, lon=_LON,
+                client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+            )
+        assert len(records) == 1, f"Expected 1 record from real fixture, got {len(records)}"
+        # senderName falls back to place.name ("valley") because emergency=False is falsy
+        assert records[0].senderName == "valley", (
+            f"Expected senderName='valley', got {records[0].senderName!r}"
+        )
 
 
 # ===========================================================================
