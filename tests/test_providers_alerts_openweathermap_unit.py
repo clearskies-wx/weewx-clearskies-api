@@ -22,7 +22,7 @@ Covers per the task-3b-8 brief §Test plan (unit tests section):
 
   Datetime conversion (lead-call 14):
   - epoch_to_utc_iso8601: epoch UTC → ISO Z string.
-  - start=1714485600 → "2026-04-30T14:00:00Z" (verified UTC).
+  - start=1714485600 → "2024-04-30T14:00:00Z" (verified UTC).
   - end=None → expires=None on canonical record.
 
   ID synthesis (lead-call 13):
