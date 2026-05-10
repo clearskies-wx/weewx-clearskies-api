@@ -170,12 +170,20 @@ class TestWuWireShapeModels:
         assert len(model.daypart) == 1  # Single daypart container
 
     def test_wu5day_daypart_has_10_elements(self) -> None:
-        """daypart[0] arrays have 10 elements (5 days × 2 dayparts D/N)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        """daypart[0] arrays have 10 elements (5 days × 2 dayparts D/N).
+
+        daypart is list[Any] in the wire model (raw dicts from JSON).
+        Must validate via _WUDaypart to access typed fields.
+        """
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _WUDaypart,
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         model = _WU5DayResponse.model_validate(data)
-        dp = model.daypart[0]
+        # daypart[0] is a raw dict; validate as _WUDaypart to get typed access
+        dp = _WUDaypart.model_validate(model.daypart[0])
         assert len(dp.iconCode) == 10
         assert len(dp.precipChance) == 10
         assert len(dp.windSpeed) == 10
@@ -204,23 +212,37 @@ class TestWuWireShapeModels:
             _WU5DayResponse.model_validate(data)
 
     def test_wu_daypart_loads_cleanly_from_fixture(self) -> None:
-        """_WUDaypart loads the daypart[0] object from the fixture."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        """_WUDaypart loads the daypart[0] object from the fixture.
+
+        daypart is list[Any] in the wire model; validate via _WUDaypart for typed access.
+        """
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _WUDaypart,
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         model = _WU5DayResponse.model_validate(data)
-        dp = model.daypart[0]
+        # daypart[0] is a raw dict; validate as _WUDaypart
+        dp = _WUDaypart.model_validate(model.daypart[0])
         # Day/Night alternates: D/N pattern for each day
         assert dp.dayOrNight[0] == "D"
         assert dp.dayOrNight[1] == "N"
 
     def test_passed_today_fixture_has_null_slot_0(self) -> None:
-        """forecast_daily_5day_passed_today.json has null in daypart slot 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        """forecast_daily_5day_passed_today.json has null in daypart slot 0.
+
+        daypart is list[Any] in the wire model; validate via _WUDaypart for typed access.
+        """
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _WUDaypart,
+        )
 
         data = _load_fixture("forecast_daily_5day_passed_today.json")
         model = _WU5DayResponse.model_validate(data)
-        dp = model.daypart[0]
+        # daypart[0] is a raw dict; validate as _WUDaypart
+        dp = _WUDaypart.model_validate(model.daypart[0])
         # Slot 0 (Today/Day) should be null (past-period)
         assert dp.iconCode[0] is None
         assert dp.precipChance[0] is None
@@ -382,89 +404,84 @@ class TestWuValiddateFromLocal:
 
 
 class TestWuToDailyPoint:
-    """_wu_to_daily_point maps a day-i entry to a DailyForecastPoint."""
+    """_wu_to_daily_point maps a day-i entry to a DailyForecastPoint.
+
+    The function signature is _wu_to_daily_point(wire, day_idx, daypart)
+    where daypart is a parsed _WUDaypart object (extracted from wire.daypart[0]).
+    """
 
     def setup_method(self) -> None:
-        """Load the full fixture and parse into a _WU5DayResponse model."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        """Load the full fixture and parse into a _WU5DayResponse model + daypart."""
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _WUDaypart,
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         self._model = _WU5DayResponse.model_validate(data)
+        # Extract daypart from the 1-element list, mirroring _wu_to_canonical_bundle logic
+        self._daypart = _WUDaypart.model_validate(self._model.daypart[0])
+
+    def _point(self, day_idx: int) -> object:
+        """Convenience wrapper: call _wu_to_daily_point with the full model + daypart."""
+        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
+
+        return _wu_to_daily_point(self._model, day_idx, self._daypart)
 
     def test_validdate_from_validtimelocal_date_part(self) -> None:
         """validDate is the date portion of validTimeLocal[0]."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.validDate == "2026-04-30"
 
     def test_validdate_day_1(self) -> None:
         """validDate for day 1 is '2026-05-01'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=1)
+        point = self._point(1)
         assert point.validDate == "2026-05-01"
 
     def test_tempmax_from_temperature_max_array(self) -> None:
         """tempMax = temperatureMax[i] (top-level array, already in target_unit)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.tempMax == 64
 
     def test_tempmin_from_temperature_min_array(self) -> None:
         """tempMin = temperatureMin[i]."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.tempMin == 48
 
     def test_precipamount_from_qpf_array(self) -> None:
         """precipAmount = qpf[i] (already in target_unit's precip unit)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0: qpf=0.0, Day 1: qpf=0.12
-        point_0 = _wu_to_daily_point(self._model, day_index=0)
+        point_0 = self._point(0)
         assert point_0.precipAmount == 0.0
-        point_1 = _wu_to_daily_point(self._model, day_index=1)
+        point_1 = self._point(1)
         assert point_1.precipAmount == 0.12
 
     def test_precipprobabilitymax_from_daypart_precipchance_day_slot(self) -> None:
         """precipProbabilityMax = daypart[0].precipChance[2*i] (Day slot, already %)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0 (D), precipChance[0] = 20
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.precipProbabilityMax == 20
 
     def test_precipprobabilitymax_day_2(self) -> None:
         """precipProbabilityMax for day 2 = daypart[0].precipChance[4] = 5."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 2 → slot 4 (D), precipChance[4] = 5
-        point = _wu_to_daily_point(self._model, day_index=2)
+        point = self._point(2)
         assert point.precipProbabilityMax == 5
 
     def test_windspeedmax_from_daypart_windspeed_day_slot(self) -> None:
         """windSpeedMax = daypart[0].windSpeed[2*i] (Day slot)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0, windSpeed[0] = 7
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.windSpeedMax == 7
 
     def test_windgustmax_is_always_none(self) -> None:
         """windGustMax is always None — canonical §4.1.3 Wunderground column = '—'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.windGustMax is None
 
     def test_sunrise_from_sunrisetimeutc_epoch(self) -> None:
         """sunrise = epoch_to_utc_iso8601(sunriseTimeUtc[i]) — UTC ISO-8601 Z string."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.sunrise is not None
         assert point.sunrise.endswith("Z")
         # sunriseTimeUtc[0] = 1746017700 → should produce a valid ISO-8601 UTC string
@@ -472,71 +489,53 @@ class TestWuToDailyPoint:
 
     def test_sunset_from_sunsettimeutc_epoch(self) -> None:
         """sunset = epoch_to_utc_iso8601(sunsetTimeUtc[i]) — UTC ISO-8601 Z string."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.sunset is not None
         assert point.sunset.endswith("Z")
 
     def test_uvindexmax_from_daypart_uvindex_day_slot(self) -> None:
         """uvIndexMax = daypart[0].uvIndex[2*i] (Day slot)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0, uvIndex[0] = 4
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.uvIndexMax == 4
 
     def test_weathercode_is_str_of_daypart_iconcode_day_slot(self) -> None:
         """weatherCode = str(daypart[0].iconCode[2*i]) — opaque provider pass-through."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0, iconCode[0] = 28 → "28"
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.weatherCode == "28"
 
     def test_weathertext_from_daypart_wxphraseshort_day_slot(self) -> None:
         """weatherText = daypart[0].wxPhraseShort[2*i] (Day slot short phrase)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0, wxPhraseShort[0] = "M Cloudy"
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.weatherText == "M Cloudy"
 
     def test_narrative_from_top_level_narrative_array(self) -> None:
         """narrative = top-level narrative[i] (NOT daypart narrative)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.narrative == "Mostly cloudy. High 64F. Winds SW at 5 to 10 mph."
 
     def test_preciptype_maps_rain_string_to_canonical_rain(self) -> None:
         """precipType 'rain' from daypart[0].precipType[2*i] → canonical 'rain'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 0 → slot 0, precipType[0] = "rain"
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.precipType == "rain"
 
     def test_preciptype_maps_null_to_none(self) -> None:
         """precipType None from daypart slot → canonical None."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
         # Day 2 → slot 4, precipType[4] = null
-        point = _wu_to_daily_point(self._model, day_index=2)
+        point = self._point(2)
         assert point.precipType is None
 
     def test_source_is_wunderground(self) -> None:
         """source is always 'wunderground'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.source == "wunderground"
 
     def test_extras_is_empty_dict(self) -> None:
         """extras is always empty dict (no extras extraction in v0.1 per brief lead-call 32)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.extras == {}
 
 
@@ -550,81 +549,72 @@ class TestPastPeriodNullHandling:
 
     def setup_method(self) -> None:
         """Load the passed-today fixture."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+            _WU5DayResponse,
+            _WUDaypart,
+        )
 
         data = _load_fixture("forecast_daily_5day_passed_today.json")
         self._model = _WU5DayResponse.model_validate(data)
+        # Extract daypart from the 1-element list, mirroring _wu_to_canonical_bundle logic
+        self._daypart = _WUDaypart.model_validate(self._model.daypart[0])
+
+    def _point(self, day_idx: int) -> object:
+        """Convenience wrapper: call _wu_to_daily_point with the full model + daypart."""
+        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
+
+        return _wu_to_daily_point(self._model, day_idx, self._daypart)
 
     def test_daypart_precipchance_null_slot_emits_none(self) -> None:
         """When daypart[0].precipChance[0] is null, precipProbabilityMax=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.precipProbabilityMax is None
 
     def test_daypart_windspeed_null_slot_emits_none(self) -> None:
         """When daypart[0].windSpeed[0] is null, windSpeedMax=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.windSpeedMax is None
 
     def test_daypart_uvindex_null_slot_emits_none(self) -> None:
         """When daypart[0].uvIndex[0] is null, uvIndexMax=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.uvIndexMax is None
 
     def test_daypart_iconcode_null_slot_emits_none_weathercode(self) -> None:
         """When daypart[0].iconCode[0] is null, weatherCode=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.weatherCode is None
 
     def test_daypart_wxphraseshort_null_slot_emits_none_weathertext(self) -> None:
         """When daypart[0].wxPhraseShort[0] is null, weatherText=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.weatherText is None
 
     def test_daypart_preciptype_null_slot_emits_none(self) -> None:
         """When daypart[0].precipType[0] is null, precipType=None for day 0."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.precipType is None
 
     def test_top_level_tempmax_stays_populated(self) -> None:
         """Top-level temperatureMax[0] stays populated even when daypart slot 0 is null."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         # temperatureMax[0] = 64 in the passed-today fixture
         assert point.tempMax == 64
 
     def test_top_level_narrative_stays_populated(self) -> None:
         """Top-level narrative[0] stays populated even when daypart slot 0 is null."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         assert point.narrative is not None
 
     def test_top_level_qpf_stays_populated(self) -> None:
         """Top-level qpf[0] stays populated even when daypart slot 0 is null."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=0)
+        point = self._point(0)
         # qpf[0] = 0.0 in the passed-today fixture
         assert point.precipAmount == 0.0
 
     def test_subsequent_days_unaffected_by_null_slot_0(self) -> None:
         """Day 1 (slot 2 = D) has all daypart fields populated normally."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
-
-        point = _wu_to_daily_point(self._model, day_index=1)
+        point = self._point(1)
         # Day 1 → slot 2 (D), all populated in passed-today fixture
         assert point.precipProbabilityMax is not None
         assert point.windSpeedMax is not None
