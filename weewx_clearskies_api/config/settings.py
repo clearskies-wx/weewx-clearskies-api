@@ -312,10 +312,11 @@ class PagesSettings:
 
 
 class AlertsSettings:
-    """[alerts] section settings (3b-1, extended 3b-7 with Aeris credentials).
+    """[alerts] section settings (3b-1, extended 3b-7 with Aeris credentials,
+    extended 3b-8 with OWM appid).
 
-    Provider id and NWS-specific knobs.  Aeris credentials are loaded from
-    env vars at __init__ time per ADR-027 §3 (secrets never in INI; sourced
+    Provider id and NWS-specific knobs.  Aeris and OWM credentials are loaded
+    from env vars at __init__ time per ADR-027 §3 (secrets never in INI; sourced
     from secrets.env loaded by the process manager).
 
     Naming deviation (brief Q1, user decision 2026-05-08):
@@ -324,6 +325,11 @@ class AlertsSettings:
       credentials are provider-wide — one key works for /forecasts + /alerts.
       Domain-scoped names would force the operator to paste identical keys into
       two env vars.  Deviation documented here; no ADR amendment.
+
+    OWM naming (3b-8, mirrors 3b-7 Aeris precedent):
+      WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID is provider-scoped (same env var
+      ForecastSettings reads).  One key works for forecast + alerts.
+      Provider-scoped per 3b-5 brief Q2 user decision 2026-05-08.
 
     nws_user_agent_contact: operator's email or URL for NWS User-Agent.
     Per ADR-006, NO project-level default — operator responsibility.
@@ -338,6 +344,10 @@ class AlertsSettings:
     aeris_client_id: str | None
     #: Aeris client_secret from env var WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET.
     aeris_client_secret: str | None
+    #: OWM appid from env var WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID (ADR-027 §3).
+    #: Provider-scoped per 3b-5 brief Q2 user decision 2026-05-08; same key works
+    #: for forecast + alerts (mirrors 3b-7 Aeris precedent).
+    openweathermap_appid: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -354,6 +364,12 @@ class AlertsSettings:
 
         raw_aeris_secret = os.environ.get("WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET", "").strip()
         self.aeris_client_secret = raw_aeris_secret if raw_aeris_secret else None
+
+        # OWM appid — env var only, never from INI. Long-form provider-scoped name
+        # per 3b-5 brief Q2 user decision 2026-05-08 (matches module filename +
+        # dispatch key). Same env var as ForecastSettings.openweathermap_appid.
+        raw_owm_appid = os.environ.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID", "").strip()
+        self.openweathermap_appid = raw_owm_appid if raw_owm_appid else None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
