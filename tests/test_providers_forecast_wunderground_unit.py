@@ -967,15 +967,19 @@ class TestFetchHttpInteractions:
                 )
 
     def test_malformed_response_raises_provider_protocol_error(self) -> None:
-        """Response missing required field → ProviderProtocolError."""
+        """Non-dict JSON response → ProviderProtocolError.
+
+        Sends a response whose body is not a JSON object (it's a list) —
+        this causes _WU5DayResponse.model_validate() to raise ValidationError,
+        which the fetch() function catches and re-raises as ProviderProtocolError.
+        """
         from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
-        # Missing validTimeLocal makes the Pydantic model fail
-        malformed = {"temperatureMax": [64, 66, 70, 68, 65]}
+        # A list (not a dict) at the top level fails _WU5DayResponse.model_validate()
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_WU_FORECAST_URL).mock(
-                return_value=httpx.Response(200, json=malformed)
+                return_value=httpx.Response(200, content=b"[1, 2, 3]", headers={"Content-Type": "application/json"})
             )
             with pytest.raises(ProviderProtocolError):
                 fetch(
