@@ -1,0 +1,24 @@
+{
+  "lat": 47.6062,
+  "lon": -122.3321,
+  "timezone": "America/Los_Angeles",
+  "timezone_offset": -25200,
+  "alerts": [
+    {
+      "sender_name": "NWS Seattle WA",
+      "event": "Wind Advisory",
+      "start": 1714485600,
+      "end": 1714521600,
+      "description": "* WHAT...Southerly winds 20 to 30 mph with gusts up to 45 mph.\n\n* WHERE...East Puget Sound Lowlands.\n\n* WHEN...Until 9 PM PDT this evening.\n\n* IMPACTS...Gusty winds could blow around unsecured objects. Tree limbs could be blown down.",
+      "tags": ["Wind"]
+    },
+    {
+      "sender_name": "NWS Portland OR",
+      "event": "Tornado Warning",
+      "start": 1714490000,
+      "end": 1714497200,
+      "description": "* WHAT...Tornado Warning issued. Rotation detected on radar.\n\n* WHERE...Clark County Washington.\n\n* WHEN...Until 8 PM PDT this evening.\n\n* IMPACTS...Flying debris will be dangerous to those caught without shelter. Mobile homes will be damaged or destroyed.",
+      "tags": ["Tornado"]
+    }
+  ]
+}

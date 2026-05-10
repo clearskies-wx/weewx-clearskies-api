@@ -1,4 +1,4 @@
-# OpenWeatherMap Forecast Provider Fixtures
+# OpenWeatherMap Forecast + Alerts Provider Fixtures
 
 Sidecar documentation per 3b-1 fixture-capture discipline.
 
@@ -63,3 +63,53 @@ Sidecar documentation per 3b-1 fixture-capture discipline.
 - **HTTP status:** 429
 - **Used to test:** `QuotaExhausted` exception raised on 429, propagated as 503
   ProviderProblem per canonical error taxonomy.
+
+---
+
+## Alerts provider fixtures (3b round 8)
+
+### alerts_paid.json
+
+- **Type:** Synthetic-from-api-docs/openweathermap.md L203-211 example — fields mirrored,
+  NOT captured live; second entry hand-crafted to exercise warning-severity path.
+- **Created:** 2026-05-10
+- **Lat/Lon:** 47.6062 N, 122.3321 W (Seattle, WA — same station coordinates)
+- **Tier simulated:** Paid "One Call by Call" subscription (`/data/3.0/onecall` alerts-only
+  projection via `exclude=current,minutely,hourly,daily`)
+- **Reason for synthetic:** No paid OWM One Call 3.0 subscription available at fixture-capture
+  time. A free-tier OWM key returns 401 from `/data/3.0/onecall`. Synthetic-from-api-docs
+  pattern applied per brief L3 rule.
+- **Entry 1:** `event="Wind Advisory"`, `sender_name="NWS Seattle WA"`,
+  `start=1714485600`, `end=1714521600`. Mirrored verbatim from api-docs L203-211 example.
+  `tags=["Wind"]` present — dropped silently per canonical §3.6 (no extras bag).
+  Severity: `"advisory"` (keyword match `*Advisory*`).
+- **Entry 2:** `event="Tornado Warning"`, `sender_name="NWS Portland OR"`,
+  `start=1714490000`, `end=1714497200`. Hand-crafted to exercise the `*Warning*`
+  severity path (priority order: warning > watch > advisory).
+- **Injected fields (all synthetic):** Both alert entries plus enclosing One Call 3.0
+  envelope (`lat`, `lon`, `timezone`, `timezone_offset`). Base shape identical to
+  api-docs L161-213 example envelope.
+
+### alerts_paid_empty.json
+
+- **Type:** Synthetic — same One Call 3.0 envelope shape as alerts_paid.json with
+  `alerts: []`. Exercises the "no active alerts" normal path (expected modal response).
+- **Created:** 2026-05-10
+- **Used to test:** Empty alerts list → empty `list[AlertRecord]` returned (NOT an error).
+
+### alerts_error_429.json
+
+- **Type:** Synthetic — same OWM error envelope shape as `error_429_quota.json`.
+  Separate file for semantic clarity (alerts-specific test fixture name).
+- **Created:** 2026-05-10
+- **Shape:** `{cod: 429, message: "..."}`
+- **HTTP status:** 429 with `Retry-After: 60` header (set in test, not in body)
+- **Used to test:** `QuotaExhausted` with `retry_after_seconds` propagated from header.
+
+### alerts_basic_tier_401.json (REUSED)
+
+- **Reused from:** `error_401_basic_tier.json` (same file, same body shape).
+- Per brief §Fixture deliverables: "may reuse from 3b-5 forecast fixtures if the body
+  shape matches" — confirmed: `{cod: 401, message: "..."}` matches.
+- **Used to test:** Q1=A graceful empty list on basic-tier 401 — `KeyInvalid`
+  (status_code==401) → empty `list[AlertRecord]` + WARN log once + cache stored.
