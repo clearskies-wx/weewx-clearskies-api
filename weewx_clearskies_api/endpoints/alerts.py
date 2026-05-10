@@ -6,8 +6,8 @@ Behavior decision tree per brief §per-endpoint spec:
   2. Provider configured, NWS returns 200 + empty features → 200, alerts=[], source="nws"
   3. Provider configured, NWS returns 200 + features → normalize, filter, return 200
   4. Network failure / 5xx after retries → 502 ProviderProblem (TransientNetworkError)
-  5. NWS returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After
-  6. NWS returns 401/403 → 502 ProviderProblem (KeyInvalid) [exotic; NWS is keyless]
+  5. Provider returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After
+  6. Provider returns 401/403 → 502 ProviderProblem (KeyInvalid)
   7. Pydantic validation failure on wire model → 502 ProviderProblem (ProviderProtocolError)
 
 Severity filter (ADR-017 §Cache key — filter applied AFTER cache lookup):
@@ -31,6 +31,10 @@ Provider discovery: endpoint reads the capability registry at request time.
 NWS user-agent contact: wired separately via wire_nws_user_agent_contact() in
   __main__.py after settings load.  Tests without a full startup use None (no
   contact), which triggers a one-time WARNING log but works correctly.
+
+Aeris credentials: wired via wire_aeris_credentials() called from
+  wire_alerts_settings() at startup.  Tests that don't exercise the Aeris
+  path leave these as None; aeris.fetch() will raise KeyInvalid if invoked.
 """
 
 from __future__ import annotations
@@ -74,14 +78,40 @@ def wire_nws_user_agent_contact(contact: str | None) -> None:
     _nws_user_agent_contact = contact
 
 
+# ---------------------------------------------------------------------------
+# Module-level Aeris credential wiring (populated at startup, 3b-7)
+# ---------------------------------------------------------------------------
+
+_aeris_client_id: str | None = None
+_aeris_client_secret: str | None = None
+
+
+def wire_aeris_credentials(client_id: str | None, client_secret: str | None) -> None:
+    """Store Aeris credentials for the alerts endpoint dispatch.
+
+    Called from wire_alerts_settings() at startup. Tests that don't exercise
+    the Aeris path leave these as None; aeris.fetch() will raise KeyInvalid.
+    Mirror of endpoints/forecast.py wire_aeris_credentials().
+    """
+    global _aeris_client_id, _aeris_client_secret  # noqa: PLW0603
+    _aeris_client_id = client_id
+    _aeris_client_secret = client_secret
+
+
 def wire_alerts_settings(settings: object) -> None:
     """Wire alerts-related settings from the Settings object.
 
     Convenience wrapper for __main__.py — extracts nws_user_agent_contact
-    from settings.alerts and calls wire_nws_user_agent_contact().
+    from settings.alerts and calls wire_nws_user_agent_contact(); also
+    extracts Aeris credentials and calls wire_aeris_credentials().
     """
-    contact = getattr(getattr(settings, "alerts", None), "nws_user_agent_contact", None)
+    alerts_section = getattr(settings, "alerts", None)
+    contact = getattr(alerts_section, "nws_user_agent_contact", None)
     wire_nws_user_agent_contact(contact)
+
+    aeris_id = getattr(alerts_section, "aeris_client_id", None)
+    aeris_secret = getattr(alerts_section, "aeris_client_secret", None)
+    wire_aeris_credentials(aeris_id, aeris_secret)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +220,15 @@ def get_alerts(
             lat=station.latitude,
             lon=station.longitude,
             user_agent_contact=_nws_user_agent_contact,
+        )
+    elif provider_id == "aeris":
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
+
+        all_records = aeris.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            client_id=_aeris_client_id,
+            client_secret=_aeris_client_secret,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
