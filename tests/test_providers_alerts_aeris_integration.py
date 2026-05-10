@@ -282,9 +282,14 @@ def _wire_integration_stack(
         alerts=AlertsSettings({"provider": alerts_provider} if alerts_provider else {}),
     )
 
-    # Wire credentials directly (bypass env-var load path for tests)
-    wire_aeris_credentials(aeris_client_id, aeris_client_secret)
+    # Wire settings first (reads NWS contact from settings.alerts), then
+    # override Aeris credentials directly. Must come AFTER wire_alerts_settings
+    # because wire_alerts_settings() calls wire_aeris_credentials() internally
+    # with the env-var-loaded values (None in tests). The explicit call below
+    # overwrites with test-supplied credentials. Original order (credentials
+    # before settings) silently zeroed out the credentials on every test.
     wire_alerts_settings(settings)
+    wire_aeris_credentials(aeris_client_id, aeris_client_secret)
 
     app = create_app(settings)
     return settings, app
@@ -293,10 +298,10 @@ def _wire_integration_stack(
 def _make_valid_aeris_alerts_fixture() -> dict[str, Any]:
     """Build a valid Aeris alerts envelope with one watch-severity alert.
 
-    NOTE: emergency field is OMITTED to avoid the boolean-type bug in
-    _AerisAlertDetails (details.emergency: str | None rejects bool False).
-    The real fixture has emergency=False which causes ValidationError.
-    This synthetic fixture exercises the happy path.
+    NOTE: emergency field is OMITTED because the original brief specified
+    emergency: str | None = None. The boolean False wire type has been fixed
+    in _AerisAlertDetails (now bool | str | None) but this fixture intentionally
+    omits the field to keep the happy-path clean and independent of that fix.
 
     The unit test test_boolean_emergency_in_record_raises_provider_protocol_error
     exercises the bug path explicitly.
