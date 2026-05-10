@@ -1,0 +1,8 @@
+{
+  "success": false,
+  "error": {
+    "code": "invalid_credentials",
+    "description": "Invalid client_id or client_secret provided. Please verify your credentials."
+  },
+  "response": []
+}

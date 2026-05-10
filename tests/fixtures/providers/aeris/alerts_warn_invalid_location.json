@@ -1,0 +1,8 @@
+{
+  "success": true,
+  "error": {
+    "code": "warn_location",
+    "description": "The location provided could not be resolved or is outside the coverage area."
+  },
+  "response": []
+}
