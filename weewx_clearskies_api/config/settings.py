@@ -381,6 +381,36 @@ class AlertsSettings:
             )
 
 
+class AQISettings:
+    """[aqi] section settings (3b-9).
+
+    Provider id for the AQI data source.  Open-Meteo is keyless — no env vars
+    needed in 3b-9.  Future keyed providers (3b-10 Aeris, 3b-11 OWM, 3b-12
+    IQAir) will add credential fields following the pattern in AlertsSettings
+    and ForecastSettings.
+
+    Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
+    """
+
+    #: Provider id: "openmeteo" currently; future: "aeris", "openweathermap", "iqair".
+    provider: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip()
+        self.provider = raw_provider if raw_provider else None
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"openmeteo"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[aqi] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values: 'openmeteo'. "
+                "Additional providers (aeris, openweathermap, iqair) land in "
+                "3b-10/3b-11/3b-12 respectively."
+            )
+
+
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
     extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
@@ -490,6 +520,7 @@ class Settings:
     content: ContentSettings
     pages: PagesSettings
     alerts: AlertsSettings
+    aqi: AQISettings
     forecast: ForecastSettings
 
     def __init__(
@@ -505,6 +536,7 @@ class Settings:
         content: ContentSettings | None = None,
         pages: PagesSettings | None = None,
         alerts: AlertsSettings | None = None,
+        aqi: AQISettings | None = None,
         forecast: ForecastSettings | None = None,
     ) -> None:
         self.api = api
@@ -518,6 +550,7 @@ class Settings:
         self.content = content if content is not None else ContentSettings({})
         self.pages = pages if pages is not None else PagesSettings({})
         self.alerts = alerts if alerts is not None else AlertsSettings({})
+        self.aqi = aqi if aqi is not None else AQISettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
 
     def validate(self) -> None:
@@ -527,6 +560,7 @@ class Settings:
         self.ratelimit.validate()
         self.database.validate()
         self.alerts.validate()
+        self.aqi.validate()
         self.forecast.validate()
 
 
@@ -617,6 +651,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     content_cfg = ContentSettings(dict(cfg.get("content", {})))
     pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
+    aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
 
     settings = Settings(
@@ -631,6 +666,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         content=content_cfg,
         pages=pages_cfg,
         alerts=alerts_cfg,
+        aqi=aqi_cfg,
         forecast=forecast_cfg,
     )
     settings.validate()

@@ -35,7 +35,8 @@ Startup sequence (ADR-012):
     6h. wire cache            — construct MemoryCache or RedisCache (fail-closed).
     6i. wire providers        — register configured provider CAPABILITY declarations.
     6j. wire alerts settings  — pass settings to alerts endpoint.
-    6k. wire forecast settings — pass settings to forecast endpoint (NWS UA).
+    6k. wire aqi settings     — pass settings to aqi endpoint (no-op for Open-Meteo).
+    6l. wire forecast settings — pass settings to forecast endpoint (NWS UA).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
 """
@@ -62,6 +63,7 @@ from weewx_clearskies_api.db.reflection import SchemaReflector
 from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
 from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
+from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.health import create_health_app
@@ -198,15 +200,19 @@ def _run_server(settings: Settings) -> None:
 def _wire_providers_from_config(settings: Settings) -> None:
     """Build the provider declarations list from operator config and register.
 
-    Single source per domain per ADR-016 / ADR-007.  If [alerts] or [forecast]
-    provider is set, look up the module via dispatch and register its CAPABILITY.
+    Single source per domain per ADR-016 / ADR-007 / ADR-013.  If [alerts],
+    [aqi], or [forecast] provider is set, look up the module via dispatch and
+    register its CAPABILITY.
 
-    Future rounds extend this with aqi, earthquakes, radar.
+    Future rounds extend this with earthquakes, radar.
 
     Failure modes:
       - [alerts] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
       - [alerts] provider absent → empty contribution; /alerts returns
         source="none" per ADR-016 §Out-of-scope.
+      - [aqi] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
+      - [aqi] provider absent → empty contribution; /aqi/current returns
+        data=null, source="none" per ADR-013.
       - [forecast] provider = <unknown-id> → KeyError → CRITICAL + exit 1.
       - [forecast] provider = <ADR-007-listed-but-not-yet-wired> (e.g. "nws")
         → ForecastSettings.validate() accepts the id; dispatch KeyError fires
@@ -232,6 +238,23 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
+    if settings.aqi.provider:
+        provider_id = settings.aqi.provider
+        try:
+            module = get_provider_module(domain="aqi", provider_id=provider_id)
+        except KeyError as exc:
+            logger.critical(
+                "FATAL: Unknown aqi provider %r in api.conf — clearskies-api cannot start. "
+                "Cause: %s. "
+                "Check [aqi] provider in api.conf. "
+                "Supported values: openmeteo. "
+                "(aeris/openweathermap/iqair land in 3b-10/3b-11/3b-12.)",
+                provider_id,
+                exc,
+            )
+            sys.exit(1)
+        declarations.append(module.CAPABILITY)
+
     if settings.forecast.provider:
         provider_id = settings.forecast.provider
         try:
@@ -250,7 +273,7 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
-    # Future rounds extend this with aqi, earthquakes, radar.
+    # Future rounds extend this with earthquakes, radar.
     wire_providers(declarations)
 
 
@@ -264,6 +287,10 @@ def main() -> None:
       4. Build the SQLAlchemy engine.
       5. Run the write-probe — exits 1 if DB user has write privileges.
       6. Run schema reflection — logs unmapped columns; does NOT exit.
+      6i. Wire provider registry.
+      6j. Wire alerts settings.
+      6k. Wire aqi settings.
+      6l. Wire forecast settings.
       7. Register DB health probe.
       8. Start uvicorn.
     """
@@ -385,7 +412,11 @@ def main() -> None:
     # Step 6j: Pass settings to alerts endpoint for provider dispatch.
     wire_alerts_settings(settings)
 
-    # Step 6k: Pass settings to forecast endpoint (NWS UA contact wiring).
+    # Step 6k: Pass settings to aqi endpoint (no-op for Open-Meteo; future
+    # keyed providers will extract credentials here).
+    wire_aqi_settings(settings)
+
+    # Step 6l: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)
 
     # Step 7: Register DB readiness probe.
