@@ -146,14 +146,11 @@ _TYPE_TO_CANONICAL_FIELD: dict[str, str] = {
     # "pm1" intentionally omitted (LC26)
 }
 
-# Which canonical fields come from valuePPB (gases) vs valueUGM3 (particulates).
-# Gas fields → ppb_to_ppm() conversion.
-# Particulate fields → valueUGM3 passthrough in µg/m³.
+# Canonical fields that come from valuePPB (gases) need ppb_to_ppm() conversion.
+# Particulate fields (pollutantPM25 / pollutantPM10) read valueUGM3 directly
+# via the unconditional else: branch in _wire_to_canonical's pollutant loop.
 _GAS_FIELDS: frozenset[str] = frozenset({
     "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
-})
-_PARTICULATE_FIELDS: frozenset[str] = frozenset({
-    "pollutantPM25", "pollutantPM10",
 })
 
 # Aeris success=false error codes that indicate auth/credential failure (LC27).

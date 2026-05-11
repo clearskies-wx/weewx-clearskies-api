@@ -62,7 +62,6 @@ ADR references: ADR-013, ADR-017, ADR-018, ADR-020, ADR-038.
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
