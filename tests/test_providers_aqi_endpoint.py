@@ -677,20 +677,21 @@ class TestAqiCurrentAerisRegistered:
             f"Expected 502 for missing credentials, got {response.status_code}: {response.text[:300]}"
         )
 
-    def test_aeris_credentials_missing_502_mentions_credentials(self) -> None:
-        """Missing credentials 502 detail mentions credentials (informative error)."""
+    def test_aeris_credentials_missing_502_rfc9457_body(self) -> None:
+        """Missing credentials 502 returns application/problem+json RFC 9457 body."""
         app = _make_aeris_aqi_app(wire_credentials=False)
         client = TestClient(app, raise_server_exceptions=False)
 
         with respx.mock(assert_all_called=False):
             response = client.get("/api/v1/aqi/current")
 
-        body = response.json()
-        # The detail or response body should mention credentials/Aeris
-        body_str = str(body).lower()
-        assert "aeris" in body_str or "credential" in body_str or "missing" in body_str, (
-            f"502 body should mention Aeris/credentials, got {body!r}"
+        # Verify RFC 9457 shape (error handler wraps HTTPException detail; check shape not text)
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "502 must return application/problem+json (RFC 9457)"
         )
+        body = response.json()
+        assert "status" in body, "RFC 9457 body must have 'status' field"
+        assert body["status"] == 502, f"Expected status=502, got {body.get('status')!r}"
 
 
 class TestAqiCurrentAerisErrorPaths:
