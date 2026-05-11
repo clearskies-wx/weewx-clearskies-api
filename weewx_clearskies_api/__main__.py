@@ -35,7 +35,8 @@ Startup sequence (ADR-012):
     6h. wire cache            — construct MemoryCache or RedisCache (fail-closed).
     6i. wire providers        — register configured provider CAPABILITY declarations.
     6j. wire alerts settings  — pass settings to alerts endpoint.
-    6k. wire aqi settings     — pass settings to aqi endpoint (no-op for Open-Meteo).
+    6k. wire aqi settings     — pass settings to aqi endpoint (no-op for Open-Meteo;
+                                credentials wired for Aeris per 3b-10).
     6l. wire forecast settings — pass settings to forecast endpoint (NWS UA).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
@@ -247,8 +248,8 @@ def _wire_providers_from_config(settings: Settings) -> None:
                 "FATAL: Unknown aqi provider %r in api.conf — clearskies-api cannot start. "
                 "Cause: %s. "
                 "Check [aqi] provider in api.conf. "
-                "Supported values: openmeteo. "
-                "(aeris/openweathermap/iqair land in 3b-10/3b-11/3b-12.)",
+                "Supported values: openmeteo, aeris. "
+                "(openweathermap/iqair land in 3b-11/3b-12.)",
                 provider_id,
                 exc,
             )
@@ -412,8 +413,10 @@ def main() -> None:
     # Step 6j: Pass settings to alerts endpoint for provider dispatch.
     wire_alerts_settings(settings)
 
-    # Step 6k: Pass settings to aqi endpoint (no-op for Open-Meteo; future
-    # keyed providers will extract credentials here).
+    # Step 6k: Pass settings to aqi endpoint.
+    # Open-Meteo: no-op (keyless).
+    # Aeris (3b-10): extracts client_id + client_secret from settings.aeris.
+    # Future: OWM (3b-11), IQAir (3b-12).
     wire_aqi_settings(settings)
 
     # Step 6l: Pass settings to forecast endpoint (NWS UA contact wiring).

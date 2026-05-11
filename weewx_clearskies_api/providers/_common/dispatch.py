@@ -10,7 +10,7 @@ day-1 alerts provider per ADR-016).
 Forecast domain: five rows (one per provider per ADR-007 day-1 set).
   Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
-AQI domain: openmeteo first (3b-9); aeris/owm/iqair follow in 3b-10/11/12.
+AQI domain: openmeteo first (3b-9), aeris second (3b-10); owm/iqair follow in 3b-11/12.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from types import ModuleType
 from weewx_clearskies_api.providers.alerts import aeris as alerts_aeris
 from weewx_clearskies_api.providers.alerts import nws as alerts_nws
 from weewx_clearskies_api.providers.alerts import openweathermap as alerts_openweathermap
+from weewx_clearskies_api.providers.aqi import aeris as aqi_aeris
 from weewx_clearskies_api.providers.aqi import openmeteo as aqi_openmeteo
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
@@ -31,6 +32,7 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("alerts", "aeris"): alerts_aeris,
     ("alerts", "nws"): alerts_nws,
     ("alerts", "openweathermap"): alerts_openweathermap,
+    ("aqi", "aeris"): aqi_aeris,
     ("aqi", "openmeteo"): aqi_openmeteo,
     ("forecast", "openmeteo"): forecast_openmeteo,
     ("forecast", "nws"): forecast_nws,
