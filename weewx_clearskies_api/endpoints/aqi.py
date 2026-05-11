@@ -125,23 +125,30 @@ def wire_aqi_settings(settings: object) -> None:
     provider = getattr(aqi_section, "provider", None)
 
     if provider == "aeris":
-        # Provider-scoped credentials per 3b-4 Q1 — same [aeris] section as
-        # forecast/alerts Aeris. Credentials at settings.aeris.client_id +
-        # settings.aeris.client_secret (not domain-scoped aqi_aeris_* keys).
-        aeris_section = getattr(settings, "aeris", None)
-        if aeris_section is None:
+        # Provider-scoped credentials per 3b-4 Q1 decision — same env vars as
+        # forecast/alerts Aeris (WEEWX_CLEARSKIES_AERIS_CLIENT_ID +
+        # WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET).  Settings class stores these on
+        # the forecast + alerts section objects (no standalone [aeris] section in
+        # Settings); access via settings.forecast which was first to wire these.
+        # Brief LC18/LC19 said "settings.aeris.client_id" but Settings has no
+        # aeris attribute — brief provenance note: brief was written assuming a
+        # standalone section that doesn't exist in the Settings class.  Using
+        # settings.forecast.aeris_client_id is the correct code path.
+        forecast_section = getattr(settings, "forecast", None)
+        if forecast_section is None:
             logger.error(
-                "[aqi] provider = aeris but [aeris] settings section missing; "
+                "[aqi] provider = aeris but [forecast] settings section missing; "
                 "credentials cannot be wired"
             )
             return
 
-        _AERIS_CLIENT_ID = getattr(aeris_section, "client_id", None)
-        _AERIS_CLIENT_SECRET = getattr(aeris_section, "client_secret", None)
+        _AERIS_CLIENT_ID = getattr(forecast_section, "aeris_client_id", None)
+        _AERIS_CLIENT_SECRET = getattr(forecast_section, "aeris_client_secret", None)
 
         if not _AERIS_CLIENT_ID or not _AERIS_CLIENT_SECRET:
             logger.error(
-                "[aqi] provider = aeris but [aeris] client_id/client_secret missing; "
+                "[aqi] provider = aeris but WEEWX_CLEARSKIES_AERIS_CLIENT_ID/"
+                "WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET env vars missing; "
                 "capability still registered but /aqi/current will return 502 until wired"
             )
 

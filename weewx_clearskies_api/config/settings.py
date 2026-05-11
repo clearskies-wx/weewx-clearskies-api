@@ -382,17 +382,18 @@ class AlertsSettings:
 
 
 class AQISettings:
-    """[aqi] section settings (3b-9).
+    """[aqi] section settings (3b-9, extended 3b-10 with Aeris).
 
     Provider id for the AQI data source.  Open-Meteo is keyless — no env vars
-    needed in 3b-9.  Future keyed providers (3b-10 Aeris, 3b-11 OWM, 3b-12
-    IQAir) will add credential fields following the pattern in AlertsSettings
-    and ForecastSettings.
+    needed.  Aeris (3b-10) is keyed — credentials come from the shared [aeris]
+    section (provider-scoped per 3b-4 Q1 user decision; same env vars as
+    forecast/alerts Aeris).  Future keyed providers (3b-11 OWM, 3b-12 IQAir)
+    will follow the same pattern.
 
     Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
     """
 
-    #: Provider id: "openmeteo" currently; future: "aeris", "openweathermap", "iqair".
+    #: Provider id: "openmeteo", "aeris"; future: "openweathermap", "iqair".
     provider: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
@@ -401,13 +402,13 @@ class AQISettings:
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
-        valid_providers = {"openmeteo"}
+        valid_providers = {"openmeteo", "aeris"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[aqi] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'openmeteo'. "
-                "Additional providers (aeris, openweathermap, iqair) land in "
-                "3b-10/3b-11/3b-12 respectively."
+                "Supported values: 'openmeteo', 'aeris'. "
+                "Additional providers (openweathermap, iqair) land in "
+                "3b-11/3b-12 respectively."
             )
 
 
