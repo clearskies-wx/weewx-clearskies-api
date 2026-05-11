@@ -690,7 +690,7 @@ class TestIntegrationAerisAqiRedisCache:
     that must be surfaced to the lead via SendMessage BEFORE closeout.
     """
 
-    def test_aeris_aqi_redis_cache_miss_stores_reading(self, db_engine: Engine) -> None:
+    def test_aeris_aqi_redis_cache_miss_stores_reading(self) -> None:
         """Redis cache miss → one HTTP call → reading stored in Redis."""
         _require_redis()
 
@@ -744,9 +744,7 @@ class TestIntegrationAerisAqiRedisCache:
             reset_cache_for_tests()
             _reset_http_client_for_tests()
 
-    def test_aeris_aqi_redis_cache_hit_skips_provider_call(
-        self, db_engine: Engine
-    ) -> None:
+    def test_aeris_aqi_redis_cache_hit_skips_provider_call(self) -> None:
         """Redis cache hit → zero HTTP calls; reading returned from Redis."""
         _require_redis()
 
