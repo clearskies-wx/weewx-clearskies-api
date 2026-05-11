@@ -44,10 +44,10 @@ All per-pollutant fields were populated in this capture:
 - `source` = "openmeteo"
 - `pollutantPM25` = 3.1 (μg/m³, passthrough — no conversion)
 - `pollutantPM10` = 4.5 (μg/m³, passthrough — no conversion)
-- `pollutantO3` = 87.0 × 24.45 / 48.00 ≈ 44.335 ppm (converted)
-- `pollutantNO2` = 0.2 × 24.45 / 46.01 ≈ 0.10626 ppm (converted)
-- `pollutantSO2` = 0.1 × 24.45 / 64.07 ≈ 0.038164 ppm (converted)
-- `pollutantCO` = 155.0 × 24.45 / 28.01 ≈ 135.306 ppm (converted)
+- `pollutantO3` = 87.0 × 24.45 / (48.00 × 1000) ≈ 0.044335 ppm (converted; chemistry fix 2026-05-11 — see canonical §4.2 footnote)
+- `pollutantNO2` = 0.2 × 24.45 / (46.01 × 1000) ≈ 0.00010626 ppm (converted)
+- `pollutantSO2` = 0.1 × 24.45 / (64.07 × 1000) ≈ 0.000038164 ppm (converted)
+- `pollutantCO` = 155.0 × 24.45 / (28.01 × 1000) ≈ 0.135306 ppm (converted)
 
 ## Synthetic fixtures needed
 

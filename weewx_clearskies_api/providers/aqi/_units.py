@@ -1,9 +1,21 @@
 """µg/m³ → ppm gas conversion, PPB → ppm direct conversion, EPA AQI category band table,
 EPA per-pollutant breakpoint table for sub-AQI computation.
 
-Conversion formula per canonical-data-model §4.2 footnote:
-    ppm = µg/m³ × 24.45 / molecular_weight
+Conversion formula (corrected 2026-05-11 — 3b-11 round-close chemistry fix):
+    ppm = µg/m³ × 24.45 / (molecular_weight × 1000)
+        = µg/m³ × 0.02445 / molecular_weight
 where 24.45 L/mol is the molar volume of an ideal gas at 25°C and 1 atm.
+
+Derivation: 1 m³ of gas at STP contains 1/0.02445 ≈ 40.9 mol. A pollutant
+concentration of C µg/m³ contributes (C × 10⁻⁶)/MW mol/m³, giving a mole
+fraction of (C × 10⁻⁶)/(MW × 40.9) = C × 24.45 × 10⁻⁹/MW. Multiplying by
+10⁶ to express as ppm (parts per million by volume) yields C × 24.45/(MW × 10³).
+
+The pre-fix formula (`µg/m³ × 24.45 / MW` with no /1000 factor) produced PPB,
+not PPM — values 1000× the canonical-data-model §3.8 group_fraction (ppm) spec.
+Surfaced by 3b-11 OWM real-capture fixture (Seattle CO=139.79 µg/m³ computed
+sub-AQI 500 / "Hazardous" before fix; ~1 / "Good" after). See round-close
+decision log for the bug-propagation analysis.
 
 PPB → ppm direct conversion (for providers that supply valuePPB directly, e.g. Aeris):
     ppm = ppb / 1000
@@ -52,6 +64,9 @@ _MOLECULAR_WEIGHTS_G_PER_MOL: dict[str, float] = {
 def ugm3_to_ppm(ugm3: float | None, *, pollutant: str) -> float | None:
     """Convert µg/m³ concentration to ppm for the given gas.
 
+    Formula: ppm = µg/m³ × 24.45 / (MW × 1000) = µg/m³ × 0.02445 / MW
+    (at 25°C, 1 atm; molar volume 24.45 L/mol).
+
     Args:
         ugm3: concentration in µg/m³ (or None).
         pollutant: canonical pollutant id ("O3", "NO2", "SO2", "CO").
@@ -65,7 +80,8 @@ def ugm3_to_ppm(ugm3: float | None, *, pollutant: str) -> float | None:
     if ugm3 is None:
         return None
     mw = _MOLECULAR_WEIGHTS_G_PER_MOL[pollutant]
-    return ugm3 * _MOLAR_VOLUME / mw
+    # µg/m³ × 24.45 / MW = ppb. Divide by 1000 to get ppm.
+    return ugm3 * _MOLAR_VOLUME / (mw * 1000.0)
 
 
 # EPA AQI category breakpoints (upper bounds, inclusive).

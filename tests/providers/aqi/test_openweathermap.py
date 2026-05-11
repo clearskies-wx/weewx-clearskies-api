@@ -11,9 +11,9 @@ Covers per the task-3b-11 brief §Test coverage shape (test_openweathermap.py):
 
   _wire_to_canonical happy path:
   - Real fixture → canonical AQIReading with all fields populated correctly.
-  - aqi = 500 (CO sub-AQI is highest; capped at 500).
-  - aqiCategory = "Hazardous" (AQI 500 → 301–500 band).
-  - aqiMainPollutant = "CO" (argmax; CO=500 wins).
+  - aqi = 31 (O3 sub-AQI is highest after chemistry fix 2026-05-11).
+  - aqiCategory = "Good" (AQI 31 → 0–50 band).
+  - aqiMainPollutant = "O3" (argmax; O3 sub-AQI 31 is unambiguous winner).
   - aqiLocation = None (PARTIAL-DOMAIN — no location field on OWM Air Pollution wire).
   - observedAt = "2026-05-11T03:56:58Z" (epoch 1778471818 → UTC Z, LC17).
   - source = "openweathermap".
@@ -289,12 +289,13 @@ class TestWireToCanonicalHappyPath:
         result = _wire_to_canonical(entry)
         assert result is not None, "_wire_to_canonical must return AQIReading for valid fixture"
 
-    def test_fixture_aqi_is_500_from_co_cap(self) -> None:
-        """aqi = 500 (CO sub-AQI caps at 500; CO=139.79 µg/m³ → 122 ppm → above 50.4 cap).
+    def test_fixture_aqi_is_31_from_o3(self) -> None:
+        """aqi = 31 (O3 sub-AQI is the highest; chemistry-corrected calc 2026-05-11).
 
+        O3 = 66.23 µg/m³ × 24.45 / (48.00 × 1000) = 0.033736 ppm.
+        EPA O3 8-hr band (0.000, 0.054, 0, 50): sub-AQI = round(50 × 0.033736 / 0.054) = 31.
         OWM main.aqi=2 (1–5 ordinal) is IGNORED per LC4 — canonical aqi derived
-        from concentrations via EPA breakpoints. CO is the dominant pollutant at
-        this reading, producing sub-AQI=500 (table cap).
+        from concentrations via EPA breakpoints.
         """
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
@@ -302,32 +303,32 @@ class TestWireToCanonicalHappyPath:
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
-        assert result.aqi == 500, (
-            f"Expected aqi=500 (CO sub-AQI cap; main.aqi=2 is ignored), got {result.aqi!r}"
+        assert result.aqi == 31, (
+            f"Expected aqi=31 (O3 sub-AQI; main.aqi=2 is ignored), got {result.aqi!r}"
         )
 
-    def test_fixture_aqi_category_is_hazardous(self) -> None:
-        """aqiCategory = 'Hazardous' (AQI 500 → 301–500 band)."""
+    def test_fixture_aqi_category_is_good(self) -> None:
+        """aqiCategory = 'Good' (AQI 31 → 0–50 band; chemistry-corrected 2026-05-11)."""
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
-        assert result.aqiCategory == "Hazardous", (
-            f"Expected aqiCategory='Hazardous' (AQI 500), got {result.aqiCategory!r}"
+        assert result.aqiCategory == "Good", (
+            f"Expected aqiCategory='Good' (AQI 31), got {result.aqiCategory!r}"
         )
 
-    def test_fixture_aqi_main_pollutant_is_co(self) -> None:
-        """aqiMainPollutant = 'CO' (CO sub-AQI=500 is the argmax dominant pollutant)."""
+    def test_fixture_aqi_main_pollutant_is_o3(self) -> None:
+        """aqiMainPollutant = 'O3' (O3 sub-AQI=31 is the argmax; chemistry-corrected 2026-05-11)."""
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
-        assert result.aqiMainPollutant == "CO", (
-            f"Expected aqiMainPollutant='CO', got {result.aqiMainPollutant!r}"
+        assert result.aqiMainPollutant == "O3", (
+            f"Expected aqiMainPollutant='O3', got {result.aqiMainPollutant!r}"
         )
 
     def test_fixture_aqi_location_is_none_partial_domain(self) -> None:
@@ -568,19 +569,24 @@ class TestWireToCanonicalEdgeCases:
         )
 
     def test_aqi_capped_at_500(self) -> None:
-        """Computed max sub-AQI > 500 is capped to 500 (defensive guard)."""
+        """Computed max sub-AQI > 500 is capped to 500 (defensive guard).
+
+        With chemistry-corrected ugm3_to_ppm, CO hits the 50.4 ppm EPA cap at
+        roughly 57700 µg/m³. Use 100000 µg/m³ to ensure the cap fires.
+        """
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        # CO = 5000 µg/m³ → extremely high → sub-AQI would exceed 500 before cap
+        # CO = 100000 µg/m³ → ~87 ppm → well above CO 8-hr cap of 50.4 ppm → 500
         entry = self._make_entry({
-            "co": 5000.0, "no": None, "no2": None, "o3": None,
+            "co": 100000.0, "no": None, "no2": None, "o3": None,
             "so2": None, "pm2_5": None, "pm10": None, "nh3": None,
         })
         result = _wire_to_canonical(entry)
         assert result is not None
         assert result.aqi is not None
         assert result.aqi <= 500, f"aqi must be capped at 500, got {result.aqi!r}"
+        assert result.aqi == 500, f"aqi at extreme CO concentration must hit cap, got {result.aqi!r}"
 
     def test_owm_main_aqi_field_not_used_in_canonical_aqi(self) -> None:
         """OWM main.aqi=1 (Good) with high CO → canonical aqi != 1 (main.aqi ignored per LC4)."""
@@ -659,15 +665,19 @@ class TestComputeOwmAqiMax:
         assert pollutant == "PM2.5", f"Expected dominant='PM2.5', got {pollutant!r}"
 
     def test_result_capped_at_500(self) -> None:
-        """_compute_owm_aqi_max caps aqi at 500 (defensive; extreme values possible)."""
+        """_compute_owm_aqi_max caps aqi at 500 (defensive; extreme values possible).
+
+        Chemistry-corrected ugm3_to_ppm: CO at 100000 µg/m³ ≈ 87 ppm, well above
+        EPA CO 8-hr table's 50.4 ppm cap → sub-AQI 500.
+        """
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _compute_owm_aqi_max,
         )
         # CO at extremely high concentration to verify cap
-        components = self._make_components(co=50000.0)
+        components = self._make_components(co=100000.0)
         aqi, pollutant = _compute_owm_aqi_max(components)
         assert aqi is not None
-        assert aqi <= 500, f"Expected aqi capped at ≤500, got {aqi!r}"
+        assert aqi == 500, f"Expected aqi capped at 500, got {aqi!r}"
         assert pollutant == "CO", f"Expected dominant='CO', got {pollutant!r}"
 
 
@@ -840,9 +850,9 @@ class TestFetchCachePaths:
 
         assert result is not None, "Cache miss + valid response must return AQIReading"
         assert result.source == "openweathermap"
-        assert result.aqi == 500  # from fixture computation
-        assert result.aqiCategory == "Hazardous"
-        assert result.aqiMainPollutant == "CO"
+        assert result.aqi == 31  # from fixture computation (chemistry-corrected 2026-05-11)
+        assert result.aqiCategory == "Good"
+        assert result.aqiMainPollutant == "O3"
 
         # Verify cache was populated
         cache = get_cache()

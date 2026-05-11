@@ -42,17 +42,19 @@ import pytest
 class TestUgm3ToPpm:
     """ugm3_to_ppm converts µg/m³ to ppm for the four supported gases.
 
-    Formula: ppm = µg/m³ × 24.45 / MW.
+    Formula (corrected 2026-05-11): ppm = µg/m³ × 24.45 / (MW × 1000),
+    equivalent to ppm = µg/m³ × 0.02445 / MW. The /1000 factor was missing
+    in the pre-fix version, which made the function return ppb-as-ppm.
     Particulates (PM2.5, PM10) are NOT in the table and raise KeyError.
     None input → None output (pass-through for missing wire values).
     """
 
     def test_ozone_100_ugm3_converts_to_expected_ppm(self) -> None:
-        """O3 100 µg/m³ → 100 × 24.45 / 48.00 ≈ 50.9375 ppm."""
+        """O3 100 µg/m³ → 100 × 24.45 / (48.00 × 1000) ≈ 0.0509375 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(100.0, pollutant="O3")
         assert result is not None
-        expected = 100.0 * 24.45 / 48.00
+        expected = 100.0 * 24.45 / (48.00 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"O3 100 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
@@ -64,51 +66,51 @@ class TestUgm3ToPpm:
         assert result == 0.0
 
     def test_no2_100_ugm3_converts_to_expected_ppm(self) -> None:
-        """NO2 100 µg/m³ → 100 × 24.45 / 46.01 ≈ 53.140 ppm."""
+        """NO2 100 µg/m³ → 100 × 24.45 / (46.01 × 1000) ≈ 0.053140 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(100.0, pollutant="NO2")
         assert result is not None
-        expected = 100.0 * 24.45 / 46.01
+        expected = 100.0 * 24.45 / (46.01 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"NO2 100 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
 
     def test_so2_100_ugm3_converts_to_expected_ppm(self) -> None:
-        """SO2 100 µg/m³ → 100 × 24.45 / 64.07 ≈ 38.162 ppm."""
+        """SO2 100 µg/m³ → 100 × 24.45 / (64.07 × 1000) ≈ 0.038162 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(100.0, pollutant="SO2")
         assert result is not None
-        expected = 100.0 * 24.45 / 64.07
+        expected = 100.0 * 24.45 / (64.07 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"SO2 100 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
 
     def test_co_100_ugm3_converts_to_expected_ppm(self) -> None:
-        """CO 100 µg/m³ → 100 × 24.45 / 28.01 ≈ 87.254 ppm."""
+        """CO 100 µg/m³ → 100 × 24.45 / (28.01 × 1000) ≈ 0.087254 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(100.0, pollutant="CO")
         assert result is not None
-        expected = 100.0 * 24.45 / 28.01
+        expected = 100.0 * 24.45 / (28.01 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"CO 100 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
 
     def test_co_fixture_value_155_ugm3_converts_correctly(self) -> None:
-        """CO 155.0 µg/m³ (fixture value) → 155 × 24.45 / 28.01 ≈ 135.245 ppm."""
+        """CO 155.0 µg/m³ (fixture value) → 155 × 24.45 / (28.01 × 1000) ≈ 0.135306 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(155.0, pollutant="CO")
         assert result is not None
-        expected = 155.0 * 24.45 / 28.01
+        expected = 155.0 * 24.45 / (28.01 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"CO 155.0 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
 
     def test_ozone_fixture_value_87_ugm3_converts_correctly(self) -> None:
-        """O3 87.0 µg/m³ (fixture value) → 87 × 24.45 / 48.00 ≈ 44.316 ppm."""
+        """O3 87.0 µg/m³ (fixture value) → 87 × 24.45 / (48.00 × 1000) ≈ 0.044316 ppm."""
         from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         result = ugm3_to_ppm(87.0, pollutant="O3")
         assert result is not None
-        expected = 87.0 * 24.45 / 48.00
+        expected = 87.0 * 24.45 / (48.00 * 1000)
         assert math.isclose(result, expected, rel_tol=1e-9), (
             f"O3 87.0 µg/m³ → expected {expected:.6f} ppm, got {result:.6f}"
         )
@@ -837,18 +839,36 @@ class TestConcentrationToSubAqiNO2:
         from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
         assert concentration_to_sub_aqi(None, pollutant="NO2") is None
 
-    def test_no2_fixture_value_1_089_ppm_is_in_very_unhealthy_band(self) -> None:
-        """NO2 = 1.089 ppm (OWM fixture after ugm3→ppm conversion) → sub-AQI ~274.
+    def test_no2_1_089_ppm_synthetic_high_is_in_very_unhealthy_band(self) -> None:
+        """NO2 = 1.089 ppm (synthetic high concentration) → sub-AQI ~274.
 
-        This is the fixture-derived value: 2.05 µg/m³ × 24.45 / 46.01 = 1.089 ppm.
+        Synthetic, not fixture-derived. Real Seattle NO2 from the OWM fixture is
+        2.05 µg/m³ = 0.001089 ppm (per chemistry fix 2026-05-11), which lands in
+        the (0, 0.053, 0, 50) Good band — see test_no2_fixture_value_0_001089_ppm_is_good.
+        This test exercises the upper band math by injecting 1000× the fixture value.
+
         Band [0.650, 1.249, 201, 300]: sub = (300-201)/(1.249-0.650)*(1.089-0.650)+201.
+        Approximate: (99/0.599)*0.439+201 ≈ 72.6+201 = 273.6 → 274
         """
         from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
         result = concentration_to_sub_aqi(1.089, pollutant="NO2")
-        # Approximate: (99/0.599)*0.439+201 ≈ 72.6+201 = 273.6 → 274
         assert result is not None
         assert 270 <= result <= 278, (
-            f"NO2=1.089 ppm (fixture) → expected ~274 (Very Unhealthy band), got {result!r}"
+            f"NO2=1.089 ppm (synthetic) → expected ~274 (Very Unhealthy band), got {result!r}"
+        )
+
+    def test_no2_fixture_value_0_001089_ppm_is_good(self) -> None:
+        """NO2 = 0.001089 ppm (real OWM fixture value, corrected chemistry) → sub-AQI ~1.
+
+        Fixture wire: 2.05 µg/m³ × 24.45 / (46.01 × 1000) ≈ 0.001089 ppm.
+        Band (0.000, 0.053, 0, 50): sub = (50/0.053) × 0.001089 ≈ 1.03 → 1.
+        Verifies the fixture-real-value mapping against EPA after the chemistry fix.
+        """
+        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        result = concentration_to_sub_aqi(0.001089, pollutant="NO2")
+        assert result is not None
+        assert result <= 5, (
+            f"NO2=0.001089 ppm (fixture) → expected ≤5 (Good band), got {result!r}"
         )
 
 

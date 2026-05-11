@@ -885,28 +885,28 @@ class TestAqiCurrentOpenWeatherMapRegistered:
             f"data must be a dict (AQIReading), got {type(data).__name__!r}"
         )
 
-    def test_owm_registered_aqi_value_is_500(self) -> None:
-        """data.aqi = 500 (from fixture; CO sub-AQI caps at 500; OWM main.aqi ignored)."""
+    def test_owm_registered_aqi_value_is_31(self) -> None:
+        """data.aqi = 31 (from fixture; O3 sub-AQI; OWM main.aqi ignored; chemistry-corrected 2026-05-11)."""
         response, _ = self._get_owm_response()
         body = response.json()
-        assert body["data"]["aqi"] == 500, (
-            f"Expected aqi=500 (CO cap), got {body['data'].get('aqi')!r}"
+        assert body["data"]["aqi"] == 31, (
+            f"Expected aqi=31 (O3 sub-AQI from corrected chemistry), got {body['data'].get('aqi')!r}"
         )
 
-    def test_owm_registered_aqi_category_is_hazardous(self) -> None:
-        """data.aqiCategory = 'Hazardous' (AQI 500 → 301–500 band)."""
+    def test_owm_registered_aqi_category_is_good(self) -> None:
+        """data.aqiCategory = 'Good' (AQI 31 → 0–50 band; chemistry-corrected 2026-05-11)."""
         response, _ = self._get_owm_response()
         body = response.json()
-        assert body["data"]["aqiCategory"] == "Hazardous", (
-            f"Expected aqiCategory='Hazardous', got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "Good", (
+            f"Expected aqiCategory='Good', got {body['data'].get('aqiCategory')!r}"
         )
 
-    def test_owm_registered_aqi_main_pollutant_is_co(self) -> None:
-        """data.aqiMainPollutant = 'CO' (argmax of sub-AQIs from fixture)."""
+    def test_owm_registered_aqi_main_pollutant_is_o3(self) -> None:
+        """data.aqiMainPollutant = 'O3' (argmax of sub-AQIs from fixture; chemistry-corrected 2026-05-11)."""
         response, _ = self._get_owm_response()
         body = response.json()
-        assert body["data"]["aqiMainPollutant"] == "CO", (
-            f"Expected aqiMainPollutant='CO', got {body['data'].get('aqiMainPollutant')!r}"
+        assert body["data"]["aqiMainPollutant"] == "O3", (
+            f"Expected aqiMainPollutant='O3', got {body['data'].get('aqiMainPollutant')!r}"
         )
 
     def test_owm_registered_aqi_location_is_null(self) -> None:

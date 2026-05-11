@@ -23,7 +23,7 @@ Environment requirement:
 End-to-end paths covered:
   - Full startup with OWM AQI registered + _OWM_APPID wired.
   - GET /api/v1/aqi/current openweathermap configured + respx-mocked → 200.
-  - Canonical AQIReading: aqi=500, aqiCategory='Hazardous', aqiMainPollutant='CO'.
+  - Canonical AQIReading: aqi=31, aqiCategory='Good', aqiMainPollutant='O3' (chemistry-corrected 2026-05-11).
   - observedAt is UTC ISO-8601 Z format (LC17 + ADR-020).
   - aqiLocation = null (PARTIAL-DOMAIN — no location field on OWM Air Pollution wire).
   - GET /api/v1/aqi/current with _OWM_APPID missing → 502 error.
@@ -330,10 +330,10 @@ class TestIntegrationOwmAqiHappyPath:
             f"Expected source='openweathermap', got {body.get('source')!r}"
         )
 
-    def test_owm_aqi_data_is_aqi_reading_with_aqi_500(
+    def test_owm_aqi_data_is_aqi_reading_with_aqi_31(
         self, integration_client: TestClient
     ) -> None:
-        """data.aqi = 500 (CO sub-AQI cap; OWM main.aqi=2 is ignored)."""
+        """data.aqi = 31 (O3 sub-AQI; OWM main.aqi=2 is ignored; chemistry-corrected 2026-05-11)."""
         data = _load_fixture("openweathermap_current.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -344,14 +344,14 @@ class TestIntegrationOwmAqiHappyPath:
 
         body = response.json()
         assert body["data"] is not None
-        assert body["data"]["aqi"] == 500, (
-            f"Expected aqi=500, got {body['data'].get('aqi')!r}"
+        assert body["data"]["aqi"] == 31, (
+            f"Expected aqi=31, got {body['data'].get('aqi')!r}"
         )
 
-    def test_owm_aqi_data_aqi_category_is_hazardous(
+    def test_owm_aqi_data_aqi_category_is_good(
         self, integration_client: TestClient
     ) -> None:
-        """data.aqiCategory = 'Hazardous' (AQI 500 → 301–500 band)."""
+        """data.aqiCategory = 'Good' (AQI 31 → 0–50 band; chemistry-corrected 2026-05-11)."""
         data = _load_fixture("openweathermap_current.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -361,14 +361,14 @@ class TestIntegrationOwmAqiHappyPath:
             response = integration_client.get("/api/v1/aqi/current")
 
         body = response.json()
-        assert body["data"]["aqiCategory"] == "Hazardous", (
-            f"Expected aqiCategory='Hazardous', got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "Good", (
+            f"Expected aqiCategory='Good', got {body['data'].get('aqiCategory')!r}"
         )
 
-    def test_owm_aqi_data_aqi_main_pollutant_is_co(
+    def test_owm_aqi_data_aqi_main_pollutant_is_o3(
         self, integration_client: TestClient
     ) -> None:
-        """data.aqiMainPollutant = 'CO' (argmax — CO has highest sub-AQI)."""
+        """data.aqiMainPollutant = 'O3' (argmax — O3 has highest sub-AQI; chemistry-corrected 2026-05-11)."""
         data = _load_fixture("openweathermap_current.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -378,8 +378,8 @@ class TestIntegrationOwmAqiHappyPath:
             response = integration_client.get("/api/v1/aqi/current")
 
         body = response.json()
-        assert body["data"]["aqiMainPollutant"] == "CO", (
-            f"Expected aqiMainPollutant='CO', got {body['data'].get('aqiMainPollutant')!r}"
+        assert body["data"]["aqiMainPollutant"] == "O3", (
+            f"Expected aqiMainPollutant='O3', got {body['data'].get('aqiMainPollutant')!r}"
         )
 
     def test_owm_aqi_data_aqi_location_is_null(
@@ -707,7 +707,7 @@ class TestIntegrationOwmAqiMemoryCache:
         )
         assert reading is not None
         assert reading.source == "openweathermap"
-        assert reading.aqi == 500
+        assert reading.aqi == 31  # chemistry-corrected 2026-05-11; O3 sub-AQI is the argmax
 
         # Cache was populated
         cached = get_cache().get(_build_cache_key(_LAT, _LON))
@@ -758,7 +758,7 @@ class TestIntegrationOwmAqiMemoryCache:
             f"Expected 0 HTTP calls on cache hit, got {cache_hit_calls}"
         )
         assert reading1 is not None and reading2 is not None
-        assert reading1.aqi == reading2.aqi == 500
+        assert reading1.aqi == reading2.aqi == 31  # chemistry-corrected 2026-05-11
         assert reading1.source == reading2.source == "openweathermap"
 
         reset_cache_for_tests()
@@ -821,7 +821,7 @@ class TestIntegrationOwmAqiRedisCache:
             )
             assert reading is not None
             assert reading.source == "openweathermap"
-            assert reading.aqi == 500
+            assert reading.aqi == 31  # chemistry-corrected 2026-05-11; O3 sub-AQI is the argmax
 
             # Verify reading is in Redis
             cache_key = _build_cache_key(_LAT, _LON)
@@ -883,7 +883,7 @@ class TestIntegrationOwmAqiRedisCache:
                 f"Expected 0 HTTP calls on Redis cache hit, got {second_call_count}"
             )
             assert reading1 is not None and reading2 is not None
-            assert reading1.aqi == reading2.aqi == 500
+            assert reading1.aqi == reading2.aqi == 31  # chemistry-corrected 2026-05-11
             assert reading1.source == reading2.source == "openweathermap"
 
         finally:

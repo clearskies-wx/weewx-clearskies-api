@@ -307,54 +307,54 @@ class TestWireToCanonicalHappyPath:
         )
 
     def test_pollutant_o3_converted_from_ugm3_to_ppm(self) -> None:
-        """pollutantO3 = ozone(87.0 µg/m³) × 24.45 / 48.00 (converted to ppm per LC15)."""
+        """pollutantO3 = ozone(87.0 µg/m³) × 24.45 / (48.00 × 1000) (chemistry-corrected ppm per LC15)."""
         from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         wire = self._load_wire()
         reading = _wire_to_canonical(wire)
         assert reading is not None
-        expected_ppm = 87.0 * 24.45 / 48.00
+        expected_ppm = 87.0 * 24.45 / (48.00 * 1000)
         assert reading.pollutantO3 is not None
         assert math.isclose(reading.pollutantO3, expected_ppm, rel_tol=1e-6), (
-            f"pollutantO3: expected {expected_ppm:.4f} ppm (converted), "
+            f"pollutantO3: expected {expected_ppm:.6f} ppm (converted), "
             f"got {reading.pollutantO3!r}"
         )
 
     def test_pollutant_no2_converted_from_ugm3_to_ppm(self) -> None:
-        """pollutantNO2 = no2(0.2 µg/m³) × 24.45 / 46.01 (converted per Q3 amendment)."""
+        """pollutantNO2 = no2(0.2 µg/m³) × 24.45 / (46.01 × 1000) (chemistry-corrected ppm per Q3 amendment)."""
         from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         wire = self._load_wire()
         reading = _wire_to_canonical(wire)
         assert reading is not None
-        expected_ppm = 0.2 * 24.45 / 46.01
+        expected_ppm = 0.2 * 24.45 / (46.01 * 1000)
         assert reading.pollutantNO2 is not None
         assert math.isclose(reading.pollutantNO2, expected_ppm, rel_tol=1e-6), (
-            f"pollutantNO2: expected {expected_ppm:.6f} ppm (converted), "
+            f"pollutantNO2: expected {expected_ppm:.9f} ppm (converted), "
             f"got {reading.pollutantNO2!r}"
         )
 
     def test_pollutant_so2_converted_from_ugm3_to_ppm(self) -> None:
-        """pollutantSO2 = so2(0.1 µg/m³) × 24.45 / 64.07 (converted per Q3 amendment)."""
+        """pollutantSO2 = so2(0.1 µg/m³) × 24.45 / (64.07 × 1000) (chemistry-corrected ppm per Q3 amendment)."""
         from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         wire = self._load_wire()
         reading = _wire_to_canonical(wire)
         assert reading is not None
-        expected_ppm = 0.1 * 24.45 / 64.07
+        expected_ppm = 0.1 * 24.45 / (64.07 * 1000)
         assert reading.pollutantSO2 is not None
         assert math.isclose(reading.pollutantSO2, expected_ppm, rel_tol=1e-6), (
-            f"pollutantSO2: expected {expected_ppm:.6f} ppm (converted), "
+            f"pollutantSO2: expected {expected_ppm:.9f} ppm (converted), "
             f"got {reading.pollutantSO2!r}"
         )
 
     def test_pollutant_co_converted_from_ugm3_to_ppm(self) -> None:
-        """pollutantCO = co(155.0 µg/m³) × 24.45 / 28.01 (converted to ppm per LC15)."""
+        """pollutantCO = co(155.0 µg/m³) × 24.45 / (28.01 × 1000) (chemistry-corrected ppm per LC15)."""
         from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         wire = self._load_wire()
         reading = _wire_to_canonical(wire)
         assert reading is not None
-        expected_ppm = 155.0 * 24.45 / 28.01
+        expected_ppm = 155.0 * 24.45 / (28.01 * 1000)
         assert reading.pollutantCO is not None
         assert math.isclose(reading.pollutantCO, expected_ppm, rel_tol=1e-6), (
-            f"pollutantCO: expected {expected_ppm:.4f} ppm (converted), "
+            f"pollutantCO: expected {expected_ppm:.6f} ppm (converted), "
             f"got {reading.pollutantCO!r}"
         )
 

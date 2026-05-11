@@ -31,20 +31,24 @@
 
 ## Expected canonical output
 
-With the ugm3_to_ppm formula (`ppm = µg/m³ × 24.45 / MW`) and EPA breakpoint tables:
+With the **corrected** ugm3_to_ppm formula (`ppm = µg/m³ × 24.45 / (MW × 1000)`, chemistry fix 2026-05-11) and EPA breakpoint tables:
 
-| Pollutant | µg/m³ | ppm (formula) | sub-AQI |
-|---|---|---|---|
-| O3 | 66.23 | 33.736 | 300 (cap — above 0.200 ppm, 8-hr table max per Q1 Option A) |
-| NO2 | 2.05 | 1.089 | 274 (in [0.650, 1.249, 201, 300] band) |
-| SO2 | 0.34 | 0.1297 | 125 (in [0.076, 0.185, 101, 150] band) |
-| CO | 139.79 | 122.02 | 500 (cap — above 50.4 ppm) |
-| PM2.5 | 0.5 | — | 3 (in [0.0, 9.0, 0, 50] band) |
-| PM10 | 0.81 | — | 1 (in [0, 54, 0, 50] band) |
+| Pollutant | µg/m³ | ppm (formula) | EPA band | sub-AQI |
+|---|---|---|---|---|
+| O3 | 66.23 | 0.033736 | (0.000, 0.054, 0, 50) | round(50 × 0.033736 / 0.054) = 31 |
+| NO2 | 2.05 | 0.001089 | (0.000, 0.053, 0, 50) | round(50 × 0.001089 / 0.053) = 1 |
+| SO2 | 0.34 | 0.0001297 | (0.000, 0.035, 0, 50) | round(50 × 0.0001297 / 0.035) = 0 |
+| CO | 139.79 | 0.12202 | (0.0, 4.4, 0, 50) | round(50 × 0.12202 / 4.4) = 1 |
+| PM2.5 | 0.5 | — | (0.0, 9.0, 0, 50) | round(50 × 0.5 / 9.0) = 3 |
+| PM10 | 0.81 | — | (0, 54, 0, 50) | round(50 × 0.81 / 54) = 1 |
 
-- **aqi** = max(300, 274, 125, 500, 3, 1) = 500
-- **aqiCategory** = "Hazardous" (AQI 500 → 301–500 band)
-- **aqiMainPollutant** = "CO" (argmax; CO=500 wins; PM2.5 wins ties by table order but CO=500 is unambiguous)
+- **aqi** = max(31, 1, 0, 1, 3, 1) = 31
+- **aqiCategory** = "Good" (AQI 0–50 band)
+- **aqiMainPollutant** = "O3" (argmax; sub-AQI 31 is unambiguous winner)
 - **aqiLocation** = null (PARTIAL-DOMAIN — no location field on OWM Air Pollution wire)
 - **observedAt** = "2026-05-11T03:56:58Z" (epoch 1778471818 → UTC ISO-8601)
 - **source** = "openweathermap"
+
+### Pre-fix expected (encoded the chemistry bug — left here for round-close audit trail)
+
+Before the 2026-05-11 chemistry fix, the `ugm3_to_ppm` formula omitted the `/1000` factor and produced ppb-as-ppm. Computed values **with the bug** were: O3=33.736 / NO2=1.089 / SO2=0.1297 / CO=122.02 (all 1000× the correct ppm). EPA breakpoint comparison against these inflated values yielded sub-AQIs O3=300(cap) / NO2=274 / SO2=125 / CO=500(cap) → final aqi=500 / aqiMainPollutant=CO / aqiCategory=Hazardous — wildly wrong for a normal-air Seattle reading. Bug surfaced at 3b-11 round close; fix landed before 3b-11 close commit.
