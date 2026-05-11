@@ -246,7 +246,7 @@ class _OWMAirPollutionResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    list: list[_OWMAirPollutionEntry] = Field(default_factory=list)  # noqa: A003
+    list: list[_OWMAirPollutionEntry] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +346,9 @@ def _compute_owm_aqi_max(
         # Convert gas pollutants µg/m³ → ppm for the breakpoint lookup.
         # ugm3_to_ppm raises KeyError for unsupported pollutants, but _POLLUTANT_ORDER
         # only lists supported ones ("O3", "NO2", "SO2", "CO").
-        if unit == "ppm":
-            conc_in_canonical_units = ugm3_to_ppm(raw, pollutant=canonical_id)
-        else:
-            conc_in_canonical_units = raw
+        conc_in_canonical_units = (
+            ugm3_to_ppm(raw, pollutant=canonical_id) if unit == "ppm" else raw
+        )
 
         sub = concentration_to_sub_aqi(conc_in_canonical_units, pollutant=canonical_id)
         if sub is None:

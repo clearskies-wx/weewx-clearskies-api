@@ -160,7 +160,7 @@ def wire_aqi_settings(settings: object) -> None:
     elif provider == "openweathermap":
         # Provider-scoped credential per 3b-5 Q2 user decision — same env var as
         # forecast/alerts OWM (WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID).
-        # Settings class stores this on the forecast section (ForecastSettings.openweathermap_appid);
+        # Settings class stores this on ForecastSettings.openweathermap_appid;
         # no standalone [openweathermap] section in Settings.
         forecast_section = getattr(settings, "forecast", None)
         if forecast_section is None:
