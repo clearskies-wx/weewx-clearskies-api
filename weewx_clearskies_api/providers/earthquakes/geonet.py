@@ -60,6 +60,7 @@ DOMAIN = "earthquakes"
 BASE_URL = "https://api.geonet.org.nz"
 PATH = "/quake"
 _GEONET_CACHE_TTL = 60  # 60 s per user decision Q2 2026-05-11
+_API_VERSION = "0.1.0"
 
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4)
@@ -176,6 +177,7 @@ def _get_http_client() -> ProviderHTTPClient:
         _http_client = ProviderHTTPClient(
             provider_id=PROVIDER_ID,
             domain=DOMAIN,
+            user_agent=f"weewx-clearskies-api/{_API_VERSION}",
         )
     return _http_client
 
