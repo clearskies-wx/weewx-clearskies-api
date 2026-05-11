@@ -549,10 +549,46 @@ def fetch(
     # (would silently drop retry_after_seconds per 3b-4 audit F1 rule).
     response = client.get(IQAIR_BASE_URL + IQAIR_NEAREST_CITY_PATH, params=params)
 
-    # Wire-shape validation: intentional (ValidationError, ValueError) → ProviderProtocolError
-    # wrap.  Adds wire-context the inner layer didn't have.  Per OWM/Aeris precedent.
+    # Parse raw JSON once — used for both status check and Pydantic validation.
+    # Parsing once avoids redundant decoding and makes the error path clear.
     try:
-        wire = _IQAirResponse.model_validate(response.json())
+        raw_json = response.json()
+    except ValueError as exc:
+        logger.error(
+            "IQAir AQI response is not valid JSON: %s. "
+            "Response body (first 2000 chars): %.2000s",
+            exc,
+            response.text,
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+        raise ProviderProtocolError(
+            f"IQAir AQI response is not valid JSON: {exc}",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        ) from exc
+
+    # LC12/LC27 envelope check FIRST — status:"fail" means a wire-level error.
+    # MUST happen before Pydantic validation because IQAir's error envelope shape
+    # {"status": "fail", "data": {"message": "..."}} has data.message but NOT
+    # data.current, so _IQAirData Pydantic validation would fail on the error
+    # path if we validated before checking status.  Check status from raw JSON
+    # and dispatch before attempting to parse data as _IQAirData.
+    # This is an intentional wrap: adds context the inner layer didn't have.
+    raw_status = raw_json.get("status", "") if isinstance(raw_json, dict) else ""
+    if raw_status != "success":
+        raw_data = raw_json.get("data", {}) if isinstance(raw_json, dict) else {}
+        if isinstance(raw_data, dict):
+            message = str(raw_data.get("message", "unknown")).lower()
+        else:
+            message = "unknown"
+        _raise_for_envelope_error(message)
+
+    # Wire-shape validation (success path only): intentional
+    # (ValidationError, ValueError) → ProviderProtocolError wrap.
+    # Adds wire-context the inner layer didn't have.  Per OWM/Aeris precedent.
+    # Documented in commit body per non-obvious-provenance rule.
+    try:
+        wire = _IQAirResponse.model_validate(raw_json)
     except (ValidationError, ValueError) as exc:
         logger.error(
             "IQAir AQI response validation failed: %s. "
@@ -566,32 +602,6 @@ def fetch(
             provider_id=PROVIDER_ID,
             domain=DOMAIN,
         ) from exc
-
-    # LC12/LC27 envelope check — status:"fail" means a wire-level error.
-    # Dispatch on data.message string to canonical taxonomy.
-    # This is an intentional wrap: adds context the inner layer didn't have.
-    if wire.status != "success":
-        # Extract the error message from data.message (IQAir error envelope shape).
-        message = ""
-        if wire.data is None:
-            # Occasionally the data field is absent or not a dict on error responses.
-            message = "unknown"
-        else:
-            # data may be a dict with a "message" key on error responses.
-            # Since _IQAirData has extra="ignore" and no message field,
-            # we need to access the raw response JSON for the error path.
-            # Re-parse the raw response to extract data.message safely.
-            try:
-                raw = response.json()
-                raw_data = raw.get("data", {})
-                if isinstance(raw_data, dict):
-                    message = str(raw_data.get("message", "unknown")).lower()
-                else:
-                    message = "unknown"
-            except (ValueError, AttributeError):
-                message = "unknown"
-
-        _raise_for_envelope_error(message)
 
     # data should be present on success; guard against unexpected null.
     if wire.data is None:
