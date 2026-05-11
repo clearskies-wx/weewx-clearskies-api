@@ -328,7 +328,16 @@ def integration_client_no_credentials(db_engine: Engine) -> TestClient:
 
 
 class TestIntegrationIQAirAqiHappyPath:
-    """Full stack GET /aqi/current with IQAir configured → 200 AQIReading."""
+    """Full stack GET /aqi/current with IQAir configured → 200 AQIReading.
+
+    setup_method flushes Redis before each test (3b-11 isolation pattern) so
+    that earlier tests in the same run don't leave cached readings that would
+    short-circuit the respx-mocked provider calls.
+    """
+
+    def setup_method(self) -> None:
+        """Flush Redis if configured, ensuring no cached reading masks provider call."""
+        _flush_redis_if_configured()
 
     def test_iqair_aqi_returns_200(self, integration_client: TestClient) -> None:
         """IQAir registered + credentials wired + respx-mocked → 200."""
@@ -620,6 +629,10 @@ class TestIntegrationIQAirAqiErrorPaths:
 
 class TestIntegrationIQAirAqiOpenApiSchema:
     """AQIResponse shape matches OpenAPI AQIResponse contract."""
+
+    def setup_method(self) -> None:
+        """Flush Redis if configured (3b-11 isolation pattern)."""
+        _flush_redis_if_configured()
 
     def test_aqi_reading_fields_match_openapi_aqi_reading_schema(
         self, integration_client: TestClient

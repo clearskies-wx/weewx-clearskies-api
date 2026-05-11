@@ -115,7 +115,12 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 
 def _reset_provider_state() -> None:
-    """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    """Reset provider registry, cache, rate limiter, and re-wire memory cache.
+
+    Also flushes Redis if CLEARSKIES_CACHE_URL is set — prevents cached readings
+    from one test contaminating the next (3b-11 isolation pattern applied to unit tests).
+    """
+    import os  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -125,6 +130,17 @@ def _reset_provider_state() -> None:
     )
     from weewx_clearskies_api.providers.aqi.iqair import _reset_http_client_for_tests  # noqa: PLC0415
     import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
+
+    # Flush Redis if configured (3b-11 isolation pattern) — prevents cache hits from
+    # earlier tests masking misses/errors in subsequent tests at the same coordinates.
+    cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
+    if cache_url:
+        try:
+            import redis as redis_lib  # noqa: PLC0415
+            r = redis_lib.from_url(cache_url)
+            r.flushdb()
+        except Exception:  # noqa: BLE001
+            pass  # Redis not reachable — skip flush; tests may fail if cache is dirty
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
