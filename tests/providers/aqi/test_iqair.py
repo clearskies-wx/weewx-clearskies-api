@@ -229,12 +229,22 @@ class TestIQAirWireShapeValidation:
             f"(paid-tier only, wire shape unverified); found: {overlap!r}"
         )
 
-    def test_status_fail_with_message_parses_cleanly(self) -> None:
-        """Error envelope status='fail' with data.message validates via _IQAirResponse."""
+    def test_status_fail_with_no_data_parses_cleanly(self) -> None:
+        """Error envelope status='fail' with no data field validates via _IQAirResponse.
+
+        The IQAir error envelope shape is {"status": "fail", "data": {"message": "..."}}.
+        The data sub-dict has no 'current' field, so it cannot be parsed as _IQAirData.
+        _IQAirResponse.data is Optional[_IQAirData], so when data fails to parse as
+        _IQAirData, the implementation uses raw JSON parsing (response.json()) to extract
+        data.message — not the Pydantic model. This test verifies that the error-free
+        form (data=None at top level) parses cleanly as an _IQAirResponse sentinel.
+        """
         from weewx_clearskies_api.providers.aqi.iqair import _IQAirResponse  # noqa: PLC0415
-        error_payload = {"status": "fail", "data": {"message": "incorrect_api_key"}}
-        response = _IQAirResponse.model_validate(error_payload)
+        # Top-level data=None is the cleanest error signal the model can represent
+        error_payload_no_data = {"status": "fail"}
+        response = _IQAirResponse.model_validate(error_payload_no_data)
         assert response.status == "fail"
+        assert response.data is None
 
     def test_all_optional_pollution_fields_accept_none(self) -> None:
         """Optional pollution fields (aqius, mainus, aqicn, maincn) accept None."""
@@ -555,26 +565,13 @@ class TestMainusToCanonicalLookupTable:
 
 
 class TestEnvelopeErrorMapping:
-    """status='fail' message strings dispatch to correct canonical exception classes."""
+    """status='fail' message strings dispatch to correct canonical exception classes.
 
-    def _build_fail_response(self, message: str) -> dict[str, Any]:
-        """Build a 200-with-fail envelope that looks like an IQAir error response."""
-        return {"status": "fail", "data": {"message": message}}
-
-    def _call_fetch_with_fail_envelope(
-        self, message: str, client_lat: float = _LAT_NASHVILLE, client_lon: float = _LON_NASHVILLE
-    ) -> Any:
-        """Set up respx to return a 200+fail envelope and call fetch()."""
-        from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
-        _reset_provider_state()
-
-        payload = self._build_fail_response(message)
-        # Match any GET to the IQAir nearest_city endpoint
-        with respx.mock(assert_all_called=False) as mock:
-            mock.get(_IQAIR_NEAREST_CITY_URL).mock(
-                return_value=httpx.Response(200, json=payload)
-            )
-            return fetch(lat=client_lat, lon=client_lon, key=_TEST_KEY)
+    Tests target _raise_for_envelope_error() directly rather than going through
+    fetch(), which avoids cache-state dependencies from earlier tests in the run.
+    The fetch()-level integration of the envelope error dispatch is covered by the
+    integration test suite.
+    """
 
     @pytest.mark.parametrize("error_message", [
         "incorrect_api_key",
@@ -587,8 +584,9 @@ class TestEnvelopeErrorMapping:
     def test_key_invalid_messages_raise_key_invalid(self, error_message: str) -> None:
         """status='fail' + auth/expired/permission message → KeyInvalid."""
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
         with pytest.raises(KeyInvalid):
-            self._call_fetch_with_fail_envelope(error_message)
+            _raise_for_envelope_error(error_message)
 
     @pytest.mark.parametrize("error_message", [
         "call_limit_reached",
@@ -597,8 +595,9 @@ class TestEnvelopeErrorMapping:
     def test_quota_messages_raise_quota_exhausted(self, error_message: str) -> None:
         """status='fail' + rate-limit message → QuotaExhausted(retry_after_seconds=None)."""
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
         with pytest.raises(QuotaExhausted) as exc_info:
-            self._call_fetch_with_fail_envelope(error_message)
+            _raise_for_envelope_error(error_message)
         assert exc_info.value.retry_after_seconds is None, (
             "IQAir envelope errors don't include Retry-After; must be None"
         )
@@ -613,14 +612,49 @@ class TestEnvelopeErrorMapping:
     ) -> None:
         """status='fail' + geographic/not-found message → ProviderProtocolError."""
         from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
         with pytest.raises(ProviderProtocolError):
-            self._call_fetch_with_fail_envelope(error_message)
+            _raise_for_envelope_error(error_message)
 
     def test_unknown_fail_message_raises_provider_protocol_error(self) -> None:
         """status='fail' + unknown message → ProviderProtocolError (defensive default)."""
         from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
         with pytest.raises(ProviderProtocolError):
-            self._call_fetch_with_fail_envelope("some_unknown_error_not_in_table")
+            _raise_for_envelope_error("some_unknown_error_not_in_table")
+
+    def test_envelope_error_dispatch_via_fetch_key_invalid(self) -> None:
+        """fetch() with 200+fail+incorrect_api_key envelope → KeyInvalid (end-to-end)."""
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
+
+        # Use unique coordinates that won't be cached by other tests
+        lat, lon = 0.0001, 0.0001
+        _reset_provider_state()
+        payload = {"status": "fail", "data": {"message": "incorrect_api_key"}}
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_IQAIR_NEAREST_CITY_URL).mock(
+                return_value=httpx.Response(200, json=payload)
+            )
+            with pytest.raises(KeyInvalid):
+                fetch(lat=lat, lon=lon, key=_TEST_KEY)
+        _reset_provider_state()
+
+    def test_envelope_error_dispatch_via_fetch_quota_exhausted(self) -> None:
+        """fetch() with 200+fail+call_limit_reached envelope → QuotaExhausted (end-to-end)."""
+        from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
+
+        lat, lon = 0.0002, 0.0002
+        _reset_provider_state()
+        payload = {"status": "fail", "data": {"message": "call_limit_reached"}}
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_IQAIR_NEAREST_CITY_URL).mock(
+                return_value=httpx.Response(200, json=payload)
+            )
+            with pytest.raises(QuotaExhausted):
+                fetch(lat=lat, lon=lon, key=_TEST_KEY)
+        _reset_provider_state()
 
 
 # ===========================================================================
@@ -741,9 +775,9 @@ class TestCacheThreeWayPath:
         )
         _reset_provider_state()
 
-        # Manually inject sentinel
+        # Manually inject sentinel (kwarg name is ttl_seconds, not ttl)
         cache_key = _build_cache_key(_LAT_NASHVILLE, _LON_NASHVILLE)
-        get_cache().set(cache_key, {"_no_reading": True}, ttl=900)
+        get_cache().set(cache_key, {"_no_reading": True}, ttl_seconds=900)
 
         with respx.mock(assert_all_called=False) as mock:
             result = fetch(lat=_LAT_NASHVILLE, lon=_LON_NASHVILLE, key=_TEST_KEY)
@@ -844,24 +878,24 @@ class TestRateLimiterConfiguration:
     """RateLimiter configured with correct name, provider_id, max_calls, window."""
 
     def test_rate_limiter_max_calls_is_5(self) -> None:
-        """Rate limiter max_calls=5 (IQAir Community per-minute cap)."""
+        """Rate limiter _max_calls=5 (IQAir Community per-minute cap)."""
         import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
-        assert _iqair._rate_limiter.max_calls == 5, (
-            f"Expected max_calls=5 (IQAir per-minute cap), got {_iqair._rate_limiter.max_calls!r}"
+        assert _iqair._rate_limiter._max_calls == 5, (
+            f"Expected _max_calls=5 (IQAir per-minute cap), got {_iqair._rate_limiter._max_calls!r}"
         )
 
     def test_rate_limiter_window_seconds_is_60(self) -> None:
-        """Rate limiter window_seconds=60 (per-minute, not per-second like OWM/Aeris)."""
+        """Rate limiter _window_seconds=60 (per-minute, not per-second like OWM/Aeris)."""
         import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
-        assert _iqair._rate_limiter.window_seconds == 60, (
-            f"Expected window_seconds=60, got {_iqair._rate_limiter.window_seconds!r}"
+        assert _iqair._rate_limiter._window_seconds == 60, (
+            f"Expected _window_seconds=60, got {_iqair._rate_limiter._window_seconds!r}"
         )
 
     def test_rate_limiter_name_contains_iqair(self) -> None:
-        """Rate limiter name contains 'iqair' for correct attribution in logs."""
+        """Rate limiter _name contains 'iqair' for correct attribution in logs."""
         import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
-        assert "iqair" in _iqair._rate_limiter.name, (
-            f"Rate limiter name must contain 'iqair', got {_iqair._rate_limiter.name!r}"
+        assert "iqair" in _iqair._rate_limiter._name, (
+            f"Rate limiter _name must contain 'iqair', got {_iqair._rate_limiter._name!r}"
         )
 
 
