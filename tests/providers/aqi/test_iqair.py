@@ -639,34 +639,17 @@ class TestEnvelopeErrorMapping:
         with pytest.raises(ProviderProtocolError):
             _raise_for_envelope_error("some_unknown_error_not_in_table")
 
-    def test_envelope_error_dispatch_via_fetch_raises_any_canonical_error(self) -> None:
-        """fetch() with 200+fail envelope raises a canonical error (end-to-end path check).
+    def test_envelope_error_dispatch_via_fetch_incorrect_api_key_raises_key_invalid(
+        self,
+    ) -> None:
+        """200+fail envelope with `incorrect_api_key` → KeyInvalid (LC12/LC27 end-to-end).
 
-        KNOWN BEHAVIOUR NOTE (3b-12, 2026-05-11):
-        The IQAir error envelope {"status":"fail","data":{"message":"incorrect_api_key"}}
-        has data.message but no data.current field. _IQAirResponse.data is typed as
-        _IQAirData|None, so Pydantic fails to parse the error data as _IQAirData and
-        raises ValidationError. The impl catches (ValidationError, ValueError) →
-        ProviderProtocolError BEFORE reaching the status-fail envelope check.
-
-        Result: 200+fail envelope errors currently surface as ProviderProtocolError
-        rather than KeyInvalid/QuotaExhausted. The _raise_for_envelope_error() function
-        itself is correct (tested directly above); the integration of it into fetch()
-        is blocked by the Pydantic validation path ordering.
-
-        This test verifies that at minimum a canonical exception IS raised (not a raw
-        Pydantic ValidationError leaking to the caller). The specific exception class
-        (ProviderProtocolError vs KeyInvalid) is a known impl limitation flagged to
-        api-dev for a future fix (e.g. making _IQAirResponse.data accept Any on fail).
-
-        The _raise_for_envelope_error direct tests above verify the correct dispatch
-        logic is implemented and wired correctly in isolation.
+        Locks in the b02c6ce parse-order fix: fetch() must check `status` from raw JSON
+        BEFORE Pydantic validation, then dispatch on `data.message` to the canonical
+        taxonomy. If a future refactor reintroduces Pydantic-first ordering this test
+        will fail (ProviderProtocolError leaks instead of KeyInvalid).
         """
-        from weewx_clearskies_api.providers._common.errors import (  # noqa: PLC0415
-            KeyInvalid,
-            ProviderProtocolError,
-            QuotaExhausted,
-        )
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
 
         lat, lon = 0.0001, 0.0001
@@ -676,8 +659,32 @@ class TestEnvelopeErrorMapping:
             mock.get(_IQAIR_NEAREST_CITY_URL).mock(
                 return_value=httpx.Response(200, json=payload)
             )
-            with pytest.raises((KeyInvalid, ProviderProtocolError, QuotaExhausted)):
+            with pytest.raises(KeyInvalid):
                 fetch(lat=lat, lon=lon, key=_TEST_KEY)
+        _reset_provider_state()
+
+    def test_envelope_error_dispatch_via_fetch_call_limit_raises_quota_exhausted(
+        self,
+    ) -> None:
+        """200+fail envelope with `call_limit_reached` → QuotaExhausted (LC12/LC27 end-to-end).
+
+        Parallel to the KeyInvalid dispatch test above; locks in the b02c6ce fix for
+        the rate-limit branch of `_raise_for_envelope_error`. retry_after_seconds=None
+        because IQAir's 200-not-429 envelope path doesn't carry a Retry-After header.
+        """
+        from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
+
+        lat, lon = 0.0002, 0.0002
+        _reset_provider_state()
+        payload = {"status": "fail", "data": {"message": "call_limit_reached"}}
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_IQAIR_NEAREST_CITY_URL).mock(
+                return_value=httpx.Response(200, json=payload)
+            )
+            with pytest.raises(QuotaExhausted) as exc_info:
+                fetch(lat=lat, lon=lon, key=_TEST_KEY)
+            assert exc_info.value.retry_after_seconds is None
         _reset_provider_state()
 
 
@@ -720,6 +727,71 @@ class TestPreCallKeyValidation:
             assert mock.calls.call_count == 0, (
                 "No HTTP call should be made when key is None"
             )
+
+    def test_key_invalid_message_names_env_var(self) -> None:
+        """KeyInvalid raised on empty key names WEEWX_CLEARSKIES_IQAIR_KEY env var.
+
+        Operators reading the error must learn the env var name without
+        cracking open the source. (Merged from F2-deleted FLAT test file 2026-05-11.)
+        """
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
+        _reset_provider_state()
+        with pytest.raises(KeyInvalid) as exc_info:
+            fetch(lat=_LAT_NASHVILLE, lon=_LON_NASHVILLE, key="")
+        assert "WEEWX_CLEARSKIES_IQAIR_KEY" in str(exc_info.value), (
+            "KeyInvalid message must name the env var so operator knows how to fix it"
+        )
+
+
+# ===========================================================================
+# 6.5. EPA category band parametrized coverage (merged from F2-deleted FLAT file 2026-05-11)
+# ===========================================================================
+
+
+class TestCategoryBandsParametrized:
+    """epa_category(aqius) bands beyond the Nashville aqi=10 'Good' fixture.
+
+    Locks in LC1 derivation (`aqiCategory` from `aqius` via EPA bands) for
+    Moderate / Unhealthy-Sensitive / Hazardous bands. Below 'Good' is covered
+    by the Nashville happy-path fixture; above 'Hazardous' (>500) is defensive
+    cap behavior tested directly in `tests/providers/aqi/test_units.py`.
+    """
+
+    @pytest.mark.parametrize(
+        ("aqius", "expected_category"),
+        [
+            (75, "Moderate"),
+            (125, "Unhealthy for Sensitive Groups"),
+            (400, "Hazardous"),
+        ],
+    )
+    def test_category_band_for_aqius_value(
+        self,
+        aqius: int,
+        expected_category: str,
+    ) -> None:
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirData,
+            _wire_to_canonical,
+        )
+        raw = {
+            "city": "TestCity",
+            "state": "TestState",
+            "country": "USA",
+            "current": {
+                "weather": {"ts": "2019-04-08T19:00:00.000Z"},
+                "pollution": {
+                    "ts": "2019-04-08T18:00:00.000Z",
+                    "aqius": aqius,
+                    "mainus": "p2",
+                },
+            },
+        }
+        data = _IQAirData.model_validate(raw)
+        reading = _wire_to_canonical(data)
+        assert reading is not None
+        assert reading.aqiCategory == expected_category
 
 
 # ===========================================================================

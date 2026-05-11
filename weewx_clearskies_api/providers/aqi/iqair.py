@@ -172,7 +172,7 @@ CAPABILITY = ProviderCapability(
         "Credential lives on AQISettings.iqair_key (domain-scoped per Q1 user decision "
         "2026-05-11 — IQAir is AQI-only, distinct from multi-domain Aeris/OWM). "
         "Rate limiter: 5/min (window_seconds=60) — IQAir Community per-minute cap; "
-        "stricter than OWM/Aeris per-second limiters. "
+        "≈12× tighter per minute than OWM/Aeris's 5-req/sec limiters (which allow ~300/min). "
         "With 15-min TTL → ~96 calls/day, well within 500/day + 10000/month caps. "
         "aqius (US EPA AQI 0-500) is published directly; no breakpoint computation needed "
         "(distinct from OWM 1-5 ordinal and Open-Meteo sub-AQI computation paths). "
@@ -462,7 +462,7 @@ def fetch(
     *,
     lat: float,
     lon: float,
-    key: str,
+    key: str | None,
     http_client: ProviderHTTPClient | None = None,
 ) -> AQIReading | None:
     """GET /v2/nearest_city?lat={lat}&lon={lon}&key={key} and return canonical AQIReading.
