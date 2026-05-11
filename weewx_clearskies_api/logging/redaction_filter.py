@@ -74,6 +74,17 @@ _APIKEY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match key= query parameter value (IQAir AirVisual API).
+# Pattern mirrors _APPID_RE / _APIKEY_RE shape; bare 'key=' is the IQAir
+# credential convention.  Fires this round (3b-12) because IQAir is the
+# fourth keyed query-param provider on this project.  Over-redaction risk
+# (key= is a generic param name) is acceptable per the LC22 / _SQL_LITERAL_RE
+# precedent — better to over-redact than leak credentials.
+_KEY_RE = re.compile(
+    r"((?:^|[?&])key=)[^&\s\n\"']+",
+    re.IGNORECASE,
+)
+
 # Match SQL quoted literals when someone accidentally logs a bound query.
 # Catches patterns like: WHERE name = 'alice', VALUES (42, 'bob')
 #
@@ -103,6 +114,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (_CLIENT_ID_RE, r"\g<1>" + _REDACTED),
     (_CLIENT_SECRET_RE, r"\g<1>" + _REDACTED),
     (_APIKEY_RE, r"\g<1>" + _REDACTED),
+    (_KEY_RE, r"\g<1>" + _REDACTED),
     (_SQL_LITERAL_RE, _REDACTED),
 ]
 
