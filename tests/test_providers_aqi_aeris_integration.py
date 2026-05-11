@@ -145,12 +145,22 @@ def db_engine() -> Generator[Engine, None, None]:
 
 def _wire_db(engine: Engine) -> None:
     """Wire the real DB engine into weewx_clearskies_api's session layer."""
-    from weewx_clearskies_api.db.reflection import reflect_schema  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
 
     wire_engine(engine)
-    registry = reflect_schema(engine)
+    # Build a full stock registry from STOCK_COLUMN_MAP (pattern from
+    # tests/test_providers_alerts_aeris_integration.py)
+    registry = ColumnRegistry()
+    registry.stock = {
+        col: ColumnInfo(db_name=col, canonical_name=canon, is_stock=True)
+        for col, canon in STOCK_COLUMN_MAP.items()
+    }
     wire_registry(registry)
 
 
