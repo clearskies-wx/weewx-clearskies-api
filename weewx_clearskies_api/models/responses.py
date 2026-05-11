@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -727,4 +727,56 @@ class AQIResponse(BaseModel):
     data: AQIReading | None
     units: dict[str, str]
     source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+# ---------------------------------------------------------------------------
+# Earthquakes (ADR-040, canonical-data-model §3.7 + §2.4)
+# ---------------------------------------------------------------------------
+
+# ruff: noqa: N815  (camelCase canonical names: magnitudeType, etc.)
+
+
+class EarthquakeRecord(BaseModel):
+    """Canonical earthquake record (ADR-010 §3.7, OpenAPI EarthquakeRecord schema).
+
+    extra="ignore" so provider wire shapes that have extra fields don't break
+    normalization.  Required fields per OpenAPI: id, time, latitude, longitude,
+    magnitude, source.
+
+    Earthquakes are unit-system-invariant (canonical-data-model §2.4) — no
+    units block; depth is always km, coordinates always WGS84 degrees.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    time: str  # UTC ISO-8601 with Z
+    latitude: float
+    longitude: float
+    magnitude: float
+    magnitudeType: str | None = None
+    depth: float | None = None
+    place: str | None = None
+    url: str | None = None
+    tsunami: bool | None = None
+    felt: int | None = None
+    mmi: float | None = None
+    alert: str | None = None  # green/yellow/orange/red (USGS PAGER); None for non-USGS
+    status: str | None = None
+    extras: dict[str, Any] = Field(default_factory=dict)
+    source: str
+
+
+class EarthquakeListResponse(BaseModel):
+    """EarthquakeListResponse envelope (OpenAPI EarthquakeListResponse schema).
+
+    Note: OpenAPI EarthquakeListResponse does NOT carry a units block (per
+    canonical-data-model §2.4, earthquakes are unit-system-invariant).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    data: list[EarthquakeRecord]
+    source: str  # provider_id or "none"
     generatedAt: str  # UTC ISO-8601 with Z

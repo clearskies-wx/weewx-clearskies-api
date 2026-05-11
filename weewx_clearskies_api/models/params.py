@@ -300,3 +300,28 @@ class AQIHistoryQueryParams(BaseModel):
     limit: int = Field(default=1000, ge=1, le=10000)
     cursor: str | None = None
     page: int | None = Field(default=None, ge=1)
+
+
+# ---------------------------------------------------------------------------
+# /earthquakes query params
+# ---------------------------------------------------------------------------
+
+
+class EarthquakesQueryParams(BaseModel):
+    """Query params for /earthquakes (OpenAPI getEarthquakes operation).
+
+    extra="forbid" so unknown query keys reject with 422 per security-baseline §3.5.
+    The Depends-wrapper pattern (coding.md §1) ensures the full query string flows
+    through Pydantic so extra="forbid" actually fires.
+
+    from_ / to: ISO 8601 timestamps bounding the event time window.
+    min_magnitude: filter to events at or above this magnitude.
+    radius_km: override the operator-configured radius (km from station lat/lon).
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: str | None = Field(None, alias="from")
+    to: str | None = None
+    min_magnitude: float | None = Field(None, ge=0)
+    radius_km: float | None = Field(None, ge=0)

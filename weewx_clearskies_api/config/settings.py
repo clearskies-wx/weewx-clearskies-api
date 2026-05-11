@@ -421,6 +421,47 @@ class AQISettings:
             )
 
 
+class EarthquakesSettings:
+    """[earthquakes] section settings (3b-13).
+
+    Provider id for the earthquake data source.  All four day-1 providers (usgs,
+    geonet, emsc, renass) are keyless — no env vars needed.
+
+    Per ADR-040: single earthquake provider per deploy.  No multi-provider
+    fallback or aggregation.
+    """
+
+    #: Provider id: "usgs", "geonet", "emsc", "renass", or absent.
+    provider: str | None
+    #: Default radius in km from station lat/lon.  Override per-request via ?radius_km.
+    default_radius_km: float
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip()
+        self.provider = raw_provider if raw_provider else None
+
+        raw_radius = section.get("default_radius_km", 100)
+        try:
+            self.default_radius_km = float(raw_radius)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"[earthquakes] default_radius_km {raw_radius!r} must be a number."
+            ) from exc
+        if self.default_radius_km < 0:
+            raise ValueError(
+                f"[earthquakes] default_radius_km {self.default_radius_km!r} must be >= 0."
+            )
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"usgs", "geonet", "emsc", "renass"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[earthquakes] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values: 'usgs', 'geonet', 'emsc', 'renass'."
+            )
+
+
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
     extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
@@ -531,6 +572,7 @@ class Settings:
     pages: PagesSettings
     alerts: AlertsSettings
     aqi: AQISettings
+    earthquakes: EarthquakesSettings
     forecast: ForecastSettings
 
     def __init__(
@@ -547,6 +589,7 @@ class Settings:
         pages: PagesSettings | None = None,
         alerts: AlertsSettings | None = None,
         aqi: AQISettings | None = None,
+        earthquakes: EarthquakesSettings | None = None,
         forecast: ForecastSettings | None = None,
     ) -> None:
         self.api = api
@@ -561,6 +604,7 @@ class Settings:
         self.pages = pages if pages is not None else PagesSettings({})
         self.alerts = alerts if alerts is not None else AlertsSettings({})
         self.aqi = aqi if aqi is not None else AQISettings({})
+        self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
 
     def validate(self) -> None:
@@ -571,6 +615,7 @@ class Settings:
         self.database.validate()
         self.alerts.validate()
         self.aqi.validate()
+        self.earthquakes.validate()
         self.forecast.validate()
 
 
@@ -662,6 +707,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
+    earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
 
     settings = Settings(
@@ -677,6 +723,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         pages=pages_cfg,
         alerts=alerts_cfg,
         aqi=aqi_cfg,
+        earthquakes=earthquakes_cfg,
         forecast=forecast_cfg,
     )
     settings.validate()

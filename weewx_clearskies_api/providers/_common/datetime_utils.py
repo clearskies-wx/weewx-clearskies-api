@@ -109,3 +109,44 @@ def epoch_to_utc_iso8601(
             domain=domain,
         ) from exc
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def epoch_ms_to_utc_iso8601(
+    epoch_ms: int | float,
+    *,
+    provider_id: str,
+    domain: str,
+) -> str:
+    """Convert epoch UTC milliseconds to ISO-8601 Z form (ADR-020).
+
+    USGS earthquake feed uses milliseconds-since-epoch for the ``time`` and
+    ``updated`` fields (the GeoJSON flavor only — the QuakeML flavor uses ISO).
+    Sibling to ``epoch_to_utc_iso8601`` which takes seconds.
+
+    Numerical sanity check: USGS event id us6000swvm has time=1778492931604 ms;
+    1778492931604 / 1000 = 1778492931.604 s; datetime.fromtimestamp(...)
+    decodes to 2026-05-11 (matches the day the event happened, per live capture
+    in docs/reference/api-docs/usgs.md).
+
+    Args:
+        epoch_ms: Unix timestamp in milliseconds since 1970-01-01T00:00:00Z.
+        provider_id: Provider identifier (e.g. ``"usgs"``).
+        domain: Provider domain (e.g. ``"earthquakes"``).
+
+    Returns:
+        UTC ISO-8601 string with Z suffix.
+
+    Raises:
+        ProviderProtocolError: ``epoch_ms`` is out of platform range, non-numeric,
+            or otherwise unparsable.
+    """
+    try:
+        seconds = epoch_ms / 1000.0
+        dt = datetime.fromtimestamp(seconds, tz=UTC)
+    except (OverflowError, ValueError, OSError, TypeError) as exc:
+        raise ProviderProtocolError(
+            f"Epoch ms parse failed for {epoch_ms!r}: {exc}",
+            provider_id=provider_id,
+            domain=domain,
+        ) from exc
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
