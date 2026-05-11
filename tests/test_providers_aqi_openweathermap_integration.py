@@ -151,12 +151,21 @@ def db_engine() -> Generator[Engine, None, None]:
 
 def _wire_db(engine: Engine) -> None:
     """Wire the real DB engine into weewx_clearskies_api's session layer."""
-    from weewx_clearskies_api.db.reflection import reflect_schema  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
 
     wire_engine(engine)
-    registry = reflect_schema(engine)
+    # Build a full stock registry from STOCK_COLUMN_MAP (mirrors aeris integration pattern).
+    registry = ColumnRegistry()
+    registry.stock = {
+        col: ColumnInfo(db_name=col, canonical_name=canon, is_stock=True)
+        for col, canon in STOCK_COLUMN_MAP.items()
+    }
     wire_registry(registry)
 
 
@@ -483,7 +492,24 @@ class TestIntegrationOwmAqiAppidMissing:
 
 
 class TestIntegrationOwmAqiErrorPaths:
-    """Provider error handling: 5xx → 502, 429 → 503 + Retry-After."""
+    """Provider error handling: 5xx → 502, 429 → 503 + Retry-After.
+
+    Each test uses a fresh integration_client fixture (function-scoped), which calls
+    _make_integration_app → _reset_owm_aqi_provider_state. However, when Redis is
+    active (CLEARSKIES_CACHE_URL set), the cache reset only clears the Python-side
+    object; Redis data persists. We call flushdb() if Redis is configured so that
+    error-path tests aren't masked by cached success responses from earlier tests.
+    """
+
+    def setup_method(self) -> None:
+        """Flush Redis if configured, ensuring no cached reading masks error-path responses."""
+        if os.environ.get("CLEARSKIES_CACHE_URL"):
+            try:
+                import redis as redis_lib  # noqa: PLC0415
+                r = redis_lib.from_url(os.environ["CLEARSKIES_CACHE_URL"])
+                r.flushdb()
+            except Exception:
+                pass  # Redis not reachable — skip flush; individual tests will skip if needed
 
     def test_provider_5xx_returns_502_rfc9457(
         self, integration_client: TestClient
@@ -648,6 +674,15 @@ class TestIntegrationOwmAqiMemoryCache:
             _build_cache_key,
             _reset_http_client_for_tests,
         )
+
+        # Flush Redis if configured so previous test runs don't leave cached readings.
+        if os.environ.get("CLEARSKIES_CACHE_URL"):
+            try:
+                import redis as redis_lib  # noqa: PLC0415
+                r = redis_lib.from_url(os.environ["CLEARSKIES_CACHE_URL"])
+                r.flushdb()
+            except Exception:
+                pass
 
         reset_cache_for_tests()
         _reset_http_client_for_tests()
