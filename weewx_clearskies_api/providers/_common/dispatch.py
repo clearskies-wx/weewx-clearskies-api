@@ -22,6 +22,7 @@ from weewx_clearskies_api.providers.alerts import nws as alerts_nws
 from weewx_clearskies_api.providers.alerts import openweathermap as alerts_openweathermap
 from weewx_clearskies_api.providers.aqi import aeris as aqi_aeris
 from weewx_clearskies_api.providers.aqi import openmeteo as aqi_openmeteo
+from weewx_clearskies_api.providers.aqi import openweathermap as aqi_openweathermap
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
 from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
@@ -34,6 +35,7 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("alerts", "openweathermap"): alerts_openweathermap,
     ("aqi", "aeris"): aqi_aeris,
     ("aqi", "openmeteo"): aqi_openmeteo,
+    ("aqi", "openweathermap"): aqi_openweathermap,
     ("forecast", "openmeteo"): forecast_openmeteo,
     ("forecast", "nws"): forecast_nws,
     ("forecast", "aeris"): forecast_aeris,

@@ -393,7 +393,7 @@ class AQISettings:
     Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
     """
 
-    #: Provider id: "openmeteo", "aeris"; future: "openweathermap", "iqair".
+    #: Provider id: "openmeteo", "aeris", "openweathermap"; future: "iqair".
     provider: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
@@ -402,13 +402,12 @@ class AQISettings:
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
-        valid_providers = {"openmeteo", "aeris"}
+        valid_providers = {"openmeteo", "aeris", "openweathermap"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[aqi] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'openmeteo', 'aeris'. "
-                "Additional providers (openweathermap, iqair) land in "
-                "3b-11/3b-12 respectively."
+                "Supported values: 'openmeteo', 'aeris', 'openweathermap'. "
+                "Additional providers (iqair) land in 3b-12."
             )
 
 

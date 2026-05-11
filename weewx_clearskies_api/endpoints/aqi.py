@@ -63,12 +63,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Module-level Aeris credential wiring (populated at startup by wire_aqi_settings,
-# 3b-10 — mirrors alerts endpoint pattern for keyed-provider credentials)
+# Module-level credential wiring (populated at startup by wire_aqi_settings).
+# Aeris: client_id + client_secret (3b-10).
+# OWM: appid (3b-11 — provider-scoped per 3b-5 Q2; same env var as forecast/alerts OWM).
 # ---------------------------------------------------------------------------
 
 _AERIS_CLIENT_ID: str | None = None
 _AERIS_CLIENT_SECRET: str | None = None
+_OWM_APPID: str | None = None
 
 # ---------------------------------------------------------------------------
 # Depends wrappers — Pydantic + Depends pattern (coding.md §1)
@@ -110,13 +112,16 @@ def wire_aqi_settings(settings: object) -> None:
     """Wire AQI-related settings from the Settings object.
 
     For Open-Meteo (keyless): no-op — no credentials to extract.
-    For Aeris (3b-10): extracts client_id + client_secret from settings.aeris
+    For Aeris (3b-10): extracts client_id + client_secret from settings.forecast
       (provider-scoped per 3b-4 Q1 user decision; same [aeris] section as
       forecast/alerts Aeris) and stores in module-level _AERIS_CLIENT_ID +
       _AERIS_CLIENT_SECRET for the dispatch to pass to aeris.fetch().
-    Future-proof for keyed providers (3b-11 OWM, 3b-12 IQAir).
+    For OWM (3b-11): extracts openweathermap_appid from settings.forecast
+      (provider-scoped per 3b-5 Q2 user decision; same env var as forecast/alerts OWM:
+      WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID) and stores in _OWM_APPID.
+    When 3b-12 lands IQAir: add elif provider == "iqair": branch.
     """
-    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET  # noqa: PLW0603
+    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _OWM_APPID  # noqa: PLW0603
 
     aqi_section = getattr(settings, "aqi", None)
     if aqi_section is None:
@@ -152,8 +157,29 @@ def wire_aqi_settings(settings: object) -> None:
                 "capability still registered but /aqi/current will return 502 until wired"
             )
 
+    elif provider == "openweathermap":
+        # Provider-scoped credential per 3b-5 Q2 user decision — same env var as
+        # forecast/alerts OWM (WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID).
+        # Settings class stores this on the forecast section (ForecastSettings.openweathermap_appid);
+        # no standalone [openweathermap] section in Settings.
+        forecast_section = getattr(settings, "forecast", None)
+        if forecast_section is None:
+            logger.error(
+                "[aqi] provider = openweathermap but [forecast] settings section missing; "
+                "credentials cannot be wired"
+            )
+            return
+
+        _OWM_APPID = getattr(forecast_section, "openweathermap_appid", None)
+
+        if not _OWM_APPID:
+            logger.error(
+                "[aqi] provider = openweathermap but "
+                "WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID env var missing; "
+                "capability still registered but /aqi/current will return 502 until wired"
+            )
+
     # Open-Meteo is keyless (auth_required=()); nothing to wire.
-    # When 3b-11 lands OWM AQI: add elif provider == "openweathermap": branch.
     # When 3b-12 lands IQAir: add elif provider == "iqair": branch.
 
 
@@ -239,6 +265,20 @@ def get_aqi_current(
             lon=station.longitude,
             client_id=_AERIS_CLIENT_ID,
             client_secret=_AERIS_CLIENT_SECRET,
+        )
+    elif provider_id == "openweathermap":
+        from weewx_clearskies_api.providers.aqi import openweathermap  # noqa: PLC0415
+
+        if not _OWM_APPID:
+            logger.error(
+                "OpenWeatherMap AQI provider configured but appid not wired at request time"
+            )
+            raise HTTPException(status_code=502, detail="OpenWeatherMap appid missing")
+
+        record = openweathermap.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            appid=_OWM_APPID,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
