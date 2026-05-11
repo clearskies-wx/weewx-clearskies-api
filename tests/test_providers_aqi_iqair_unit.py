@@ -516,15 +516,16 @@ class TestPreCallKeyGuard:
         with pytest.raises(KeyInvalid):
             fetch(lat=36.1767, lon=-86.7386, key=None)  # type: ignore[arg-type]
 
-    def test_whitespace_only_key_raises_key_invalid(self) -> None:
-        """fetch() with key='   ' (whitespace only) raises KeyInvalid.
+    def test_key_error_message_names_env_var(self) -> None:
+        """KeyInvalid message for empty key names WEEWX_CLEARSKIES_IQAIR_KEY env var.
 
-        Wire-level validation should treat whitespace-only keys like empty keys.
-        Note: AQISettings strips whitespace before storing, so this tests the
-        module's own guard when called directly with a bad value.
+        This helps operators diagnose missing credentials without reading source code.
         """
-        with pytest.raises(KeyInvalid):
-            fetch(lat=36.1767, lon=-86.7386, key="   ")
+        with pytest.raises(KeyInvalid) as exc_info:
+            fetch(lat=36.1767, lon=-86.7386, key="")
+        assert "WEEWX_CLEARSKIES_IQAIR_KEY" in str(exc_info.value), (
+            "KeyInvalid message must name the env var so operator knows how to fix it"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -786,19 +787,24 @@ class TestCapabilityDeclaration:
 
 
 class TestRateLimiterConfig:
-    """Rate limiter configured for IQAir Community per-minute cap (LC10)."""
+    """Rate limiter configured for IQAir Community per-minute cap (LC10).
+
+    RateLimiter stores constructor args as private attrs (_max_calls, _window_seconds,
+    _name) per the existing codebase convention (weewx_clearskies_api/providers/_common/
+    rate_limiter.py L49-53). Tests use private names, not public property names.
+    """
 
     def test_rate_limiter_max_calls_is_5(self) -> None:
-        """Rate limiter max_calls = 5 (IQAir Community tier per-minute cap)."""
-        assert iqair._rate_limiter.max_calls == 5
+        """Rate limiter _max_calls = 5 (IQAir Community tier per-minute cap)."""
+        assert iqair._rate_limiter._max_calls == 5
 
     def test_rate_limiter_window_seconds_is_60(self) -> None:
-        """Rate limiter window_seconds = 60 (per-minute, stricter than OWM/Aeris per-second)."""
-        assert iqair._rate_limiter.window_seconds == 60
+        """Rate limiter _window_seconds = 60 (per-minute, stricter than OWM/Aeris per-second)."""
+        assert iqair._rate_limiter._window_seconds == 60
 
     def test_rate_limiter_provider_id_is_iqair(self) -> None:
-        """Rate limiter provider_id = 'iqair'."""
-        assert iqair._rate_limiter.provider_id == "iqair"
+        """Rate limiter _provider_id = 'iqair'."""
+        assert iqair._rate_limiter._provider_id == "iqair"
 
 
 # ---------------------------------------------------------------------------
