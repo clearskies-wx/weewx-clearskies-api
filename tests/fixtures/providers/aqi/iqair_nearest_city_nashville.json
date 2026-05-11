@@ -1,0 +1,30 @@
+{
+  "status": "success",
+  "data": {
+    "city": "Nashville",
+    "state": "Tennessee",
+    "country": "USA",
+    "location": {
+      "type": "Point",
+      "coordinates": [-86.7386, 36.1767]
+    },
+    "current": {
+      "weather": {
+        "ts": "2019-04-08T19:00:00.000Z",
+        "tp": 18,
+        "hu": 88,
+        "pr": 1012,
+        "wd": 90,
+        "ws": 3.1,
+        "ic": "04d"
+      },
+      "pollution": {
+        "ts": "2019-04-08T18:00:00.000Z",
+        "aqius": 10,
+        "mainus": "p2",
+        "aqicn": 3,
+        "maincn": "p2"
+      }
+    }
+  }
+}

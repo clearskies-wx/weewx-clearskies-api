@@ -191,6 +191,77 @@ class TestRedactionFilter:
         assert "format=json" in doc["message"]
         assert "[REDACTED]" in doc["message"]
 
+    def test_redaction_iqair_key_query_param_at_question_mark(self) -> None:
+        """IQAir ?key=SECRET → key=[REDACTED] (no leak of SECRET; _KEY_RE pattern — 3b-12).
+
+        IQAir AirVisual v2 API uses query-param 'key=' for auth (NOT header X-Key).
+        _KEY_RE is a generic 'key=' redactor; added because IQAir is the fourth
+        keyed query-param provider on this project. Over-redaction risk accepted per
+        LC22 / _SQL_LITERAL_RE precedent.
+        """
+        log, buf = self._make_redacting_logger("test_iqair_key_start_redact")
+        log.info(
+            "GET /v2/nearest_city?lat=36.1767&lon=-86.7386&key=SECRET_VALUE_xyz"
+        )
+        doc = json.loads(buf.getvalue().strip())
+        assert "SECRET_VALUE_xyz" not in doc["message"], (
+            "IQAir key= value must be redacted from log output"
+        )
+        assert "[REDACTED]" in doc["message"]
+
+    def test_redaction_iqair_key_param_mid_querystring(self) -> None:
+        """key= value redacted when key= appears after other query params.
+
+        Verifies the &key= (ampersand-delimited) form is also captured by _KEY_RE.
+        """
+        log, buf = self._make_redacting_logger("test_iqair_key_mid_redact")
+        log.info(
+            "GET https://api.airvisual.com/v2/nearest_city?lat=36.18&lon=-86.74&key=MY_SECRET_KEY"
+        )
+        doc = json.loads(buf.getvalue().strip())
+        assert "MY_SECRET_KEY" not in doc["message"], (
+            "key= value in mid-querystring must be redacted"
+        )
+        assert "[REDACTED]" in doc["message"]
+
+    def test_redaction_iqair_key_param_followed_by_another_param(self) -> None:
+        """?key=SECRET&other=value → key=[REDACTED] but other=value preserved.
+
+        The regex must not consume the trailing &other=value into the redacted value.
+        """
+        log, buf = self._make_redacting_logger("test_iqair_key_followed_redact")
+        log.info(
+            "GET https://api.airvisual.com/v2/nearest_city?lat=36.18&key=MYSECRET&format=json"
+        )
+        doc = json.loads(buf.getvalue().strip())
+        assert "MYSECRET" not in doc["message"], (
+            "key= value must be redacted even when followed by another param"
+        )
+        assert "format=json" in doc["message"], (
+            "Params after key= must NOT be consumed into the redacted value"
+        )
+        assert "[REDACTED]" in doc["message"]
+
+    def test_existing_appid_pattern_unaffected_by_key_re_addition(self) -> None:
+        """_APPID_RE still fires correctly after _KEY_RE is added (no pattern regression)."""
+        log, buf = self._make_redacting_logger("test_appid_regression_guard")
+        log.info("OWM call: https://api.openweathermap.org/data/2.5/air_pollution?lat=42.3&lon=-71.1&appid=MY_OWM_KEY")
+        doc = json.loads(buf.getvalue().strip())
+        assert "MY_OWM_KEY" not in doc["message"], (
+            "appid= value must still be redacted (no regression from _KEY_RE addition)"
+        )
+        assert "[REDACTED]" in doc["message"]
+
+    def test_existing_apikey_pattern_unaffected_by_key_re_addition(self) -> None:
+        """_APIKEY_RE still fires correctly after _KEY_RE is added (no pattern regression)."""
+        log, buf = self._make_redacting_logger("test_apikey_regression_guard")
+        log.info("Wunderground call: https://api.weather.com/v2/pws/observations/current?stationId=KMA10&apiKey=MY_WU_KEY")
+        doc = json.loads(buf.getvalue().strip())
+        assert "MY_WU_KEY" not in doc["message"], (
+            "apiKey= value must still be redacted (no regression from _KEY_RE addition)"
+        )
+        assert "[REDACTED]" in doc["message"]
+
 
 class TestRequestIdFilter:
     """Verify RequestIdFilter injects the context variable into records."""
