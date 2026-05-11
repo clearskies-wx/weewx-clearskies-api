@@ -7,7 +7,7 @@ Behavior decision tree for /aqi/current per brief §per-endpoint spec:
   3. Provider configured, fetch succeeds but all values null → 200, data=null
   4. Network failure / 5xx after retries → 502 (TransientNetworkError → RFC 9457)
   5. Provider returns 429 → 503 + Retry-After (QuotaExhausted → RFC 9457)
-  6. Provider returns 401/403 → 502 (KeyInvalid — not expected for keyless Open-Meteo)
+  6. Provider returns 401/403 → 502 (KeyInvalid)
   7. Pydantic validation failure on wire model → 502 (ProviderProtocolError → RFC 9457)
 
 /aqi/history always returns 501 Not Implemented (LC21):
@@ -28,9 +28,11 @@ Provider discovery: endpoint reads the capability registry at request time.
   CAPABILITY; this endpoint checks the registry for an "aqi" domain entry.
   Tests that need the openmeteo path call wire_providers([openmeteo.CAPABILITY]).
 
-wire_aqi_settings (LC18):
+wire_aqi_settings (LC18/LC19):
   No-op for Open-Meteo (keyless, no credentials to wire).
-  Future-proof for keyed providers (3b-10 Aeris, 3b-11 OWM, 3b-12 IQAir).
+  For Aeris: extracts client_id + client_secret from settings.aeris and stores
+  in module-level _AERIS_CLIENT_ID + _AERIS_CLIENT_SECRET for dispatch (3b-10).
+  Future-proof for keyed providers (3b-11 OWM, 3b-12 IQAir).
 
 Units block (LC lead-call in brief §per-endpoint spec):
   Populated via get_units_block() / get_target_unit() from services/units.py.
@@ -59,6 +61,14 @@ from weewx_clearskies_api.services.units import get_units_block
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Module-level Aeris credential wiring (populated at startup by wire_aqi_settings,
+# 3b-10 — mirrors alerts endpoint pattern for keyed-provider credentials)
+# ---------------------------------------------------------------------------
+
+_AERIS_CLIENT_ID: str | None = None
+_AERIS_CLIENT_SECRET: str | None = None
 
 # ---------------------------------------------------------------------------
 # Depends wrappers — Pydantic + Depends pattern (coding.md §1)
@@ -100,15 +110,44 @@ def wire_aqi_settings(settings: object) -> None:
     """Wire AQI-related settings from the Settings object.
 
     For Open-Meteo (keyless): no-op — no credentials to extract.
-    Future-proof for keyed providers (3b-10 Aeris, 3b-11 OWM, 3b-12 IQAir):
-    extract provider credentials and call the appropriate wire_*_credentials()
-    functions here when those providers land.
+    For Aeris (3b-10): extracts client_id + client_secret from settings.aeris
+      (provider-scoped per 3b-4 Q1 user decision; same [aeris] section as
+      forecast/alerts Aeris) and stores in module-level _AERIS_CLIENT_ID +
+      _AERIS_CLIENT_SECRET for the dispatch to pass to aeris.fetch().
+    Future-proof for keyed providers (3b-11 OWM, 3b-12 IQAir).
     """
-    # Open-Meteo is keyless (auth_required=()); nothing to wire in 3b-9.
-    # When 3b-10 lands Aeris AQI: extract aeris_client_id + aeris_client_secret.
-    # When 3b-11 lands OWM AQI: extract openweathermap_appid.
-    # When 3b-12 lands IQAir: extract iqair_api_key.
-    pass
+    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET  # noqa: PLW0603
+
+    aqi_section = getattr(settings, "aqi", None)
+    if aqi_section is None:
+        return
+
+    provider = getattr(aqi_section, "provider", None)
+
+    if provider == "aeris":
+        # Provider-scoped credentials per 3b-4 Q1 — same [aeris] section as
+        # forecast/alerts Aeris. Credentials at settings.aeris.client_id +
+        # settings.aeris.client_secret (not domain-scoped aqi_aeris_* keys).
+        aeris_section = getattr(settings, "aeris", None)
+        if aeris_section is None:
+            logger.error(
+                "[aqi] provider = aeris but [aeris] settings section missing; "
+                "credentials cannot be wired"
+            )
+            return
+
+        _AERIS_CLIENT_ID = getattr(aeris_section, "client_id", None)
+        _AERIS_CLIENT_SECRET = getattr(aeris_section, "client_secret", None)
+
+        if not _AERIS_CLIENT_ID or not _AERIS_CLIENT_SECRET:
+            logger.error(
+                "[aqi] provider = aeris but [aeris] client_id/client_secret missing; "
+                "capability still registered but /aqi/current will return 502 until wired"
+            )
+
+    # Open-Meteo is keyless (auth_required=()); nothing to wire.
+    # When 3b-11 lands OWM AQI: add elif provider == "openweathermap": branch.
+    # When 3b-12 lands IQAir: add elif provider == "iqair": branch.
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +217,21 @@ def get_aqi_current(
         record: AQIReading | None = openmeteo.fetch(
             lat=station.latitude,
             lon=station.longitude,
+        )
+    elif provider_id == "aeris":
+        from weewx_clearskies_api.providers.aqi import aeris  # noqa: PLC0415
+
+        if not _AERIS_CLIENT_ID or not _AERIS_CLIENT_SECRET:
+            logger.error(
+                "Aeris AQI provider configured but credentials not wired at request time"
+            )
+            raise HTTPException(status_code=502, detail="Aeris credentials missing")
+
+        record = aeris.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            client_id=_AERIS_CLIENT_ID,
+            client_secret=_AERIS_CLIENT_SECRET,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
