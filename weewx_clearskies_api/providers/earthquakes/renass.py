@@ -259,10 +259,11 @@ def _to_canonical(
     raw_props: dict[str, Any] = raw_feature.get("properties", raw_feature)
 
     # Extras per §4.4 (LC#5): type, description_fr (flat key), url_fr (flat key).
+    # Note: type is always included in extras even when null — the test verifies
+    # extras["type"] is None for standard earthquake events and "quarry blast" for others.
     extras: dict[str, Any] = {}
-    raw_type = raw_props.get("type")
-    if raw_type is not None:
-        extras["type"] = raw_type
+    # "type" key exists in ReNaSS response even when null (None); always include.
+    extras["type"] = raw_props.get("type")  # None or "earthquake"/"quarry blast"/"explosion"
     raw_desc = raw_props.get("description")
     if isinstance(raw_desc, dict) and "fr" in raw_desc:
         extras["description_fr"] = raw_desc["fr"]
