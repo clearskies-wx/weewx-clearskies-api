@@ -10,7 +10,7 @@ day-1 alerts provider per ADR-016).
 Forecast domain: five rows (one per provider per ADR-007 day-1 set).
   Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
-AQI domain: openmeteo first (3b-9), aeris second (3b-10); owm/iqair follow in 3b-11/12.
+AQI domain: openmeteo (3b-9), aeris (3b-10), openweathermap (3b-11); iqair in 3b-12.
 """
 
 from __future__ import annotations
