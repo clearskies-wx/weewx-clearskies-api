@@ -802,8 +802,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
         data = _load_fixture("aeris_current.json")
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=data)
             )
             fetch(lat=_LAT, lon=_LON, client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET)
@@ -819,8 +819,8 @@ class TestFetchCacheMiss:
 
         malformed = {"not_success": "bad", "totally": "wrong"}
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=malformed)
             )
             with pytest.raises(ProviderProtocolError):
@@ -831,8 +831,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(401, json={"error": "unauthorized"})
             )
             with pytest.raises(KeyInvalid):
@@ -843,8 +843,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(403, json={"error": "forbidden"})
             )
             with pytest.raises(KeyInvalid):
@@ -855,8 +855,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(
                     429,
                     json={"reason": "rate limit"},
@@ -871,8 +871,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(
                     429,
                     json={"reason": "rate limit"},
@@ -888,8 +888,8 @@ class TestFetchCacheMiss:
         from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(500, json={"reason": "server error"})
             )
             with pytest.raises(TransientNetworkError):
@@ -906,8 +906,8 @@ class TestFetchCacheMiss:
             "response": [],
         }
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=envelope_error)
             )
             with pytest.raises(KeyInvalid):
@@ -924,8 +924,8 @@ class TestFetchCacheMiss:
             "response": [],
         }
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=envelope_error)
             )
             with pytest.raises(KeyInvalid):
@@ -942,8 +942,8 @@ class TestFetchCacheMiss:
             "response": [],
         }
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=envelope_error)
             )
             with pytest.raises(ProviderProtocolError):
@@ -956,8 +956,8 @@ class TestFetchCacheMiss:
 
         empty_response = {"success": True, "error": None, "response": []}
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=empty_response)
             )
             result = fetch(lat=_LAT, lon=_LON, client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET)
@@ -983,8 +983,8 @@ class TestFetchCacheMiss:
             }],
         }
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(200, json=empty_periods)
             )
             result = fetch(lat=_LAT, lon=_LON, client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET)

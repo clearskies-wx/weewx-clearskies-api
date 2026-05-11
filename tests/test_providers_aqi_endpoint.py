@@ -701,8 +701,8 @@ class TestAqiCurrentAerisErrorPaths:
         app = _make_aeris_aqi_app(wire_credentials=True)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(401, json={"error": "unauthorized"})
             )
             response = client.get("/api/v1/aqi/current")
@@ -719,8 +719,8 @@ class TestAqiCurrentAerisErrorPaths:
         app = _make_aeris_aqi_app(wire_credentials=True)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(401, json={"error": "unauthorized"})
             )
             response = client.get("/api/v1/aqi/current")
@@ -735,8 +735,8 @@ class TestAqiCurrentAerisErrorPaths:
         app = _make_aeris_aqi_app(wire_credentials=True)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(
                     429,
                     json={"reason": "too many requests"},
@@ -757,8 +757,8 @@ class TestAqiCurrentAerisErrorPaths:
         app = _make_aeris_aqi_app(wire_credentials=True)
         client = TestClient(app, raise_server_exceptions=False)
 
-        with respx.mock(assert_all_called=False):
-            respx.get(_AERIS_AQ_URL).mock(
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_URL).mock(
                 return_value=httpx.Response(
                     429,
                     json={"reason": "rate limit"},
