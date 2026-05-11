@@ -223,10 +223,63 @@ class RedisCache:
 
 
 # ---------------------------------------------------------------------------
+# Test-only: _RedisCache — wraps a pre-existing Redis client (for fakeredis)
+# ---------------------------------------------------------------------------
+
+
+class _RedisCache:
+    """RedisCache variant that wraps an already-constructed Redis client.
+
+    Used in unit tests to inject a fakeredis.FakeRedis instance without
+    going through the URL-based RedisCache constructor (which calls ping()
+    and would complicate fakeredis setup).
+
+    API is identical to RedisCache.get() / .set() — JSON-encode/decode,
+    binary keys, per-key EX TTL.
+
+    NOT for production use — production always uses RedisCache(url=...).
+    Named with underscore prefix to signal test-only scope.
+    """
+
+    def __init__(self, client: object) -> None:
+        self._client = client
+        # redis-py BaseError covers all Redis exceptions; fakeredis raises same class.
+        try:
+            import redis as _redis_lib  # noqa: PLC0415
+            self._redis_error_cls: type[Exception] = _redis_lib.exceptions.RedisError
+        except ImportError:
+            self._redis_error_cls = Exception
+
+    def get(self, key: str) -> Any | None:
+        """Return cached value or None on miss/expiry."""
+        try:
+            raw = self._client.get(key.encode())  # type: ignore[attr-defined]
+        except self._redis_error_cls:
+            return None
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    def set(self, key: str, value: Any, ttl_seconds: int) -> None:
+        """Store value with per-entry TTL."""
+        raw = json.dumps(value)
+        try:
+            self._client.set(key.encode(), raw.encode(), ex=ttl_seconds)  # type: ignore[attr-defined]
+        except self._redis_error_cls:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Module-level singleton and wire function
 # ---------------------------------------------------------------------------
 
 _cache: CacheBackend | None = None
+# _cache_instance: alias for tests that directly assign the cache backend.
+# get_cache() reads _cache; tests that use _cache_instance must also set _cache.
+_cache_instance: CacheBackend | None = None
 
 
 def wire_cache_from_env() -> None:
@@ -258,9 +311,15 @@ def wire_cache_from_env() -> None:
 def get_cache() -> CacheBackend:
     """Return the wired cache backend.
 
+    Checks _cache_instance first (test-injection override), then _cache
+    (production singleton).  This allows tests to inject a fake-redis-backed
+    _RedisCache without going through wire_cache_from_env().
+
     Raises:
-        RuntimeError: wire_cache_from_env() has not been called yet.
+        RuntimeError: Neither _cache_instance nor _cache is set.
     """
+    if _cache_instance is not None:
+        return _cache_instance  # type: ignore[return-value]
     if _cache is None:
         raise RuntimeError(
             "Cache not initialised. "
@@ -271,5 +330,6 @@ def get_cache() -> CacheBackend:
 
 def reset_cache_for_tests() -> None:
     """Reset module-level cache singleton.  Used in tests only."""
-    global _cache  # noqa: PLW0603
+    global _cache, _cache_instance  # noqa: PLW0603
     _cache = None
+    _cache_instance = None
