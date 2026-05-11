@@ -90,6 +90,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -246,7 +247,7 @@ class _OWMAirPollutionResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    list: list[_OWMAirPollutionEntry] = Field(default_factory=list)
+    list: List[_OWMAirPollutionEntry] = Field(default_factory=list)  # noqa: UP006 — List required; 'list[...]' annotation shadows the builtin when field is named 'list' (LC11)
 
 
 # ---------------------------------------------------------------------------

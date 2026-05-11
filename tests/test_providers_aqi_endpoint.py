@@ -771,3 +771,295 @@ class TestAqiCurrentAerisErrorPaths:
         assert "Retry-After" in response.headers, (
             "503 from QuotaExhausted must include Retry-After header"
         )
+
+
+# ===========================================================================
+# 7. /aqi/current — openweathermap provider (3b-11 extension)
+# ===========================================================================
+
+# OWM Air Pollution URL for respx mocking
+_OWM_AIRPOL_BASE_URL = "https://api.openweathermap.org"
+_OWM_AIRPOL_URL = _OWM_AIRPOL_BASE_URL + "/data/2.5/air_pollution"
+_TEST_OWM_APPID = "TEST_OWM_APPID_ENDPOINT"
+
+
+def _reset_owm_aqi_provider_state() -> None:
+    """Reset provider registry, cache, OWM http client + rate limiter."""
+    from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+        reset_cache_for_tests,
+        wire_cache_from_env,
+    )
+    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
+        reset_provider_registry_for_tests,
+    )
+    from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
+        _reset_http_client_for_tests,
+    )
+    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
+
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
+    _reset_http_client_for_tests()
+    _owm_aqi._rate_limiter._calls.clear()
+    wire_cache_from_env()
+
+
+def _make_owm_aqi_app(wire_appid: bool = True) -> FastAPI:
+    """Build test FastAPI app with OWM AQI registered.
+
+    wire_appid: if True, sets _OWM_APPID on the endpoint module.
+    If False, leaves it None to exercise the missing-credentials 502 path.
+    """
+    from weewx_clearskies_api.app import create_app  # noqa: PLC0415
+    from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
+        ApiSettings,
+        DatabaseSettings,
+        HealthSettings,
+        LoggingSettings,
+        RateLimitSettings,
+        Settings,
+    )
+    from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
+
+    _reset_owm_aqi_provider_state()
+    _wire_test_station_at_seattle()
+
+    # Register OWM AQI CAPABILITY
+    from weewx_clearskies_api.providers.aqi.openweathermap import CAPABILITY  # noqa: PLC0415
+    wire_providers([CAPABILITY])
+
+    # Wire appid into the endpoint module (simulating wire_aqi_settings)
+    if wire_appid:
+        _aqi_endpoint._OWM_APPID = _TEST_OWM_APPID
+    else:
+        _aqi_endpoint._OWM_APPID = None
+
+    settings = Settings(
+        api=ApiSettings({}),
+        health=HealthSettings({}),
+        logging_settings=LoggingSettings({}),
+        ratelimit=RateLimitSettings({}),
+        database=DatabaseSettings({}),
+    )
+    return create_app(settings)
+
+
+class TestAqiCurrentOpenWeatherMapRegistered:
+    """/aqi/current with openweathermap CAPABILITY registered + respx mock (3b-11)."""
+
+    def _get_owm_response(self, wire_appid: bool = True) -> Any:
+        """Build app with OWM AQI, request /aqi/current with respx-mocked upstream."""
+        app = _make_owm_aqi_app(wire_appid=wire_appid)
+        client = TestClient(app, raise_server_exceptions=False)
+        data = _load_fixture("openweathermap_current.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(200, json=data)
+            )
+            return client.get("/api/v1/aqi/current"), mock
+
+    def test_owm_registered_returns_200(self) -> None:
+        """openweathermap registered + valid response + appid wired → 200."""
+        response, _ = self._get_owm_response()
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_owm_registered_source_is_openweathermap(self) -> None:
+        """source = 'openweathermap' in AQIResponse envelope."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["source"] == "openweathermap", (
+            f"Expected source='openweathermap', got {body.get('source')!r}"
+        )
+
+    def test_owm_registered_data_is_aqi_reading(self) -> None:
+        """data field is AQIReading (not null) when OWM returns a reading."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        data = body["data"]
+        assert data is not None, "Expected AQIReading in data, got null"
+        assert isinstance(data, dict), (
+            f"data must be a dict (AQIReading), got {type(data).__name__!r}"
+        )
+
+    def test_owm_registered_aqi_value_is_500(self) -> None:
+        """data.aqi = 500 (from fixture; CO sub-AQI caps at 500; OWM main.aqi ignored)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["data"]["aqi"] == 500, (
+            f"Expected aqi=500 (CO cap), got {body['data'].get('aqi')!r}"
+        )
+
+    def test_owm_registered_aqi_category_is_hazardous(self) -> None:
+        """data.aqiCategory = 'Hazardous' (AQI 500 → 301–500 band)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["data"]["aqiCategory"] == "Hazardous", (
+            f"Expected aqiCategory='Hazardous', got {body['data'].get('aqiCategory')!r}"
+        )
+
+    def test_owm_registered_aqi_main_pollutant_is_co(self) -> None:
+        """data.aqiMainPollutant = 'CO' (argmax of sub-AQIs from fixture)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["data"]["aqiMainPollutant"] == "CO", (
+            f"Expected aqiMainPollutant='CO', got {body['data'].get('aqiMainPollutant')!r}"
+        )
+
+    def test_owm_registered_aqi_location_is_null(self) -> None:
+        """data.aqiLocation = null (PARTIAL-DOMAIN — OWM Air Pollution has no location field)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["data"].get("aqiLocation") is None, (
+            f"Expected aqiLocation=null (PARTIAL-DOMAIN), "
+            f"got {body['data'].get('aqiLocation')!r}"
+        )
+
+    def test_owm_registered_data_source_is_openweathermap(self) -> None:
+        """data.source = 'openweathermap' (provider_id literal on AQIReading)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        assert body["data"]["source"] == "openweathermap"
+
+    def test_owm_registered_observed_at_is_utc_z(self) -> None:
+        """data.observedAt ends with Z (UTC ISO-8601, LC17 + ADR-020)."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        observed_at = body["data"]["observedAt"]
+        assert observed_at.endswith("Z"), (
+            f"observedAt must end with Z, got {observed_at!r}"
+        )
+
+    def test_owm_registered_envelope_has_required_fields(self) -> None:
+        """AQIResponse envelope has all four required fields: data, units, source, generatedAt."""
+        response, _ = self._get_owm_response()
+        body = response.json()
+        for field in ("data", "units", "source", "generatedAt"):
+            assert field in body, f"AQIResponse envelope missing required field {field!r}"
+
+    def test_owm_appid_missing_returns_502(self) -> None:
+        """openweathermap registered but appid NOT wired → 502 'OpenWeatherMap appid missing'."""
+        app = _make_owm_aqi_app(wire_appid=False)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 502, (
+            f"Expected 502 for missing appid, got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_owm_appid_missing_502_rfc9457_body(self) -> None:
+        """Missing appid 502 returns application/problem+json RFC 9457 body."""
+        app = _make_owm_aqi_app(wire_appid=False)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            response = client.get("/api/v1/aqi/current")
+
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "502 must return application/problem+json (RFC 9457)"
+        )
+        body = response.json()
+        assert "status" in body, "RFC 9457 body must have 'status' field"
+        assert body["status"] == 502
+
+
+class TestAqiCurrentOpenWeatherMapErrorPaths:
+    """/aqi/current OWM provider error handling (3b-11)."""
+
+    def test_owm_provider_401_returns_502_rfc9457(self) -> None:
+        """respx 401 from OWM → 502 application/problem+json (KeyInvalid → 502)."""
+        app = _make_owm_aqi_app(wire_appid=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(401, json={"cod": 401, "message": "Invalid API key"})
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 502, (
+            f"Provider 401 must map to 502, got {response.status_code}: {response.text[:300]}"
+        )
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "502 must return application/problem+json (RFC 9457)"
+        )
+
+    def test_owm_provider_401_response_has_rfc9457_shape(self) -> None:
+        """Provider 401 → 502 body has 'type' and 'status' fields (RFC 9457 shape)."""
+        app = _make_owm_aqi_app(wire_appid=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(401, json={"cod": 401, "message": "Invalid API key"})
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        body = response.json()
+        assert "type" in body, "RFC 9457 error must have 'type' field"
+        assert "status" in body, "RFC 9457 error must have 'status' field"
+        assert body["status"] == 502
+
+    def test_owm_provider_429_returns_503_rfc9457(self) -> None:
+        """respx 429 from OWM → 503 application/problem+json (QuotaExhausted → 503)."""
+        app = _make_owm_aqi_app(wire_appid=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(
+                    429,
+                    json={"cod": 429, "message": "too many requests"},
+                    headers={"Retry-After": "60"},
+                )
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 503, (
+            f"Provider 429 must map to 503, got {response.status_code}: {response.text[:300]}"
+        )
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "503 must return application/problem+json (RFC 9457)"
+        )
+
+    def test_owm_provider_429_includes_retry_after_header(self) -> None:
+        """Provider 429 → 503 response includes Retry-After header (ADR-018)."""
+        app = _make_owm_aqi_app(wire_appid=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(
+                    429,
+                    json={"message": "rate limit"},
+                    headers={"Retry-After": "90"},
+                )
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert "Retry-After" in response.headers, (
+            "503 from QuotaExhausted must include Retry-After header"
+        )
+
+    def test_owm_provider_5xx_returns_502_rfc9457(self) -> None:
+        """respx 5xx from OWM → 502 application/problem+json (TransientNetworkError → 502)."""
+        app = _make_owm_aqi_app(wire_appid=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_OWM_AIRPOL_URL).mock(
+                return_value=httpx.Response(500, json={"error": "server error"})
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 502, (
+            f"Provider 5xx must map to 502, got {response.status_code}: {response.text[:300]}"
+        )
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "502 must return application/problem+json (RFC 9457)"
+        )
