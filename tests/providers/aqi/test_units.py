@@ -1,4 +1,4 @@
-"""Pure-compute unit tests for providers/aqi/_units.py (3b-9).
+"""Pure-compute unit tests for providers/aqi/_units.py (3b-9, extended 3b-10).
 
 Covers per the task-3b-9 brief §Test-author parallel scope (test_units.py):
 
@@ -317,3 +317,102 @@ class TestEpaCategory:
         assert isinstance(result, str), (
             f"Expected str result, got {type(result).__name__!r}"
         )
+
+
+# ===========================================================================
+# 3. ppb_to_ppm — conversion round-trips and edge cases (3b-10 extension)
+# ===========================================================================
+
+
+class TestPpbToPpm:
+    """ppb_to_ppm converts ppb (parts per billion) to ppm (parts per million).
+
+    Formula: ppm = ppb / 1000.0 (no molar-weight involved — same divisor for
+    all gases; Aeris provides valuePPB directly).
+
+    Brief reference: LC16 in phase-2-task-3b-10 brief.
+    No pollutant arg needed — the conversion is gas-agnostic.
+    None input → None output (pass-through for missing wire values).
+    """
+
+    def test_o3_32_point_1_ppb_converts_to_0_point_0321_ppm(self) -> None:
+        """O3 32.1 ppb → 0.0321 ppm (exact division by 1000)."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(32.1)
+        assert result is not None
+        assert abs(result - 0.0321) < 1e-9, (
+            f"32.1 ppb → expected 0.0321 ppm, got {result!r}"
+        )
+
+    def test_co_143_ppb_converts_to_0_point_143_ppm(self) -> None:
+        """CO 143 ppb (fixture value) → 0.143 ppm."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(143.0)
+        assert result is not None
+        assert abs(result - 0.143) < 1e-9, (
+            f"143.0 ppb → expected 0.143 ppm, got {result!r}"
+        )
+
+    def test_no2_3_ppb_converts_to_0_point_003_ppm(self) -> None:
+        """NO2 3.0 ppb (fixture value) → 0.003 ppm."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(3.0)
+        assert result is not None
+        assert abs(result - 0.003) < 1e-9, (
+            f"3.0 ppb → expected 0.003 ppm, got {result!r}"
+        )
+
+    def test_so2_zero_ppb_converts_to_zero_ppm(self) -> None:
+        """SO2 0 ppb (fixture value) → 0.0 ppm (zero input stays zero)."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(0.0)
+        assert result == 0.0, f"0.0 ppb → expected 0.0 ppm, got {result!r}"
+
+    def test_1000_ppb_converts_to_1_ppm(self) -> None:
+        """1000 ppb → 1.0 ppm (round-number boundary check)."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(1000.0)
+        assert result is not None
+        assert abs(result - 1.0) < 1e-9, (
+            f"1000.0 ppb → expected 1.0 ppm, got {result!r}"
+        )
+
+    def test_none_input_returns_none(self) -> None:
+        """ppb_to_ppm(None) → None (None propagates; ADR-010 null passthrough)."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(None)
+        assert result is None, f"Expected None for None input, got {result!r}"
+
+    def test_result_is_float_for_valid_input(self) -> None:
+        """Return type is float (not None) for a valid non-None input."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(50.0)
+        assert isinstance(result, float), (
+            f"Expected float result, got {type(result).__name__!r}"
+        )
+
+    def test_doubling_ppb_doubles_ppm(self) -> None:
+        """Linear formula: doubling ppb must double ppm."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result1 = ppb_to_ppm(100.0)
+        result2 = ppb_to_ppm(200.0)
+        assert result1 is not None and result2 is not None
+        assert abs(result2 - result1 * 2) < 1e-9, (
+            "Doubling ppb must double ppm (linear formula sanity check)"
+        )
+
+    def test_fixture_o3_36_ppb_converts_correctly(self) -> None:
+        """O3 36 ppb (real fixture value) → 0.036 ppm."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        result = ppb_to_ppm(36.0)
+        assert result is not None
+        assert abs(result - 0.036) < 1e-9, (
+            f"36.0 ppb → expected 0.036 ppm, got {result!r}"
+        )
+
+    def test_ppb_to_ppm_does_not_require_pollutant_arg(self) -> None:
+        """ppb_to_ppm takes only ppb — no pollutant kwarg needed (gas-agnostic)."""
+        from weewx_clearskies_api.providers.aqi._units import ppb_to_ppm  # noqa: PLC0415
+        # Call with positional arg only — must not raise TypeError
+        result = ppb_to_ppm(25.0)
+        assert result is not None

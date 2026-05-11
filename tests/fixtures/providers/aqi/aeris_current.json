@@ -1,0 +1,104 @@
+{
+  "success": true,
+  "error": null,
+  "response": [
+    {
+      "id": null,
+      "loc": {
+        "lat": 47.6062,
+        "long": -122.3321
+      },
+      "place": {
+        "name": "seattle",
+        "state": "wa",
+        "country": "us"
+      },
+      "periods": [
+        {
+          "dateTimeISO": "2026-05-10T17:00:00-07:00",
+          "timestamp": 1778457600,
+          "aqi": 33,
+          "category": "good",
+          "color": "00E400",
+          "method": "airnow",
+          "dominant": "o3",
+          "health": {
+            "index": 2,
+            "category": "low",
+            "color": "0000FF"
+          },
+          "pollutants": [
+            {
+              "type": "o3",
+              "name": "ozone",
+              "valuePPB": 36,
+              "valueUGM3": 72,
+              "aqi": 33,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            },
+            {
+              "type": "pm2.5",
+              "name": "particle matter (<2.5µm)",
+              "valuePPB": null,
+              "valueUGM3": 5.8,
+              "aqi": 24,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            },
+            {
+              "type": "pm10",
+              "name": "particle matter (<10µm)",
+              "valuePPB": null,
+              "valueUGM3": 8.0,
+              "aqi": 7,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            },
+            {
+              "type": "co",
+              "name": "carbon monoxide",
+              "valuePPB": 143,
+              "valueUGM3": 163,
+              "aqi": 2,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            },
+            {
+              "type": "no2",
+              "name": "nitrogen dioxide",
+              "valuePPB": 3,
+              "valueUGM3": 5.3,
+              "aqi": 3,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            },
+            {
+              "type": "so2",
+              "name": "sulfur dioxide",
+              "valuePPB": 0,
+              "valueUGM3": 0.6,
+              "aqi": 0,
+              "category": "good",
+              "color": "00E400",
+              "method": "airnow"
+            }
+          ]
+        }
+      ],
+      "profile": {
+        "tz": "America/Los_Angeles",
+        "sources": [
+          {"name": "CAMS"},
+          {"name": "Vaisala Xweather"}
+        ],
+        "stations": null
+      }
+    }
+  ]
+}

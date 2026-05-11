@@ -1,4 +1,4 @@
-"""Endpoint tests for GET /aqi/current + GET /aqi/history (3b-9).
+"""Endpoint tests for GET /aqi/current + GET /aqi/history (3b-9, extended 3b-10).
 
 Covers per the task-3b-9 brief §Test-author parallel scope (test_aqi.py):
 
@@ -23,6 +23,12 @@ Covers per the task-3b-9 brief §Test-author parallel scope (test_aqi.py):
   - Body has type, title, status=501, detail, instance fields.
   - With valid from/to params → still 501 (params validate, then 501).
   - With unknown query key → 422 (extra="forbid" fires before 501).
+
+3b-10 extension — /aqi/current — aeris provider:
+  - aeris registered + credentials wired + respx mock → 200 + canonical AQIReading.
+  - aeris registered but credentials NOT wired → 502 "Aeris credentials missing".
+  - aeris + respx 401 → 502 RFC 9457 (KeyInvalid → 502).
+  - aeris + respx 429 → 503 RFC 9457 + Retry-After.
 
 Pydantic + Depends pattern (coding.md §1, security-baseline §3.5):
   Unknown query keys rejected with 422 via extra="forbid" + Depends wrapper.
@@ -496,3 +502,269 @@ class TestAqiHistory:
             assert "aqi/history" in body["instance"], (
                 f"instance should reference aqi/history, got {body['instance']!r}"
             )
+
+
+# ===========================================================================
+# 6. /aqi/current — aeris provider (3b-10 extension)
+# ===========================================================================
+
+# Aeris AQI base URL for respx mocking
+_AERIS_AQ_BASE_URL = "https://data.api.xweather.com"
+_TEST_CLIENT_ID = "TEST_AERIS_ID"
+_TEST_CLIENT_SECRET = "TEST_AERIS_SECRET"
+
+
+def _reset_aeris_provider_state() -> None:
+    """Reset provider registry, cache, aeris http client + rate limiter."""
+    from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+        reset_cache_for_tests,
+        wire_cache_from_env,
+    )
+    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
+        reset_provider_registry_for_tests,
+    )
+    from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
+
+    reset_cache_for_tests()
+    reset_provider_registry_for_tests()
+    _reset_http_client_for_tests()
+    _aeris._rate_limiter._calls.clear()
+    wire_cache_from_env()
+
+
+def _make_aeris_aqi_app(wire_credentials: bool = True) -> FastAPI:
+    """Build test FastAPI app with Aeris AQI registered.
+
+    wire_credentials: if True, sets _AERIS_CLIENT_ID + _AERIS_CLIENT_SECRET on the
+    endpoint module (simulating wire_aqi_settings being called at startup).
+    If False, leaves them None to exercise the missing-credentials 502 path.
+    """
+    from weewx_clearskies_api.app import create_app  # noqa: PLC0415
+    from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
+        ApiSettings,
+        DatabaseSettings,
+        HealthSettings,
+        LoggingSettings,
+        RateLimitSettings,
+        Settings,
+    )
+    from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
+
+    _reset_aeris_provider_state()
+    _wire_test_station_at_seattle()
+
+    # Register Aeris AQI CAPABILITY
+    from weewx_clearskies_api.providers.aqi.aeris import CAPABILITY  # noqa: PLC0415
+    wire_providers([CAPABILITY])
+
+    # Wire credentials into the endpoint module (simulating wire_aqi_settings)
+    if wire_credentials:
+        _aqi_endpoint._AERIS_CLIENT_ID = _TEST_CLIENT_ID
+        _aqi_endpoint._AERIS_CLIENT_SECRET = _TEST_CLIENT_SECRET
+    else:
+        _aqi_endpoint._AERIS_CLIENT_ID = None
+        _aqi_endpoint._AERIS_CLIENT_SECRET = None
+
+    settings = Settings(
+        api=ApiSettings({}),
+        health=HealthSettings({}),
+        logging_settings=LoggingSettings({}),
+        ratelimit=RateLimitSettings({}),
+        database=DatabaseSettings({}),
+    )
+    return create_app(settings)
+
+
+class TestAqiCurrentAerisRegistered:
+    """/aqi/current with aeris CAPABILITY registered + respx mock (3b-10)."""
+
+    def _get_aeris_response(self, wire_credentials: bool = True) -> Any:
+        """Build app with aeris, request /aqi/current with respx-mocked upstream."""
+        app = _make_aeris_aqi_app(wire_credentials=wire_credentials)
+        client = TestClient(app, raise_server_exceptions=False)
+        data = _load_fixture("aeris_current.json")
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_AERIS_AQ_BASE_URL).mock(
+                return_value=httpx.Response(200, json=data)
+            )
+            return client.get("/api/v1/aqi/current"), mock
+
+    def test_aeris_registered_returns_200(self) -> None:
+        """aeris registered + valid response + credentials wired → 200."""
+        response, _ = self._get_aeris_response()
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_aeris_registered_source_is_aeris(self) -> None:
+        """source = 'aeris' in AQIResponse envelope."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        assert body["source"] == "aeris", (
+            f"Expected source='aeris', got {body.get('source')!r}"
+        )
+
+    def test_aeris_registered_data_is_aqi_reading(self) -> None:
+        """data field is AQIReading (not null) when aeris returns a reading."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        data = body["data"]
+        assert data is not None, "Expected AQIReading in data, got null"
+        assert isinstance(data, dict), (
+            f"data must be a dict (AQIReading), got {type(data).__name__!r}"
+        )
+
+    def test_aeris_registered_aqi_value_is_33(self) -> None:
+        """data.aqi = 33 (from real fixture; AQI rounded to int)."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        assert body["data"]["aqi"] == 33, (
+            f"Expected aqi=33, got {body['data'].get('aqi')!r}"
+        )
+
+    def test_aeris_registered_aqi_category_is_good(self) -> None:
+        """data.aqiCategory = 'Good' (AQI 33 → 0–50 band)."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        assert body["data"]["aqiCategory"] == "Good", (
+            f"Expected aqiCategory='Good', got {body['data'].get('aqiCategory')!r}"
+        )
+
+    def test_aeris_registered_aqi_location_is_seattle(self) -> None:
+        """data.aqiLocation = 'seattle' (Aeris supplies place.name — NOT PARTIAL-DOMAIN)."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        assert body["data"].get("aqiLocation") == "seattle", (
+            f"Expected aqiLocation='seattle', got {body['data'].get('aqiLocation')!r}"
+        )
+
+    def test_aeris_registered_data_source_is_aeris(self) -> None:
+        """data.source = 'aeris' (provider_id literal on AQIReading)."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        assert body["data"]["source"] == "aeris"
+
+    def test_aeris_registered_observed_at_is_utc_z(self) -> None:
+        """data.observedAt ends with Z (UTC ISO-8601, LC4 + ADR-020)."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        observed_at = body["data"]["observedAt"]
+        assert observed_at.endswith("Z"), (
+            f"observedAt must end with Z, got {observed_at!r}"
+        )
+
+    def test_aeris_registered_envelope_has_required_fields(self) -> None:
+        """AQIResponse envelope has all four required fields: data, units, source, generatedAt."""
+        response, _ = self._get_aeris_response()
+        body = response.json()
+        for field in ("data", "units", "source", "generatedAt"):
+            assert field in body, f"AQIResponse envelope missing required field {field!r}"
+
+    def test_aeris_credentials_missing_returns_502(self) -> None:
+        """aeris registered but credentials NOT wired → 502 'Aeris credentials missing'."""
+        app = _make_aeris_aqi_app(wire_credentials=False)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 502, (
+            f"Expected 502 for missing credentials, got {response.status_code}: {response.text[:300]}"
+        )
+
+    def test_aeris_credentials_missing_502_mentions_credentials(self) -> None:
+        """Missing credentials 502 detail mentions credentials (informative error)."""
+        app = _make_aeris_aqi_app(wire_credentials=False)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            response = client.get("/api/v1/aqi/current")
+
+        body = response.json()
+        # The detail or response body should mention credentials/Aeris
+        body_str = str(body).lower()
+        assert "aeris" in body_str or "credential" in body_str or "missing" in body_str, (
+            f"502 body should mention Aeris/credentials, got {body!r}"
+        )
+
+
+class TestAqiCurrentAerisErrorPaths:
+    """/aqi/current aeris provider error handling (3b-10)."""
+
+    def test_aeris_provider_401_returns_502_rfc9457(self) -> None:
+        """respx 401 from Aeris → 502 application/problem+json (KeyInvalid → 502)."""
+        app = _make_aeris_aqi_app(wire_credentials=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            respx.get(_AERIS_AQ_BASE_URL).mock(
+                return_value=httpx.Response(401, json={"error": "unauthorized"})
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 502, (
+            f"Provider 401 must map to 502, got {response.status_code}: {response.text[:300]}"
+        )
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "502 must return application/problem+json (RFC 9457)"
+        )
+
+    def test_aeris_provider_401_response_has_rfc9457_shape(self) -> None:
+        """Provider 401 → 502 body has 'type' and 'status' fields (RFC 9457 shape)."""
+        app = _make_aeris_aqi_app(wire_credentials=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            respx.get(_AERIS_AQ_BASE_URL).mock(
+                return_value=httpx.Response(401, json={"error": "unauthorized"})
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        body = response.json()
+        assert "type" in body, "RFC 9457 error must have 'type' field"
+        assert "status" in body, "RFC 9457 error must have 'status' field"
+        assert body["status"] == 502
+
+    def test_aeris_provider_429_returns_503_rfc9457(self) -> None:
+        """respx 429 from Aeris → 503 application/problem+json (QuotaExhausted → 503)."""
+        app = _make_aeris_aqi_app(wire_credentials=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            respx.get(_AERIS_AQ_BASE_URL).mock(
+                return_value=httpx.Response(
+                    429,
+                    json={"reason": "too many requests"},
+                    headers={"Retry-After": "60"},
+                )
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert response.status_code == 503, (
+            f"Provider 429 must map to 503, got {response.status_code}: {response.text[:300]}"
+        )
+        assert "application/problem+json" in response.headers.get("content-type", ""), (
+            "503 must return application/problem+json (RFC 9457)"
+        )
+
+    def test_aeris_provider_429_includes_retry_after_header(self) -> None:
+        """Provider 429 → 503 response includes Retry-After header (ADR-018)."""
+        app = _make_aeris_aqi_app(wire_credentials=True)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        with respx.mock(assert_all_called=False):
+            respx.get(_AERIS_AQ_BASE_URL).mock(
+                return_value=httpx.Response(
+                    429,
+                    json={"reason": "rate limit"},
+                    headers={"Retry-After": "90"},
+                )
+            )
+            response = client.get("/api/v1/aqi/current")
+
+        assert "Retry-After" in response.headers, (
+            "503 from QuotaExhausted must include Retry-After header"
+        )
