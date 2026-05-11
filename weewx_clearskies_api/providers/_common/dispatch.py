@@ -11,6 +11,7 @@ Forecast domain: five rows (one per provider per ADR-007 day-1 set).
   Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
 AQI domain: openmeteo (3b-9), aeris (3b-10), openweathermap (3b-11), iqair (3b-12 — fourth + FINAL day-1 AQI provider).
+Earthquakes domain: usgs, geonet, emsc, renass (3b-13 — domain opener; all keyless per ADR-040).
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ from weewx_clearskies_api.providers.aqi import aeris as aqi_aeris
 from weewx_clearskies_api.providers.aqi import iqair as aqi_iqair
 from weewx_clearskies_api.providers.aqi import openmeteo as aqi_openmeteo
 from weewx_clearskies_api.providers.aqi import openweathermap as aqi_openweathermap
+from weewx_clearskies_api.providers.earthquakes import emsc as earthquakes_emsc
+from weewx_clearskies_api.providers.earthquakes import geonet as earthquakes_geonet
+from weewx_clearskies_api.providers.earthquakes import renass as earthquakes_renass
+from weewx_clearskies_api.providers.earthquakes import usgs as earthquakes_usgs
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
 from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
@@ -38,6 +43,10 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("aqi", "iqair"): aqi_iqair,
     ("aqi", "openmeteo"): aqi_openmeteo,
     ("aqi", "openweathermap"): aqi_openweathermap,
+    ("earthquakes", "emsc"): earthquakes_emsc,
+    ("earthquakes", "geonet"): earthquakes_geonet,
+    ("earthquakes", "renass"): earthquakes_renass,
+    ("earthquakes", "usgs"): earthquakes_usgs,
     ("forecast", "openmeteo"): forecast_openmeteo,
     ("forecast", "nws"): forecast_nws,
     ("forecast", "aeris"): forecast_aeris,

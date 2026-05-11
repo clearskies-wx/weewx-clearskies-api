@@ -37,7 +37,8 @@ Startup sequence (ADR-012):
     6j. wire alerts settings  — pass settings to alerts endpoint.
     6k. wire aqi settings     — pass settings to aqi endpoint (no-op for Open-Meteo;
                                 credentials wired for Aeris per 3b-10).
-    6l. wire forecast settings — pass settings to forecast endpoint (NWS UA).
+    6l. wire earthquakes settings — pass settings to earthquakes endpoint (default_radius_km).
+    6m. wire forecast settings — pass settings to forecast endpoint (NWS UA).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
 """
@@ -65,6 +66,7 @@ from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
 from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
 from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
+from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.health import create_health_app
@@ -255,6 +257,22 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
+    if settings.earthquakes.provider:
+        provider_id = settings.earthquakes.provider
+        try:
+            module = get_provider_module(domain="earthquakes", provider_id=provider_id)
+        except KeyError as exc:
+            logger.critical(
+                "FATAL: Unknown earthquakes provider %r in api.conf — clearskies-api cannot start. "
+                "Cause: %s. "
+                "Check [earthquakes] provider in api.conf. "
+                "Supported values: usgs, geonet, emsc, renass (all keyless per ADR-040).",
+                provider_id,
+                exc,
+            )
+            sys.exit(1)
+        declarations.append(module.CAPABILITY)
+
     if settings.forecast.provider:
         provider_id = settings.forecast.provider
         try:
@@ -273,7 +291,7 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
-    # Future rounds extend this with earthquakes, radar.
+    # Future rounds extend this with radar.
     wire_providers(declarations)
 
 
@@ -290,7 +308,8 @@ def main() -> None:
       6i. Wire provider registry.
       6j. Wire alerts settings.
       6k. Wire aqi settings.
-      6l. Wire forecast settings.
+      6l. Wire earthquakes settings.
+      6m. Wire forecast settings.
       7. Register DB health probe.
       8. Start uvicorn.
     """
@@ -418,7 +437,11 @@ def main() -> None:
     # Future: OWM (3b-11), IQAir (3b-12).
     wire_aqi_settings(settings)
 
-    # Step 6l: Pass settings to forecast endpoint (NWS UA contact wiring).
+    # Step 6l: Pass settings to earthquakes endpoint (default_radius_km from api.conf).
+    # All four providers are keyless — no credential wiring needed (ADR-040).
+    wire_earthquakes_settings(settings)
+
+    # Step 6m: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)
 
     # Step 7: Register DB readiness probe.
