@@ -66,11 +66,13 @@ router = APIRouter()
 # Module-level credential wiring (populated at startup by wire_aqi_settings).
 # Aeris: client_id + client_secret (3b-10).
 # OWM: appid (3b-11 — provider-scoped per 3b-5 Q2; same env var as forecast/alerts OWM).
+# IQAir: key (3b-12 — domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
 # ---------------------------------------------------------------------------
 
 _AERIS_CLIENT_ID: str | None = None
 _AERIS_CLIENT_SECRET: str | None = None
 _OWM_APPID: str | None = None
+_IQAIR_KEY: str | None = None
 
 # ---------------------------------------------------------------------------
 # Depends wrappers — Pydantic + Depends pattern (coding.md §1)
@@ -119,9 +121,11 @@ def wire_aqi_settings(settings: object) -> None:
     For OWM (3b-11): extracts openweathermap_appid from settings.forecast
       (provider-scoped per 3b-5 Q2 user decision; same env var as forecast/alerts OWM:
       WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID) and stores in _OWM_APPID.
-    When 3b-12 lands IQAir: add elif provider == "iqair": branch.
+    For IQAir (3b-12): extracts iqair_key from settings.aqi (domain-scoped per
+      Q1 user decision 2026-05-11; IQAir is AQI-only, not multi-domain like Aeris/OWM)
+      and stores in _IQAIR_KEY.
     """
-    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _OWM_APPID  # noqa: PLW0603
+    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _OWM_APPID, _IQAIR_KEY  # noqa: PLW0603
 
     aqi_section = getattr(settings, "aqi", None)
     if aqi_section is None:
@@ -179,8 +183,20 @@ def wire_aqi_settings(settings: object) -> None:
                 "capability still registered but /aqi/current will return 502 until wired"
             )
 
+    elif provider == "iqair":
+        # Domain-scoped credential per Q1 user decision 2026-05-11 — IQAir is
+        # AQI-only (not multi-domain like Aeris/OWM), so the credential lives
+        # directly on AQISettings.iqair_key (populated from
+        # WEEWX_CLEARSKIES_IQAIR_KEY env var at AQISettings.__init__ time).
+        _IQAIR_KEY = getattr(aqi_section, "iqair_key", None)
+
+        if not _IQAIR_KEY:
+            logger.error(
+                "[aqi] provider = iqair but WEEWX_CLEARSKIES_IQAIR_KEY env var missing; "
+                "capability still registered but /aqi/current will return 502 until wired"
+            )
+
     # Open-Meteo is keyless (auth_required=()); nothing to wire.
-    # When 3b-12 lands IQAir: add elif provider == "iqair": branch.
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +295,20 @@ def get_aqi_current(
             lat=station.latitude,
             lon=station.longitude,
             appid=_OWM_APPID,
+        )
+    elif provider_id == "iqair":
+        from weewx_clearskies_api.providers.aqi import iqair  # noqa: PLC0415
+
+        if not _IQAIR_KEY:
+            logger.error(
+                "IQAir AQI provider configured but key not wired at request time"
+            )
+            raise HTTPException(status_code=502, detail="IQAir key missing")
+
+        record = iqair.fetch(
+            lat=station.latitude,
+            lon=station.longitude,
+            key=_IQAIR_KEY,
         )
     else:
         # Unknown provider should have been caught at startup by _wire_providers_from_config.

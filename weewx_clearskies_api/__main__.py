@@ -248,8 +248,7 @@ def _wire_providers_from_config(settings: Settings) -> None:
                 "FATAL: Unknown aqi provider %r in api.conf — clearskies-api cannot start. "
                 "Cause: %s. "
                 "Check [aqi] provider in api.conf. "
-                "Supported values: openmeteo, aeris, openweathermap. "
-                "(iqair lands in 3b-12.)",
+                "Supported values: openmeteo, aeris, openweathermap, iqair. ",
                 provider_id,
                 exc,
             )

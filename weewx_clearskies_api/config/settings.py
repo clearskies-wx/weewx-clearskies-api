@@ -382,32 +382,42 @@ class AlertsSettings:
 
 
 class AQISettings:
-    """[aqi] section settings (3b-9, extended 3b-10 with Aeris).
+    """[aqi] section settings (3b-9, extended 3b-10 with Aeris, 3b-12 with IQAir).
 
     Provider id for the AQI data source.  Open-Meteo is keyless — no env vars
     needed.  Aeris (3b-10) is keyed — credentials come from the shared [aeris]
     section (provider-scoped per 3b-4 Q1 user decision; same env vars as
-    forecast/alerts Aeris).  Future keyed providers (3b-11 OWM, 3b-12 IQAir)
-    will follow the same pattern.
+    forecast/alerts Aeris).  OWM (3b-11) is keyed — provider-scoped per 3b-5 Q2
+    decision; same env var as forecast/alerts OWM.  IQAir (3b-12) is keyed —
+    domain-scoped per Q1 user decision 2026-05-11 (IQAir is AQI-only; distinct
+    from multi-domain Aeris/OWM).
 
     Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
     """
 
-    #: Provider id: "openmeteo", "aeris", "openweathermap"; future: "iqair".
+    #: Provider id: "openmeteo", "aeris", "openweathermap", "iqair".
     provider: str | None
+    #: IQAir API key (domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
+    iqair_key: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
         self.provider = raw_provider if raw_provider else None
 
+        # IQAir API key — env var only, never from INI.  Long-form provider-scoped
+        # naming per LC11 / OWM precedent.  Domain-scoped because IQAir serves only
+        # the AQI domain (not forecast/alerts — distinct from Aeris/OWM which are
+        # provider-scoped across multiple domains).  Q1 user decision 2026-05-11.
+        raw_iqair_key = os.environ.get("WEEWX_CLEARSKIES_IQAIR_KEY", "").strip()
+        self.iqair_key = raw_iqair_key if raw_iqair_key else None
+
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
-        valid_providers = {"openmeteo", "aeris", "openweathermap"}
+        valid_providers = {"openmeteo", "aeris", "openweathermap", "iqair"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[aqi] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'openmeteo', 'aeris', 'openweathermap'. "
-                "Additional providers (iqair) land in 3b-12."
+                "Supported values: 'openmeteo', 'aeris', 'openweathermap', 'iqair'."
             )
 
 
