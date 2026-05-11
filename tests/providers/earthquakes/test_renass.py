@@ -3,7 +3,7 @@
 Covers per the task-3b-13 brief §Test surface (test_renass.py):
 
   Wire-shape Pydantic validation:
-  - France recent fixture loads cleanly via _ReNaSSResponse (3-feature FeatureCollection).
+  - France recent fixture loads cleanly via _RenassResponse (3-feature FeatureCollection).
   - Extra wire fields ignored (extra="ignore").
   - Bilingual description and url fields parse as dict[str, str].
   - Required fields enforced: missing id → ValidationError → ProviderProtocolError.
@@ -140,39 +140,39 @@ class TestReNaSSWireShapeValidation:
     """Wire-shape models validate correctly against the fixture and edge-case shapes."""
 
     def test_fixture_loads_cleanly_via_response_model(self) -> None:
-        """renass_france_recent.json loads via _ReNaSSResponse without error."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        """renass_france_recent.json loads via _RenassResponse without error."""
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         assert response.type == "FeatureCollection"
         assert len(response.features) == 3
 
     def test_extra_wire_fields_are_ignored(self) -> None:
         """Extra wire fields ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
         raw["unexpected_future_field"] = "dropped"
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         assert response is not None
 
     def test_first_feature_id_is_fr2026trycyd(self) -> None:
         """Feature[0].id = 'fr2026trycyd' (top-level Feature.id)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         assert response.features[0].id == "fr2026trycyd", (
             f"Expected id='fr2026trycyd', got {response.features[0].id!r}"
         )
 
     def test_description_is_bilingual_dict(self) -> None:
         """properties.description is dict with 'fr' and 'en' keys."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         desc = response.features[0].properties.description
         assert desc is not None
         assert isinstance(desc, dict), f"description must be dict, got {type(desc).__name__!r}"
@@ -181,10 +181,10 @@ class TestReNaSSWireShapeValidation:
 
     def test_url_is_bilingual_dict(self) -> None:
         """properties.url is dict with 'fr' and 'en' keys."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         url = response.features[0].properties.url
         assert url is not None
         assert isinstance(url, dict), f"url must be dict, got {type(url).__name__!r}"
@@ -193,19 +193,19 @@ class TestReNaSSWireShapeValidation:
 
     def test_automatic_is_boolean(self) -> None:
         """properties.automatic is Python bool (True/False, not int 0/1)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         auto = response.features[0].properties.automatic
         assert isinstance(auto, bool), f"automatic must be bool, got {type(auto).__name__!r}"
 
     def test_depth_from_properties_is_positive(self) -> None:
         """properties.depth = 14.126... (POSITIVE; geometry.coordinates[2] is -14.126 NEGATIVE)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         assert response.features[0].properties.depth > 0, (
             f"properties.depth must be positive, got {response.features[0].properties.depth!r}"
         )
@@ -214,12 +214,12 @@ class TestReNaSSWireShapeValidation:
         """Dropping 'id' from Feature → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.renass import _ReNaSSFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import _RenassEventFeature  # noqa: PLC0415
 
         raw = _load_fixture("renass_france_recent.json")
         feature_raw = {k: v for k, v in raw["features"][0].items() if k != "id"}
         with pytest.raises(ValidationError):
-            _ReNaSSFeature.model_validate(feature_raw)
+            _RenassEventFeature.model_validate(feature_raw)
 
 
 # ===========================================================================
@@ -233,12 +233,12 @@ class TestReNaSSToCanonical:
     def _get_canonical_at(self, index: int = 0) -> Any:
         """Load fixture, parse, and get canonical EarthquakeRecord at index."""
         from weewx_clearskies_api.providers.earthquakes.renass import (  # noqa: PLC0415
-            _ReNaSSResponse,
+            _RenassResponse,
             _to_canonical,
         )
 
         raw = _load_fixture("renass_france_recent.json")
-        response = _ReNaSSResponse.model_validate(raw)
+        response = _RenassResponse.model_validate(raw)
         feature = response.features[index]
         return _to_canonical(feature, raw["features"][index])
 
@@ -476,9 +476,8 @@ class TestFetchHappyPath:
         import fakeredis  # noqa: PLC0415
 
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
-            _RedisCache,
+            RedisCache,
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
@@ -494,8 +493,15 @@ class TestFetchHappyPath:
         _reset_http_client_for_tests()
         _rate_limiter._calls.clear()
 
-        fake_redis = fakeredis.FakeRedis()
-        _cache_mod._cache_instance = _RedisCache(fake_redis)
+        # Inject fakeredis via the established RedisCache test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
+        import redis as _redis_lib  # noqa: PLC0415
+        fake_redis = fakeredis.FakeRedis(decode_responses=False)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = fake_redis
+        redis_cache._redis_error_cls = _redis_lib.exceptions.RedisError
+        _cache_mod._cache = redis_cache
 
         from weewx_clearskies_api.providers.earthquakes.renass import fetch  # noqa: PLC0415
 

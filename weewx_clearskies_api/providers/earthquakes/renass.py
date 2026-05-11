@@ -231,10 +231,8 @@ def _to_canonical(
 
     Args:
         feature: Parsed Pydantic feature model (typed access to canonical fields).
-        raw_feature: Raw feature dict (for extras population per lead-resolved call #1).
-            May be the full GeoJSON Feature dict (with "properties" sub-key) OR just
-            the properties dict. Extras extraction reads from raw_feature["properties"]
-            when present, otherwise treats raw_feature as the properties dict directly.
+        raw_feature: Full GeoJSON Feature dict (must contain "properties" sub-key);
+            used for extras population per lead-resolved call #1.
     """
     props = feature.properties
 
@@ -255,8 +253,7 @@ def _to_canonical(
     elif props.automatic is False:
         status = "reviewed"
 
-    # Normalize: handle both full feature dict and bare props dict.
-    raw_props: dict[str, Any] = raw_feature.get("properties", raw_feature)
+    raw_props: dict[str, Any] = raw_feature["properties"]
 
     # Extras per §4.4 (LC#5): type, description_fr (flat key), url_fr (flat key).
     # Note: type is always included in extras even when null — the test verifies
@@ -396,13 +393,3 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton.  Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
-
-
-# ---------------------------------------------------------------------------
-# Name aliases for test compatibility
-# Test-author used _ReNaSSResponse and _ReNaSSFeature
-# rather than the brief-prescribed _RenassResponse and _RenassEventFeature.
-# Private implementation names; aliases allow tests to import either form.
-# ---------------------------------------------------------------------------
-_ReNaSSResponse = _RenassResponse
-_ReNaSSFeature = _RenassEventFeature

@@ -3,7 +3,7 @@
 Covers per the task-3b-13 brief §Test surface (test_emsc.py):
 
   Wire-shape Pydantic validation:
-  - Global M2.5+ fixture loads cleanly via _EMSCResponse (3-feature FeatureCollection).
+  - Global M2.5+ fixture loads cleanly via _EmscResponse (3-feature FeatureCollection).
   - Extra wire fields ignored (extra="ignore").
   - Required fields enforced: missing mag → ValidationError → ProviderProtocolError.
 
@@ -138,50 +138,50 @@ class TestEMSCWireShapeValidation:
     """Wire-shape models validate correctly against the fixture and edge-case shapes."""
 
     def test_fixture_loads_cleanly_via_response_model(self) -> None:
-        """emsc_global_m2_5.json loads via _EMSCResponse without error."""
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCResponse  # noqa: PLC0415
+        """emsc_global_m2_5.json loads via _EmscResponse without error."""
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscResponse  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         assert response.type == "FeatureCollection"
         assert len(response.features) == 3
 
     def test_extra_wire_fields_are_ignored(self) -> None:
         """Extra wire fields ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscResponse  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
         raw["unexpected_future_field"] = "dropped"
         raw["features"][0]["properties"]["futureField"] = "dropped"
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         assert response is not None
 
     def test_first_feature_id_from_top_level(self) -> None:
         """Feature[0].id = '20260511_0000281' (top-level Feature.id)."""
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscResponse  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         assert response.features[0].id == "20260511_0000281", (
             f"Expected id='20260511_0000281', got {response.features[0].id!r}"
         )
 
     def test_depth_from_properties_is_positive(self) -> None:
         """properties.depth = 5.0 (POSITIVE km; geometry.coordinates[2] is -5.0 NEGATIVE)."""
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscResponse  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         assert response.features[0].properties.depth == 5.0, (
             f"properties.depth must be 5.0 (positive), got {response.features[0].properties.depth!r}"
         )
 
     def test_magtype_is_lowercase(self) -> None:
         """properties.magtype = 'm' (LOWERCASE — EMSC uses lowercase, differs from USGS)."""
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscResponse  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         assert response.features[0].properties.magtype == "m", (
             f"Expected magtype='m' (lowercase), got {response.features[0].properties.magtype!r}"
         )
@@ -190,7 +190,7 @@ class TestEMSCWireShapeValidation:
         """Dropping 'mag' from properties → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EMSCFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscEventFeature  # noqa: PLC0415
 
         raw = _load_fixture("emsc_global_m2_5.json")
         feature_raw = dict(raw["features"][0])
@@ -198,7 +198,7 @@ class TestEMSCWireShapeValidation:
             k: v for k, v in feature_raw["properties"].items() if k != "mag"
         }
         with pytest.raises(ValidationError):
-            _EMSCFeature.model_validate(feature_raw)
+            _EmscEventFeature.model_validate(feature_raw)
 
 
 # ===========================================================================
@@ -212,12 +212,12 @@ class TestEMSCToCanonical:
     def _get_first_canonical(self) -> Any:
         """Load fixture, parse, and get first canonical EarthquakeRecord."""
         from weewx_clearskies_api.providers.earthquakes.emsc import (  # noqa: PLC0415
-            _EMSCResponse,
+            _EmscResponse,
             _to_canonical,
         )
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         feature = response.features[0]
         return _to_canonical(feature, raw["features"][0])
 
@@ -360,12 +360,12 @@ class TestEMSCToCanonical:
     def test_second_feature_depth_is_positive(self) -> None:
         """Feature[1] depth = 37.8 (positive); geometry.coordinates[2] = -37.8 (negative)."""
         from weewx_clearskies_api.providers.earthquakes.emsc import (  # noqa: PLC0415
-            _EMSCResponse,
+            _EmscResponse,
             _to_canonical,
         )
 
         raw = _load_fixture("emsc_global_m2_5.json")
-        response = _EMSCResponse.model_validate(raw)
+        response = _EmscResponse.model_validate(raw)
         feature = response.features[1]
         record = _to_canonical(feature, raw["features"][1])
         assert record.depth == 37.8, (
@@ -449,9 +449,8 @@ class TestFetchHappyPath:
         import fakeredis  # noqa: PLC0415
 
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
-            _RedisCache,
+            RedisCache,
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
@@ -460,6 +459,7 @@ class TestFetchHappyPath:
             _reset_http_client_for_tests,
             _rate_limiter,
         )
+        import redis as _redis_lib  # noqa: PLC0415
         import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
@@ -467,8 +467,14 @@ class TestFetchHappyPath:
         _reset_http_client_for_tests()
         _rate_limiter._calls.clear()
 
-        fake_redis = fakeredis.FakeRedis()
-        _cache_mod._cache_instance = _RedisCache(fake_redis)
+        # Inject fakeredis via the established RedisCache test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
+        fake_redis = fakeredis.FakeRedis(decode_responses=False)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = fake_redis
+        redis_cache._redis_error_cls = _redis_lib.exceptions.RedisError
+        _cache_mod._cache = redis_cache
 
         from weewx_clearskies_api.providers.earthquakes.emsc import fetch  # noqa: PLC0415
 

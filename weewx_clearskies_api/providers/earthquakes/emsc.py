@@ -224,10 +224,8 @@ def _to_canonical(
 
     Args:
         feature: Parsed Pydantic feature model (typed access to canonical fields).
-        raw_feature: Raw feature dict (for extras population per lead-resolved call #1).
-            May be the full GeoJSON Feature dict (with "properties" sub-key) OR just
-            the properties dict. Extras extraction reads from raw_feature["properties"]
-            when present, otherwise treats raw_feature as the properties dict directly.
+        raw_feature: Full GeoJSON Feature dict (must contain "properties" sub-key);
+            used for extras population per lead-resolved call #1.
     """
     props = feature.properties
 
@@ -235,8 +233,7 @@ def _to_canonical(
     unid = props.unid or feature.id
     url = f"https://www.seismicportal.eu/eventdetails.html?unid={unid}"
 
-    # Normalize: handle both full feature dict and bare props dict.
-    raw_props: dict[str, Any] = raw_feature.get("properties", raw_feature)
+    raw_props: dict[str, Any] = raw_feature["properties"]
 
     # Extras per §4.4: evtype, auth, source_id, source_catalog, lastupdate.
     extras: dict[str, Any] = {}
@@ -366,13 +363,3 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton.  Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
-
-
-# ---------------------------------------------------------------------------
-# Name aliases for test compatibility
-# Test-author used all-caps provider prefix (_EMSCResponse, _EMSCFeature)
-# rather than the brief-prescribed mixed-case (_EmscResponse, _EmscEventFeature).
-# Private implementation names; aliases allow tests to import either form.
-# ---------------------------------------------------------------------------
-_EMSCResponse = _EmscResponse
-_EMSCFeature = _EmscEventFeature

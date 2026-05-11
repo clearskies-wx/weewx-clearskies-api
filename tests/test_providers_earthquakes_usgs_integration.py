@@ -435,9 +435,8 @@ class TestUSGSProviderConfigured:
 
         import redis as redis_lib  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
-            _RedisCache,
+            RedisCache,
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
@@ -453,9 +452,15 @@ class TestUSGSProviderConfigured:
         _reset_http_client_for_tests()
         _rate_limiter._calls.clear()
 
+        # Inject a real-Redis-backed RedisCache via the established test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
         r = redis_lib.Redis.from_url(_REDIS_URL)
         r.flushdb()
-        _cache_mod._cache_instance = _RedisCache(r)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = r
+        redis_cache._redis_error_cls = redis_lib.exceptions.RedisError
+        _cache_mod._cache = redis_cache
 
         app = _make_earthquakes_app(db_engine, provider="usgs")
         client = TestClient(app, raise_server_exceptions=False)

@@ -3,7 +3,7 @@
 Covers per the task-3b-13 brief §Test surface (test_usgs.py):
 
   Wire-shape Pydantic validation:
-  - Seattle radius fixture loads cleanly via _USGSResponse (3-feature FeatureCollection).
+  - Seattle radius fixture loads cleanly via _UsgsResponse (3-feature FeatureCollection).
   - Extra wire fields (tz, detail, cdi, sig, etc.) ignored (extra="ignore").
   - Required fields enforced: missing id → ValidationError → ProviderProtocolError.
 
@@ -141,60 +141,60 @@ class TestUSGSWireShapeValidation:
     """Wire-shape models validate correctly against the fixture and edge-case shapes."""
 
     def test_fixture_loads_cleanly_via_response_model(self) -> None:
-        """usgs_seattle_radius_m2_5.json loads via _USGSResponse without error."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        """usgs_seattle_radius_m2_5.json loads via _UsgsResponse without error."""
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert response.type == "FeatureCollection"
         assert len(response.features) == 3
 
     def test_fixture_has_three_features(self) -> None:
         """Fixture has exactly 3 features (sliced to 3 at capture time)."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert len(response.features) == 3, (
             f"Expected 3 features, got {len(response.features)}"
         )
 
     def test_extra_wire_fields_are_ignored(self) -> None:
         """Extra wire fields (tz, detail, cdi, sig, etc.) silently ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
         raw["unexpected_future_field"] = "should_be_dropped"
         raw["features"][0]["properties"]["future_field"] = "also_dropped"
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert response is not None, "Extra fields must not cause ValidationError"
 
     def test_first_feature_id_is_uw62242697(self) -> None:
         """Feature[0].id = 'uw62242697' (top-level Feature.id, not properties field)."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert response.features[0].id == "uw62242697", (
             f"Expected id='uw62242697', got {response.features[0].id!r}"
         )
 
     def test_first_feature_time_is_epoch_ms(self) -> None:
         """Feature[0].properties.time = 1778131207650 (epoch milliseconds, not ISO)."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert response.features[0].properties.time == 1778131207650, (
             f"Expected time=1778131207650, got {response.features[0].properties.time!r}"
         )
 
     def test_first_feature_tsunami_is_zero_integer(self) -> None:
         """Feature[0].properties.tsunami = 0 (integer, not boolean; cast at canonical layer)."""
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsResponse  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         assert response.features[0].properties.tsunami == 0, (
             f"Expected tsunami=0 (int), got {response.features[0].properties.tsunami!r}"
         )
@@ -203,13 +203,13 @@ class TestUSGSWireShapeValidation:
         """Dropping 'id' from a Feature → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.usgs import _USGSFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsEventFeature  # noqa: PLC0415
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
         feature_raw = raw["features"][0].copy()
         del feature_raw["id"]
         with pytest.raises(ValidationError):
-            _USGSFeature.model_validate(feature_raw)
+            _UsgsEventFeature.model_validate(feature_raw)
 
 
 # ===========================================================================
@@ -277,12 +277,12 @@ class TestUSGSToCanonical:
     def _get_first_canonical(self) -> Any:
         """Load fixture, parse, and get first canonical EarthquakeRecord."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _USGSResponse,
+            _UsgsResponse,
             _to_canonical,
         )
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
-        response = _USGSResponse.model_validate(raw)
+        response = _UsgsResponse.model_validate(raw)
         feature = response.features[0]
         return _to_canonical(feature, raw["features"][0])
 
@@ -472,12 +472,12 @@ class TestTsunamiConversion:
     def test_tsunami_zero_converts_to_false(self) -> None:
         """tsunami=0 integer → canonical bool False."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _USGSFeature,
+            _UsgsEventFeature,
             _to_canonical,
         )
 
         raw = self._make_feature_with_tsunami(0)
-        feature = _USGSFeature.model_validate(raw)
+        feature = _UsgsEventFeature.model_validate(raw)
         record = _to_canonical(feature, raw)
         assert record.tsunami is False, f"Expected False, got {record.tsunami!r}"
         assert isinstance(record.tsunami, bool), "tsunami must be bool type"
@@ -485,12 +485,12 @@ class TestTsunamiConversion:
     def test_tsunami_one_converts_to_true(self) -> None:
         """tsunami=1 integer → canonical bool True."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _USGSFeature,
+            _UsgsEventFeature,
             _to_canonical,
         )
 
         raw = self._make_feature_with_tsunami(1)
-        feature = _USGSFeature.model_validate(raw)
+        feature = _UsgsEventFeature.model_validate(raw)
         record = _to_canonical(feature, raw)
         assert record.tsunami is True, f"Expected True, got {record.tsunami!r}"
         assert isinstance(record.tsunami, bool), "tsunami must be bool type"
@@ -589,8 +589,11 @@ class TestFetchHappyPath:
             _rate_limiter,
         )
 
-        # Wire a fakeredis backend
-        from weewx_clearskies_api.providers._common.cache import _RedisCache  # noqa: PLC0415
+        # Wire a fakeredis backend via the established RedisCache test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
+        from weewx_clearskies_api.providers._common.cache import RedisCache  # noqa: PLC0415
+        import redis as _redis_lib  # noqa: PLC0415
         import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
@@ -598,8 +601,11 @@ class TestFetchHappyPath:
         _reset_http_client_for_tests()
         _rate_limiter._calls.clear()
 
-        fake_redis = fakeredis.FakeRedis()
-        _cache_mod._cache_instance = _RedisCache(fake_redis)
+        fake_redis = fakeredis.FakeRedis(decode_responses=False)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = fake_redis
+        redis_cache._redis_error_cls = _redis_lib.exceptions.RedisError
+        _cache_mod._cache = redis_cache
 
         from weewx_clearskies_api.providers.earthquakes.usgs import fetch  # noqa: PLC0415
 

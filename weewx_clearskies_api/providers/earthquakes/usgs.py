@@ -244,10 +244,8 @@ def _to_canonical(
 
     Args:
         feature: Parsed Pydantic feature model (typed access to canonical fields).
-        raw_feature: Raw feature dict (for extras population per lead-resolved call #1).
-            May be the full GeoJSON Feature dict (with "properties" sub-key) OR just
-            the properties dict. Extras extraction reads from raw_feature["properties"]
-            when present, otherwise treats raw_feature as the properties dict directly.
+        raw_feature: Full GeoJSON Feature dict (must contain "properties" sub-key);
+            used for extras population per lead-resolved call #1.
     """
     props = feature.properties
     coords = feature.geometry.coordinates
@@ -256,8 +254,7 @@ def _to_canonical(
     depth_km = coords[2] if len(coords) >= 3 else None
 
     # Extras per §4.4: route provider-specific fields not in canonical.
-    # Normalize: handle both full feature dict ({"properties": {...}}) and bare props dict.
-    raw_props: dict[str, Any] = raw_feature.get("properties", raw_feature)
+    raw_props: dict[str, Any] = raw_feature["properties"]
 
     extras: dict[str, Any] = {}
     for key in ("cdi", "sig", "net", "code", "ids", "sources", "types", "nst", "dmin", "rms", "gap", "type", "title"):
@@ -388,13 +385,3 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton.  Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
-
-
-# ---------------------------------------------------------------------------
-# Name aliases for test compatibility
-# Test-author used all-caps provider prefix (_USGSResponse, _USGSFeature)
-# rather than the brief-prescribed mixed-case (_UsgsResponse, _UsgsEventFeature).
-# Private implementation names; aliases allow tests to import either form.
-# ---------------------------------------------------------------------------
-_USGSResponse = _UsgsResponse
-_USGSFeature = _UsgsEventFeature

@@ -198,7 +198,7 @@ class TestGeoNetWireShapeValidation:
         """Dropping 'publicID' from properties → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.geonet import _GeoNetFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.geonet import _GeoNetEventFeature  # noqa: PLC0415
 
         raw = _load_fixture("geonet_nz_mmi3.json")
         feature_raw = dict(raw["features"][0])
@@ -206,7 +206,7 @@ class TestGeoNetWireShapeValidation:
             k: v for k, v in feature_raw["properties"].items() if k != "publicID"
         }
         with pytest.raises(ValidationError):
-            _GeoNetFeature.model_validate(feature_raw)
+            _GeoNetEventFeature.model_validate(feature_raw)
 
 
 # ===========================================================================
@@ -414,9 +414,8 @@ class TestFetchHappyPath:
         import fakeredis  # noqa: PLC0415
 
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
-            _RedisCache,
+            RedisCache,
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
@@ -425,6 +424,7 @@ class TestFetchHappyPath:
             _reset_http_client_for_tests,
             _rate_limiter,
         )
+        import redis as _redis_lib  # noqa: PLC0415
         import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
@@ -432,8 +432,14 @@ class TestFetchHappyPath:
         _reset_http_client_for_tests()
         _rate_limiter._calls.clear()
 
-        fake_redis = fakeredis.FakeRedis()
-        _cache_mod._cache_instance = _RedisCache(fake_redis)
+        # Inject fakeredis via the established RedisCache test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
+        fake_redis = fakeredis.FakeRedis(decode_responses=False)
+        redis_cache = object.__new__(RedisCache)
+        redis_cache._client = fake_redis
+        redis_cache._redis_error_cls = _redis_lib.exceptions.RedisError
+        _cache_mod._cache = redis_cache
 
         from weewx_clearskies_api.providers.earthquakes.geonet import fetch  # noqa: PLC0415
 
