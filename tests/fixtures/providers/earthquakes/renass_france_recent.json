@@ -1,0 +1,83 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "id": "fr2026trycyd",
+      "type": "Feature",
+      "properties": {
+        "type": null,
+        "time": "2026-05-11T16:36:59.105052Z",
+        "description": {
+          "fr": "Évènement de magnitude 1.7, proche de Pau",
+          "en": "Event of magnitude 1.7, near Pau"
+        },
+        "depth": 14.12690163,
+        "url": {
+          "fr": "https://renass.unistra.fr/fr/evenements/fr2026trycyd",
+          "en": "https://renass.unistra.fr/en/events/fr2026trycyd"
+        },
+        "latitude": 43.00603485,
+        "longitude": 0.2690240741,
+        "automatic": true,
+        "mag": 1.716991822,
+        "magType": "MLv"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [0.2690240741, 43.00603485, -14.12690163]
+      }
+    },
+    {
+      "id": "fr2026trxulp",
+      "type": "Feature",
+      "properties": {
+        "type": null,
+        "time": "2026-05-11T15:01:24.620000Z",
+        "description": {
+          "fr": "Évènement de magnitude 1.4, proche de Mamoudzou",
+          "en": "Event of magnitude 1.4, near Mamoudzou"
+        },
+        "depth": 41.23,
+        "url": {
+          "fr": "https://renass.unistra.fr/fr/evenements/fr2026trxulp",
+          "en": "https://renass.unistra.fr/en/events/fr2026trxulp"
+        },
+        "latitude": -12.8563,
+        "longitude": 45.5093,
+        "automatic": true,
+        "mag": 1.429053809,
+        "magType": "ML"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [45.5093, -12.8563, -41.23]
+      }
+    },
+    {
+      "id": "fr2026trxhpm",
+      "type": "Feature",
+      "properties": {
+        "type": "quarry blast",
+        "time": "2026-05-11T12:36:37.713492Z",
+        "description": {
+          "fr": "Tir de carrière de magnitude 1.5, proche de Brive-la-Gaillarde",
+          "en": "Quarry blast of magnitude 1.5, near Brive-la-Gaillarde"
+        },
+        "depth": 0.0,
+        "url": {
+          "fr": "https://renass.unistra.fr/fr/evenements/fr2026trxhpm",
+          "en": "https://renass.unistra.fr/en/events/fr2026trxhpm"
+        },
+        "latitude": 45.10512924,
+        "longitude": 1.452506304,
+        "automatic": false,
+        "mag": 1.54834994,
+        "magType": "MLv"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [1.452506304, 45.10512924, -0.0]
+      }
+    }
+  ]
+}

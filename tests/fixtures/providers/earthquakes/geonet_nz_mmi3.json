@@ -1,0 +1,62 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          175.256698608,
+          -38.977085114
+        ]
+      },
+      "properties": {
+        "publicID": "2026p353000",
+        "time": "2026-05-11T14:38:39.296Z",
+        "depth": 20.33428955078125,
+        "magnitude": 2.4993398757078116,
+        "mmi": 3,
+        "locality": "10 km south of Taumarunui",
+        "quality": "best"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          176.439407349,
+          -40.560535431
+        ]
+      },
+      "properties": {
+        "publicID": "2026p352537",
+        "time": "2026-05-11T10:31:59.226Z",
+        "depth": 22.22758674621582,
+        "magnitude": 3.059985659897529,
+        "mmi": 3,
+        "locality": "20 km east of Pongaroa",
+        "quality": "best"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          177.965621948,
+          -37.588722229
+        ]
+      },
+      "properties": {
+        "publicID": "2026p351278",
+        "time": "2026-05-10T23:21:08.759Z",
+        "depth": 10,
+        "magnitude": 3.5972849170899686,
+        "mmi": 3,
+        "locality": "30 km north-east of Te Kaha",
+        "quality": "deleted"
+      }
+    }
+  ]
+}

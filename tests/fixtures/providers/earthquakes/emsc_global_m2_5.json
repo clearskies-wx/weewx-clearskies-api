@@ -1,0 +1,89 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "count": 3
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.66,
+          1.39,
+          -5.0
+        ]
+      },
+      "id": "20260511_0000281",
+      "properties": {
+        "source_id": "1993315",
+        "source_catalog": "EMSC-RTS",
+        "lastupdate": "2026-05-11T17:07:33.440295Z",
+        "time": "2026-05-11T17:00:26.0Z",
+        "flynn_region": "MOLUCCA SEA",
+        "lat": 1.39,
+        "lon": 126.66,
+        "depth": 5.0,
+        "evtype": "ke",
+        "auth": "BMKG",
+        "mag": 2.5,
+        "magtype": "m",
+        "unid": "20260511_0000281"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -70.01,
+          -19.44,
+          -37.8
+        ]
+      },
+      "id": "20260511_0000279",
+      "properties": {
+        "source_id": "1993313",
+        "source_catalog": "EMSC-RTS",
+        "lastupdate": "2026-05-11T17:00:42.157121Z",
+        "time": "2026-05-11T16:53:33.0Z",
+        "flynn_region": "TARAPACA, CHILE",
+        "lat": -19.44,
+        "lon": -70.01,
+        "depth": 37.8,
+        "evtype": "ke",
+        "auth": "CSN",
+        "mag": 3.0,
+        "magtype": "ml",
+        "unid": "20260511_0000279"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          113.53,
+          -10.36,
+          -5.0
+        ]
+      },
+      "id": "20260511_0000276",
+      "properties": {
+        "source_id": "1993311",
+        "source_catalog": "EMSC-RTS",
+        "lastupdate": "2026-05-11T16:56:31.509514Z",
+        "time": "2026-05-11T16:47:10.0Z",
+        "flynn_region": "SOUTH OF JAVA, INDONESIA",
+        "lat": -10.36,
+        "lon": 113.53,
+        "depth": 5.0,
+        "evtype": "ke",
+        "auth": "BMKG",
+        "mag": 3.3,
+        "magtype": "m",
+        "unid": "20260511_0000276"
+      }
+    }
+  ]
+}

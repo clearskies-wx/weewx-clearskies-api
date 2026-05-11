@@ -1,0 +1,123 @@
+{
+  "type": "FeatureCollection",
+  "metadata": {
+    "generated": 1778519258000,
+    "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=47.6&longitude=-122.3&maxradiuskm=500&minmagnitude=2.5&limit=3&orderby=time",
+    "title": "USGS Earthquakes",
+    "status": 200,
+    "api": "2.4.0",
+    "limit": 3,
+    "offset": 1
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "mag": 2.8379271030426025,
+        "place": "1 km W of Concrete, Washington",
+        "time": 1778131207650,
+        "updated": 1778427774149,
+        "tz": null,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/uw62242697",
+        "detail": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=uw62242697&format=geojson",
+        "felt": 160,
+        "cdi": 4.3,
+        "mmi": null,
+        "alert": null,
+        "status": "reviewed",
+        "tsunami": 0,
+        "sig": 193,
+        "net": "uw",
+        "code": "62242697",
+        "ids": ",uw62242697,us6000svv6,",
+        "sources": ",uw,us,",
+        "types": ",dyfi,origin,phase-data,",
+        "nst": 46,
+        "dmin": 0.1877,
+        "rms": 0.330000013,
+        "gap": 100,
+        "magType": "ml",
+        "type": "earthquake",
+        "title": "M 2.8 - 1 km W of Concrete, Washington"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-121.77283477783203, 48.53633499145508, 0.189999997615814]
+      },
+      "id": "uw62242697"
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "mag": 2.7,
+        "place": "5 km N of Anacortes, Washington",
+        "time": 1777263757780,
+        "updated": 1777419656809,
+        "tz": null,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/uw62240147",
+        "detail": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=uw62240147&format=geojson",
+        "felt": 26,
+        "cdi": 2.7,
+        "mmi": null,
+        "alert": null,
+        "status": "reviewed",
+        "tsunami": 0,
+        "sig": 119,
+        "net": "uw",
+        "code": "62240147",
+        "ids": ",us6000st37,uw62240147,",
+        "sources": ",us,uw,",
+        "types": ",dyfi,origin,phase-data,",
+        "nst": 71,
+        "dmin": 0.0158,
+        "rms": 0.19,
+        "gap": 31,
+        "magType": "ml",
+        "type": "earthquake",
+        "title": "M 2.7 - 5 km N of Anacortes, Washington"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-122.61866666666667, 48.5605, 15.05]
+      },
+      "id": "uw62240147"
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "mag": 2.8,
+        "place": "off the coast of Washington",
+        "time": 1775998424933,
+        "updated": 1777993401040,
+        "tz": null,
+        "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us6000sphj",
+        "detail": "https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=us6000sphj&format=geojson",
+        "felt": null,
+        "cdi": null,
+        "mmi": null,
+        "alert": null,
+        "status": "reviewed",
+        "tsunami": 0,
+        "sig": 121,
+        "net": "us",
+        "code": "6000sphj",
+        "ids": ",us6000sphj,",
+        "sources": ",us,",
+        "types": ",origin,phase-data,",
+        "nst": 22,
+        "dmin": 0.882,
+        "rms": 0.5,
+        "gap": 214,
+        "magType": "ml",
+        "type": "earthquake",
+        "title": "M 2.8 - off the coast of Washington"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-128.8671, 47.0581, 10]
+      },
+      "id": "us6000sphj"
+    }
+  ],
+  "bbox": [-128.8671, 47.0581, 0.18999999761581, -121.77283477783, 48.5605, 15.05]
+}
