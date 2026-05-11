@@ -521,34 +521,56 @@ class TestWireToCanonicalEdgeCases:
 
 
 # ===========================================================================
-# 4. _iso_offset_to_utc_z — timezone conversion round-trips
+# 4. Explicit-offset → UTC Z conversion (via shared to_utc_iso8601_from_offset)
 # ===========================================================================
 
 
 class TestIsoOffsetToUtcZ:
-    """_iso_offset_to_utc_z converts explicit-offset ISO-8601 → UTC with Z suffix."""
+    """Aeris observedAt uses to_utc_iso8601_from_offset (shared helper, ADR-020).
+
+    The impl uses providers._common.datetime_utils.to_utc_iso8601_from_offset
+    rather than a module-local _iso_offset_to_utc_z helper (DRY rule applied
+    at impl time; same helper used by alerts/forecast aeris modules).
+
+    Tests verify:
+    - The shared helper converts explicit-offset ISO-8601 → UTC Z correctly.
+    - The conversion is exercised end-to-end via _wire_to_canonical (observedAt
+      field on the canonical record reflects the UTC conversion).
+    """
 
     def test_minus_07_offset_converts_to_utc_z(self) -> None:
-        """-07:00 offset converts correctly to UTC Z."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-04-30T10:00:00-07:00")
-        # 10:00 - (-7) = 17:00 UTC
+        """-07:00 offset converts correctly to UTC Z (shared helper)."""
+        from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
+            to_utc_iso8601_from_offset,
+        )
+        result = to_utc_iso8601_from_offset(
+            "2026-04-30T10:00:00-07:00", provider_id="aeris", domain="aqi"
+        )
+        # 10:00 + 7 = 17:00 UTC
         assert result == "2026-04-30T17:00:00Z", (
             f"Expected '2026-04-30T17:00:00Z', got {result!r}"
         )
 
     def test_zero_offset_converts_to_utc_z(self) -> None:
-        """+00:00 offset → UTC Z (replaces +00:00 with Z)."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-04-30T17:00:00+00:00")
+        """+00:00 offset → UTC Z (replaces +00:00 with Z, shared helper)."""
+        from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
+            to_utc_iso8601_from_offset,
+        )
+        result = to_utc_iso8601_from_offset(
+            "2026-04-30T17:00:00+00:00", provider_id="aeris", domain="aqi"
+        )
         assert result == "2026-04-30T17:00:00Z", (
             f"Expected '2026-04-30T17:00:00Z' for +00:00 input, got {result!r}"
         )
 
     def test_positive_offset_converts_to_utc_z(self) -> None:
-        """+05:30 offset (IST) converts to UTC Z."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-04-30T10:30:00+05:30")
+        """+05:30 offset (IST) converts to UTC Z (shared helper)."""
+        from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
+            to_utc_iso8601_from_offset,
+        )
+        result = to_utc_iso8601_from_offset(
+            "2026-04-30T10:30:00+05:30", provider_id="aeris", domain="aqi"
+        )
         # 10:30 - 5:30 = 5:00 UTC
         assert result == "2026-04-30T05:00:00Z", (
             f"Expected '2026-04-30T05:00:00Z', got {result!r}"
@@ -556,22 +578,51 @@ class TestIsoOffsetToUtcZ:
 
     def test_result_ends_with_z(self) -> None:
         """Result always ends with Z (ADR-020 UTC at API boundary)."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-04-30T10:00:00-07:00")
+        from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
+            to_utc_iso8601_from_offset,
+        )
+        result = to_utc_iso8601_from_offset(
+            "2026-04-30T10:00:00-07:00", provider_id="aeris", domain="aqi"
+        )
         assert result.endswith("Z"), f"Result must end with Z, got {result!r}"
 
-    def test_fixture_timestamp_converts_correctly(self) -> None:
-        """Real fixture dateTimeISO '2026-05-10T17:00:00-07:00' → '2026-05-11T00:00:00Z'."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-05-10T17:00:00-07:00")
-        assert result == "2026-05-11T00:00:00Z", (
-            f"Expected '2026-05-11T00:00:00Z', got {result!r}"
+    def test_fixture_timestamp_converts_correctly_via_wire_to_canonical(self) -> None:
+        """Real fixture dateTimeISO '2026-05-10T17:00:00-07:00' → '2026-05-11T00:00:00Z'.
+
+        Tests the conversion end-to-end via _wire_to_canonical (observedAt field).
+        """
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _AerisAQResponse,
+            _wire_to_canonical,
+        )
+        data = {
+            "success": True,
+            "error": None,
+            "response": [{
+                "place": {"name": "testcity"},
+                "periods": [{
+                    "dateTimeISO": "2026-05-10T17:00:00-07:00",
+                    "aqi": 33.0,
+                    "dominant": "o3",
+                    "pollutants": [{"type": "pm2.5", "valuePPB": None, "valueUGM3": 5.0}],
+                }],
+            }],
+        }
+        resp = _AerisAQResponse.model_validate(data)
+        result = _wire_to_canonical(resp.response[0])
+        assert result is not None
+        assert result.observedAt == "2026-05-11T00:00:00Z", (
+            f"Expected '2026-05-11T00:00:00Z', got {result.observedAt!r}"
         )
 
     def test_midnight_offset_wraps_to_next_day_correctly(self) -> None:
-        """Midnight offset that wraps to next day is handled correctly."""
-        from weewx_clearskies_api.providers.aqi.aeris import _iso_offset_to_utc_z  # noqa: PLC0415
-        result = _iso_offset_to_utc_z("2026-04-30T00:00:00-07:00")
+        """Midnight local with -07:00 offset → 07:00 UTC (shared helper)."""
+        from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
+            to_utc_iso8601_from_offset,
+        )
+        result = to_utc_iso8601_from_offset(
+            "2026-04-30T00:00:00-07:00", provider_id="aeris", domain="aqi"
+        )
         # midnight local = 07:00 UTC
         assert result == "2026-04-30T07:00:00Z", (
             f"Expected '2026-04-30T07:00:00Z', got {result!r}"
