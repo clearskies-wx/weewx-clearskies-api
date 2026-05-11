@@ -1,8 +1,11 @@
-"""µg/m³ → ppm gas conversion + EPA AQI category band table.
+"""µg/m³ → ppm gas conversion, PPB → ppm direct conversion, EPA AQI category band table.
 
 Conversion formula per canonical-data-model §4.2 footnote:
     ppm = µg/m³ × 24.45 / molecular_weight
 where 24.45 L/mol is the molar volume of an ideal gas at 25°C and 1 atm.
+
+PPB → ppm direct conversion (for providers that supply valuePPB directly, e.g. Aeris):
+    ppm = ppb / 1000
 
 EPA AQI category breakpoints per canonical-data-model §3.8 (canonical):
     0-50      → Good
@@ -61,6 +64,24 @@ _EPA_CATEGORY_BANDS: list[tuple[int, str]] = [
     (300, "Very Unhealthy"),
     (500, "Hazardous"),
 ]
+
+
+def ppb_to_ppm(ppb: float | None) -> float | None:
+    """Convert ppb (parts per billion) to ppm (parts per million).
+
+    Used by the Aeris AQI provider which returns gas concentrations in valuePPB
+    directly (O3, NO2, SO2, CO).  Distinct from ugm3_to_ppm — no molar volume
+    or molecular weight needed; the conversion is purely a 1000x scale factor.
+
+    Args:
+        ppb: concentration in ppb (or None).
+
+    Returns:
+        ppm value (None propagates).  ppm = ppb / 1000.
+    """
+    if ppb is None:
+        return None
+    return ppb / 1000.0
 
 
 def epa_category(aqi: int | float | None) -> str | None:
