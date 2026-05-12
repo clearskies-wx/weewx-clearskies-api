@@ -8,16 +8,9 @@
   The trimmed fixture retains the WMS 1.3.0 envelope, Service block, and the
   RADAR_1KM_RRAI + RADAR_1KM_RSNO layers with their Dimension elements.
   All retained values are verbatim from the real live capture; no field values were invented.
-- **Layers:** `RADAR_1KM_RDPR` (synthetic — see below), `RADAR_1KM_RRAI` (real), `RADAR_1KM_RSNO` (real)
-  - **RADAR_1KM_RDPR is SYNTHETIC**: api-docs/msc_geomet.md referenced `RADAR_1KM_RDPR` but
-    the live full capabilities capture shows only `RADAR_1KM_RRAI` (rain) and `RADAR_1KM_RSNO`
-    (snow) as available radar layers. `RADAR_1KM_RDPR` returns "Layer not available" error.
-    The api-dev implementation (`msc_geomet.py`) uses `LAYER_NAME = "RADAR_1KM_RDPR"` based on
-    the api-docs. Since tests must pass against the current implementation, the `RADAR_1KM_RDPR`
-    layer is INJECTED into this fixture with the same Dimension value as the real `RADAR_1KM_RRAI`.
-    Synthetic injection explicitly noted in XML comments.
-    **Bug to route to api-dev/lead:** The MSC GeoMet layer name in the implementation and
-    api-docs is wrong. The actual layer should be `RADAR_1KM_RRAI` (or `RADAR_1KM_RSNO`).
+- **Layers:** `RADAR_1KM_RRAI` (real, rain), `RADAR_1KM_RSNO` (real, snow); `RADAR_1KM_RDPR` (synthetic, dead — see below).
+  - `RADAR_1KM_RRAI` is the real WMS layer; `msc_geomet.py` `LAYER_NAME` points at it as of lead-direct `f2362ee` (2026-05-11). Tests assert against this name. The snow sibling `RADAR_1KM_RSNO` is exercised by the sibling-layer regression test in `test_wms_capabilities.py`.
+  - The synthetic `RADAR_1KM_RDPR` was injected during 3b-14 test-author fixture capture to make tests pass against the original (wrong) `LAYER_NAME="RADAR_1KM_RDPR"` from the brief + api-docs. RDPR is NOT in live GeoMet capabilities. After the lead-direct fix this injection is unused but harmless — left in place as a historical record. A future fixture refresh can drop it.
 - **TIME dimension format:** ISO start/end/period notation — `2026-05-11T21:54:00Z/2026-05-12T00:54:00Z/PT6M`
   - 3-hour rolling window, 6-minute cadence (31 frames)
 - **Why trimmed:** 46 MB full response is impractical as a test fixture.
