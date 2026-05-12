@@ -2,36 +2,42 @@
 
 ## tile_4_4_6.png
 
-**Origin:** synthetic-from-spec — no Aeris client_id/client_secret was available for
-live capture at 3b-15 fixture-capture time (2026-05-11). Fixture hand-crafted per the
-synthetic-from-real pattern (precedent: 3b-4 Aeris paid-tier discussion, 3b-14 minimal
-PNG pattern).
+**Origin:** live capture — 2026-05-11T17:xx UTC (Windows DILBERT local run).
+Captured via `urllib.request` with the project Aeris credentials from `reference/CREDENTIALS.md`
+(PWSWeather Contributor Plan path — confirmed accessible at capture time).
 
-**Synthetic origin:** minimal 1×1 transparent RGBA PNG (70 bytes) created via Python
-`struct`/`zlib`/`png` encoding. Content-Type matches what the Aeris api-docs specify:
-`image/png`.
+**Live capture URL:**
+`https://maps.api.xweather.com/<redacted>/radar/4/4/6/current.png`
+(client_id + client_secret redacted in sidecar; used real credentials at capture time)
 
-**Target tile URL (upstream docs, not live-verified):**
-`https://maps.api.xweather.com/{client_id}_{client_secret}/radar/4/4/6/current.png`
+**Tile coordinates:** z=4, x=4, y=6 (Pacific/Northwest North America region at zoom 4).
+Layer: `radar` (global radar mosaic, ADR-015). Offset: `current` (hardcoded at v0.1).
 
-**Per upstream docs:** Aeris Xweather Raster Maps returns `image/png` tiles.
-Layer: `radar` (global radar mosaic). Offset `current` hardcoded at v0.1 per brief §LC-7.
-ADR-015 note: PWSWeather Contributor Plan purportedly bundles Maps API access — confirm
-at live-capture time when credentials become available.
+**Live response:**
+- HTTP status: 200
+- Content-Type: `image/png;x-cost-v1=tile|1|1|1`
+- Size: 3682 bytes
+- First 8 bytes: `89504e470d0a1a0a` (valid PNG signature)
 
-**Injected fields:** none — entirely synthetic binary PNG fixture. A future round with
-real Aeris credentials (PWSWeather Contributor Plan) can capture the live tile and swap
-this out.
+**Cross-check against api-docs claims (per brief §live-capture coordination):**
+- api-docs claim: `image/png` → **MILD DIVERGENCE**: live response is
+  `image/png;x-cost-v1=tile|1|1|1` (vendor cost-tracking parameter appended).
+  The base media type is still `image/png`; the parameter is for Aeris's internal
+  billing/cost tracking, not a content format change.
 
-**Live capture cross-check:** NOT performed — Aeris credentials unavailable at capture time.
-Test-author surfaced this to lead via SendMessage per brief gate. Lead direction:
-proceed with synthetic, sidecar marks clearly.
+**Divergence impact:**
+The impl uses `response.headers.get("Content-Type", "image/png")` which propagates
+the full header value including the cost parameter. The endpoint then passes it to
+`fastapi.Response(content=bytes, media_type=ct)`. FastAPI will send the full
+`image/png;x-cost-v1=tile|1|1|1` as the response Content-Type, which is still
+a valid `image/png` media type from the browser's perspective.
 
-**URL credential redaction (security):** Aeris embeds client_id_client_secret in the URL
-PATH. The impl's `_redact_url()` helper replaces this segment with `<redacted>` before
-any logging (LC-E). Tests verify the redaction helper directly.
+The test mocks return pure `image/png` which is fine for testing (the vendor
+parameter doesn't affect the format, just Aeris's billing). A future round could
+add a test that verifies the Content-Type parameter is preserved end-to-end if
+the team decides that's important.
 
-**Size:** 70 bytes (1×1 transparent PNG; real tiles are 256×256 ≈ 10–50 KB).
+**PWSWeather Contributor Plan access:** confirmed accessible at capture time
+(2026-05-11). No access restriction detected.
 
-**Test use:** used as mock response content for httpx respx mock of the Aeris tile URL
-in unit and integration tests. Content-Type header set to `image/png` in all mocks.
+**Test use:** used as mock response content for httpx respx mock of the Aeris tile URL.
