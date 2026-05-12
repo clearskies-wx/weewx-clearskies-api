@@ -40,8 +40,14 @@ PROVIDER_ID = "msc_geomet"
 DOMAIN = "radar"
 BASE_URL = "https://geo.weather.gc.ca"
 FRAMES_PATH = "/geomet"
-LAYER_NAME = "RADAR_1KM_RDPR"  # dual-pol QPE; rain-or-snow; recommended default
-_CACHE_TTL = 60
+# Lead-direct 2026-05-11: brief + api-docs said RADAR_1KM_RDPR but live
+# GetCapabilities (verified from test-author's real fixture) exposes only
+# RADAR_1KM_RRAI (rain) and RADAR_1KM_RSNO (snow). RDPR returns "Layer not
+# available". RRAI is the most universally useful default for the live radar tab.
+LAYER_NAME = "RADAR_1KM_RRAI"  # 1 km rain composite
+# TTL deviation: ADR-017's default for radar frame metadata is 5 min;
+# brief lead-call 5 set 60s. ADR-017 amendment deferred (3b-14 auditor F3).
+_CACHE_TTL = 60  # see deviation note above
 _API_VERSION = "0.1.0"
 
 ATTRIBUTION = "Environment and Climate Change Canada — MSC GeoMet"
@@ -59,9 +65,10 @@ CAPABILITY = ProviderCapability(
     default_poll_interval_seconds=_CACHE_TTL,
     operator_notes=(
         "Canada national mosaic via Environment Canada MSC GeoMet WMS service. "
-        "Layer: RADAR_1KM_RDPR (1 km dual-pol QPE, rain-or-snow composite). "
-        "6-minute cadence. Open Government Licence — Canada; commercial use allowed "
-        "with attribution: 'Environment and Climate Change Canada — MSC GeoMet'."
+        "Layer: RADAR_1KM_RRAI (1 km rain composite — RADAR_1KM_RSNO is the snow "
+        "sibling, not used by default). 6-minute cadence. Open Government Licence "
+        "— Canada; commercial use allowed with attribution: 'Environment and "
+        "Climate Change Canada — MSC GeoMet'."
     ),
     wms_endpoint_url="https://geo.weather.gc.ca/geomet?",
     wms_layer_name=LAYER_NAME,

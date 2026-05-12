@@ -11,9 +11,9 @@ Coverage per 3b-14 brief §Test coverage + WMS GetCapabilities fixture notes:
     parse_wms_time_dimension() expands to timestamps up to _MAX_PERIOD_FRAMES.
   - NOAA MRMS get_capabilities.xml (layer radar_base_reflectivity_time):
     TIME = 2026-05-11T23:16:00.0Z/2026-05-12T01:06:59.0Z/PT1S (1s period).
-  - MSC GeoMet get_capabilities.xml (layer RADAR_1KM_RDPR, synthetic — see fixtures.md):
+  - MSC GeoMet get_capabilities.xml (layer RADAR_1KM_RRAI, real — sibling RADAR_1KM_RSNO):
     TIME = 2026-05-11T21:54:00Z/2026-05-12T00:54:00Z/PT6M.
-  - DWD RADOLAN get_capabilities.xml (layer dwd:RX-Produkt, synthetic — see fixtures.md):
+  - DWD RADOLAN get_capabilities.xml (layer Niederschlagsradar, real — sibling RADOLAN-RW):
     TIME = 2026-05-08T00:00:00.000Z/2026-05-12T03:15:00.000Z/PT5M.
 
   Synthetic inline fixture (comma-separated list form):
@@ -266,7 +266,7 @@ class TestNOAAMRMSFixture:
 
 
 class TestMSCGeoMetFixture:
-    """MSC GeoMet fixture: RADAR_1KM_RDPR layer (synthetic — see fixtures.md), PT6M period."""
+    """MSC GeoMet fixture: RADAR_1KM_RRAI layer (real — sibling RADAR_1KM_RSNO), PT6M period."""
 
     def test_parse_returns_31_frames_for_3h_pt6m(self) -> None:
         """MSC GeoMet 3h range at PT6M → 31 frames (21:54..00:54, inclusive)."""
@@ -275,7 +275,7 @@ class TestMSCGeoMetFixture:
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -289,7 +289,7 @@ class TestMSCGeoMetFixture:
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -304,7 +304,7 @@ class TestMSCGeoMetFixture:
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -319,30 +319,30 @@ class TestMSCGeoMetFixture:
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
         for ts in result:
             assert ts.endswith("Z"), f"Timestamp {ts!r} must end with Z (ADR-020)"
 
-    def test_real_layer_rrai_also_parseable(self) -> None:
-        """RADAR_1KM_RRAI (real layer from live capture) also parses correctly."""
+    def test_sibling_layer_rsno_also_parseable(self) -> None:
+        """RADAR_1KM_RSNO (snow sibling — real layer from live capture) also parses correctly."""
         from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RRAI",
+            layer="RADAR_1KM_RSNO",
             provider_id="msc_geomet",
             domain="radar",
         )
-        # Same range as RADAR_1KM_RDPR in fixture (both have same Dimension value)
-        assert len(result) == 31, f"RADAR_1KM_RRAI should also yield 31 frames; got {len(result)}"
+        # Same range as RADAR_1KM_RRAI in fixture (same Dimension value across sibling layers).
+        assert len(result) == 31, f"RADAR_1KM_RSNO should yield 31 frames; got {len(result)}"
 
 
 class TestDWDRADOLANFixture:
-    """DWD RADOLAN fixture: dwd:RX-Produkt layer (synthetic — see fixtures.md), PT5M period."""
+    """DWD RADOLAN fixture: Niederschlagsradar layer (real — sibling RADOLAN-RW), PT5M period."""
 
     def test_parse_returns_nonempty_list(self) -> None:
         """parse_wms_time_dimension returns non-empty list for DWD fixture."""
@@ -351,7 +351,7 @@ class TestDWDRADOLANFixture:
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
@@ -367,7 +367,7 @@ class TestDWDRADOLANFixture:
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
@@ -383,25 +383,25 @@ class TestDWDRADOLANFixture:
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
         for ts in result:
             assert ts.endswith("Z"), f"Timestamp {ts!r} must end with Z"
 
-    def test_real_niederschlagsradar_layer_also_parseable(self) -> None:
-        """Niederschlagsradar (real layer from live capture) also parses correctly."""
+    def test_sibling_layer_radolan_rw_also_parseable(self) -> None:
+        """RADOLAN-RW (hourly sibling — real layer from live capture) also parses correctly."""
         from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
 
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="Niederschlagsradar",
+            layer="RADOLAN-RW",
             provider_id="dwd_radolan",
             domain="radar",
         )
-        assert len(result) > 0, "Niederschlagsradar should yield timestamps from its period range"
+        assert len(result) > 0, "RADOLAN-RW should yield timestamps from its period range"
 
 
 # ===========================================================================

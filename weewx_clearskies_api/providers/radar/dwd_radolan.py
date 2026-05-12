@@ -41,8 +41,14 @@ PROVIDER_ID = "dwd_radolan"
 DOMAIN = "radar"
 BASE_URL = "https://maps.dwd.de"
 FRAMES_PATH = "/geoserver/dwd/wms"
-LAYER_NAME = "dwd:RX-Produkt"  # 5-min reflectivity composite
-_CACHE_TTL = 60
+# Lead-direct 2026-05-11: brief + api-docs said "dwd:RX-Produkt" but live
+# GetCapabilities (verified from test-author's real fixture) names the
+# 5-min reflectivity layer "Niederschlagsradar" (German: "precipitation radar").
+# "dwd:RX-Produkt" is not a valid layer name in the current GeoServer.
+LAYER_NAME = "Niederschlagsradar"  # 5-min reflectivity composite
+# TTL deviation: ADR-017's default for radar frame metadata is 5 min;
+# brief lead-call 5 set 60s. ADR-017 amendment deferred (3b-14 auditor F3).
+_CACHE_TTL = 60  # see deviation note above
 _API_VERSION = "0.1.0"
 
 ATTRIBUTION = "Source: Deutscher Wetterdienst (DWD)"
@@ -59,8 +65,8 @@ CAPABILITY = ProviderCapability(
     auth_required=(),
     default_poll_interval_seconds=_CACHE_TTL,
     operator_notes=(
-        "RADOLAN RX-Produkt (5-min reflectivity composite) via DWD GeoServer WMS. "
-        "Germany only. 5-minute cadence. DWD Open Data — attribution required: "
+        "RADOLAN Niederschlagsradar (5-min reflectivity composite) via DWD GeoServer "
+        "WMS. Germany only. 5-minute cadence. DWD Open Data — attribution required: "
         "'Quelle: Deutscher Wetterdienst' / 'Source: Deutscher Wetterdienst (DWD)'. "
         "WN-Produkt nowcast frames are out of scope for v0.1."
     ),

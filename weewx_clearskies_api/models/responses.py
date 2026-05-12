@@ -791,21 +791,33 @@ class RadarFrame(BaseModel):
     """One radar frame (canonical-data-model §4.5, OpenAPI RadarFrame schema).
 
     Radar has no canonical-entity mapping — tiles are bytes fetched browser-side.
-    RadarFrame carries only the timestamp and kind so the dashboard can drive
-    the frame-replay control.
+    RadarFrame carries the timestamp, kind, and (RainViewer only) a per-frame
+    `path` that the dashboard combines with the response-level `tileHost` to
+    materialize the tile URL via CAPABILITY.tile_url_template.
+
+    `path` is None for WMS-T providers (they compose tile URLs purely via
+    `?TIME=<time>`); set only for RainViewer per its api-docs (3b-14 auditor F2).
     """
 
     model_config = ConfigDict(extra="ignore")
 
     time: str  # UTC ISO-8601 with Z (ADR-020)
     kind: str  # "past" | "current" | "nowcast" (OpenAPI RadarFrame kind enum)
+    path: str | None = None  # RainViewer per-frame tile path; None for WMS-T
 
 
 class RadarFrameList(BaseModel):
     """List of radar frames for a single provider (OpenAPI RadarFrameList schema).
 
     required: [providerId, frames]
-    attribution is nullable (OpenAPI spec).
+    attribution + tileHost are nullable.
+
+    `tileHost` is RainViewer's per-fetch tile-server host from the JSON envelope
+    (`weather-maps.json.host`; currently `https://tilecache.rainviewer.com`).
+    The dashboard substitutes it into CAPABILITY.tile_url_template's `{host}`
+    placeholder along with each frame's `path`. None for WMS-T providers
+    (their tile URL is composed differently — see CAPABILITY.wms_endpoint_url).
+    3b-14 auditor F2 added this.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -813,6 +825,7 @@ class RadarFrameList(BaseModel):
     providerId: str
     frames: list[RadarFrame]
     attribution: str | None = None
+    tileHost: str | None = None  # RainViewer per-fetch tile host; None for WMS-T
 
 
 class RadarFramesResponse(BaseModel):

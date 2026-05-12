@@ -3,8 +3,10 @@
 Covers per the task-3b-14 brief §Test coverage (dwd_radolan unit test file):
 
   Fixture loading + parse:
-  - get_capabilities.xml loads via parse_wms_time_dimension for layer "dwd:RX-Produkt"
-    (synthetic — see fixtures.md; api-dev uses LAYER_NAME="dwd:RX-Produkt" per api-docs).
+  - get_capabilities.xml loads via parse_wms_time_dimension for layer
+    "Niederschlagsradar" (lead-direct 2026-05-11 — real layer name from live
+    GetCapabilities; brief + api-docs originally said "dwd:RX-Produkt"
+    which is not in the live capabilities).
   - TIME dimension: 2026-05-08T00:00:00Z/2026-05-12T03:15:00Z/PT5M (4+ day range; capped at 300).
   - All timestamps end with 'Z'.
 
@@ -25,7 +27,7 @@ Covers per the task-3b-14 brief §Test coverage (dwd_radolan unit test file):
   - provider_id = "dwd_radolan", domain = "radar".
   - supplied_canonical_fields = () (no canonical-entity mapping).
   - auth_required = () (keyless).
-  - wms_endpoint_url is non-None, wms_layer_name = "dwd:RX-Produkt".
+  - wms_endpoint_url is non-None, wms_layer_name = "Niederschlagsradar".
   - tile_content_type = "image/png".
   - tile_url_template = None (WMS provider).
   - geographic_coverage = "germany".
@@ -85,16 +87,16 @@ def _reset_provider_state() -> None:
 
 
 class TestDWDRADOLANFixtureParsing:
-    """parse_wms_time_dimension parses DWD RADOLAN fixture for dwd:RX-Produkt (synthetic)."""
+    """parse_wms_time_dimension parses DWD RADOLAN fixture for Niederschlagsradar (real layer)."""
 
     def test_fixture_parses_to_nonempty_list(self) -> None:
-        """get_capabilities.xml parses to non-empty list for dwd:RX-Produkt."""
+        """get_capabilities.xml parses to non-empty list for Niederschlagsradar."""
         from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
@@ -110,7 +112,7 @@ class TestDWDRADOLANFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
@@ -125,7 +127,7 @@ class TestDWDRADOLANFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="dwd:RX-Produkt",
+            layer="Niederschlagsradar",
             provider_id="dwd_radolan",
             domain="radar",
         )
@@ -285,11 +287,11 @@ class TestDWDRADOLANCapabilityDeclaration:
 
         assert CAPABILITY.geographic_coverage == "germany"
 
-    def test_capability_wms_layer_name_is_dwd_rx_produkt(self) -> None:
-        """CAPABILITY.wms_layer_name = 'dwd:RX-Produkt'."""
+    def test_capability_wms_layer_name_is_niederschlagsradar(self) -> None:
+        """CAPABILITY.wms_layer_name = 'Niederschlagsradar' (real layer name from live GetCapabilities)."""
         from weewx_clearskies_api.providers.radar.dwd_radolan import CAPABILITY  # noqa: PLC0415
 
-        assert CAPABILITY.wms_layer_name == "dwd:RX-Produkt"
+        assert CAPABILITY.wms_layer_name == "Niederschlagsradar"
 
     def test_capability_tile_content_type_is_png(self) -> None:
         """CAPABILITY.tile_content_type = 'image/png'."""

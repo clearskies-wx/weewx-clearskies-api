@@ -85,14 +85,23 @@ def _parse_iso_duration(period: str) -> timedelta | None:
 def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
     """Expand a WMS period notation to a list of ISO-8601 timestamps.
 
+    Walks BACKWARD from end_iso, emitting up to _MAX_PERIOD_FRAMES timestamps,
+    then returns them sorted ascending. End-anchored windowing ensures the
+    LATEST frame in the time dimension is always included — critical because
+    `_to_canonical_frames` labels max(timestamps) as "current". Without this,
+    long-range fixtures (e.g. IEM NEXRAD's 2011-2026/PT5M dimension) report a
+    decades-stale "current" frame after truncation at the cap.
+
     Args:
         start_iso: Start timestamp (ISO-8601 UTC).
         end_iso: End timestamp (ISO-8601 UTC).
         period_iso: ISO 8601 duration string (e.g. "PT5M").
 
     Returns:
-        List of ISO-8601 UTC timestamps at period intervals, inclusive of
-        start and up to (but not past) end. Capped at _MAX_PERIOD_FRAMES.
+        List of ISO-8601 UTC timestamps at period intervals, ascending,
+        inclusive of end and walking back to start. Capped at the most
+        recent _MAX_PERIOD_FRAMES timestamps. Lead-direct fix 2026-05-11
+        per auditor finding F1.
 
     Raises:
         ValueError: If any timestamp or duration cannot be parsed.
@@ -104,10 +113,12 @@ def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
         raise ValueError(f"Cannot parse or zero-duration period: {period_iso!r}")
 
     timestamps: list[str] = []
-    current = start
-    while current <= end and len(timestamps) < _MAX_PERIOD_FRAMES:
+    current = end
+    while current >= start and len(timestamps) < _MAX_PERIOD_FRAMES:
         timestamps.append(current.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        current = current + delta
+        current = current - delta
+    # Walked backward → reverse to ascending order (matches comma-separated form).
+    timestamps.reverse()
     return timestamps
 
 

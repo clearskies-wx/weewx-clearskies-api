@@ -3,8 +3,10 @@
 Covers per the task-3b-14 brief §Test coverage (noaa_mrms unit test file):
 
   Fixture loading + parse:
-  - get_capabilities.xml loads via parse_wms_time_dimension for layer "0"
-    (synthetic — see fixtures.md; api-dev uses LAYER_NAME="0" per api-docs).
+  - get_capabilities.xml loads via parse_wms_time_dimension for layer
+    "radar_base_reflectivity_time" (lead-direct 2026-05-11 — real layer name
+    from live GetCapabilities; brief + api-docs originally said "0" which was
+    wrong).
   - TIME dimension: start/end/PT1S (period notation; fine-grained).
   - All timestamps end with 'Z'.
 
@@ -25,7 +27,7 @@ Covers per the task-3b-14 brief §Test coverage (noaa_mrms unit test file):
   - provider_id = "noaa_mrms", domain = "radar".
   - supplied_canonical_fields = () (no canonical-entity mapping).
   - auth_required = () (keyless).
-  - wms_endpoint_url is non-None, wms_layer_name = "0".
+  - wms_endpoint_url is non-None, wms_layer_name = "radar_base_reflectivity_time".
   - tile_content_type = "image/png".
   - tile_url_template = None (WMS provider).
 
@@ -93,7 +95,7 @@ class TestNOAAMRMSFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="0",
+            layer="radar_base_reflectivity_time",
             provider_id="noaa_mrms",
             domain="radar",
         )
@@ -106,7 +108,7 @@ class TestNOAAMRMSFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="0",
+            layer="radar_base_reflectivity_time",
             provider_id="noaa_mrms",
             domain="radar",
         )
@@ -247,12 +249,13 @@ class TestNOAAMRMSCapabilityDeclaration:
 
         assert CAPABILITY.wms_endpoint_url is not None
 
-    def test_capability_wms_layer_name_is_0(self) -> None:
-        """CAPABILITY.wms_layer_name = '0' (ArcGIS ImageServer convention per api-docs)."""
+    def test_capability_wms_layer_name_is_radar_base_reflectivity_time(self) -> None:
+        """CAPABILITY.wms_layer_name = 'radar_base_reflectivity_time' (real layer name from live GetCapabilities)."""
         from weewx_clearskies_api.providers.radar.noaa_mrms import CAPABILITY  # noqa: PLC0415
 
-        assert CAPABILITY.wms_layer_name == "0", (
-            f"Expected wms_layer_name='0', got {CAPABILITY.wms_layer_name!r}"
+        assert CAPABILITY.wms_layer_name == "radar_base_reflectivity_time", (
+            f"Expected wms_layer_name='radar_base_reflectivity_time', "
+            f"got {CAPABILITY.wms_layer_name!r}"
         )
 
     def test_capability_tile_content_type_is_png(self) -> None:

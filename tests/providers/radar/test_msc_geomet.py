@@ -3,8 +3,10 @@
 Covers per the task-3b-14 brief §Test coverage (msc_geomet unit test file):
 
   Fixture loading + parse:
-  - get_capabilities.xml loads via parse_wms_time_dimension for layer "RADAR_1KM_RDPR"
-    (synthetic — see fixtures.md; api-dev uses LAYER_NAME="RADAR_1KM_RDPR" per api-docs).
+  - get_capabilities.xml loads via parse_wms_time_dimension for layer
+    "RADAR_1KM_RRAI" (lead-direct 2026-05-11 — real layer name from live
+    GetCapabilities; brief + api-docs originally said "RADAR_1KM_RDPR"
+    which is not in the live capabilities).
   - TIME dimension: 2026-05-11T21:54:00Z/2026-05-12T00:54:00Z/PT6M → 31 frames.
   - All timestamps end with 'Z'.
 
@@ -25,7 +27,7 @@ Covers per the task-3b-14 brief §Test coverage (msc_geomet unit test file):
   - provider_id = "msc_geomet", domain = "radar".
   - supplied_canonical_fields = () (no canonical-entity mapping).
   - auth_required = () (keyless).
-  - wms_endpoint_url is non-None, wms_layer_name = "RADAR_1KM_RDPR".
+  - wms_endpoint_url is non-None, wms_layer_name = "RADAR_1KM_RRAI".
   - tile_content_type = "image/png".
   - tile_url_template = None (WMS provider).
   - geographic_coverage = "canada".
@@ -85,16 +87,16 @@ def _reset_provider_state() -> None:
 
 
 class TestMSCGeoMetFixtureParsing:
-    """parse_wms_time_dimension parses MSC GeoMet fixture for RADAR_1KM_RDPR (synthetic)."""
+    """parse_wms_time_dimension parses MSC GeoMet fixture for RADAR_1KM_RRAI (real layer)."""
 
     def test_fixture_parses_to_31_frames(self) -> None:
-        """get_capabilities.xml: RADAR_1KM_RDPR, 3h/PT6M → 31 frames."""
+        """get_capabilities.xml: RADAR_1KM_RRAI, 3h/PT6M → 31 frames."""
         from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -107,7 +109,7 @@ class TestMSCGeoMetFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -120,7 +122,7 @@ class TestMSCGeoMetFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -133,7 +135,7 @@ class TestMSCGeoMetFixtureParsing:
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
             xml_bytes,
-            layer="RADAR_1KM_RDPR",
+            layer="RADAR_1KM_RRAI",
             provider_id="msc_geomet",
             domain="radar",
         )
@@ -282,11 +284,11 @@ class TestMSCGeoMetCapabilityDeclaration:
 
         assert CAPABILITY.geographic_coverage == "canada"
 
-    def test_capability_wms_layer_name_is_radar_1km_rdpr(self) -> None:
-        """CAPABILITY.wms_layer_name = 'RADAR_1KM_RDPR'."""
+    def test_capability_wms_layer_name_is_radar_1km_rrai(self) -> None:
+        """CAPABILITY.wms_layer_name = 'RADAR_1KM_RRAI' (real layer name from live GetCapabilities)."""
         from weewx_clearskies_api.providers.radar.msc_geomet import CAPABILITY  # noqa: PLC0415
 
-        assert CAPABILITY.wms_layer_name == "RADAR_1KM_RDPR"
+        assert CAPABILITY.wms_layer_name == "RADAR_1KM_RRAI"
 
     def test_capability_tile_content_type_is_png(self) -> None:
         """CAPABILITY.tile_content_type = 'image/png'."""

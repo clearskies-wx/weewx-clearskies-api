@@ -32,15 +32,15 @@ from weewx_clearskies_api.providers.earthquakes import geonet as earthquakes_geo
 from weewx_clearskies_api.providers.earthquakes import renass as earthquakes_renass
 from weewx_clearskies_api.providers.earthquakes import usgs as earthquakes_usgs
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
+from weewx_clearskies_api.providers.forecast import nws as forecast_nws
+from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
+from weewx_clearskies_api.providers.forecast import openweathermap as forecast_openweathermap
+from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
 from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
 from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
 from weewx_clearskies_api.providers.radar import rainviewer as radar_rainviewer
-from weewx_clearskies_api.providers.forecast import nws as forecast_nws
-from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
-from weewx_clearskies_api.providers.forecast import openweathermap as forecast_openweathermap
-from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 
 PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("alerts", "aeris"): alerts_aeris,

@@ -351,6 +351,35 @@ class TestBranch3RainViewerSuccess:
             f"generatedAt must end with Z, got {body['generatedAt']!r}"
         )
 
+    def test_rainviewer_response_has_tile_host_and_per_frame_path(self) -> None:
+        """3b-14 auditor F2: response.data.tileHost set + frame.path set per frame.
+
+        Without these, the dashboard cannot construct RainViewer tile URLs from
+        the CAPABILITY.tile_url_template which has {host} and {path} placeholders.
+        """
+        app = _make_radar_app(provider="rainviewer")
+        client = TestClient(app, raise_server_exceptions=False)
+        data = _load_json_fixture(_RV_FIXTURE)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_PROVIDER_UPSTREAM_URLS["rainviewer"]).mock(
+                return_value=httpx.Response(200, json=data)
+            )
+            response = client.get("/api/v1/radar/providers/rainviewer/frames")
+
+        _reset_all_provider_state()
+        body = response.json()
+        assert body["data"]["tileHost"] == "https://tilecache.rainviewer.com", (
+            f"Expected tileHost from fixture envelope; got {body['data'].get('tileHost')!r}"
+        )
+        for frame in body["data"]["frames"]:
+            assert frame.get("path") is not None, (
+                f"Each rainviewer frame must carry per-frame path; got {frame!r}"
+            )
+            assert frame["path"].startswith("/v2/radar/"), (
+                f"Frame path should start with '/v2/radar/'; got {frame['path']!r}"
+            )
+
 
 class TestBranch3IEMNEXRADSuccess:
     """iem_nexrad: 200 RadarFramesResponse."""
@@ -455,6 +484,110 @@ class TestBranch3DWDRADOLANSuccess:
         body = response.json()
         assert body["data"]["providerId"] == "dwd_radolan"
         assert len(body["data"]["frames"]) > 0
+
+
+class TestF1RegressionGuardCurrentFrameNearEndOfPeriod:
+    """Regression guard for 3b-14 auditor F1.
+
+    `_expand_period()` used to walk forward from start_iso, truncating to the
+    first 300 timestamps. For long-range TIME dimensions (IEM 2011-2026 at PT5M,
+    NOAA 6660 frames at PT1S, DWD 4 days at PT5M), the "current" frame ended up
+    decades/hours/days stale. Lead-direct fix walks backward from end_iso.
+
+    These tests assert the "current" frame's time matches each fixture's
+    end-of-period timestamp. If `_expand_period` regresses to start-anchored
+    walking, the current frame will be far from the fixture's end and these
+    assertions will fail loudly.
+    """
+
+    def test_iem_current_frame_is_end_of_period(self) -> None:
+        """IEM NEXRAD fixture period ends 2026-12-31; current frame must be at the end."""
+        app = _make_radar_app(provider="iem_nexrad")
+        client = TestClient(app, raise_server_exceptions=False)
+        xml_bytes = _load_bytes_fixture(_IEM_FIXTURE)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_PROVIDER_UPSTREAM_URLS["iem_nexrad"]).mock(
+                return_value=httpx.Response(200, content=xml_bytes)
+            )
+            response = client.get("/api/v1/radar/providers/iem_nexrad/frames")
+
+        _reset_all_provider_state()
+        frames = response.json()["data"]["frames"]
+        current = [f for f in frames if f["kind"] == "current"]
+        assert len(current) == 1, f"Expected exactly one current frame, got {len(current)}"
+        # IEM TIME dimension: 2011-02-16/2026-12-31/PT5M — end-anchored window
+        # should put current at 2026-12-31T00:00:00Z (PT5M-aligned).
+        assert current[0]["time"].startswith("2026-12-31"), (
+            f"IEM current frame should be 2026-12-31 (fixture end-of-period); "
+            f"got {current[0]['time']!r}. _expand_period regressed to start-anchored?"
+        )
+
+    def test_noaa_current_frame_is_end_of_period(self) -> None:
+        """NOAA MRMS fixture period ends 2026-05-12T01:06:59; current frame must be at the end."""
+        app = _make_radar_app(provider="noaa_mrms")
+        client = TestClient(app, raise_server_exceptions=False)
+        xml_bytes = _load_bytes_fixture(_NOAA_FIXTURE)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_PROVIDER_UPSTREAM_URLS["noaa_mrms"]).mock(
+                return_value=httpx.Response(200, content=xml_bytes)
+            )
+            response = client.get("/api/v1/radar/providers/noaa_mrms/frames")
+
+        _reset_all_provider_state()
+        frames = response.json()["data"]["frames"]
+        current = [f for f in frames if f["kind"] == "current"]
+        assert len(current) == 1
+        # NOAA fixture period ends 2026-05-12T01:06:59Z (PT1S).
+        assert current[0]["time"] == "2026-05-12T01:06:59Z", (
+            f"NOAA current frame should be 2026-05-12T01:06:59Z (fixture end-of-period); "
+            f"got {current[0]['time']!r}. _expand_period regressed to start-anchored?"
+        )
+
+    def test_msc_current_frame_is_end_of_period(self) -> None:
+        """MSC GeoMet fixture period ends 2026-05-12T00:54:00; current frame must be at the end."""
+        app = _make_radar_app(provider="msc_geomet")
+        client = TestClient(app, raise_server_exceptions=False)
+        xml_bytes = _load_bytes_fixture(_MSC_FIXTURE)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_PROVIDER_UPSTREAM_URLS["msc_geomet"]).mock(
+                return_value=httpx.Response(200, content=xml_bytes)
+            )
+            response = client.get("/api/v1/radar/providers/msc_geomet/frames")
+
+        _reset_all_provider_state()
+        frames = response.json()["data"]["frames"]
+        current = [f for f in frames if f["kind"] == "current"]
+        assert len(current) == 1
+        # MSC fixture period ends 2026-05-12T00:54:00Z (31 frames fits within cap).
+        assert current[0]["time"] == "2026-05-12T00:54:00Z", (
+            f"MSC current frame should be 2026-05-12T00:54:00Z (fixture end-of-period); "
+            f"got {current[0]['time']!r}."
+        )
+
+    def test_dwd_current_frame_is_end_of_period(self) -> None:
+        """DWD RADOLAN fixture period ends 2026-05-12T03:15:00; current frame must be at the end."""
+        app = _make_radar_app(provider="dwd_radolan")
+        client = TestClient(app, raise_server_exceptions=False)
+        xml_bytes = _load_bytes_fixture(_DWD_FIXTURE)
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(_PROVIDER_UPSTREAM_URLS["dwd_radolan"]).mock(
+                return_value=httpx.Response(200, content=xml_bytes)
+            )
+            response = client.get("/api/v1/radar/providers/dwd_radolan/frames")
+
+        _reset_all_provider_state()
+        frames = response.json()["data"]["frames"]
+        current = [f for f in frames if f["kind"] == "current"]
+        assert len(current) == 1
+        # DWD fixture period ends 2026-05-12T03:15:00Z (PT5M).
+        assert current[0]["time"] == "2026-05-12T03:15:00Z", (
+            f"DWD current frame should be 2026-05-12T03:15:00Z (fixture end-of-period); "
+            f"got {current[0]['time']!r}. _expand_period regressed to start-anchored?"
+        )
 
 
 # ===========================================================================

@@ -45,7 +45,9 @@ DOMAIN = "radar"
 BASE_URL = "https://mesonet.agron.iastate.edu"
 FRAMES_PATH = "/cgi-bin/wms/nexrad/n0q-t.cgi"
 LAYER_NAME = "nexrad-n0q-wmst"
-_CACHE_TTL = 60
+# TTL deviation: ADR-017's default for radar frame metadata is 5 min;
+# brief lead-call 5 set 60s. ADR-017 amendment deferred (3b-14 auditor F3).
+_CACHE_TTL = 60  # see deviation note above
 _API_VERSION = "0.1.0"
 
 ATTRIBUTION = "NEXRAD imagery courtesy of Iowa Environmental Mesonet."

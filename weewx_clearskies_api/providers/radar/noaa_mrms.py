@@ -40,8 +40,13 @@ PROVIDER_ID = "noaa_mrms"
 DOMAIN = "radar"
 BASE_URL = "https://mapservices.weather.noaa.gov"
 FRAMES_PATH = "/eventdriven/services/radar/radar_base_reflectivity_time/ImageServer/WMSServer"
-LAYER_NAME = "0"
-_CACHE_TTL = 60
+# Lead-direct 2026-05-11: brief + api-docs claimed "0" (ArcGIS ImageServer convention)
+# but live GetCapabilities names the layer `radar_base_reflectivity_time` (verified
+# from test-author's real fixture). Lead-direct fix to match real layer.
+LAYER_NAME = "radar_base_reflectivity_time"
+# TTL deviation: ADR-017's default for radar frame metadata is 5 min;
+# brief lead-call 5 set 60s. ADR-017 amendment deferred (3b-14 auditor F3).
+_CACHE_TTL = 60  # see deviation note above
 _API_VERSION = "0.1.0"
 
 ATTRIBUTION = "NOAA/NWS — Multi-Radar/Multi-Sensor (MRMS)"

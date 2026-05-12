@@ -9,10 +9,17 @@ Five responsibilities per ADR-038 §2:
   5. Error handling     — canonical taxonomy (QuotaExhausted, TransientNetworkError,
                           ProviderProtocolError)
 
-Frame-kind mapping (per docs/reference/api-docs/rainviewer.md):
-  radar.past[i].time >= generated → "current"  (latest past frame is current)
-  radar.past[i].time < generated  → "past"
-  radar.nowcast[i]                → "nowcast"
+Frame-kind mapping (per docs/reference/api-docs/rainviewer.md, lead-direct
+fix 2026-05-11 after brief rule-bug surfaced by test-author):
+  EXACTLY ONE entry in radar.past with max(time) → "current"
+  All other radar.past entries                   → "past"
+  radar.nowcast[i]                               → "nowcast"
+
+  The original brief said "time >= generated → current" but live RainViewer
+  responses have all past[].time strictly BEFORE generated (the latest past
+  is ~5 min before the JSON was generated), so the literal rule produces
+  zero "current" frames. The api-docs parenthetical ("the latest past frame
+  is current") is the correct semantic.
 
 Cache (ADR-017):
   Key: SHA-256 of (provider_id, "frames").  No lat/lon component — frame index
@@ -57,7 +64,12 @@ PROVIDER_ID = "rainviewer"
 DOMAIN = "radar"
 BASE_URL = "https://api.rainviewer.com"
 FRAMES_PATH = "/public/weather-maps.json"
-_CACHE_TTL = 60  # 60 s per brief lead call 5
+# TTL deviation: ADR-017's default for radar frame metadata is 5 min;
+# brief lead-call 5 set 60s to match earthquakes precedent (3b-13). The
+# deviation is conscious — radar frame indexes roll forward every 5-10 min
+# upstream, but cache hit-rate at 60s is acceptable for keyless polite-use.
+# ADR-017 amendment deferred to a future round (3b-14 auditor F3).
+_CACHE_TTL = 60  # 60 s — see ADR-017 deviation note above
 _API_VERSION = "0.1.0"
 
 ATTRIBUTION = "RainViewer (https://www.rainviewer.com/)"
@@ -170,26 +182,36 @@ def _to_canonical_frames(parsed: _RainViewerWeatherMaps) -> list[RadarFrame]:
     """Map RainViewer wire model to a list of canonical RadarFrame instances.
 
     Frame-kind rule (docs/reference/api-docs/rainviewer.md):
-      past[i].time >= generated → "current"  (latest past frame = current)
-      past[i].time < generated  → "past"
-      nowcast[i]                → "nowcast"
+      The single past entry with max(time) → "current"
+      All other past entries               → "past"
+      nowcast entries                      → "nowcast"
+
+    There is always exactly ONE "current" frame in a non-empty past list.
+
+    Each frame's `path` is set to the wire `path` so the dashboard can
+    combine it with the response-level `tileHost` and the CAPABILITY's
+    tile_url_template to construct the per-frame tile URL (3b-14 F2).
     """
     frames: list[RadarFrame] = []
 
-    for entry in parsed.radar.past:
-        kind = "current" if entry.time >= parsed.generated else "past"
-        frames.append(
-            RadarFrame(
-                time=epoch_to_utc_iso8601(entry.time, provider_id=PROVIDER_ID, domain=DOMAIN),
-                kind=kind,
+    if parsed.radar.past:
+        latest_past_time = max(entry.time for entry in parsed.radar.past)
+        for entry in parsed.radar.past:
+            kind = "current" if entry.time == latest_past_time else "past"
+            frames.append(
+                RadarFrame(
+                    time=epoch_to_utc_iso8601(entry.time, provider_id=PROVIDER_ID, domain=DOMAIN),
+                    kind=kind,
+                    path=entry.path,
+                )
             )
-        )
 
     for entry in parsed.radar.nowcast:
         frames.append(
             RadarFrame(
                 time=epoch_to_utc_iso8601(entry.time, provider_id=PROVIDER_ID, domain=DOMAIN),
                 kind="nowcast",
+                path=entry.path,
             )
         )
 
@@ -260,6 +282,7 @@ def get_frames() -> RadarFrameList:
         providerId=PROVIDER_ID,
         frames=frames,
         attribution=ATTRIBUTION,
+        tileHost=parsed.host,  # 3b-14 F2 — dashboard combines with frame.path + CAPABILITY.tile_url_template
     )
 
     cache.set(key, _to_cacheable(result), ttl_seconds=_CACHE_TTL)
