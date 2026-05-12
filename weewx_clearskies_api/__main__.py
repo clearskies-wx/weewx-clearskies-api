@@ -39,6 +39,7 @@ Startup sequence (ADR-012):
                                 credentials wired for Aeris per 3b-10).
     6l. wire earthquakes settings — pass settings to earthquakes endpoint (default_radius_km).
     6m. wire forecast settings — pass settings to forecast endpoint (NWS UA).
+    6n. wire radar — register configured radar provider's CAPABILITY in registry.
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
 """
@@ -291,7 +292,28 @@ def _wire_providers_from_config(settings: Settings) -> None:
             sys.exit(1)
         declarations.append(module.CAPABILITY)
 
-    # Future rounds extend this with radar.
+    # 3b-14: radar domain (keyless half — rainviewer, iem_nexrad, noaa_mrms,
+    # msc_geomet, dwd_radolan).  No wire_radar_settings() needed: provider id
+    # lives in the registry; no per-request settings (no filter params, no
+    # station lat/lon dependency for frame index).  Brief lead call 6.
+    if settings.radar.provider:
+        provider_id = settings.radar.provider
+        try:
+            module = get_provider_module(domain="radar", provider_id=provider_id)
+        except KeyError as exc:
+            logger.critical(
+                "FATAL: Unknown radar provider %r in api.conf — clearskies-api cannot start. "
+                "Cause: %s. "
+                "Check [radar] provider in api.conf. "
+                "Supported values (3b-14 keyless set): "
+                "rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan. "
+                "Keyed providers (aeris, openweathermap, mapbox_jma) added in 3b-15.",
+                provider_id,
+                exc,
+            )
+            sys.exit(1)
+        declarations.append(module.CAPABILITY)
+
     wire_providers(declarations)
 
 
@@ -310,6 +332,8 @@ def main() -> None:
       6k. Wire aqi settings.
       6l. Wire earthquakes settings.
       6m. Wire forecast settings.
+      (6n is implicit in 6i for radar — CAPABILITY registered in _wire_providers_from_config;
+       no separate wire_radar_settings() per brief lead call 6.)
       7. Register DB health probe.
       8. Start uvicorn.
     """

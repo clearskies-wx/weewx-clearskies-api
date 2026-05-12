@@ -12,6 +12,8 @@ Forecast domain: five rows (one per provider per ADR-007 day-1 set).
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
 AQI domain: openmeteo (3b-9), aeris (3b-10), openweathermap (3b-11), iqair (3b-12 — fourth + FINAL day-1 AQI provider).
 Earthquakes domain: usgs, geonet, emsc, renass (3b-13 — domain opener; all keyless per ADR-040).
+Radar domain: rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan (3b-14 — keyless half per ADR-015).
+  Keyed providers (aeris, openweathermap, mapbox_jma) wired in 3b-15.
 """
 
 from __future__ import annotations
@@ -30,6 +32,11 @@ from weewx_clearskies_api.providers.earthquakes import geonet as earthquakes_geo
 from weewx_clearskies_api.providers.earthquakes import renass as earthquakes_renass
 from weewx_clearskies_api.providers.earthquakes import usgs as earthquakes_usgs
 from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
+from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
+from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
+from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
+from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
+from weewx_clearskies_api.providers.radar import rainviewer as radar_rainviewer
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
 from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
 from weewx_clearskies_api.providers.forecast import openweathermap as forecast_openweathermap
@@ -52,6 +59,11 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "aeris"): forecast_aeris,
     ("forecast", "openweathermap"): forecast_openweathermap,
     ("forecast", "wunderground"): forecast_wunderground,
+    ("radar", "dwd_radolan"): radar_dwd_radolan,
+    ("radar", "iem_nexrad"): radar_iem_nexrad,
+    ("radar", "msc_geomet"): radar_msc_geomet,
+    ("radar", "noaa_mrms"): radar_noaa_mrms,
+    ("radar", "rainviewer"): radar_rainviewer,
 }
 
 

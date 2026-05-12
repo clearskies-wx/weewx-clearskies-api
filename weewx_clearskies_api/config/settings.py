@@ -462,6 +462,41 @@ class EarthquakesSettings:
             )
 
 
+class RadarSettings:
+    """[radar] section settings (3b-14).
+
+    Provider id for the radar data source.  All five day-1 providers (rainviewer,
+    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan) are keyless — no env vars
+    needed.  Keyed providers (aeris, openweathermap, mapbox_jma) added in 3b-15.
+
+    Per ADR-015: single radar provider per deploy (operator picks one per
+    their lat/lon).  Per-region auto-pick is a setup-wizard concern (out of scope).
+
+    No wire_radar_settings() needed (brief lead call 6): provider id lives in
+    the registry; no per-request settings (no filter params, no station lat/lon
+    needed for frame index).
+    """
+
+    #: Provider id: "rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet",
+    #: "dwd_radolan", or absent.  Keyed providers added in 3b-15.
+    provider: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip()
+        self.provider = raw_provider if raw_provider else None
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet", "dwd_radolan"}
+        # Note: 3b-15 will extend this set with the keyed providers.
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[radar] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values for 3b-14 (more added in 3b-15): "
+                "'rainviewer', 'iem_nexrad', 'noaa_mrms', 'msc_geomet', 'dwd_radolan'."
+            )
+
+
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
     extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
@@ -573,6 +608,7 @@ class Settings:
     alerts: AlertsSettings
     aqi: AQISettings
     earthquakes: EarthquakesSettings
+    radar: RadarSettings
     forecast: ForecastSettings
 
     def __init__(
@@ -590,6 +626,7 @@ class Settings:
         alerts: AlertsSettings | None = None,
         aqi: AQISettings | None = None,
         earthquakes: EarthquakesSettings | None = None,
+        radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
     ) -> None:
         self.api = api
@@ -605,6 +642,7 @@ class Settings:
         self.alerts = alerts if alerts is not None else AlertsSettings({})
         self.aqi = aqi if aqi is not None else AQISettings({})
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
+        self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
 
     def validate(self) -> None:
@@ -616,6 +654,7 @@ class Settings:
         self.alerts.validate()
         self.aqi.validate()
         self.earthquakes.validate()
+        self.radar.validate()
         self.forecast.validate()
 
 
@@ -708,6 +747,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
+    radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
 
     settings = Settings(
@@ -724,6 +764,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         alerts=alerts_cfg,
         aqi=aqi_cfg,
         earthquakes=earthquakes_cfg,
+        radar=radar_cfg,
         forecast=forecast_cfg,
     )
     settings.validate()

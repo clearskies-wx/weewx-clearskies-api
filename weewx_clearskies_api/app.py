@@ -43,6 +43,7 @@ from weewx_clearskies_api.endpoints.alerts import router as alerts_router
 from weewx_clearskies_api.endpoints.aqi import router as aqi_router
 from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
+from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
@@ -114,6 +115,8 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(aqi_router, prefix="/api/v1")
     # 3b-13 new routers.
     app.include_router(earthquakes_router, prefix="/api/v1")
+    # 3b-14 new routers.
+    app.include_router(radar_router, prefix="/api/v1")
 
     # ---------------------------------------------------------------------------
     # Middleware registration order.
