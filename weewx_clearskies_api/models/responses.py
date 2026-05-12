@@ -780,3 +780,48 @@ class EarthquakeListResponse(BaseModel):
     data: list[EarthquakeRecord]
     source: str  # provider_id or "none"
     generatedAt: str  # UTC ISO-8601 with Z
+
+
+# ---------------------------------------------------------------------------
+# Radar (ADR-015, 3b-14)
+# ---------------------------------------------------------------------------
+
+
+class RadarFrame(BaseModel):
+    """One radar frame (canonical-data-model §4.5, OpenAPI RadarFrame schema).
+
+    Radar has no canonical-entity mapping — tiles are bytes fetched browser-side.
+    RadarFrame carries only the timestamp and kind so the dashboard can drive
+    the frame-replay control.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str  # UTC ISO-8601 with Z (ADR-020)
+    kind: str  # "past" | "current" | "nowcast" (OpenAPI RadarFrame kind enum)
+
+
+class RadarFrameList(BaseModel):
+    """List of radar frames for a single provider (OpenAPI RadarFrameList schema).
+
+    required: [providerId, frames]
+    attribution is nullable (OpenAPI spec).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    providerId: str
+    frames: list[RadarFrame]
+    attribution: str | None = None
+
+
+class RadarFramesResponse(BaseModel):
+    """RadarFramesResponse envelope (OpenAPI RadarFramesResponse schema).
+
+    Wraps RadarFrameList in the standard data + generatedAt envelope.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    data: RadarFrameList
+    generatedAt: str  # UTC ISO-8601 with Z

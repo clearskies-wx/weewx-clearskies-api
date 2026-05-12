@@ -32,6 +32,12 @@ dependencies = [
     # backend without a separate install step (ADR-017 §Decision).
     # Pre-approved 2026-05-07 per task brief §confirmed-call #4.
     "redis>=5.0.0",
+    # 3b-14: defusedxml for WMS GetCapabilities XML parsing (radar domain).
+    # Per coding.md §1 "Avoid dangerous functions": stdlib xml.etree is vulnerable
+    # to billion-laughs, external-entity-expansion, and quadratic-blowup attacks.
+    # defusedxml is a pure-Python MIT-licensed replacement that disables these
+    # attack vectors. Lead call 1 in 3b-14 brief.
+    "defusedxml==0.7.1",
 ]
 
 [project.optional-dependencies]
@@ -112,6 +118,11 @@ ignore_missing_stubs = true
 [[tool.mypy.overrides]]
 # skyfield does not ship type stubs.
 module = ["skyfield.*"]
+ignore_missing_stubs = true
+
+[[tool.mypy.overrides]]
+# defusedxml does not ship type stubs (3b-14).
+module = ["defusedxml.*"]
 ignore_missing_stubs = true
 
 # ---------------------------------------------------------------------------

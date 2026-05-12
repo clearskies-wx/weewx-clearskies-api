@@ -31,6 +31,23 @@ class ProviderCapability:
 
     Each provider module exports one of these as its CAPABILITY symbol.
     Fields match the OpenAPI CapabilityDeclaration schema.
+
+    Radar-specific fields (3b-14, lead call 2 — 4 optional fields on the dataclass,
+    not a subclass; ADR-038 line 86 anticipated a tile_format field for radar):
+      tile_url_template: XYZ slippy tile URL template ({z}/{x}/{y} placeholders).
+          Set by rainviewer (XYZ provider). None for WMS-T providers.
+      wms_endpoint_url: WMS GetMap base URL for Leaflet L.tileLayer.wms().
+          Set by WMS-T providers (iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan).
+          None for XYZ providers.
+      wms_layer_name: WMS layer name (e.g. "nexrad-n0q-wmst", "RADAR_1KM_RDPR").
+          Set by WMS-T providers. None for XYZ providers.
+      tile_content_type: MIME type for tile content (e.g. "image/png").
+          Set by all radar providers. None for non-radar providers.
+
+    OpenAPI CapabilityDeclaration schema extension deferred to the dashboard-
+    integration round (post-3b-16) — at that point the dashboard's actual
+    consumption pattern is concrete. Fields exist on the Python dataclass and
+    in the registry now; /capabilities response includes them only if non-None.
     """
 
     provider_id: str
@@ -40,6 +57,11 @@ class ProviderCapability:
     auth_required: tuple[str, ...] = field(default_factory=tuple)
     default_poll_interval_seconds: int = 300
     operator_notes: str | None = None
+    # 3b-14: optional radar fields (None for non-radar providers)
+    tile_url_template: str | None = None      # XYZ slippy URL template
+    wms_endpoint_url: str | None = None       # WMS GetMap base URL
+    wms_layer_name: str | None = None         # WMS layer name
+    tile_content_type: str | None = None      # "image/png" for radar providers
 
 
 # ---------------------------------------------------------------------------
