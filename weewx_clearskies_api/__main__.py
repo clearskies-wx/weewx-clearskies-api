@@ -297,6 +297,8 @@ def _wire_providers_from_config(settings: Settings) -> None:
     # 3b-14: radar domain (keyless half — rainviewer, iem_nexrad, noaa_mrms,
     # msc_geomet, dwd_radolan).
     # 3b-15: keyed providers added (aeris, openweathermap).
+    # 3b-16: iframe provider added; uses make_capability() factory (not CAPABILITY
+    #   constant) so the iframe_url is embedded in the registered capability.
     # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
     # Credentials for keyed providers wired separately via wire_radar_settings().
     if settings.radar.provider:
@@ -310,13 +312,17 @@ def _wire_providers_from_config(settings: Settings) -> None:
                 "Check [radar] provider in api.conf. "
                 "Supported values: "
                 "rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan (keyless); "
-                "aeris, openweathermap (keyed). "
+                "aeris, openweathermap (keyed); "
+                "iframe (embed; requires iframe_url). "
                 "mapbox_jma is not supported — deferred per ADR-015 2026-05-11 amendment.",
                 provider_id,
                 exc,
             )
             sys.exit(1)
-        declarations.append(module.CAPABILITY)
+        if provider_id == "iframe":
+            declarations.append(module.make_capability(iframe_url=settings.radar.iframe_url))
+        else:
+            declarations.append(module.CAPABILITY)
 
     wire_providers(declarations)
 

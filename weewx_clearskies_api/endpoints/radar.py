@@ -91,7 +91,7 @@ _RADAR_AERIS_CLIENT_SECRET: str | None = None
 _RADAR_OWM_APPID: str | None = None
 
 # Known radar provider ids (dispatch table keys for /frames).
-# Includes all 7 providers: 5 keyless (3b-14) + 2 keyed (3b-15).
+# Includes all 8 providers: 5 keyless (3b-14) + 2 keyed (3b-15) + 1 iframe (3b-16).
 # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
 _KNOWN_RADAR_PROVIDERS = frozenset(
     {
@@ -102,6 +102,7 @@ _KNOWN_RADAR_PROVIDERS = frozenset(
         "dwd_radolan",
         "aeris",
         "openweathermap",
+        "iframe",
     }
 )
 
@@ -236,7 +237,20 @@ def get_radar_frames(provider_id: str) -> RadarFramesResponse:
             ),
         )
 
-    # --- Decision tree branch 3: dispatch + fetch ---
+    # --- Decision tree branch 3: iframe early-return ---
+    # iframe providers do not have a frame index — the dashboard embeds the
+    # iframe_url from /capabilities directly.  Return 501 rather than letting
+    # the code fall through to a module that has no get_frames().
+    if provider_id == "iframe":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "iframe providers do not have frame indexes. "
+                "The dashboard reads iframe_url from /capabilities."
+            ),
+        )
+
+    # --- Decision tree branch 4: dispatch + fetch ---
     # KeyError would only fire here if _KNOWN_RADAR_PROVIDERS contains a key
     # missing from PROVIDER_MODULES — a programming error caught at startup.
     module = get_provider_module(domain="radar", provider_id=provider_id)

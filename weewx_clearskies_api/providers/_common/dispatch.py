@@ -41,6 +41,7 @@ from weewx_clearskies_api.providers.forecast import openweathermap as forecast_o
 from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
+from weewx_clearskies_api.providers.radar import iframe as radar_iframe
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
 from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
 from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
@@ -66,6 +67,7 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "wunderground"): forecast_wunderground,
     ("radar", "aeris"): radar_aeris,          # keyed — 3b-15
     ("radar", "dwd_radolan"): radar_dwd_radolan,
+    ("radar", "iframe"): radar_iframe,        # iframe embed — 3b-16
     ("radar", "iem_nexrad"): radar_iem_nexrad,
     ("radar", "msc_geomet"): radar_msc_geomet,
     ("radar", "noaa_mrms"): radar_noaa_mrms,
