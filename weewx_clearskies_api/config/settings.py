@@ -463,11 +463,12 @@ class EarthquakesSettings:
 
 
 class RadarSettings:
-    """[radar] section settings (3b-14; extended 3b-15 with 2 keyed providers).
+    """[radar] section settings (3b-14; extended 3b-15 with 2 keyed providers;
+    extended 3b-16 with iframe provider).
 
     Provider id for the radar data source.  Five keyless providers (rainviewer,
-    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan) and two keyed providers
-    (aeris, openweathermap) per ADR-015.
+    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan), two keyed providers
+    (aeris, openweathermap) per ADR-015, and one iframe provider (iframe).
 
     Note: mapbox_jma is NOT included — deferred per ADR-015 2026-05-11 amendment
     (Mapbox JMA tilesets are raster-array shape, GL-JS-only; incompatible with
@@ -479,15 +480,22 @@ class RadarSettings:
     Keyed provider credentials (aeris, openweathermap) are NOT stored here —
     they are wired at startup via wire_radar_settings() in endpoints/radar.py,
     which reads them from settings.forecast (provider-scoped per 3b-5 Q2).
+
+    iframe provider: operator supplies iframe_url in [radar] section; the
+    dashboard embeds the URL directly.  No frames index, no tile proxy.
     """
 
     #: Provider id: "rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet",
-    #: "dwd_radolan", "aeris", "openweathermap", or absent.
+    #: "dwd_radolan", "aeris", "openweathermap", "iframe", or absent.
     provider: str | None
+    #: iframe embed URL.  Required when provider == "iframe"; None otherwise.
+    iframe_url: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
         self.provider = raw_provider if raw_provider else None
+        raw_iframe_url = str(section.get("iframe_url", "")).strip()
+        self.iframe_url = raw_iframe_url if raw_iframe_url else None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
@@ -499,6 +507,7 @@ class RadarSettings:
             "dwd_radolan",
             "aeris",       # keyed — added 3b-15; credentials in settings.forecast
             "openweathermap",  # keyed — added 3b-15; credentials in settings.forecast
+            "iframe",      # iframe embed — added 3b-16; requires iframe_url in [radar]
         }
         # mapbox_jma is NOT valid — deferred per ADR-015 2026-05-11 amendment.
         if self.provider is not None and self.provider not in valid_providers:
@@ -506,7 +515,12 @@ class RadarSettings:
                 f"[radar] provider {self.provider!r} not in {valid_providers}. "
                 "Supported values: 'rainviewer', 'iem_nexrad', 'noaa_mrms', "
                 "'msc_geomet', 'dwd_radolan' (keyless); "
-                "'aeris', 'openweathermap' (keyed; credentials in [forecast] section)."
+                "'aeris', 'openweathermap' (keyed; credentials in [forecast] section); "
+                "'iframe' (embed; requires iframe_url in [radar] section)."
+            )
+        if self.provider == "iframe" and not self.iframe_url:
+            raise ValueError(
+                "[radar] provider='iframe' requires iframe_url to be set in api.conf"
             )
 
 

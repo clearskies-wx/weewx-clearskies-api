@@ -43,6 +43,8 @@ class ProviderCapability:
           Set by WMS-T providers. None for XYZ providers.
       tile_content_type: MIME type for tile content (e.g. "image/png").
           Set by all radar providers. None for non-radar providers.
+      iframe_url: Operator-supplied iframe URL (3b-16, iframe provider only).
+          Set by the iframe config-slot provider. None for all tile providers.
 
     OpenAPI CapabilityDeclaration schema extension deferred to the dashboard-
     integration round (post-3b-16) — at that point the dashboard's actual
@@ -62,6 +64,7 @@ class ProviderCapability:
     wms_endpoint_url: str | None = None       # WMS GetMap base URL
     wms_layer_name: str | None = None         # WMS layer name
     tile_content_type: str | None = None      # "image/png" for radar providers
+    iframe_url: str | None = None             # operator-supplied iframe URL (iframe provider only)
 
 
 # ---------------------------------------------------------------------------

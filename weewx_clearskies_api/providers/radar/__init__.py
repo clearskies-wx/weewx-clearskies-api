@@ -8,7 +8,10 @@ Day-1 keyless provider set (3b-14 — 5 providers, all keyless):
   dwd_radolan — Germany, WMS-T, GetCapabilities.
 
 Keyed providers (aeris, openweathermap, mapbox_jma) and the tile-proxy
-endpoint are deferred to 3b-15.  iframe config slot deferred to 3b-16.
+endpoint were delivered in 3b-15.
+
+Config-slot provider (3b-16):
+  iframe     — operator-supplied URL, config slot (3b-16). No API call.
 
 Single source per deploy (ADR-015 §Operator setup flow).
 No canonical-entity mapping — radar tiles are bytes (canonical-data-model §4.5).
