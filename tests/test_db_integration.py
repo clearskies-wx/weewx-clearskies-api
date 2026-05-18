@@ -37,8 +37,8 @@ Fixtures:
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -126,7 +126,7 @@ _SQLITE_SDB_PATH = os.environ.get(
 
 def _skip_if_backend_not_configured(backend: str) -> None:
     """Skip the calling test if BACKEND env var does not match `backend`."""
-    if _BACKEND != backend:
+    if backend != _BACKEND:
         pytest.skip(
             f"Skipping {backend} test: BACKEND={_BACKEND!r}. "
             f"Set BACKEND={backend} to run these tests."

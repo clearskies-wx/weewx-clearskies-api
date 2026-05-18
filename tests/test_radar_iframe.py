@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -66,13 +65,12 @@ def _reset_all_provider_state() -> None:
     wire_cache_from_env()
 
 
-def _make_iframe_app(register_capability: bool = True) -> "FastAPI":
+def _make_iframe_app(register_capability: bool = True) -> FastAPI:
     """Build a test FastAPI app with the radar router.
 
     register_capability: if True, registers an iframe ProviderCapability in
     the registry (simulates operator having configured provider='iframe').
     """
-    from fastapi import FastAPI  # noqa: PLC0415
 
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
@@ -120,7 +118,9 @@ class TestMakeCapabilityShape:
 
     def test_make_capability_returns_provider_capability(self) -> None:
         """make_capability() returns a ProviderCapability instance."""
-        from weewx_clearskies_api.providers._common.capability import ProviderCapability  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.capability import (
+            ProviderCapability,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.iframe import make_capability  # noqa: PLC0415
 
         cap = make_capability(iframe_url="https://example.com/radar")
@@ -130,7 +130,10 @@ class TestMakeCapabilityShape:
 
     def test_make_capability_provider_id_is_iframe(self) -> None:
         """make_capability() returns capability with provider_id='iframe'."""
-        from weewx_clearskies_api.providers.radar.iframe import PROVIDER_ID, make_capability  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.iframe import (  # noqa: PLC0415
+            PROVIDER_ID,
+            make_capability,
+        )
 
         cap = make_capability(iframe_url="https://example.com/radar")
         assert cap.provider_id == "iframe", (
@@ -327,7 +330,9 @@ class TestDispatchTableIncludesIframe:
 
     def test_dispatch_table_includes_iframe(self) -> None:
         """('radar', 'iframe') is a key in PROVIDER_MODULES dispatch table."""
-        from weewx_clearskies_api.providers._common.dispatch import PROVIDER_MODULES  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            PROVIDER_MODULES,  # noqa: PLC0415
+        )
 
         assert ("radar", "iframe") in PROVIDER_MODULES, (
             "PROVIDER_MODULES must contain ('radar', 'iframe') for the iframe config-slot provider"
@@ -335,7 +340,9 @@ class TestDispatchTableIncludesIframe:
 
     def test_dispatch_table_iframe_module_has_make_capability(self) -> None:
         """The module at ('radar', 'iframe') in PROVIDER_MODULES exposes make_capability."""
-        from weewx_clearskies_api.providers._common.dispatch import PROVIDER_MODULES  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            PROVIDER_MODULES,  # noqa: PLC0415
+        )
 
         mod = PROVIDER_MODULES[("radar", "iframe")]
         assert hasattr(mod, "make_capability"), (
@@ -345,7 +352,9 @@ class TestDispatchTableIncludesIframe:
 
     def test_dispatch_table_iframe_module_has_no_get_frames(self) -> None:
         """The iframe module correctly has NO get_frames() (it is a config slot, not a frame provider)."""
-        from weewx_clearskies_api.providers._common.dispatch import PROVIDER_MODULES  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            PROVIDER_MODULES,  # noqa: PLC0415
+        )
 
         mod = PROVIDER_MODULES[("radar", "iframe")]
         assert not hasattr(mod, "get_frames"), (

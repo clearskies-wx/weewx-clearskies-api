@@ -37,8 +37,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -178,6 +179,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers all wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.forecast.openweathermap as _owm  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         AlertsSettings,
@@ -189,9 +191,14 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
+    from weewx_clearskies_api.endpoints import forecast as forecast_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -201,20 +208,20 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
+        _reset_basic_tier_warned_for_tests,
+        _reset_http_client_for_tests,
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
-        _reset_basic_tier_warned_for_tests,
-        _reset_http_client_for_tests,
-    )
-    import weewx_clearskies_api.providers.forecast.openweathermap as _owm  # noqa: PLC0415
-    from weewx_clearskies_api.endpoints import forecast as forecast_endpoint  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -265,7 +272,9 @@ def _wire_integration_stack(
     # Build capability list
     capabilities: list[ProviderCapability] = []
     if forecast_provider == "openweathermap":
-        from weewx_clearskies_api.providers.forecast import openweathermap as forecast_owm  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import (
+            openweathermap as forecast_owm,  # noqa: PLC0415
+        )
         capabilities.append(forecast_owm.CAPABILITY)
 
     wire_providers(capabilities)
@@ -285,13 +294,15 @@ def _wire_integration_stack(
 
 def _reset_owm_state() -> None:
     """Reset OWM provider state between tests."""
+    import weewx_clearskies_api.providers.forecast.openweathermap as _owm  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
         _reset_basic_tier_warned_for_tests,
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.forecast.openweathermap as _owm  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -329,7 +340,9 @@ class TestIntegrationDispatchTableHasOpenWeatherMap:
 
     def test_openweathermap_is_in_forecast_dispatch_table(self) -> None:
         """get_provider_module(domain='forecast', provider_id='openweathermap') returns module."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="forecast", provider_id="openweathermap")
         assert module is not None
         assert hasattr(module, "CAPABILITY")
@@ -338,7 +351,9 @@ class TestIntegrationDispatchTableHasOpenWeatherMap:
 
     def test_openweathermap_module_has_correct_domain(self) -> None:
         """OWM module from dispatch table has domain='forecast'."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="forecast", provider_id="openweathermap")
         assert module.CAPABILITY.domain == "forecast"
 
@@ -543,12 +558,12 @@ class TestIntegrationOwmMemoryCacheMissAndHit:
         self, db_engine: Engine
     ) -> None:
         """Memory cache miss → one OWM HTTP call → bundle stored."""
-        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            get_cache,
             reset_cache_for_tests,
             wire_cache_from_env,
-            get_cache,
         )
+        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
             _reset_basic_tier_warned_for_tests,
             _reset_http_client_for_tests,
@@ -590,11 +605,11 @@ class TestIntegrationOwmMemoryCacheMissAndHit:
         self, db_engine: Engine
     ) -> None:
         """Memory cache hit → zero OWM HTTP calls; bundle matches cached."""
-        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             reset_cache_for_tests,
             wire_cache_from_env,
         )
+        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
             _reset_basic_tier_warned_for_tests,
             _reset_http_client_for_tests,
@@ -843,7 +858,9 @@ class TestIntegrationOwmStartupWiring:
             reset_provider_registry_for_tests,
             wire_providers,
         )
-        from weewx_clearskies_api.providers.forecast.openweathermap import CAPABILITY  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openweathermap import (
+            CAPABILITY,  # noqa: PLC0415
+        )
 
         reset_provider_registry_for_tests()
         wire_providers([CAPABILITY])
@@ -859,12 +876,12 @@ class TestIntegrationOwmStartupWiring:
         self, db_engine: Engine
     ) -> None:
         """OWM configured but appid missing → KeyInvalid at fetch (not startup)."""
-        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             reset_cache_for_tests,
             wire_cache_from_env,
         )
+        from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.openweathermap import (  # noqa: PLC0415
             _reset_basic_tier_warned_for_tests,
             _reset_http_client_for_tests,

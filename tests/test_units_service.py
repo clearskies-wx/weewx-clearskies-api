@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers: build in-memory weewx.conf fixtures via configobj
 # ---------------------------------------------------------------------------

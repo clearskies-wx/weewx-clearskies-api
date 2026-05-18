@@ -31,11 +31,11 @@ from __future__ import annotations
 
 import os
 import textwrap
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 
@@ -193,9 +193,12 @@ def integration_client_3a2(
     from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
     from weewx_clearskies_api.services.content import wire_content_directory
     from weewx_clearskies_api.services.reports import wire_reports_directory
-    from weewx_clearskies_api.services.station import load_station_metadata, reset_cache as reset_station
-    from weewx_clearskies_api.services.units import load_units_block, reset_cache as reset_units
-    from weewx_clearskies_api.services.weewx_conf import load_weewx_conf, reset_cache as reset_weewx_conf
+    from weewx_clearskies_api.services.station import load_station_metadata
+    from weewx_clearskies_api.services.station import reset_cache as reset_station
+    from weewx_clearskies_api.services.units import load_units_block
+    from weewx_clearskies_api.services.units import reset_cache as reset_units
+    from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
+    from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
 
     # Reports directory (empty)
     reports_tmp = tmp_path_factory.mktemp("reports_3a2")
@@ -231,6 +234,8 @@ def integration_client_3a2(
     try:
         from weewx_clearskies_api.services.almanac import (
             reset_cache as reset_almanac,
+        )
+        from weewx_clearskies_api.services.almanac import (
             wire_ephemeris_directory,
         )
         reset_almanac()
@@ -721,29 +726,6 @@ class TestStationIntegration:
         The interval column is a MariaDB reserved word — backtick quoting is
         required; this test exercises that query path on both backends.
         """
-        from sqlalchemy.pool import NullPool
-        from weewx_clearskies_api.app import create_app
-        from weewx_clearskies_api.config.settings import (
-            ApiSettings, DatabaseSettings, HealthSettings,
-            LoggingSettings, RateLimitSettings, Settings, WeewxSettings,
-        )
-        from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
-        from weewx_clearskies_api.db.registry import wire_registry
-        from weewx_clearskies_api.db.session import wire_engine
-        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
-        from weewx_clearskies_api.services.content import wire_content_directory
-        from weewx_clearskies_api.services.reports import wire_reports_directory
-        from weewx_clearskies_api.services.station import (
-            load_station_metadata,
-            reset_cache as reset_station,
-        )
-        from weewx_clearskies_api.services.units import (
-            get_target_unit, load_units_block, reset_cache as reset_units
-        )
-        from weewx_clearskies_api.services.weewx_conf import (
-            load_weewx_conf, reset_cache as reset_weewx_conf
-        )
-
         # Production-schema-shaped empty archive (all NOT NULL constraints present).
         # StaticPool + check_same_thread=False ensures all connections share the
         # same in-memory SQLite DB so the archive table created here is visible to
@@ -753,6 +735,33 @@ class TestStationIntegration:
         # the exact driver for commit b7642ae's speculative "no such table" catch.
         # That catch was removed (F4); this pool switch is the correct fixture fix.
         from sqlalchemy.pool import StaticPool as _StaticPool
+
+        from weewx_clearskies_api.app import create_app
+        from weewx_clearskies_api.config.settings import (
+            ApiSettings,
+            DatabaseSettings,
+            HealthSettings,
+            LoggingSettings,
+            RateLimitSettings,
+            Settings,
+            WeewxSettings,
+        )
+        from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
+        from weewx_clearskies_api.db.registry import wire_registry
+        from weewx_clearskies_api.db.session import wire_engine
+        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
+        from weewx_clearskies_api.services.content import wire_content_directory
+        from weewx_clearskies_api.services.reports import wire_reports_directory
+        from weewx_clearskies_api.services.station import (
+            load_station_metadata,
+        )
+        from weewx_clearskies_api.services.station import (
+            reset_cache as reset_station,
+        )
+        from weewx_clearskies_api.services.units import get_target_unit, load_units_block
+        from weewx_clearskies_api.services.units import reset_cache as reset_units
+        from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
+        from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
         empty_engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -1031,8 +1040,13 @@ class TestPagesIntegration:
         """/pages with wire_hidden_pages(['legal']) → 8 entries; legal absent."""
         from weewx_clearskies_api.app import create_app
         from weewx_clearskies_api.config.settings import (
-            ApiSettings, DatabaseSettings, HealthSettings,
-            LoggingSettings, RateLimitSettings, Settings, WeewxSettings,
+            ApiSettings,
+            DatabaseSettings,
+            HealthSettings,
+            LoggingSettings,
+            RateLimitSettings,
+            Settings,
+            WeewxSettings,
         )
         from weewx_clearskies_api.db.reflection import SchemaReflector
         from weewx_clearskies_api.db.registry import wire_registry
@@ -1041,14 +1055,15 @@ class TestPagesIntegration:
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
-            load_station_metadata, reset_cache as reset_station,
+            load_station_metadata,
         )
-        from weewx_clearskies_api.services.units import (
-            get_target_unit, load_units_block, reset_cache as reset_units
+        from weewx_clearskies_api.services.station import (
+            reset_cache as reset_station,
         )
-        from weewx_clearskies_api.services.weewx_conf import (
-            load_weewx_conf, reset_cache as reset_weewx_conf
-        )
+        from weewx_clearskies_api.services.units import get_target_unit, load_units_block
+        from weewx_clearskies_api.services.units import reset_cache as reset_units
+        from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
+        from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
 
         wire_engine(seeded_engine)
         reset_units()
@@ -1256,8 +1271,13 @@ class TestContentEndpointsIntegration:
         """/content/about when about.md absent → 404 problem+json."""
         from weewx_clearskies_api.app import create_app
         from weewx_clearskies_api.config.settings import (
-            ApiSettings, DatabaseSettings, HealthSettings,
-            LoggingSettings, RateLimitSettings, Settings, WeewxSettings,
+            ApiSettings,
+            DatabaseSettings,
+            HealthSettings,
+            LoggingSettings,
+            RateLimitSettings,
+            Settings,
+            WeewxSettings,
         )
         from weewx_clearskies_api.db.reflection import SchemaReflector
         from weewx_clearskies_api.db.registry import wire_registry
@@ -1266,14 +1286,15 @@ class TestContentEndpointsIntegration:
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
-            load_station_metadata, reset_cache as reset_station,
+            load_station_metadata,
         )
-        from weewx_clearskies_api.services.units import (
-            get_target_unit, load_units_block, reset_cache as reset_units
+        from weewx_clearskies_api.services.station import (
+            reset_cache as reset_station,
         )
-        from weewx_clearskies_api.services.weewx_conf import (
-            load_weewx_conf, reset_cache as reset_weewx_conf
-        )
+        from weewx_clearskies_api.services.units import get_target_unit, load_units_block
+        from weewx_clearskies_api.services.units import reset_cache as reset_units
+        from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
+        from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
 
         empty_content = tmp_path_factory.mktemp("content_404_3a2")
         # Do NOT create about.md
@@ -1328,8 +1349,13 @@ class TestContentEndpointsIntegration:
         """404 detail for missing about.md must NOT contain the filesystem path."""
         from weewx_clearskies_api.app import create_app
         from weewx_clearskies_api.config.settings import (
-            ApiSettings, DatabaseSettings, HealthSettings,
-            LoggingSettings, RateLimitSettings, Settings, WeewxSettings,
+            ApiSettings,
+            DatabaseSettings,
+            HealthSettings,
+            LoggingSettings,
+            RateLimitSettings,
+            Settings,
+            WeewxSettings,
         )
         from weewx_clearskies_api.db.reflection import SchemaReflector
         from weewx_clearskies_api.db.registry import wire_registry
@@ -1338,14 +1364,15 @@ class TestContentEndpointsIntegration:
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
-            load_station_metadata, reset_cache as reset_station,
+            load_station_metadata,
         )
-        from weewx_clearskies_api.services.units import (
-            get_target_unit, load_units_block, reset_cache as reset_units
+        from weewx_clearskies_api.services.station import (
+            reset_cache as reset_station,
         )
-        from weewx_clearskies_api.services.weewx_conf import (
-            load_weewx_conf, reset_cache as reset_weewx_conf
-        )
+        from weewx_clearskies_api.services.units import get_target_unit, load_units_block
+        from weewx_clearskies_api.services.units import reset_cache as reset_units
+        from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
+        from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
 
         no_files_dir = tmp_path_factory.mktemp("content_no_leak_3a2")
 

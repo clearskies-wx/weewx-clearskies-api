@@ -9,9 +9,9 @@ ruff: noqa: N815  (canonical field names use weewx camelCase per ADR-010)
 
 from __future__ import annotations
 
-import re
 import datetime as _datetime_mod
-from datetime import UTC, date, datetime
+import re
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -45,7 +45,7 @@ class ArchiveQueryParams(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def check_cursor_page_exclusive(self) -> "ArchiveQueryParams":
+    def check_cursor_page_exclusive(self) -> ArchiveQueryParams:
         if self.cursor is not None and self.page is not None:
             raise ValueError("cursor and page are mutually exclusive")
         return self

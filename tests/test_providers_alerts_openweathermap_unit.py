@@ -120,6 +120,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.alerts.openweathermap as _owm_alerts  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -131,7 +132,6 @@ def _reset_provider_state() -> None:
         _reset_basic_tier_warned_for_tests,
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.alerts.openweathermap as _owm_alerts  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -166,37 +166,51 @@ class TestOwmSeverityFromEvent:
 
     def test_tornado_warning_maps_to_warning(self) -> None:
         """`Tornado Warning` → 'warning' (contains 'warning' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Tornado Warning") == "warning"
 
     def test_severe_thunderstorm_watch_maps_to_watch(self) -> None:
         """`Severe Thunderstorm Watch` → 'watch' (contains 'watch' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Severe Thunderstorm Watch") == "watch"
 
     def test_wind_advisory_maps_to_advisory(self) -> None:
         """`Wind Advisory` → 'advisory' (contains 'advisory' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Wind Advisory") == "advisory"
 
     def test_special_weather_statement_maps_to_advisory(self) -> None:
         """`Special Weather Statement` → 'advisory' (contains 'statement' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Special Weather Statement") == "advisory"
 
     def test_heat_watch_maps_to_watch(self) -> None:
         """`Heat Watch` → 'watch' (contains 'watch' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Heat Watch") == "watch"
 
     def test_coastal_flood_warning_maps_to_warning(self) -> None:
         """`Coastal Flood Warning` → 'warning' (contains 'warning' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Coastal Flood Warning") == "warning"
 
     def test_unknown_event_defaults_to_advisory(self) -> None:
         """`Unknown Mystery Hazard` → 'advisory' (no keyword match → default)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Unknown Mystery Hazard") == "advisory"
 
     def test_unknown_event_does_not_emit_warning_log(
@@ -205,7 +219,9 @@ class TestOwmSeverityFromEvent:
         """Unknown event → 'advisory' default; NO WARNING log (lead-call 12: OWM events
         are natural-language agency labels, not schema codes — noise suppressed).
         """
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         with caplog.at_level(
             logging.WARNING,
             logger="weewx_clearskies_api.providers.alerts.openweathermap",
@@ -217,31 +233,41 @@ class TestOwmSeverityFromEvent:
 
     def test_lowercase_tornado_warning_maps_to_warning(self) -> None:
         """Case-insensitive: `tornado warning` (lower-case) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("tornado warning") == "warning"
 
     def test_warning_beats_advisory_in_priority_order(self) -> None:
         """Priority overlap: `Severe Weather Warning` → 'warning' (warning beats advisory)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         # "Severe Weather Warning" contains both "warning" and no other matches,
         # but the priority ordering ensures "warning" wins over the default.
         assert _owm_severity_from_event("Severe Weather Warning") == "warning"
 
     def test_watch_and_advisory_combined_warning_wins(self) -> None:
         """Priority overlap: event with 'Warning' in name → 'warning' beats 'watch'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         # If a hypothetical event string had "Warning Watch" in its name,
         # warning must take priority per the brief priority order.
         assert _owm_severity_from_event("Warning Watch Test") == "warning"
 
     def test_real_fixture_first_entry_wind_advisory_yields_advisory(self) -> None:
         """Real fixture entry 1 'Wind Advisory' → severity 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Wind Advisory") == "advisory"
 
     def test_real_fixture_second_entry_tornado_warning_yields_warning(self) -> None:
         """Real fixture entry 2 'Tornado Warning' → severity 'warning'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_severity_from_event  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_severity_from_event,  # noqa: PLC0415
+        )
         assert _owm_severity_from_event("Tornado Warning") == "warning"
 
 
@@ -255,13 +281,17 @@ class TestDatetimeConversion:
 
     def test_epoch_converts_to_utc_iso8601_z_string(self) -> None:
         """epoch=1714485600 → UTC ISO-8601 Z string ending in Z."""
-        from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.datetime_utils import (
+            epoch_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = epoch_to_utc_iso8601(1714485600, provider_id="openweathermap", domain="alerts")
         assert result.endswith("Z"), f"Expected UTC Z suffix, got {result!r}"
 
     def test_epoch_converts_to_correct_utc_datetime(self) -> None:
         """epoch=1714485600 → 2024-04-30T14:00:00Z (verified UTC)."""
-        from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.datetime_utils import (
+            epoch_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = epoch_to_utc_iso8601(1714485600, provider_id="openweathermap", domain="alerts")
         assert result == "2024-04-30T14:00:00Z", (
             f"Expected '2024-04-30T14:00:00Z', got {result!r}"
@@ -270,8 +300,8 @@ class TestDatetimeConversion:
     def test_owm_alert_entry_effective_is_utc_z(self) -> None:
         """_owm_alert_to_canonical: start epoch → effective UTC Z."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         entry = _OWMAlertEntry.model_validate({
             "sender_name": "NWS Seattle WA",
@@ -289,8 +319,8 @@ class TestDatetimeConversion:
     def test_owm_alert_entry_end_none_yields_expires_none(self) -> None:
         """end=None → expires=None on canonical record."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         entry = _OWMAlertEntry.model_validate({
             "sender_name": "NWS Test",
@@ -307,8 +337,8 @@ class TestDatetimeConversion:
     def test_real_fixture_effective_is_utc_z(self) -> None:
         """Real fixture start=1714485600 → effective ends with Z."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         fixture = _load_fixture("alerts_paid.json")
         first_raw = fixture["alerts"][0]
@@ -329,7 +359,9 @@ class TestIdSynthesis:
 
     def test_normal_case_produces_pipe_delimited_id(self) -> None:
         """Normal: ("Wind Advisory", 1714485600, "NWS Seattle WA") → expected ID."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _synthesize_alert_id  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _synthesize_alert_id,  # noqa: PLC0415
+        )
         result = _synthesize_alert_id("Wind Advisory", 1714485600, "NWS Seattle WA")
         assert result == "Wind Advisory|1714485600|NWS Seattle WA", (
             f"Expected pipe-delimited ID, got {result!r}"
@@ -337,7 +369,9 @@ class TestIdSynthesis:
 
     def test_none_sender_name_produces_empty_trailing_segment(self) -> None:
         """sender_name=None → trailing empty segment after last pipe."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _synthesize_alert_id  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _synthesize_alert_id,  # noqa: PLC0415
+        )
         result = _synthesize_alert_id("Foo", 100, None)
         assert result == "Foo|100|", (
             f"Expected 'Foo|100|' for None sender_name, got {result!r}"
@@ -345,7 +379,9 @@ class TestIdSynthesis:
 
     def test_empty_sender_name_produces_empty_trailing_segment(self) -> None:
         """sender_name="" → trailing empty segment after last pipe."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _synthesize_alert_id  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _synthesize_alert_id,  # noqa: PLC0415
+        )
         result = _synthesize_alert_id("Foo", 100, "")
         assert result == "Foo|100|", (
             f"Expected 'Foo|100|' for empty sender_name, got {result!r}"
@@ -354,8 +390,8 @@ class TestIdSynthesis:
     def test_id_synthesis_from_real_fixture_first_entry(self) -> None:
         """Real fixture entry 1: synthesized ID has expected format."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         fixture = _load_fixture("alerts_paid.json")
         first_raw = fixture["alerts"][0]
@@ -369,8 +405,8 @@ class TestIdSynthesis:
     def test_id_synthesis_second_entry_different_sender_and_start(self) -> None:
         """Real fixture entry 2 (Tornado Warning): ID uses different sender and start."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         fixture = _load_fixture("alerts_paid.json")
         second_raw = fixture["alerts"][1]
@@ -396,7 +432,9 @@ class TestDescriptionPassthrough:
 
     def _make_entry(self, description: str | None) -> Any:
         """Build a minimal _OWMAlertEntry with the given description."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         return _OWMAlertEntry.model_validate({
             "sender_name": "NWS Test",
             "event": "Wind Advisory",
@@ -407,7 +445,9 @@ class TestDescriptionPassthrough:
 
     def test_description_text_is_passed_through_unchanged(self) -> None:
         """Wire description text is not modified."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_alert_to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_to_canonical,  # noqa: PLC0415
+        )
         text = "* WHAT...Southerly winds 20 to 30 mph with gusts up to 45 mph."
         entry = self._make_entry(text)
         record = _owm_alert_to_canonical(entry)
@@ -417,7 +457,9 @@ class TestDescriptionPassthrough:
 
     def test_description_does_not_append_instruction(self) -> None:
         """No NWS-style instruction-append for OWM (brief: passthrough only)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_alert_to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_to_canonical,  # noqa: PLC0415
+        )
         text = "Test advisory body."
         entry = self._make_entry(text)
         record = _owm_alert_to_canonical(entry)
@@ -428,7 +470,9 @@ class TestDescriptionPassthrough:
 
     def test_description_none_maps_to_none_or_empty(self) -> None:
         """Wire description=None → None or empty string on canonical record (not an error)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _owm_alert_to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_to_canonical,  # noqa: PLC0415
+        )
         entry = self._make_entry(None)
         record = _owm_alert_to_canonical(entry)
         # None or empty string both acceptable — no assertion on which; just that it doesn't raise.
@@ -450,8 +494,8 @@ class TestPartialDomainFields:
     def _make_canonical_record(self) -> Any:
         """Make a canonical AlertRecord from a minimal OWM alert entry."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         entry = _OWMAlertEntry.model_validate({
             "sender_name": "NWS Test",
@@ -530,8 +574,8 @@ class TestTagsFieldDroppedSilently:
     def test_tags_field_in_wire_does_not_appear_on_canonical_record(self) -> None:
         """Wire tags=['Wind'] → dropped; AlertRecord has no tags field."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _OWMAlertEntry,
             _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
         # Wire entry WITH tags (as in real OWM response per api-docs L209)
         entry_data = {
@@ -558,7 +602,9 @@ class TestTagsFieldDroppedSilently:
 
     def test_real_fixture_with_tags_loads_without_error(self) -> None:
         """Real fixture entry with tags=["Wind"] loads cleanly (extra="ignore")."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         fixture = _load_fixture("alerts_paid.json")
         first_raw = fixture["alerts"][0]
         # Confirm the fixture has tags
@@ -616,7 +662,10 @@ class TestWireShapePydantic:
     def test_alert_entry_missing_event_raises_validation_error(self) -> None:
         """Missing required 'event' field → ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         with pytest.raises(ValidationError):
             _OWMAlertEntry.model_validate({
                 "sender_name": "NWS Test",
@@ -629,7 +678,10 @@ class TestWireShapePydantic:
     def test_alert_entry_missing_start_raises_validation_error(self) -> None:
         """Missing required 'start' field → ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         with pytest.raises(ValidationError):
             _OWMAlertEntry.model_validate({
                 "sender_name": "NWS Test",
@@ -641,7 +693,9 @@ class TestWireShapePydantic:
 
     def test_extra_fields_on_alert_entry_ignored(self) -> None:
         """Unknown extra fields on alert entry are silently ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         entry = _OWMAlertEntry.model_validate({
             "sender_name": "NWS Test",
             "event": "Wind Advisory",
@@ -655,7 +709,9 @@ class TestWireShapePydantic:
 
     def test_sender_name_none_is_accepted(self) -> None:
         """sender_name=None is valid (optional field)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         entry = _OWMAlertEntry.model_validate({
             "event": "Wind Advisory",
             "start": 1714485600,
@@ -664,7 +720,9 @@ class TestWireShapePydantic:
 
     def test_end_none_is_accepted(self) -> None:
         """end=None is valid (nullable field)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _OWMAlertEntry  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
         entry = _OWMAlertEntry.model_validate({
             "event": "Wind Advisory",
             "start": 1714485600,
@@ -761,8 +819,8 @@ class TestFetchCacheMissAndHit:
         """Empty alerts[] (no active alerts) → empty list; empty list cached."""
         _reset_provider_state()
         empty_data = _load_fixture("alerts_paid_empty.json")
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OWM_ONECALL_URL).mock(
@@ -773,7 +831,9 @@ class TestFetchCacheMissAndHit:
 
         assert records == []
         # Cache was populated with empty list
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
         cached = get_cache().get(_build_alerts_cache_key(_LAT, _LON))
         assert cached is not None, "Empty list must be cached (not None key miss)"
         assert cached == [], f"Expected cached empty list, got {cached!r}"
@@ -812,8 +872,8 @@ class TestFetchMissingCredentials:
     def test_none_appid_raises_key_invalid_before_http(self) -> None:
         """appid=None → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -823,8 +883,8 @@ class TestFetchMissingCredentials:
     def test_empty_string_appid_raises_key_invalid_before_http(self) -> None:
         """appid='' → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -945,8 +1005,8 @@ class TestFetchHttpErrorPaths:
     def test_non_401_key_invalid_is_reraised(self) -> None:
         """Non-401 KeyInvalid (e.g. 403) → re-raised (defensive path)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
 
         # 403 → KeyInvalid with status_code=403 (not 401 → re-raise path)
         with respx.mock(assert_all_called=False) as mock:
@@ -960,8 +1020,8 @@ class TestFetchHttpErrorPaths:
     def test_429_raises_quota_exhausted(self) -> None:
         """HTTP 429 → QuotaExhausted propagated."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         error_fixture = _load_fixture("alerts_error_429.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -977,8 +1037,8 @@ class TestFetchHttpErrorPaths:
         3b-4 F1 carry-forward: assert retry_after_seconds propagated through.
         """
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         error_fixture = _load_fixture("alerts_error_429.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -998,8 +1058,10 @@ class TestFetchHttpErrorPaths:
     def test_500_raises_transient_network_error(self) -> None:
         """HTTP 500 → TransientNetworkError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OWM_ONECALL_URL).mock(
@@ -1020,8 +1082,10 @@ class TestValidationErrorMapsToProviderProtocolError:
     def test_missing_event_field_raises_provider_protocol_error(self) -> None:
         """Alert entry missing 'event' → ValidationError → ProviderProtocolError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         malformed = {
             "lat": _LAT,
             "lon": _LON,
@@ -1048,8 +1112,10 @@ class TestValidationErrorMapsToProviderProtocolError:
     def test_missing_start_field_raises_provider_protocol_error(self) -> None:
         """Alert entry missing 'start' → ValidationError → ProviderProtocolError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         malformed = {
             "lat": _LAT,
             "lon": _LON,
@@ -1219,11 +1285,11 @@ class TestCapabilityRegistry:
     def test_wire_providers_registers_openweathermap_alerts_capability(self) -> None:
         """wire_providers([CAPABILITY]) → registry contains openweathermap alerts entry."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-            wire_providers,
             get_provider_registry,
+            wire_providers,
         )
+        from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
         wire_providers([CAPABILITY])
         registry = get_provider_registry()
         owm_entries = [
@@ -1245,21 +1311,27 @@ class TestCacheKeyConstruction:
 
     def test_same_coordinates_produce_same_key(self) -> None:
         """Same lat/lon always produces the same cache key."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
         key1 = _build_alerts_cache_key(47.6062, -122.3321)
         key2 = _build_alerts_cache_key(47.6062, -122.3321)
         assert key1 == key2
 
     def test_different_coordinates_produce_different_keys(self) -> None:
         """Different lat/lon produces different cache keys."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
         key1 = _build_alerts_cache_key(47.6062, -122.3321)
         key2 = _build_alerts_cache_key(41.6022, -98.9178)
         assert key1 != key2
 
     def test_key_is_64_char_hex_string(self) -> None:
         """Cache key is SHA-256 hex digest (64 characters)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
         key = _build_alerts_cache_key(47.6062, -122.3321)
         assert len(key) == 64
         assert all(c in "0123456789abcdef" for c in key)
@@ -1271,8 +1343,12 @@ class TestCacheKeyConstruction:
         modules use separate cache entries even though they share the same
         /data/3.0/onecall URL (brief lead-call 15).
         """
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openweathermap import _build_cache_key as _forecast_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.forecast.openweathermap import (
+            _build_cache_key as _forecast_key,  # noqa: PLC0415
+        )
         alerts_key = _build_alerts_cache_key(47.6062, -122.3321)
         forecast_key = _forecast_key(47.6062, -122.3321, "US")
         assert alerts_key != forecast_key, (

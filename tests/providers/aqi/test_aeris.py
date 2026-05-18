@@ -104,6 +104,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -111,8 +112,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.aqi.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -675,7 +677,9 @@ class TestBuildCacheKey:
     def test_aeris_aqi_key_distinct_from_openmeteo_key(self) -> None:
         """Aeris AQI key differs from Open-Meteo key at same coordinates (provider_id differs)."""
         from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _build_cache_key as om_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _build_cache_key as om_key,  # noqa: PLC0415
+        )
         aeris_key = _build_cache_key(47.6062, -122.3321)
         openmeteo_key = om_key(47.6062, -122.3321)
         assert aeris_key != openmeteo_key, (
@@ -684,8 +688,9 @@ class TestBuildCacheKey:
 
     def test_credentials_not_in_cache_key(self) -> None:
         """Cache key signature takes only lat/lon — credentials cannot be embedded."""
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key  # noqa: PLC0415
         import inspect  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key  # noqa: PLC0415
         sig = inspect.signature(_build_cache_key)
         param_names = list(sig.parameters.keys())
         # Must not accept client_id or client_secret
@@ -710,9 +715,12 @@ class TestFetchCacheHit:
 
     def test_cache_hit_returns_canonical_reading_without_http_call(self) -> None:
         """Cache hit → canonical AQIReading returned; no outbound HTTP call made."""
-        from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
         from weewx_clearskies_api.models.responses import AQIReading  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         # Pre-populate cache with a known record
         reading = AQIReading(
@@ -746,7 +754,10 @@ class TestFetchCacheHit:
     def test_cache_hit_sentinel_returns_none_without_http_call(self) -> None:
         """Cache hit with _no_reading sentinel → None; no outbound HTTP call."""
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         cache_key = _build_cache_key(_LAT, _LON)
         get_cache().set(cache_key, {"_no_reading": True}, ttl_seconds=900)
@@ -798,7 +809,10 @@ class TestFetchCacheMiss:
     def test_cache_miss_happy_path_populates_cache(self) -> None:
         """Cache miss happy path → result cached for subsequent reads."""
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
         data = _load_fixture("aeris_current.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -813,7 +827,9 @@ class TestFetchCacheMiss:
 
     def test_wire_validation_failure_raises_provider_protocol_error(self) -> None:
         """Malformed JSON response → ProviderProtocolError (wire-validation failure)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
         malformed = {"not_success": "bad", "totally": "wrong"}
@@ -884,7 +900,9 @@ class TestFetchCacheMiss:
 
     def test_http_500_raises_transient_network_error(self) -> None:
         """HTTP 5xx from Aeris → TransientNetworkError (L2 carry-forward)."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -932,7 +950,9 @@ class TestFetchCacheMiss:
 
     def test_success_false_invalid_query_raises_provider_protocol_error(self) -> None:
         """success=false + error.code='invalid_query' → ProviderProtocolError (LC27)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.aeris import fetch  # noqa: PLC0415
 
         envelope_error = {
@@ -951,7 +971,10 @@ class TestFetchCacheMiss:
     def test_empty_response_array_returns_none_and_caches_sentinel(self) -> None:
         """success=true + empty response[] → None returned + sentinel cached."""
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         empty_response = {"success": True, "error": None, "response": []}
 
@@ -971,7 +994,10 @@ class TestFetchCacheMiss:
     def test_empty_periods_returns_none_and_caches_sentinel(self) -> None:
         """success=true + response[0] with empty periods[] → None + sentinel cached."""
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key, fetch  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         empty_periods = {
             "success": True,

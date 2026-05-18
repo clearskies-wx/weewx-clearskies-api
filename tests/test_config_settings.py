@@ -15,13 +15,11 @@ from pathlib import Path
 import pytest
 
 from weewx_clearskies_api.config.settings import (
-    AQISettings,
     ApiSettings,
+    AQISettings,
     HealthSettings,
     LoggingSettings,
     RateLimitSettings,
-    DatabaseSettings,
-    Settings,
     load_settings,
 )
 

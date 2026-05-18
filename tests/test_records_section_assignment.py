@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Build a ColumnRegistry mock with a configurable set of mapped fields.
 # ---------------------------------------------------------------------------

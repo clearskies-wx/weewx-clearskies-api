@@ -12,15 +12,15 @@ or a mock engine (failure case).  We do not hit a real MariaDB.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import StaticPool
-from unittest.mock import MagicMock, patch
 
 from weewx_clearskies_api.db.health import db_probe, wire_db_health_probe
 from weewx_clearskies_api.health import ProbeResult, _readiness_probes
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

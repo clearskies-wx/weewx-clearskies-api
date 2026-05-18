@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from weewx_clearskies_api.middleware.request_id import RequestIdMiddleware
 from weewx_clearskies_api.logging.redaction_filter import request_id_var
+from weewx_clearskies_api.middleware.request_id import RequestIdMiddleware
 
 
 def _make_minimal_app() -> FastAPI:

@@ -82,7 +82,11 @@ from weewx_clearskies_api.services.almanac import wire_ephemeris_directory
 from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
 from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
-from weewx_clearskies_api.services.units import WeewxConfNotFoundError, get_target_unit, load_units_block
+from weewx_clearskies_api.services.units import (
+    WeewxConfNotFoundError,
+    get_target_unit,
+    load_units_block,
+)
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_weewx_conf
 
 logger = logging.getLogger(__name__)

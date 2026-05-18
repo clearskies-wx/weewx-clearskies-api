@@ -154,7 +154,7 @@ def wire_ephemeris_directory(directory: str) -> None:
         loader = Loader(str(path))
         eph = loader("de421.bsp")
         ts = loader.timescale()
-    except (OSError, IOError, urllib.error.URLError, ValueError) as exc:
+    except (OSError, urllib.error.URLError, ValueError) as exc:
         # OSError/IOError: directory not writable, file missing, permission denied.
         # URLError: network failure on first-run download.
         # ValueError: ephemeris file corrupted or out-of-range for DE421.
@@ -222,7 +222,7 @@ def get_ts_eph() -> tuple:  # type: ignore[return]
         _ts = ts
         _eph = eph
         return _ts, _eph
-    except (OSError, IOError, urllib.error.URLError, ValueError) as exc:
+    except (OSError, urllib.error.URLError, ValueError) as exc:
         # Known failure modes: missing file, network error, corrupted ephemeris.
         raise RuntimeError(
             "Ephemeris not loaded. In production, call wire_ephemeris_directory() "
@@ -315,7 +315,6 @@ class MoonDay:
 
 def _to_utc_z(t: object) -> str:
     """Convert a Skyfield Time object to UTC ISO-8601 with Z suffix."""
-    from skyfield.api import Time  # type: ignore[attr-defined]
 
     dt = t.utc_datetime()  # type: ignore[attr-defined]
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -426,7 +425,7 @@ def _compute_sun_for_date(
 
     rise_ts = None
     set_ts = None
-    for t, e in zip(times, events):
+    for t, e in zip(times, events, strict=False):
         if e == 1 and rise_ts is None:
             rise_ts = t
         elif e == 0 and set_ts is None:
@@ -467,10 +466,10 @@ def _compute_sun_for_date(
     # We want the civil twilight boundaries: sun at -6°.
     # Dawn: first event where state transitions TO ≥ 3.
     # Dusk: last event where state transitions FROM ≥ 3.
-    for t, e in zip(times_tw, events_tw):
+    for t, e in zip(times_tw, events_tw, strict=False):
         if e >= 3 and dawn_time is None:
             dawn_time = _to_utc_z(t)
-    for t, e in zip(reversed(times_tw), reversed(events_tw)):  # type: ignore[call-overload]
+    for t, e in zip(reversed(times_tw), reversed(events_tw), strict=False):  # type: ignore[call-overload]
         if e >= 3 and dusk_time is None:
             dusk_time = _to_utc_z(t)
 
@@ -507,7 +506,7 @@ def _compute_sun_for_date(
     f_seasons = almanac.seasons(eph)  # type: ignore[arg-type]
     t_seasons, events_seasons = almanac.find_discrete(t_start, t_end_yr, f_seasons)  # type: ignore[arg-type]
     # Events: 0=vernal equinox, 1=summer solstice, 2=autumnal equinox, 3=winter solstice.
-    for t, e in zip(t_seasons, events_seasons):
+    for t, e in zip(t_seasons, events_seasons, strict=False):
         if e in (0, 2) and next_equinox is None:
             next_equinox = _to_utc_z(t)
         if e in (1, 3) and next_solstice is None:
@@ -574,7 +573,7 @@ def _compute_moon_for_date(
 
     f_moon = almanac.risings_and_settings(eph, moon, location)  # type: ignore[arg-type]
     times_m, events_m = almanac.find_discrete(t0, t1, f_moon)  # type: ignore[arg-type]
-    for t, e in zip(times_m, events_m):
+    for t, e in zip(times_m, events_m, strict=False):
         if e == 1 and rise_time is None:
             rise_time = _to_utc_z(t)
         elif e == 0 and set_time is None:
@@ -620,7 +619,7 @@ def _compute_moon_for_date(
         f_phases = almanac.moon_phases(eph)  # type: ignore[arg-type]
         t_phases, events_phases = almanac.find_discrete(t_search_start, t_search_end, f_phases)  # type: ignore[arg-type]
         # Events: 0=new moon, 1=first quarter, 2=full moon, 3=last quarter.
-        for t, e in zip(t_phases, events_phases):
+        for t, e in zip(t_phases, events_phases, strict=False):
             if e == 2 and next_full_moon is None:
                 next_full_moon = _to_utc_z(t)
             if e == 0 and next_new_moon is None:

@@ -15,10 +15,7 @@ ADR references: brief §5 and §6 path traversal defense spec.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-import pytest
 
 
 def _wire(directory: Path) -> None:
@@ -33,7 +30,6 @@ class TestReportFileNamingConvention:
 
     def test_monthly_filename_has_zero_padded_month(self) -> None:
         """get_monthly_report constructs NOAA-2025-01.txt for year=2025, month=1."""
-        import weewx_clearskies_api.services.reports as reports_module
 
         # Access the private function to verify filename construction
         # The module uses f"NOAA-{year:04d}-{month:02d}.txt" internally

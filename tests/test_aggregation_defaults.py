@@ -19,8 +19,6 @@ ADR references: brief §2 interval=day spec, brief §test-author-parallel-scope.
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestDayAggregatorConstant:
     """DAY_AGGREGATOR is published in services/archive.py and contains expected defaults."""
@@ -176,7 +174,7 @@ class TestDayAggregatorConstant:
         Derived from _FIRST_CLASS_FIELDS (which is auto-derived from STOCK_COLUMN_MAP
         minus meta) so this test stays in sync with schema changes automatically.
         """
-        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR, _FIRST_CLASS_FIELDS
+        from weewx_clearskies_api.services.archive import _FIRST_CLASS_FIELDS, DAY_AGGREGATOR
 
         # Fields that are intentionally absent from DAY_AGGREGATOR (no archive_day_* table):
         # Direction fields (windDir, windGustDir, vecdir, gustdir) have archive_day tables
@@ -203,7 +201,7 @@ class TestDayAggregatorConstant:
         name was removed from or never added to _FIRST_CLASS_FIELDS (i.e., the name
         is wrong, or the field was deleted from the stock column map).
         """
-        from weewx_clearskies_api.services.archive import DAY_AGGREGATOR, _FIRST_CLASS_FIELDS
+        from weewx_clearskies_api.services.archive import _FIRST_CLASS_FIELDS, DAY_AGGREGATOR
 
         orphans = set(DAY_AGGREGATOR.keys()) - _FIRST_CLASS_FIELDS
         assert not orphans, (

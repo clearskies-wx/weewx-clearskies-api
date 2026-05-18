@@ -40,10 +40,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
-import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -74,6 +73,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset cache, registry, and module-level http client."""
+    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -84,7 +84,6 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -518,6 +517,7 @@ _TEST_CLIENT_SECRET = "TEST_AERIS_SECRET"
 
 def _reset_aeris_provider_state() -> None:
     """Reset provider registry, cache, aeris http client + rate limiter."""
+    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -525,8 +525,9 @@ def _reset_aeris_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.aqi.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -542,6 +543,7 @@ def _make_aeris_aqi_app(wire_credentials: bool = True) -> FastAPI:
     endpoint module (simulating wire_aqi_settings being called at startup).
     If False, leaves them None to exercise the missing-credentials 502 path.
     """
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         ApiSettings,
@@ -552,7 +554,6 @@ def _make_aeris_aqi_app(wire_credentials: bool = True) -> FastAPI:
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
-    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
 
     _reset_aeris_provider_state()
     _wire_test_station_at_seattle()
@@ -785,6 +786,7 @@ _TEST_OWM_APPID = "TEST_OWM_APPID_ENDPOINT"
 
 def _reset_owm_aqi_provider_state() -> None:
     """Reset provider registry, cache, OWM http client + rate limiter."""
+    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -795,7 +797,6 @@ def _reset_owm_aqi_provider_state() -> None:
     from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -810,6 +811,7 @@ def _make_owm_aqi_app(wire_appid: bool = True) -> FastAPI:
     wire_appid: if True, sets _OWM_APPID on the endpoint module.
     If False, leaves it None to exercise the missing-credentials 502 path.
     """
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         ApiSettings,
@@ -820,7 +822,6 @@ def _make_owm_aqi_app(wire_appid: bool = True) -> FastAPI:
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
-    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
 
     _reset_owm_aqi_provider_state()
     _wire_test_station_at_seattle()

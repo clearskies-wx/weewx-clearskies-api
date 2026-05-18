@@ -106,7 +106,9 @@ class TestMoonPhaseNameClassification:
     """
 
     def _classify(self, angle_degrees: float) -> str:
-        from weewx_clearskies_api.services.almanac import _phase_name_from_angle  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.almanac import (
+            _phase_name_from_angle,  # type: ignore[attr-defined]
+        )
         return _phase_name_from_angle(angle_degrees)
 
     def test_angle_0_is_new_moon(self) -> None:
@@ -165,7 +167,9 @@ class TestMoonPhaseNameClassification:
         }
         sample_angles = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5,
                          180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5, 359.9]
-        from weewx_clearskies_api.services.almanac import _phase_name_from_angle  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.almanac import (
+            _phase_name_from_angle,  # type: ignore[attr-defined]
+        )
         for angle in sample_angles:
             name = _phase_name_from_angle(angle)
             assert name in valid_names, (
@@ -197,6 +201,7 @@ class TestAlmanacParamModels:
     def test_almanac_params_reject_malformed_date_string(self) -> None:
         """AlmanacQueryParams rejects non-date string with ValidationError."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import AlmanacQueryParams
         with pytest.raises(ValidationError):
             AlmanacQueryParams.model_validate({"date": "not-a-date"})
@@ -204,6 +209,7 @@ class TestAlmanacParamModels:
     def test_almanac_params_reject_unknown_key(self) -> None:
         """AlmanacQueryParams rejects unknown query key (extra='forbid')."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import AlmanacQueryParams
         with pytest.raises(ValidationError):
             AlmanacQueryParams.model_validate({"date": "2024-01-01", "unknown_key": "x"})
@@ -223,6 +229,7 @@ class TestAlmanacParamModels:
     def test_sun_times_params_reject_year_below_1900(self) -> None:
         """SunTimesQueryParams rejects year < 1900."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import SunTimesQueryParams
         with pytest.raises(ValidationError):
             SunTimesQueryParams.model_validate({"year": 1899})
@@ -230,6 +237,7 @@ class TestAlmanacParamModels:
     def test_sun_times_params_reject_unknown_key(self) -> None:
         """SunTimesQueryParams rejects unknown query key (extra='forbid')."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import SunTimesQueryParams
         with pytest.raises(ValidationError):
             SunTimesQueryParams.model_validate({"year": 2024, "bogus": "yes"})
@@ -251,6 +259,7 @@ class TestAlmanacParamModels:
     def test_moon_phases_params_reject_month_zero(self) -> None:
         """MoonPhasesQueryParams rejects month=0 (< 1)."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import MoonPhasesQueryParams
         with pytest.raises(ValidationError):
             MoonPhasesQueryParams.model_validate({"year": 2024, "month": 0})
@@ -258,6 +267,7 @@ class TestAlmanacParamModels:
     def test_moon_phases_params_reject_month_13(self) -> None:
         """MoonPhasesQueryParams rejects month=13 (> 12)."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import MoonPhasesQueryParams
         with pytest.raises(ValidationError):
             MoonPhasesQueryParams.model_validate({"year": 2024, "month": 13})
@@ -265,6 +275,7 @@ class TestAlmanacParamModels:
     def test_moon_phases_params_reject_year_below_1900(self) -> None:
         """MoonPhasesQueryParams rejects year < 1900."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import MoonPhasesQueryParams
         with pytest.raises(ValidationError):
             MoonPhasesQueryParams.model_validate({"year": 1850, "month": 6})
@@ -272,6 +283,7 @@ class TestAlmanacParamModels:
     def test_moon_phases_params_reject_unknown_key(self) -> None:
         """MoonPhasesQueryParams rejects unknown query key (extra='forbid')."""
         from pydantic import ValidationError
+
         from weewx_clearskies_api.models.params import MoonPhasesQueryParams
         with pytest.raises(ValidationError):
             MoonPhasesQueryParams.model_validate({"year": 2024, "secret": "hax"})
@@ -512,7 +524,7 @@ class TestSunriseSetUsnoReference:
         )
         rise_dt = datetime.datetime.fromisoformat(rise.replace("Z", "+00:00"))
         # USNO-verified reference: 2024-06-21 rise ~09:15Z at lat=42.375, lon=-72.519
-        usno_rise = datetime.datetime(2024, 6, 21, 9, 15, 0, tzinfo=datetime.timezone.utc)
+        usno_rise = datetime.datetime(2024, 6, 21, 9, 15, 0, tzinfo=datetime.UTC)
         delta_minutes = abs((rise_dt - usno_rise).total_seconds()) / 60
         assert delta_minutes <= 7.0, (
             f"Sunrise {rise!r} differs from USNO 09:15Z by {delta_minutes:.1f} min "
@@ -545,7 +557,7 @@ class TestSunriseSetUsnoReference:
         )
         sunset_dt = datetime.datetime.fromisoformat(sunset.replace("Z", "+00:00"))
         # USNO: ~00:29Z on Jun 22
-        usno_set = datetime.datetime(2024, 6, 22, 0, 29, 0, tzinfo=datetime.timezone.utc)
+        usno_set = datetime.datetime(2024, 6, 22, 0, 29, 0, tzinfo=datetime.UTC)
         delta_minutes = abs((sunset_dt - usno_set).total_seconds()) / 60
         assert delta_minutes <= 7.0, (
             f"Sunset {sunset!r} differs from USNO 00:29Z Jun 22 by {delta_minutes:.1f} min "
@@ -571,7 +583,7 @@ class TestSunriseSetUsnoReference:
         assert rise is not None, "sunrise must not be null for mid-latitude winter solstice"
         rise_dt = datetime.datetime.fromisoformat(rise.replace("Z", "+00:00"))
         # USNO-verified reference: 2024-12-21 rise ~12:18Z at lat=42.375, lon=-72.519
-        usno_rise = datetime.datetime(2024, 12, 21, 12, 18, 0, tzinfo=datetime.timezone.utc)
+        usno_rise = datetime.datetime(2024, 12, 21, 12, 18, 0, tzinfo=datetime.UTC)
         delta_minutes = abs((rise_dt - usno_rise).total_seconds()) / 60
         assert delta_minutes <= 7.0, (
             f"Sunrise {rise!r} differs from USNO 12:18Z by {delta_minutes:.1f} min "
@@ -598,7 +610,7 @@ class TestSunriseSetUsnoReference:
         assert sunset is not None, "sunset must not be null for mid-latitude winter solstice"
         sunset_dt = datetime.datetime.fromisoformat(sunset.replace("Z", "+00:00"))
         # USNO-verified reference: 2024-12-21 set ~21:19Z at lat=42.375, lon=-72.519
-        usno_set = datetime.datetime(2024, 12, 21, 21, 19, 0, tzinfo=datetime.timezone.utc)
+        usno_set = datetime.datetime(2024, 12, 21, 21, 19, 0, tzinfo=datetime.UTC)
         delta_minutes = abs((sunset_dt - usno_set).total_seconds()) / 60
         assert delta_minutes <= 7.0, (
             f"Sunset {sunset!r} differs from USNO 21:19Z by {delta_minutes:.1f} min "
@@ -762,6 +774,7 @@ class TestAlmanacExceptionPropagation:
         a 500 problem+json response.
         """
         from skyfield import almanac as sf_almanac
+
         from weewx_clearskies_api.services.almanac import compute_almanac
 
         def _raise_value_error(*_args: object, **_kwargs: object) -> None:

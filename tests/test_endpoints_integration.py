@@ -29,8 +29,9 @@ from __future__ import annotations
 
 import os
 import textwrap
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -62,7 +63,7 @@ _SEED_OUT_TEMP_MAX = 70.0
 
 
 def _skip_if_backend_not_configured(backend: str) -> None:
-    if _BACKEND != backend:
+    if backend != _BACKEND:
         pytest.skip(
             f"BACKEND={_BACKEND!r}; set BACKEND={backend} to run this test"
         )
@@ -330,7 +331,7 @@ class TestCurrentEndpoint:
 
         import datetime as dt_module
         expected_dt = dt_module.datetime.fromtimestamp(
-            int(max_epoch), tz=dt_module.timezone.utc
+            int(max_epoch), tz=dt_module.UTC
         )
         expected_ts = expected_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         assert data["timestamp"] == expected_ts, (
@@ -357,7 +358,7 @@ class TestCurrentEndpoint:
             Settings,
             WeewxSettings,
         )
-        from weewx_clearskies_api.db.reflection import ColumnRegistry, ColumnInfo
+        from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
         from weewx_clearskies_api.db.registry import wire_registry
         from weewx_clearskies_api.db.session import wire_engine
         from weewx_clearskies_api.services.reports import wire_reports_directory
@@ -403,7 +404,7 @@ class TestCurrentEndpoint:
             load_units_block(weewx_conf_path)
             wire_reports_directory("/tmp")
             # Minimal registry with just the core observation columns
-            from weewx_clearskies_api.db.reflection import ColumnRegistry, ColumnInfo
+            from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
             minimal_registry = ColumnRegistry()
             minimal_registry.stock = {
                 "dateTime": ColumnInfo("dateTime", "timestamp", True),

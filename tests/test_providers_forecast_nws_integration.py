@@ -32,8 +32,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -171,6 +172,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers all wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.forecast.nws as _nws  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         AlertsSettings,
@@ -182,7 +184,11 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
@@ -194,16 +200,19 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.forecast.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.forecast.nws as _nws  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -304,8 +313,12 @@ def _mock_all_nws(mock: Any) -> None:
 def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with no forecast provider configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.forecast.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, forecast_provider=None)
     yield app
@@ -326,8 +339,12 @@ def integration_client_no_provider(
 def integration_app_nws(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with NWS forecast provider configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.forecast.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, forecast_provider="nws")
     yield app
@@ -346,8 +363,12 @@ def integration_client_nws(integration_app_nws: FastAPI) -> TestClient:
 def integration_app_both_nws(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with NWS alerts + NWS forecast both configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.forecast.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(
         db_engine, forecast_provider="nws", alerts_provider="nws"
@@ -622,7 +643,9 @@ class TestIntegrationStartupWiring:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -654,7 +677,9 @@ class TestIntegrationStartupWiring:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -705,7 +730,9 @@ class TestIntegrationStartupWiring:
         3b-4 scope item 2 adds the ('forecast', 'aeris') row to dispatch.py;
         the old KeyError expectation is now stale and was updated here.
         """
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="forecast", provider_id="aeris")
         assert module is not None
         assert hasattr(module, "CAPABILITY")
@@ -723,7 +750,9 @@ class TestIntegrationStartupWiring:
 
     def test_nws_now_in_dispatch_table(self, db_engine: Engine) -> None:
         """Verify ('forecast', 'nws') is now in the dispatch table (3b-3 addition)."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="forecast", provider_id="nws")
         assert module is not None
         assert hasattr(module, "CAPABILITY")
@@ -759,7 +788,9 @@ class TestIntegrationForecastNwsRedisBackend:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -805,7 +836,9 @@ class TestIntegrationForecastNwsRedisBackend:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()

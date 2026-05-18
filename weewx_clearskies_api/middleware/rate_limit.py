@@ -23,8 +23,8 @@ from __future__ import annotations
 import logging
 import math
 import time
-import cachetools
 
+import cachetools
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response

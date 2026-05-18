@@ -40,16 +40,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.endpoints.alerts import router as alerts_router
-from weewx_clearskies_api.endpoints.aqi import router as aqi_router
-from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
-from weewx_clearskies_api.endpoints.forecast import router as forecast_router
-from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
+from weewx_clearskies_api.endpoints.aqi import router as aqi_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
 from weewx_clearskies_api.endpoints.content import router as content_router
+from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
+from weewx_clearskies_api.endpoints.forecast import router as forecast_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
 from weewx_clearskies_api.endpoints.pages import router as pages_router
+from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
 from weewx_clearskies_api.endpoints.station import router as station_router

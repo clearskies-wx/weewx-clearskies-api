@@ -12,7 +12,6 @@ for cases that can't be expressed with SQLite's permissions model.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,7 +21,6 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.pool import StaticPool
 
 from weewx_clearskies_api.db.probe import run_write_probe
-
 
 # ---------------------------------------------------------------------------
 # Helpers

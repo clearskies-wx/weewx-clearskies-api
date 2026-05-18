@@ -51,7 +51,6 @@ from weewx_clearskies_api.providers._common.capability import ProviderCapability
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     ProviderProtocolError,
-    TransientNetworkError,
 )
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter

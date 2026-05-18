@@ -25,10 +25,7 @@ Brief: phase-2-task-3b-15-radar-keyed-A2-brief.md §Test-author scope.
 from __future__ import annotations
 
 import base64
-import hashlib
-import json
 from pathlib import Path
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -217,7 +214,6 @@ class TestOWMRadarGetFrames:
 
     def test_get_frames_cache_populated_after_call(self) -> None:
         """After get_frames(), cache contains a serialized frame list."""
-        from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
         from weewx_clearskies_api.providers.radar.openweathermap import get_frames  # noqa: PLC0415
 
         get_frames(appid=_TEST_APPID)
@@ -272,7 +268,9 @@ class TestOWMRadarTileCacheKey:
 
     def test_cache_key_does_not_include_appid(self) -> None:
         """Two different appids produce the same cache key (credentials excluded per LC-D)."""
-        from weewx_clearskies_api.providers.radar.openweathermap import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.openweathermap import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
@@ -280,7 +278,9 @@ class TestOWMRadarTileCacheKey:
 
     def test_cache_key_differs_by_z(self) -> None:
         """Different z values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.openweathermap import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.openweathermap import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=5, x=4, y=6, t=None)
@@ -288,7 +288,9 @@ class TestOWMRadarTileCacheKey:
 
     def test_cache_key_differs_by_x(self) -> None:
         """Different x values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.openweathermap import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.openweathermap import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=5, y=6, t=None)
@@ -296,7 +298,9 @@ class TestOWMRadarTileCacheKey:
 
     def test_cache_key_differs_by_y(self) -> None:
         """Different y values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.openweathermap import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.openweathermap import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=4, y=7, t=None)
@@ -304,7 +308,9 @@ class TestOWMRadarTileCacheKey:
 
     def test_cache_key_includes_provider_id(self) -> None:
         """Cache key payload encodes provider_id to distinguish from other domains."""
-        from weewx_clearskies_api.providers.radar.openweathermap import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.openweathermap import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         # The key is a SHA-256 hex digest; we verify it's deterministic and non-empty.
         key = _build_tile_cache_key(z=4, x=4, y=6, t=None)
@@ -586,7 +592,9 @@ class TestOWMRadarTileUpstreamErrors:
         The provider module raises ProviderProtocolError so the endpoint can
         inspect .status_code and decide (per LC-H decision tree).
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.openweathermap import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -603,7 +611,9 @@ class TestOWMRadarTileUpstreamErrors:
 
     def test_upstream_5xx_raises_transient_network_error(self) -> None:
         """Upstream 5xx after retries → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.openweathermap import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -615,7 +625,9 @@ class TestOWMRadarTileUpstreamErrors:
 
     def test_upstream_network_error_raises_transient_network_error(self) -> None:
         """DNS/TCP failure → TransientNetworkError (after retries exhausted)."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.openweathermap import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:

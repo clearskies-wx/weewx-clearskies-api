@@ -112,8 +112,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -203,7 +203,9 @@ class TestUSGSWireShapeValidation:
         """Dropping 'id' from a Feature → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.usgs import _UsgsEventFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.usgs import (
+            _UsgsEventFeature,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
         feature_raw = raw["features"][0].copy()
@@ -260,7 +262,9 @@ class TestEpochMsToUtcIso8601:
         from weewx_clearskies_api.providers._common.datetime_utils import (  # noqa: PLC0415
             epoch_ms_to_utc_iso8601,
         )
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             epoch_ms_to_utc_iso8601("not-a-number", provider_id="usgs", domain="earthquakes")  # type: ignore[arg-type]
@@ -277,8 +281,8 @@ class TestUSGSToCanonical:
     def _get_first_canonical(self) -> Any:
         """Load fixture, parse, and get first canonical EarthquakeRecord."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _UsgsResponse,
             _to_canonical,
+            _UsgsResponse,
         )
 
         raw = _load_fixture("usgs_seattle_radius_m2_5.json")
@@ -472,8 +476,8 @@ class TestTsunamiConversion:
     def test_tsunami_zero_converts_to_false(self) -> None:
         """tsunami=0 integer → canonical bool False."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _UsgsEventFeature,
             _to_canonical,
+            _UsgsEventFeature,
         )
 
         raw = self._make_feature_with_tsunami(0)
@@ -485,8 +489,8 @@ class TestTsunamiConversion:
     def test_tsunami_one_converts_to_true(self) -> None:
         """tsunami=1 integer → canonical bool True."""
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _UsgsEventFeature,
             _to_canonical,
+            _UsgsEventFeature,
         )
 
         raw = self._make_feature_with_tsunami(1)
@@ -576,25 +580,24 @@ class TestFetchHappyPath:
         """With fakeredis backend: cache hit → 0 HTTP calls."""
         pytest.importorskip("fakeredis", reason="fakeredis not installed")
         import fakeredis  # noqa: PLC0415
+        import redis as _redis_lib  # noqa: PLC0415
 
+        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
+
+        # Wire a fakeredis backend via the established RedisCache test pattern
+        # (object.__new__ bypasses the URL-based ping in __init__);
+        # see tests/test_providers_alerts_unit.py:660 for the precedent.
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            RedisCache,  # noqa: PLC0415
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
-
-        # Wire a fakeredis backend via the established RedisCache test pattern
-        # (object.__new__ bypasses the URL-based ping in __init__);
-        # see tests/test_providers_alerts_unit.py:660 for the precedent.
-        from weewx_clearskies_api.providers._common.cache import RedisCache  # noqa: PLC0415
-        import redis as _redis_lib  # noqa: PLC0415
-        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -638,7 +641,9 @@ class TestProviderProtocolErrorOnInvalidWireShape:
 
     def test_missing_required_id_raises_provider_protocol_error(self) -> None:
         """Drop 'id' from features → ValidationError → ProviderProtocolError from fetch()."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.earthquakes.usgs import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -661,7 +666,9 @@ class TestProviderProtocolErrorOnInvalidWireShape:
 
     def test_missing_required_mag_raises_provider_protocol_error(self) -> None:
         """Drop 'mag' from properties → ValidationError → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.earthquakes.usgs import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -704,7 +711,10 @@ class TestRateLimiterIntegration:
             fetch(lat=_LAT, lon=_LON, radius_km=500.0, from_dt=None, to_dt=None)
 
         # Reset cache to force second HTTP call
-        from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests, wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            reset_cache_for_tests,
+            wire_cache_from_env,
+        )
         reset_cache_for_tests()
         wire_cache_from_env()
 

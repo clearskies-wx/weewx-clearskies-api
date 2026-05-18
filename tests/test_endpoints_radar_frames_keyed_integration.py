@@ -24,7 +24,6 @@ Brief: phase-2-task-3b-15-radar-keyed-A2-brief.md §frames-endpoint extension.
 
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

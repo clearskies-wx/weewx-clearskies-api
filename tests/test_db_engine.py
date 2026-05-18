@@ -12,14 +12,17 @@ Tests:
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy.pool import NullPool, QueuePool
 
 from weewx_clearskies_api.config.settings import DatabaseSettings
-from weewx_clearskies_api.db.engine import _build_mysql_url, _build_sqlite_url, _validate_db_host, build_engine
-
+from weewx_clearskies_api.db.engine import (
+    _build_mysql_url,
+    _build_sqlite_url,
+    _validate_db_host,
+    build_engine,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -189,7 +192,6 @@ def test_mysql_url_ipv6_host_bracketed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_mysql_url_does_not_include_driver_string() -> None:
     """MySQL URL uses the pymysql dialect string."""
-    import os
     os.environ["WEEWX_CLEARSKIES_DB_USER"] = "u"
     os.environ["WEEWX_CLEARSKIES_DB_PASSWORD"] = "p"
     try:

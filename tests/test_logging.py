@@ -10,9 +10,9 @@ Verifies:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import io
 
 from weewx_clearskies_api.logging.json_formatter import JsonFormatter
 from weewx_clearskies_api.logging.redaction_filter import (

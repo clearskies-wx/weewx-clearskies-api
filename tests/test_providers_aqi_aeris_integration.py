@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -204,6 +205,7 @@ def _wire_test_units() -> None:
 
 def _reset_aeris_provider_state() -> None:
     """Reset provider registry, cache, aeris http client + rate limiter."""
+    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -211,8 +213,9 @@ def _reset_aeris_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.aqi.aeris as _aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.aqi.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -229,6 +232,7 @@ def _make_integration_app(
 
     wire_credentials: if True, sets _AERIS_CLIENT_ID + _AERIS_CLIENT_SECRET.
     """
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         ApiSettings,
@@ -239,7 +243,6 @@ def _make_integration_app(
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
-    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
 
     _reset_aeris_provider_state()
     _wire_db(engine)
@@ -672,7 +675,9 @@ class TestIntegrationAerisAqiMemoryCache:
             wire_cache_from_env,
         )
         from weewx_clearskies_api.providers.aqi import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         _reset_http_client_for_tests()
@@ -789,7 +794,9 @@ class TestIntegrationAerisAqiRedisCache:
             reset_cache_for_tests,
         )
         from weewx_clearskies_api.providers.aqi import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         _reset_http_client_for_tests()

@@ -80,7 +80,6 @@ ADR-027, ADR-029, ADR-038.
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +108,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -119,7 +119,6 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -150,7 +149,9 @@ class TestWuWireShapeModels:
 
     def test_wu5day_response_loads_from_full_fixture(self) -> None:
         """_WU5DayResponse loads from forecast_daily_5day.json without errors."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _WU5DayResponse,  # noqa: PLC0415
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         model = _WU5DayResponse.model_validate(data)
@@ -184,7 +185,9 @@ class TestWuWireShapeModels:
 
     def test_wu5day_response_ignores_extra_fields(self) -> None:
         """extras='ignore' means unknown fields in the wire response don't cause ValidationError."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _WU5DayResponse,  # noqa: PLC0415
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         # Inject unknown field that the Pydantic model doesn't know about
@@ -201,7 +204,9 @@ class TestWuWireShapeModels:
         processing (e.g. if validTimeLocal is None and _wu_validdate_from_local
         is called on a None value).
         """
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _WU5DayResponse,  # noqa: PLC0415
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         del data["validTimeLocal"]
@@ -262,20 +267,28 @@ class TestWuValiddateFromLocal:
 
     def test_extracts_date_from_datetime_with_offset(self) -> None:
         """'2026-04-30T07:00:00-0700' → '2026-04-30'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_validdate_from_local  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_validdate_from_local,  # noqa: PLC0415
+        )
 
         assert _wu_validdate_from_local("2026-04-30T07:00:00-0700") == "2026-04-30"
 
     def test_extracts_date_from_positive_offset(self) -> None:
         """'2026-05-01T07:00:00+0530' → '2026-05-01' (positive UTC offset)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_validdate_from_local  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_validdate_from_local,  # noqa: PLC0415
+        )
 
         assert _wu_validdate_from_local("2026-05-01T07:00:00+0530") == "2026-05-01"
 
     def test_missing_t_separator_raises_provider_protocol_error(self) -> None:
         """String without 'T' separator raises ProviderProtocolError (schema change)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_validdate_from_local  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_validdate_from_local,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             _wu_validdate_from_local("2026-04-30 07:00:00")
@@ -287,7 +300,9 @@ class TestWuValiddateFromLocal:
         (UTC equivalent is 2026-04-30T14:00:00Z — same calendar date in this case,
         but the rule is: use the Local field's date portion directly, per brief lead-call 28.)
         """
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_validdate_from_local  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_validdate_from_local,  # noqa: PLC0415
+        )
 
         # If the time were, say, 23:00 local vs 06:00 UTC next day, the local date wins.
         # This test confirms we split on 'T' and take the date part only.
@@ -320,7 +335,9 @@ class TestWuToDailyPoint:
 
     def _point(self, day_idx: int) -> object:
         """Convenience wrapper: call _wu_to_daily_point with the full model + daypart."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_daily_point,  # noqa: PLC0415
+        )
 
         return _wu_to_daily_point(self._model, day_idx, self._daypart)
 
@@ -445,7 +462,9 @@ class TestPastPeriodNullHandling:
 
     def _point(self, day_idx: int) -> object:
         """Convenience wrapper: call _wu_to_daily_point with the full model + daypart."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_daily_point  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_daily_point,  # noqa: PLC0415
+        )
 
         return _wu_to_daily_point(self._model, day_idx, self._daypart)
 
@@ -510,49 +529,63 @@ class TestWuToCanonicalBundle:
 
     def setup_method(self) -> None:
         """Load the full fixture."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _WU5DayResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _WU5DayResponse,  # noqa: PLC0415
+        )
 
         data = _load_fixture("forecast_daily_5day.json")
         self._model = _WU5DayResponse.model_validate(data)
 
     def test_hourly_is_always_empty_list(self) -> None:
         """hourly=[] ALWAYS — Wunderground PWS API has no hourly forecast (PARTIAL-DOMAIN)."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert bundle.hourly == []
 
     def test_discussion_is_always_none(self) -> None:
         """discussion=None ALWAYS — canonical §4.1.4 Wunderground column = all '—'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert bundle.discussion is None
 
     def test_daily_has_5_entries(self) -> None:
         """daily has 5 entries for a full /5day response."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert len(bundle.daily) == 5
 
     def test_source_is_wunderground(self) -> None:
         """source = 'wunderground' on the bundle."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert bundle.source == "wunderground"
 
     def test_generatedat_ends_with_z(self) -> None:
         """generatedAt is a UTC ISO-8601 string ending in Z."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert bundle.generatedAt.endswith("Z")
 
     def test_daily_points_have_correct_validdates(self) -> None:
         """Daily entries have ascending station-local dates."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         assert bundle.daily[0].validDate == "2026-04-30"
@@ -561,7 +594,9 @@ class TestWuToCanonicalBundle:
 
     def test_bundle_source_on_each_daily_point_is_wunderground(self) -> None:
         """Each DailyForecastPoint.source = 'wunderground'."""
-        from weewx_clearskies_api.providers.forecast.wunderground import _wu_to_canonical_bundle  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.wunderground import (
+            _wu_to_canonical_bundle,  # noqa: PLC0415
+        )
 
         bundle = _wu_to_canonical_bundle(self._model)
         for day in bundle.daily:
@@ -576,7 +611,9 @@ class TestWuToCanonicalBundle:
         Pydantic ValidationError leaking past the provider boundary as 500.
         Bundle-level guard surfaces it as canonical ProviderProtocolError → 502.
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
             _WU5DayResponse,
             _wu_to_canonical_bundle,
@@ -596,7 +633,9 @@ class TestWuToCanonicalBundle:
         produced validDate=None at DailyForecastPoint construction → Pydantic
         ValidationError. Bundle-level guard catches it explicitly.
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
             _WU5DayResponse,
             _wu_to_canonical_bundle,
@@ -883,7 +922,9 @@ class TestFetchHttpInteractions:
 
     def test_5xx_response_propagates_transient_network_error(self) -> None:
         """5xx from Wunderground → TransientNetworkError propagated."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -906,7 +947,9 @@ class TestFetchHttpInteractions:
         this causes _WU5DayResponse.model_validate() to raise ValidationError,
         which the fetch() function catches and re-raises as ProviderProtocolError.
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         # A list (not a dict) at the top level fails _WU5DayResponse.model_validate()
@@ -925,7 +968,9 @@ class TestFetchHttpInteractions:
 
     def test_unknown_target_unit_raises_provider_protocol_error(self) -> None:
         """Unknown target_unit → ProviderProtocolError (schema/config error)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.wunderground import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False):

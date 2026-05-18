@@ -90,6 +90,7 @@ import json
 import logging
 import re
 import urllib.parse
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -112,7 +113,6 @@ from weewx_clearskies_api.providers._common.errors import (
 )
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
-from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 

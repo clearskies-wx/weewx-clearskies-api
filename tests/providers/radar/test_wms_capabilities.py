@@ -50,7 +50,6 @@ Fixture paths: tests/fixtures/providers/radar/{iem_nexrad,noaa_mrms,msc_geomet,d
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -152,7 +151,9 @@ class TestIEMNEXRADFixture:
 
     def test_parse_returns_list_of_strings(self) -> None:
         """parse_wms_time_dimension returns list[str] for IEM NEXRAD fixture."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("iem_nexrad", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -189,7 +190,9 @@ class TestIEMNEXRADFixture:
 
     def test_all_results_end_with_z(self) -> None:
         """All IEM NEXRAD timestamps end with 'Z' suffix (ADR-020 UTC requirement)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("iem_nexrad", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -203,8 +206,12 @@ class TestIEMNEXRADFixture:
 
     def test_missing_layer_raises_provider_protocol_error(self) -> None:
         """Layer not in IEM NEXRAD capabilities → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("iem_nexrad", "get_capabilities.xml")
         with pytest.raises(ProviderProtocolError, match="not found"):
@@ -221,7 +228,9 @@ class TestNOAAMRMSFixture:
 
     def test_parse_returns_nonempty_list(self) -> None:
         """parse_wms_time_dimension returns non-empty list for NOAA MRMS fixture."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("noaa_mrms", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -234,7 +243,9 @@ class TestNOAAMRMSFixture:
 
     def test_all_results_end_with_z(self) -> None:
         """All NOAA MRMS timestamps end with 'Z' suffix (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("noaa_mrms", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -270,7 +281,9 @@ class TestMSCGeoMetFixture:
 
     def test_parse_returns_31_frames_for_3h_pt6m(self) -> None:
         """MSC GeoMet 3h range at PT6M → 31 frames (21:54..00:54, inclusive)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -284,7 +297,9 @@ class TestMSCGeoMetFixture:
 
     def test_first_frame_time_is_correct(self) -> None:
         """MSC GeoMet first frame = 2026-05-11T21:54:00Z (start of period range)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -299,7 +314,9 @@ class TestMSCGeoMetFixture:
 
     def test_last_frame_time_is_correct(self) -> None:
         """MSC GeoMet last frame = 2026-05-12T00:54:00Z (end of period range)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -314,7 +331,9 @@ class TestMSCGeoMetFixture:
 
     def test_all_results_end_with_z(self) -> None:
         """All MSC GeoMet timestamps end with 'Z' suffix (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -328,7 +347,9 @@ class TestMSCGeoMetFixture:
 
     def test_sibling_layer_rsno_also_parseable(self) -> None:
         """RADAR_1KM_RSNO (snow sibling — real layer from live capture) also parses correctly."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("msc_geomet", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -346,7 +367,9 @@ class TestDWDRADOLANFixture:
 
     def test_parse_returns_nonempty_list(self) -> None:
         """parse_wms_time_dimension returns non-empty list for DWD fixture."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -378,7 +401,9 @@ class TestDWDRADOLANFixture:
 
     def test_all_results_end_with_z(self) -> None:
         """All DWD timestamps end with 'Z' suffix (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -392,7 +417,9 @@ class TestDWDRADOLANFixture:
 
     def test_sibling_layer_radolan_rw_also_parseable(self) -> None:
         """RADOLAN-RW (hourly sibling — real layer from live capture) also parses correctly."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("dwd_radolan", "get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -414,7 +441,9 @@ class TestCommaSeparatedTimeDimension:
 
     def test_comma_separated_returns_five_timestamps(self) -> None:
         """5 comma-separated timestamps in synthetic XML → 5-element list."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             _COMMA_SEPARATED_XML,
@@ -426,7 +455,9 @@ class TestCommaSeparatedTimeDimension:
 
     def test_comma_separated_first_timestamp_correct(self) -> None:
         """First comma-separated timestamp = 2026-05-11T00:00:00Z."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             _COMMA_SEPARATED_XML,
@@ -438,7 +469,9 @@ class TestCommaSeparatedTimeDimension:
 
     def test_comma_separated_last_timestamp_correct(self) -> None:
         """Last comma-separated timestamp = 2026-05-11T00:20:00Z."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             _COMMA_SEPARATED_XML,
@@ -450,7 +483,9 @@ class TestCommaSeparatedTimeDimension:
 
     def test_comma_separated_all_end_with_z(self) -> None:
         """All comma-separated timestamps end with 'Z' (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             _COMMA_SEPARATED_XML,
@@ -472,7 +507,9 @@ class TestNamespaceHandling:
 
     def test_no_namespace_xml_parsed_correctly(self) -> None:
         """No-namespace XML (ArcGIS pattern) → correct timestamp list."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             _NO_NAMESPACE_XML,
@@ -496,8 +533,12 @@ class TestErrorHandling:
 
     def test_malformed_xml_raises_provider_protocol_error(self) -> None:
         """Malformed XML bytes → ProviderProtocolError (not stdlib ParseError)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             parse_wms_time_dimension(
@@ -509,8 +550,12 @@ class TestErrorHandling:
 
     def test_layer_not_found_raises_provider_protocol_error(self) -> None:
         """Layer not found in capabilities tree → ProviderProtocolError with 'not found' text."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("iem_nexrad", "get_capabilities.xml")
         with pytest.raises(ProviderProtocolError, match="not found"):
@@ -523,8 +568,12 @@ class TestErrorHandling:
 
     def test_no_time_dimension_raises_provider_protocol_error(self) -> None:
         """Layer with no TIME Dimension → ProviderProtocolError with relevant detail."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             parse_wms_time_dimension(
@@ -536,8 +585,12 @@ class TestErrorHandling:
 
     def test_empty_time_dimension_raises_provider_protocol_error(self) -> None:
         """Empty TIME Dimension element → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             parse_wms_time_dimension(
@@ -549,8 +602,12 @@ class TestErrorHandling:
 
     def test_zero_second_period_raises_provider_protocol_error(self) -> None:
         """PT0S period in period notation → ProviderProtocolError (zero-duration guard)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         with pytest.raises(ProviderProtocolError):
             parse_wms_time_dimension(
@@ -593,7 +650,9 @@ class TestPeriodExpansionArithmetic:
 
     def test_pt5m_period_yields_seven_timestamps(self) -> None:
         """10:00 to 10:30 at PT5M → 7 timestamps (inclusive of both endpoints)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             self._PT5M_XML,
@@ -605,21 +664,27 @@ class TestPeriodExpansionArithmetic:
 
     def test_pt5m_period_first_is_start(self) -> None:
         """PT5M expansion: first timestamp = 2026-05-11T10:00:00Z."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(self._PT5M_XML, layer="pt5m-layer", provider_id="test", domain="radar")
         assert result[0] == "2026-05-11T10:00:00Z"
 
     def test_pt5m_period_last_is_end(self) -> None:
         """PT5M expansion: last timestamp = 2026-05-11T10:30:00Z."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(self._PT5M_XML, layer="pt5m-layer", provider_id="test", domain="radar")
         assert result[-1] == "2026-05-11T10:30:00Z"
 
     def test_pt1h_period_yields_four_timestamps(self) -> None:
         """00:00 to 03:00 at PT1H → 4 timestamps (00:00, 01:00, 02:00, 03:00)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(
             self._PT1H_XML,
@@ -631,7 +696,9 @@ class TestPeriodExpansionArithmetic:
 
     def test_pt1h_period_second_timestamp_is_one_hour_after_first(self) -> None:
         """PT1H period: second timestamp is exactly 1 hour after first."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         result = parse_wms_time_dimension(self._PT1H_XML, layer="pt1h-layer", provider_id="test", domain="radar")
         assert result[0] == "2026-05-11T00:00:00Z"

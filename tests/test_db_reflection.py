@@ -19,11 +19,9 @@ from sqlalchemy.pool import StaticPool
 
 from weewx_clearskies_api.db.reflection import (
     STOCK_COLUMN_MAP,
-    ColumnRegistry,
     SchemaReflector,
     _build_registry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

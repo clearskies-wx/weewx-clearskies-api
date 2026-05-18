@@ -50,7 +50,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
 from weewx_clearskies_api.models.params import EarthquakesQueryParams
-from weewx_clearskies_api.models.responses import EarthquakeListResponse, EarthquakeRecord, utc_isoformat
+from weewx_clearskies_api.models.responses import (
+    EarthquakeListResponse,
+    EarthquakeRecord,
+    utc_isoformat,
+)
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.services.station import get_station_info
 

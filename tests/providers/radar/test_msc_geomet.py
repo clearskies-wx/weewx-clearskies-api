@@ -66,8 +66,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.radar.msc_geomet import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -91,7 +91,9 @@ class TestMSCGeoMetFixtureParsing:
 
     def test_fixture_parses_to_31_frames(self) -> None:
         """get_capabilities.xml: RADAR_1KM_RRAI, 3h/PT6M → 31 frames."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -104,7 +106,9 @@ class TestMSCGeoMetFixtureParsing:
 
     def test_first_timestamp_is_start_of_range(self) -> None:
         """First timestamp = 2026-05-11T21:54:00Z (start of period range)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -117,7 +121,9 @@ class TestMSCGeoMetFixtureParsing:
 
     def test_last_timestamp_is_end_of_range(self) -> None:
         """Last timestamp = 2026-05-12T00:54:00Z (end of period range)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -130,7 +136,9 @@ class TestMSCGeoMetFixtureParsing:
 
     def test_all_timestamps_end_with_z(self) -> None:
         """All MSC GeoMet parsed timestamps end with 'Z' (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -224,7 +232,9 @@ class TestMSCGeoMetErrorMapping:
 
     def test_5xx_raises_transient_network_error(self) -> None:
         """HTTP 5xx → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.msc_geomet import get_frames  # noqa: PLC0415
 
         _reset_provider_state()
@@ -238,7 +248,9 @@ class TestMSCGeoMetErrorMapping:
 
     def test_malformed_xml_raises_provider_protocol_error(self) -> None:
         """Malformed XML → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.msc_geomet import get_frames  # noqa: PLC0415
 
         _reset_provider_state()

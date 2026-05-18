@@ -41,8 +41,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -209,6 +210,7 @@ def _wire_test_units() -> None:
 
 def _reset_owm_aqi_provider_state() -> None:
     """Reset provider registry, cache, OWM http client + rate limiter."""
+    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -219,7 +221,6 @@ def _reset_owm_aqi_provider_state() -> None:
     from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -237,6 +238,7 @@ def _make_integration_app(
     wire_appid: if True, sets _OWM_APPID. If False, leaves None to exercise
     the missing-credentials 502 path.
     """
+    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         ApiSettings,
@@ -247,7 +249,6 @@ def _make_integration_app(
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
-    import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
 
     _reset_owm_aqi_provider_state()
     _wire_db(engine)

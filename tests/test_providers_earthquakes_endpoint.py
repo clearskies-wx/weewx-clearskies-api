@@ -46,10 +46,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
-import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -96,8 +95,8 @@ def _reset_provider_state(provider: str = "usgs") -> None:
     if provider == "usgs":
         try:
             from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-                _reset_http_client_for_tests,
                 _rate_limiter,
+                _reset_http_client_for_tests,
             )
             _reset_http_client_for_tests()
             _rate_limiter._calls.clear()
@@ -139,7 +138,9 @@ def _make_earthquakes_app(provider: str | None = None) -> FastAPI:
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings  # noqa: PLC0415
+    from weewx_clearskies_api.endpoints.earthquakes import (
+        wire_earthquakes_settings,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
 
     _reset_provider_state(provider or "usgs")

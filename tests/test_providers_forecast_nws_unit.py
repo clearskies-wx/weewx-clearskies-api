@@ -62,7 +62,6 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -95,6 +94,7 @@ def _reset_provider_state() -> None:
     surfaces as RuntimeError("Cache not initialised") at fetch's first
     get_cache().get() call.
     """
+    import weewx_clearskies_api.providers.forecast.nws as _nws  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -102,8 +102,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.nws import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.forecast.nws as _nws  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -122,8 +123,8 @@ def _wire_test_station(latitude: float = 47.6062, longitude: float = -122.3321) 
     Endpoint tests that need a non-US location (e.g. GeographicallyUnsupported)
     pass overrides via this helper or set _cached_station directly.
     """
-    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     import weewx_clearskies_api.services.station as station_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
 
     reset_cache()
     station_mod._cached_station = StationInfo(
@@ -177,6 +178,7 @@ def forecast_client_nws() -> Any:
     _wire_test_station(latitude=..., longitude=...) inside the test body.
     """
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
     from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
@@ -193,6 +195,7 @@ def forecast_client_nws() -> Any:
 def forecast_client_no_provider() -> Any:
     """TestClient for the forecast endpoint with NO provider configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
 
@@ -229,19 +232,25 @@ class TestExtractIconShortname:
 
     def test_standard_url_with_query_string_and_intensity_returns_shortname(self) -> None:
         """/icons/land/day/sct,30?size=medium → 'sct'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname("/icons/land/day/sct,30?size=medium")
         assert result == "sct"
 
     def test_night_icon_no_intensity_returns_shortname(self) -> None:
         """/icons/land/night/rain?size=medium → 'rain'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname("/icons/land/night/rain?size=medium")
         assert result == "rain"
 
     def test_full_https_url_returns_shortname(self) -> None:
         """Full HTTPS URL with query string extracts shortName correctly."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname(
             "https://api.weather.gov/icons/land/night/sct?size=small"
         )
@@ -249,29 +258,39 @@ class TestExtractIconShortname:
 
     def test_tsra_with_comma_intensity_returns_tsra(self) -> None:
         """/icons/land/day/tsra,40?size=medium → 'tsra'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname("/icons/land/day/tsra,40?size=medium")
         assert result == "tsra"
 
     def test_snow_icon_returns_snow(self) -> None:
         """/icons/land/day/snow?size=medium → 'snow'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname("/icons/land/day/snow?size=medium")
         assert result == "snow"
 
     def test_none_input_returns_none(self) -> None:
         """None → None (no exception)."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         assert _extract_icon_shortname(None) is None
 
     def test_empty_string_returns_none(self) -> None:
         """Empty string → None."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         assert _extract_icon_shortname("") is None
 
     def test_path_with_no_slash_returns_none(self) -> None:
         """URL with no path segment → None (tolerate malformed URLs)."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         # urlparse("notaurl") has no meaningful path segments
         result = _extract_icon_shortname("notaurl")
         # "notaurl" has no slashes; rsplit gives basename="notaurl" which is non-empty.
@@ -282,7 +301,9 @@ class TestExtractIconShortname:
 
     def test_rain_showers_hi_with_intensity_returns_rain_showers_hi(self) -> None:
         """/icons/land/day/rain_showers_hi,50 → 'rain_showers_hi'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_icon_shortname  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_icon_shortname,  # noqa: PLC0415
+        )
         result = _extract_icon_shortname("/icons/land/day/rain_showers_hi,50?size=medium")
         assert result == "rain_showers_hi"
 
@@ -792,7 +813,9 @@ class TestPrecipTypeFromIcon:
     """_get_precip_type_from_icon maps icon URLs to canonical precipType enum."""
 
     def _call(self, icon_url: str | None) -> str | None:
-        from weewx_clearskies_api.providers.forecast.nws import _get_precip_type_from_icon  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _get_precip_type_from_icon,  # noqa: PLC0415
+        )
         return _get_precip_type_from_icon(icon_url)
 
     def test_rain_icon_returns_rain(self) -> None:
@@ -869,21 +892,29 @@ class TestTargetUnitToNwsUnits:
     """_TARGET_UNIT_TO_NWS_UNITS maps weewx target_unit to NWS units= query param."""
 
     def test_us_maps_to_us(self) -> None:
-        from weewx_clearskies_api.providers.forecast.nws import _TARGET_UNIT_TO_NWS_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _TARGET_UNIT_TO_NWS_UNITS,  # noqa: PLC0415
+        )
         assert _TARGET_UNIT_TO_NWS_UNITS["US"] == "us"
 
     def test_metric_maps_to_si(self) -> None:
-        from weewx_clearskies_api.providers.forecast.nws import _TARGET_UNIT_TO_NWS_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _TARGET_UNIT_TO_NWS_UNITS,  # noqa: PLC0415
+        )
         assert _TARGET_UNIT_TO_NWS_UNITS["METRIC"] == "si"
 
     def test_metricwx_maps_to_si(self) -> None:
         """METRICWX → si (post-convert wind km/h → m/s at zip step per brief call 11)."""
-        from weewx_clearskies_api.providers.forecast.nws import _TARGET_UNIT_TO_NWS_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _TARGET_UNIT_TO_NWS_UNITS,  # noqa: PLC0415
+        )
         assert _TARGET_UNIT_TO_NWS_UNITS["METRICWX"] == "si"
 
     def test_unknown_unit_raises_provider_protocol_error_in_fetch(self) -> None:
         """Unknown target_unit raises ProviderProtocolError before any HTTP call."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.nws import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -901,26 +932,34 @@ class TestExtractAfdHeadlineAndSender:
 
     def test_real_fixture_headline_is_first_line_after_wire_header(self) -> None:
         """products_afd_body.json: headline = 'Area Forecast Discussion'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_afd_headline_and_sender,  # noqa: PLC0415
+        )
         body = _load_fixture("products_afd_body.json")["productText"]
         headline, _ = _extract_afd_headline_and_sender(body)
         assert headline == "Area Forecast Discussion"
 
     def test_real_fixture_sender_is_nws_location_composite(self) -> None:
         """products_afd_body.json: senderName = 'NWS Seattle WA'."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_afd_headline_and_sender,  # noqa: PLC0415
+        )
         body = _load_fixture("products_afd_body.json")["productText"]
         _, sender = _extract_afd_headline_and_sender(body)
         assert sender == "NWS Seattle WA"
 
     def test_empty_input_returns_none_none(self) -> None:
         """Empty productText → (None, None)."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_afd_headline_and_sender,  # noqa: PLC0415
+        )
         assert _extract_afd_headline_and_sender("") == (None, None)
 
     def test_body_without_nws_line_falls_back_to_none_sender(self) -> None:
         """productText missing 'National Weather Service' line → sender is None."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_afd_headline_and_sender,  # noqa: PLC0415
+        )
         body = (
             "000\n"
             "FXUS66 KXXX 010000\n"
@@ -934,7 +973,9 @@ class TestExtractAfdHeadlineAndSender:
 
     def test_body_with_only_wire_header_returns_none_headline(self) -> None:
         """productText with only WMO wire-format header → (None, None)."""
-        from weewx_clearskies_api.providers.forecast.nws import _extract_afd_headline_and_sender  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _extract_afd_headline_and_sender,  # noqa: PLC0415
+        )
         body = "000\nFXUS66 KXXX 010000\nAFDXXX\n"
         headline, sender = _extract_afd_headline_and_sender(body)
         assert headline is None
@@ -961,14 +1002,18 @@ class TestWireShapeModels:
 
     def test_hourly_response_loads_from_real_fixture(self) -> None:
         """forecast_hourly.json loads cleanly into _NwsForecastResponse."""
-        from weewx_clearskies_api.providers.forecast.nws import _NwsForecastResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _NwsForecastResponse,  # noqa: PLC0415
+        )
         data = _load_fixture("forecast_hourly.json")
         model = _NwsForecastResponse.model_validate(data)
         assert len(model.properties.periods) == 156
 
     def test_forecast_response_loads_from_real_fixture(self) -> None:
         """forecast.json loads cleanly into _NwsForecastResponse."""
-        from weewx_clearskies_api.providers.forecast.nws import _NwsForecastResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _NwsForecastResponse,  # noqa: PLC0415
+        )
         data = _load_fixture("forecast.json")
         model = _NwsForecastResponse.model_validate(data)
         assert len(model.properties.periods) == 14
@@ -1001,6 +1046,7 @@ class TestWireShapeModels:
     def test_points_missing_required_cwa_raises_validation_error(self) -> None:
         """_NwsPointProperties with missing 'cwa' → ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.forecast.nws import _NwsPointResponse  # noqa: PLC0415
         bad_data = {
             "type": "Feature",
@@ -1027,7 +1073,9 @@ class TestWireShapeModels:
 
     def test_hourly_malformed_missing_properties_raises_validation_error(self) -> None:
         """forecast_hourly_malformed.json with missing 'periods' loads with empty list."""
-        from weewx_clearskies_api.providers.forecast.nws import _NwsForecastResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.nws import (
+            _NwsForecastResponse,  # noqa: PLC0415
+        )
         data = _load_fixture("forecast_hourly_malformed.json")
         # Model has periods with default_factory=list, so empty properties is valid.
         model = _NwsForecastResponse.model_validate(data)
@@ -1285,8 +1333,8 @@ class TestFetchCacheHit:
 
     def test_cache_hit_with_memory_cache_skips_http(self) -> None:
         """Memory cache hit: no outbound HTTP, returns reconstructed ForecastBundle."""
-        from weewx_clearskies_api.providers._common.cache import MemoryCache  # noqa: PLC0415
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import MemoryCache  # noqa: PLC0415
 
         _reset_provider_state()
         cache_mod._cache = MemoryCache()
@@ -1300,8 +1348,9 @@ class TestFetchCacheHit:
             pytest.skip("fakeredis not installed")
 
         import redis as redis_lib  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.cache import RedisCache  # noqa: PLC0415
+
         import weewx_clearskies_api.providers._common.cache as cache_mod  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import RedisCache  # noqa: PLC0415
 
         _reset_provider_state()
         # Bypass RedisCache.__init__'s real-Redis ping; assign fake client directly
@@ -1324,7 +1373,9 @@ class TestFetchErrorPaths:
 
     def test_points_404_raises_geographically_unsupported(self) -> None:
         """/points 404 → GeographicallyUnsupported (non-US location, brief call 13)."""
-        from weewx_clearskies_api.providers._common.errors import GeographicallyUnsupported  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            GeographicallyUnsupported,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.nws import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -1342,7 +1393,9 @@ class TestFetchErrorPaths:
 
     def test_hourly_5xx_raises_transient_network_error(self) -> None:
         """/forecast/hourly 503 → TransientNetworkError after retries."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.nws import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -1481,7 +1534,9 @@ class TestFetchErrorPaths:
 
     def test_malformed_hourly_response_raises_provider_protocol_error(self) -> None:
         """Malformed /forecast/hourly response → ProviderProtocolError (NOT soft-failure)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast.nws import fetch  # noqa: PLC0415
 
         _reset_provider_state()
@@ -1717,8 +1772,12 @@ class TestForecastEndpointNws:
     def test_nws_happy_path_returns_200(self, forecast_client_nws: Any) -> None:
         """NWS configured + mocked → 200."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1731,8 +1790,12 @@ class TestForecastEndpointNws:
     def test_nws_happy_path_source_is_nws(self, forecast_client_nws: Any) -> None:
         """NWS configured → response body data.source = 'nws'."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1746,8 +1809,12 @@ class TestForecastEndpointNws:
     def test_nws_happy_path_discussion_not_null(self, forecast_client_nws: Any) -> None:
         """NWS configured + AFD available → discussion is populated (not null)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1763,8 +1830,12 @@ class TestForecastEndpointNws:
     ) -> None:
         """No query params → 48 hourly (default), 7 daily (default)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1779,8 +1850,12 @@ class TestForecastEndpointNws:
     def test_nws_slice_params_respected(self, forecast_client_nws: Any) -> None:
         """?hours=24&days=3 → exactly 24 hourly points and 3 daily points."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1797,8 +1872,12 @@ class TestForecastEndpointNws:
     def test_nws_down_returns_502_provider_problem(self, forecast_client_nws: Any) -> None:
         """/points 503 → 502 ProviderProblem with errorCode=TransientNetworkError."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1818,8 +1897,12 @@ class TestForecastEndpointNws:
     ) -> None:
         """/points 429 → 503 ProviderProblem with errorCode=QuotaExhausted."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1856,8 +1939,12 @@ class TestForecastEndpointNws:
         )
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])
@@ -1875,8 +1962,12 @@ class TestForecastEndpointNws:
     def test_nws_units_block_present_in_response(self, forecast_client_nws: Any) -> None:
         """Response includes envelope units block."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
         wire_cache_from_env()
         wire_providers([forecast_nws.CAPABILITY])

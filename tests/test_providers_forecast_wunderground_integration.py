@@ -37,8 +37,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -182,6 +183,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers all wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         AlertsSettings,
@@ -193,9 +195,14 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
+    from weewx_clearskies_api.endpoints import forecast as forecast_endpoint  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -205,19 +212,19 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
+        _reset_http_client_for_tests,
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
-    )
-    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
-    from weewx_clearskies_api.endpoints import forecast as forecast_endpoint  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -270,7 +277,9 @@ def _wire_integration_stack(
     # Build capability list
     capabilities: list[ProviderCapability] = []
     if forecast_provider == "wunderground":
-        from weewx_clearskies_api.providers.forecast import wunderground as forecast_wu  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import (
+            wunderground as forecast_wu,  # noqa: PLC0415
+        )
         capabilities.append(forecast_wu.CAPABILITY)
 
     wire_providers(capabilities)
@@ -290,12 +299,14 @@ def _wire_integration_stack(
 
 def _reset_wu_state() -> None:
     """Reset Wunderground provider state between tests."""
+    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.providers.forecast.wunderground import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.forecast.wunderground as _wu  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -332,7 +343,9 @@ class TestIntegrationDispatchTableHasWunderground:
 
     def test_wunderground_is_in_forecast_dispatch_table(self) -> None:
         """get_provider_module(domain='forecast', provider_id='wunderground') returns module."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
 
         module = get_provider_module(domain="forecast", provider_id="wunderground")
         assert module is not None
@@ -342,7 +355,9 @@ class TestIntegrationDispatchTableHasWunderground:
 
     def test_wunderground_module_has_correct_domain(self) -> None:
         """Wunderground module from dispatch table has domain='forecast'."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
 
         module = get_provider_module(domain="forecast", provider_id="wunderground")
         assert module.CAPABILITY.domain == "forecast"
@@ -565,7 +580,9 @@ class TestIntegrationRedisCache:
         import os  # noqa: PLC0415
         old_cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
         os.environ["CLEARSKIES_CACHE_URL"] = _REDIS_URL
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         client = TestClient(app, raise_server_exceptions=False)
@@ -606,7 +623,9 @@ class TestIntegrationRedisCache:
         import os  # noqa: PLC0415
         old_cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
         os.environ["CLEARSKIES_CACHE_URL"] = _REDIS_URL
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         client = TestClient(app, raise_server_exceptions=False)
@@ -652,7 +671,9 @@ class TestIntegrationRedisCache:
         import os  # noqa: PLC0415
         old_cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
         os.environ["CLEARSKIES_CACHE_URL"] = _REDIS_URL
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         client = TestClient(app, raise_server_exceptions=False)

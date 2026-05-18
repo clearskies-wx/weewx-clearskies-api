@@ -41,8 +41,8 @@ from weewx_clearskies_api.providers.forecast import openweathermap as forecast_o
 from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
-from weewx_clearskies_api.providers.radar import iframe as radar_iframe
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
+from weewx_clearskies_api.providers.radar import iframe as radar_iframe
 from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
 from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
 from weewx_clearskies_api.providers.radar import openweathermap as radar_openweathermap

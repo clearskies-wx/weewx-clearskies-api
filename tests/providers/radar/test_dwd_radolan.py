@@ -66,8 +66,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.radar.dwd_radolan import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -91,7 +91,9 @@ class TestDWDRADOLANFixtureParsing:
 
     def test_fixture_parses_to_nonempty_list(self) -> None:
         """get_capabilities.xml parses to non-empty list for Niederschlagsradar."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -122,7 +124,9 @@ class TestDWDRADOLANFixtureParsing:
 
     def test_all_timestamps_end_with_z(self) -> None:
         """All DWD parsed timestamps end with 'Z' (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -136,7 +140,9 @@ class TestDWDRADOLANFixtureParsing:
 
     def test_real_niederschlagsradar_layer_also_parseable(self) -> None:
         """Niederschlagsradar (real layer from live capture) also parses correctly."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -227,7 +233,9 @@ class TestDWDRADOLANErrorMapping:
 
     def test_5xx_raises_transient_network_error(self) -> None:
         """HTTP 5xx → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.dwd_radolan import get_frames  # noqa: PLC0415
 
         _reset_provider_state()
@@ -241,7 +249,9 @@ class TestDWDRADOLANErrorMapping:
 
     def test_malformed_xml_raises_provider_protocol_error(self) -> None:
         """Malformed XML → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.dwd_radolan import get_frames  # noqa: PLC0415
 
         _reset_provider_state()

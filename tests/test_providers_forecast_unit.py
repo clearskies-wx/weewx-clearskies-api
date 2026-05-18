@@ -42,9 +42,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import respx
-import httpx
 
 # ---------------------------------------------------------------------------
 # Fixture helpers
@@ -67,12 +67,14 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, and rate limiter to a clean state between tests."""
+    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -115,6 +117,7 @@ def _make_forecast_settings(provider: str | None = None) -> Any:
 def forecast_client_no_provider() -> Any:
     """TestClient for the forecast endpoint with NO provider configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -131,6 +134,7 @@ def forecast_client_no_provider() -> Any:
 def forecast_client_openmeteo() -> Any:
     """TestClient for the forecast endpoint with Open-Meteo configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -153,82 +157,116 @@ class TestWmoCodeToText:
     """_WMO_CODE_TO_TEXT maps all documented codes; unknown code → None."""
 
     def test_code_0_is_clear_sky(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[0] == "Clear sky"
 
     def test_code_1_is_mainly_clear(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[1] == "Mainly clear"
 
     def test_code_2_is_partly_cloudy(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[2] == "Partly cloudy"
 
     def test_code_3_is_overcast(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[3] == "Overcast"
 
     def test_code_45_is_fog(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[45] == "Fog"
 
     def test_code_48_is_depositing_rime_fog(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_TEXT[48] == "Depositing rime fog"
 
     def test_drizzle_codes_51_53_55_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (51, 53, 55):
             assert code in _WMO_CODE_TO_TEXT, f"Drizzle code {code} missing from _WMO_CODE_TO_TEXT"
 
     def test_freezing_drizzle_codes_56_57_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (56, 57):
             assert code in _WMO_CODE_TO_TEXT, f"Freezing drizzle code {code} missing"
 
     def test_rain_codes_61_63_65_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (61, 63, 65):
             assert code in _WMO_CODE_TO_TEXT, f"Rain code {code} missing"
 
     def test_freezing_rain_codes_66_67_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (66, 67):
             assert code in _WMO_CODE_TO_TEXT, f"Freezing rain code {code} missing"
 
     def test_snow_codes_71_73_75_77_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (71, 73, 75, 77):
             assert code in _WMO_CODE_TO_TEXT, f"Snow code {code} missing"
 
     def test_rain_shower_codes_80_81_82_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (80, 81, 82):
             assert code in _WMO_CODE_TO_TEXT, f"Rain shower code {code} missing"
 
     def test_snow_shower_codes_85_86_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (85, 86):
             assert code in _WMO_CODE_TO_TEXT, f"Snow shower code {code} missing"
 
     def test_thunderstorm_code_95_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         assert 95 in _WMO_CODE_TO_TEXT
 
     def test_thunderstorm_hail_codes_96_99_present(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         for code in (96, 99):
             assert code in _WMO_CODE_TO_TEXT, f"Thunderstorm+hail code {code} missing"
 
     def test_unknown_wmo_code_returns_none(self) -> None:
         """Code 200 is not in the WMO code table → None, no exception."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         result = _WMO_CODE_TO_TEXT.get(200)
         assert result is None, f"Expected None for unknown code 200, got {result!r}"
 
     def test_all_documented_codes_covered(self) -> None:
         """Every WMO code documented in openmeteo.md is in the table."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_TEXT  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_TEXT,  # noqa: PLC0415
+        )
         # Per api-docs/openmeteo.md WMO codes table
         documented_codes = {
             0, 1, 2, 3,
@@ -252,61 +290,81 @@ class TestWmoCodeToPrecipType:
     """_WMO_CODE_TO_PRECIP_TYPE maps rain/freezing-rain/snow; else → None."""
 
     def test_drizzle_51_is_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(51) == "rain"
 
     def test_drizzle_53_is_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(53) == "rain"
 
     def test_drizzle_55_is_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(55) == "rain"
 
     def test_rain_codes_61_63_65_are_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (61, 63, 65):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "rain", (
                 f"Rain code {code} should map to 'rain'"
             )
 
     def test_rain_showers_80_81_82_are_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (80, 81, 82):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "rain", (
                 f"Rain shower code {code} should map to 'rain'"
             )
 
     def test_thunderstorm_95_96_99_are_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (95, 96, 99):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "rain", (
                 f"Thunderstorm code {code} should map to 'rain'"
             )
 
     def test_freezing_drizzle_56_57_are_freezing_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (56, 57):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "freezing-rain", (
                 f"Freezing drizzle code {code} should map to 'freezing-rain'"
             )
 
     def test_freezing_rain_66_67_are_freezing_rain(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (66, 67):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "freezing-rain", (
                 f"Freezing rain code {code} should map to 'freezing-rain'"
             )
 
     def test_snow_codes_71_73_75_77_are_snow(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (71, 73, 75, 77):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "snow", (
                 f"Snow code {code} should map to 'snow'"
             )
 
     def test_snow_shower_codes_85_86_are_snow(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         for code in (85, 86):
             assert _WMO_CODE_TO_PRECIP_TYPE.get(code) == "snow", (
                 f"Snow shower code {code} should map to 'snow'"
@@ -314,19 +372,27 @@ class TestWmoCodeToPrecipType:
 
     def test_clear_sky_code_0_returns_none(self) -> None:
         """WMO 0 (Clear sky) has no precipitation → None."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(0) is None
 
     def test_partly_cloudy_code_2_returns_none(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(2) is None
 
     def test_fog_code_45_returns_none(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(45) is None
 
     def test_unknown_code_200_returns_none(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _WMO_CODE_TO_PRECIP_TYPE  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _WMO_CODE_TO_PRECIP_TYPE,  # noqa: PLC0415
+        )
         assert _WMO_CODE_TO_PRECIP_TYPE.get(200) is None
 
 
@@ -340,7 +406,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_negative_offset_pdt_converts_to_utc(self) -> None:
         """'2026-04-30T16:00' with offset -25200 (PDT = UTC-7) → '2026-04-30T23:00:00Z'."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = _local_iso_to_utc_iso8601("2026-04-30T16:00", -25200)
         assert result == "2026-04-30T23:00:00Z", (
             f"Expected '2026-04-30T23:00:00Z', got {result!r}"
@@ -348,7 +416,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_zero_offset_utc_is_unchanged(self) -> None:
         """'2026-04-30T16:00' with offset 0 (UTC) → '2026-04-30T16:00:00Z'."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = _local_iso_to_utc_iso8601("2026-04-30T16:00", 0)
         assert result == "2026-04-30T16:00:00Z", (
             f"Expected '2026-04-30T16:00:00Z', got {result!r}"
@@ -356,7 +426,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_positive_offset_tokyo_jst_converts_to_utc(self) -> None:
         """'2026-04-30T09:00' with offset +32400 (JST = UTC+9) → '2026-04-30T00:00:00Z'."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = _local_iso_to_utc_iso8601("2026-04-30T09:00", 32400)
         assert result == "2026-04-30T00:00:00Z", (
             f"Expected '2026-04-30T00:00:00Z', got {result!r}"
@@ -364,7 +436,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_fixture_hourly_index_0_converts_correctly(self) -> None:
         """Fixture first hourly time '2026-05-07T00:00' + offset -25200 → '2026-05-07T07:00:00Z'."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         # Fixture: time[0] = "2026-05-07T00:00", utc_offset_seconds = -25200
         result = _local_iso_to_utc_iso8601("2026-05-07T00:00", -25200)
         assert result == "2026-05-07T07:00:00Z", (
@@ -373,7 +447,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_fixture_daily_sunrise_converts_correctly(self) -> None:
         """Fixture sunrise '2026-05-07T05:42' + offset -25200 → '2026-05-07T12:42:00Z'."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = _local_iso_to_utc_iso8601("2026-05-07T05:42", -25200)
         assert result == "2026-05-07T12:42:00Z", (
             f"Expected '2026-05-07T12:42:00Z', got {result!r}"
@@ -381,7 +457,9 @@ class TestLocalIsoToUtcConversion:
 
     def test_result_always_ends_with_z_suffix(self) -> None:
         """ADR-020: all UTC times use Z suffix, not +00:00."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _local_iso_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _local_iso_to_utc_iso8601,  # noqa: PLC0415
+        )
         result = _local_iso_to_utc_iso8601("2026-05-07T12:00", 0)
         assert result.endswith("Z"), f"Expected Z suffix, got {result!r}"
         assert "+00:00" not in result, f"Expected no +00:00 suffix, got {result!r}"
@@ -396,21 +474,27 @@ class TestTargetUnitParamMapping:
     """_TARGET_UNIT_TO_OPENMETEO_UNITS maps US/METRIC/METRICWX correctly."""
 
     def test_us_maps_to_fahrenheit_mph_inch(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _TARGET_UNIT_TO_OPENMETEO_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _TARGET_UNIT_TO_OPENMETEO_UNITS,  # noqa: PLC0415
+        )
         params = _TARGET_UNIT_TO_OPENMETEO_UNITS["US"]
         assert params["temperature_unit"] == "fahrenheit"
         assert params["wind_speed_unit"] == "mph"
         assert params["precipitation_unit"] == "inch"
 
     def test_metric_maps_to_celsius_kmh_mm(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _TARGET_UNIT_TO_OPENMETEO_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _TARGET_UNIT_TO_OPENMETEO_UNITS,  # noqa: PLC0415
+        )
         params = _TARGET_UNIT_TO_OPENMETEO_UNITS["METRIC"]
         assert params["temperature_unit"] == "celsius"
         assert params["wind_speed_unit"] == "kmh"
         assert params["precipitation_unit"] == "mm"
 
     def test_metricwx_maps_to_celsius_ms_mm(self) -> None:
-        from weewx_clearskies_api.providers.forecast.openmeteo import _TARGET_UNIT_TO_OPENMETEO_UNITS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _TARGET_UNIT_TO_OPENMETEO_UNITS,  # noqa: PLC0415
+        )
         params = _TARGET_UNIT_TO_OPENMETEO_UNITS["METRICWX"]
         assert params["temperature_unit"] == "celsius"
         assert params["wind_speed_unit"] == "ms"
@@ -418,22 +502,28 @@ class TestTargetUnitParamMapping:
 
     def test_unknown_target_unit_raises_provider_protocol_error(self) -> None:
         """Unknown target_unit (defensive case) → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
+        import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            reset_cache_for_tests,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
+        )
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
         )
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
             _reset_http_client_for_tests,
         )
-        import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
         _reset_http_client_for_tests()
         _om._rate_limiter._calls.clear()
 
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         with pytest.raises(ProviderProtocolError) as exc_info:
@@ -457,7 +547,9 @@ class TestZipHourlyCorrectness:
 
     def _make_hourly_block(self) -> Any:
         """Build a minimal 3-hour _OpenMeteoHourlyBlock for testing."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _OpenMeteoHourlyBlock  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _OpenMeteoHourlyBlock,  # noqa: PLC0415
+        )
         return _OpenMeteoHourlyBlock(
             time=["2026-05-07T00:00", "2026-05-07T01:00", "2026-05-07T02:00"],
             temperature_2m=[52.9, 52.1, 51.8],
@@ -561,7 +653,9 @@ class TestZipDailyCorrectness:
 
     def _make_daily_block(self) -> Any:
         """Build a minimal 2-day _OpenMeteoDailyBlock for testing."""
-        from weewx_clearskies_api.providers.forecast.openmeteo import _OpenMeteoDailyBlock  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _OpenMeteoDailyBlock,  # noqa: PLC0415
+        )
         return _OpenMeteoDailyBlock(
             time=["2026-05-07", "2026-05-08"],
             temperature_2m_max=[61.9, 63.4],
@@ -656,6 +750,7 @@ class TestWireShapePydantic:
     def test_missing_required_latitude_raises_validation_error(self) -> None:
         """forecast_malformed.json (no latitude) → pydantic ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.forecast.openmeteo import (  # noqa: PLC0415
             _OpenMeteoForecastResponse,
         )
@@ -738,24 +833,28 @@ class TestForecastQueryParams:
 
     def test_negative_hours_raises_validation_error(self) -> None:
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import ForecastQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             ForecastQueryParams.model_validate({"hours": "-1"})
 
     def test_negative_days_raises_validation_error(self) -> None:
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import ForecastQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             ForecastQueryParams.model_validate({"days": "-1"})
 
     def test_hours_above_max_385_raises_validation_error(self) -> None:
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import ForecastQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             ForecastQueryParams.model_validate({"hours": "385"})
 
     def test_days_above_max_17_raises_validation_error(self) -> None:
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import ForecastQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             ForecastQueryParams.model_validate({"days": "17"})
@@ -763,6 +862,7 @@ class TestForecastQueryParams:
     def test_unknown_key_raises_validation_error(self) -> None:
         """extra='forbid' blocks unknown query keys per security-baseline §3.5."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import ForecastQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             ForecastQueryParams.model_validate({"hours": "24", "nuke": "1"})
@@ -851,7 +951,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -874,7 +976,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -897,7 +1001,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -921,7 +1027,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -944,7 +1052,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -966,7 +1076,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -995,7 +1107,9 @@ class TestModuleFetchHappyPath:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast.json")
@@ -1027,9 +1141,9 @@ class TestModuleFetchCacheHit:
     def test_memory_cache_hit_skips_http_call(self) -> None:
         """Pre-populated MemoryCache → fetch() returns bundle; respx call count = 0."""
         from weewx_clearskies_api.models.responses import (  # noqa: PLC0415
+            DailyForecastPoint,
             ForecastBundle,
             HourlyForecastPoint,
-            DailyForecastPoint,
         )
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             MemoryCache,
@@ -1089,9 +1203,9 @@ class TestModuleFetchCacheHit:
             pytest.skip("fakeredis not installed")
 
         from weewx_clearskies_api.models.responses import (  # noqa: PLC0415
+            DailyForecastPoint,
             ForecastBundle,
             HourlyForecastPoint,
-            DailyForecastPoint,
         )
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             RedisCache,
@@ -1159,12 +1273,16 @@ class TestModuleFetchErrorPaths:
 
     def _setup(self) -> None:
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
     def test_5xx_raises_transient_network_error(self) -> None:
         """Open-Meteo 503 → TransientNetworkError after retries exhausted."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         self._setup()
@@ -1202,7 +1320,9 @@ class TestModuleFetchErrorPaths:
 
     def test_400_with_error_envelope_raises_provider_protocol_error(self) -> None:
         """Open-Meteo 400 + {error:true, reason:...} → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         self._setup()
@@ -1222,7 +1342,9 @@ class TestModuleFetchErrorPaths:
 
     def test_malformed_wire_shape_raises_provider_protocol_error(self) -> None:
         """200 response with missing required 'latitude' → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         self._setup()
@@ -1282,8 +1404,12 @@ class TestCapabilityRegistryForecastModule:
             reset_provider_registry_for_tests,
             wire_providers,
         )
-        from weewx_clearskies_api.providers.alerts.nws import CAPABILITY as alerts_cap  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import CAPABILITY as forecast_cap  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.nws import (
+            CAPABILITY as alerts_cap,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            CAPABILITY as forecast_cap,  # noqa: PLC0415
+        )
 
         reset_provider_registry_for_tests()
         wire_providers([alerts_cap, forecast_cap])
@@ -1681,7 +1807,9 @@ class TestUnknownWmoCodeHandling:
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
 
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
 
         fixture = _load_fixture("forecast_unknown_wmo_code.json")

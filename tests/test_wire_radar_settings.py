@@ -106,7 +106,7 @@ class TestWireRadarSettingsAeris:
         assert mod._RADAR_AERIS_CLIENT_SECRET == "my_client_secret"
 
     def test_aeris_provider_missing_forecast_section_logs_error(
-        self, caplog: "pytest.LogCaptureFixture"
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """provider=aeris but no forecast section → ERROR logged, no exception raised."""
         mod = _get_radar_endpoint()
@@ -123,7 +123,7 @@ class TestWireRadarSettingsAeris:
         assert mod._RADAR_AERIS_CLIENT_SECRET is None
 
     def test_aeris_provider_empty_credentials_logs_error(
-        self, caplog: "pytest.LogCaptureFixture"
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """provider=aeris with empty credentials → ERROR logged, startup not blocked."""
         mod = _get_radar_endpoint()
@@ -176,7 +176,7 @@ class TestWireRadarSettingsOWM:
         assert mod._RADAR_OWM_APPID == "test_owm_appid"
 
     def test_openweathermap_provider_missing_forecast_section_logs_error(
-        self, caplog: "pytest.LogCaptureFixture"
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """provider=openweathermap but no forecast section → ERROR logged, no raise."""
         mod = _get_radar_endpoint()
@@ -189,7 +189,7 @@ class TestWireRadarSettingsOWM:
         assert mod._RADAR_OWM_APPID is None
 
     def test_openweathermap_empty_appid_logs_error(
-        self, caplog: "pytest.LogCaptureFixture"
+        self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """provider=openweathermap with missing appid → ERROR logged, startup not blocked."""
         mod = _get_radar_endpoint()

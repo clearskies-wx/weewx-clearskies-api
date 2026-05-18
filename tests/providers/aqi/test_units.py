@@ -33,7 +33,6 @@ import math
 
 import pytest
 
-
 # ===========================================================================
 # 1. ugm3_to_ppm — conversion round-trips and edge cases
 # ===========================================================================
@@ -452,7 +451,9 @@ class TestConcentrationToSubAqiPM25:
 
     def test_pm25_zero_is_sub_aqi_0(self) -> None:
         """PM2.5 = 0.0 µg/m³ → sub-AQI 0 (bottom of first band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="PM2.5")
         assert result == 0, f"PM2.5=0.0 → expected sub-AQI 0, got {result!r}"
 
@@ -462,7 +463,9 @@ class TestConcentrationToSubAqiPM25:
         EPA boundary test: 9.0 must map to 50, NOT 51.
         The rounding formula produces exactly 50 at C_high = C = 9.0.
         """
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(9.0, pollutant="PM2.5")
         assert result == 50, (
             f"PM2.5=9.0 exactly → expected sub-AQI 50 (NOT 51), got {result!r}"
@@ -470,62 +473,82 @@ class TestConcentrationToSubAqiPM25:
 
     def test_pm25_4_5_midpoint_of_first_band(self) -> None:
         """PM2.5 = 4.5 µg/m³ (midpoint of first band 0–9) → sub-AQI 25."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(4.5, pollutant="PM2.5")
         assert result == 25, f"PM2.5=4.5 midpoint → expected 25, got {result!r}"
 
     def test_pm25_9_1_is_sub_aqi_51_bottom_of_second_band(self) -> None:
         """PM2.5 = 9.1 µg/m³ → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(9.1, pollutant="PM2.5")
         assert result == 51, f"PM2.5=9.1 → expected 51, got {result!r}"
 
     def test_pm25_35_4_is_sub_aqi_100_top_of_moderate(self) -> None:
         """PM2.5 = 35.4 µg/m³ → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(35.4, pollutant="PM2.5")
         assert result == 100, f"PM2.5=35.4 → expected 100, got {result!r}"
 
     def test_pm25_22_25_midpoint_of_moderate_band(self) -> None:
         """PM2.5 = 22.25 µg/m³ (approx midpoint of Moderate band 9.1–35.4) → sub-AQI ~75."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(22.25, pollutant="PM2.5")
         # sub = (100-51)/(35.4-9.1) * (22.25-9.1) + 51 = (49/26.3)*13.15+51 ≈ 24.5+51 ≈ 75/76
         assert result in (75, 76), f"PM2.5=22.25 midpoint of moderate → expected ~75-76, got {result!r}"
 
     def test_pm25_35_5_is_sub_aqi_101_bottom_of_usg(self) -> None:
         """PM2.5 = 35.5 µg/m³ → sub-AQI 101 (bottom of Unhealthy for Sensitive Groups)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(35.5, pollutant="PM2.5")
         assert result == 101, f"PM2.5=35.5 → expected 101, got {result!r}"
 
     def test_pm25_55_4_is_sub_aqi_150_top_of_usg(self) -> None:
         """PM2.5 = 55.4 µg/m³ → sub-AQI 150 (top of USG band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(55.4, pollutant="PM2.5")
         assert result == 150, f"PM2.5=55.4 → expected 150, got {result!r}"
 
     def test_pm25_above_325_4_caps_at_500(self) -> None:
         """PM2.5 > 325.4 µg/m³ (above table top) → cap at 500."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(400.0, pollutant="PM2.5")
         assert result == 500, f"PM2.5 above table top → expected 500 cap, got {result!r}"
 
     def test_pm25_negative_returns_zero(self) -> None:
         """PM2.5 < 0 (defensive) → sub-AQI 0 (below-table floor)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(-1.0, pollutant="PM2.5")
         assert result == 0, f"PM2.5=-1.0 below table → expected 0, got {result!r}"
 
     def test_pm25_none_returns_none(self) -> None:
         """PM2.5 = None → sub-AQI None (None propagates per ADR-010)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(None, pollutant="PM2.5")
         assert result is None, f"None PM2.5 → expected None, got {result!r}"
 
     def test_pm25_fixture_value_0_5_is_sub_aqi_3(self) -> None:
         """PM2.5 = 0.5 µg/m³ (OWM fixture value) → sub-AQI 3."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         # sub = (50-0)/(9.0-0.0)*(0.5-0)+0 = 50/9*0.5 = 2.78 → round → 3
         result = concentration_to_sub_aqi(0.5, pollutant="PM2.5")
         assert result == 3, f"PM2.5=0.5 (fixture) → expected 3, got {result!r}"
@@ -545,48 +568,64 @@ class TestConcentrationToSubAqiPM10:
 
     def test_pm10_zero_is_sub_aqi_0(self) -> None:
         """PM10 = 0 µg/m³ → sub-AQI 0."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="PM10")
         assert result == 0, f"PM10=0.0 → expected 0, got {result!r}"
 
     def test_pm10_54_is_sub_aqi_50_top_of_good(self) -> None:
         """PM10 = 54 µg/m³ → sub-AQI 50 (top of Good band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(54.0, pollutant="PM10")
         assert result == 50, f"PM10=54 → expected 50, got {result!r}"
 
     def test_pm10_27_midpoint_of_good_band(self) -> None:
         """PM10 = 27 µg/m³ (midpoint of Good band 0–54) → sub-AQI 25."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(27.0, pollutant="PM10")
         assert result == 25, f"PM10=27 midpoint → expected 25, got {result!r}"
 
     def test_pm10_55_is_sub_aqi_51_bottom_of_moderate(self) -> None:
         """PM10 = 55 µg/m³ → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(55.0, pollutant="PM10")
         assert result == 51, f"PM10=55 → expected 51, got {result!r}"
 
     def test_pm10_154_is_sub_aqi_100_top_of_moderate(self) -> None:
         """PM10 = 154 µg/m³ → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(154.0, pollutant="PM10")
         assert result == 100, f"PM10=154 → expected 100, got {result!r}"
 
     def test_pm10_above_604_caps_at_500(self) -> None:
         """PM10 > 604 µg/m³ → cap at 500."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(700.0, pollutant="PM10")
         assert result == 500, f"PM10 above table top → expected 500 cap, got {result!r}"
 
     def test_pm10_none_returns_none(self) -> None:
         """PM10 = None → sub-AQI None."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         assert concentration_to_sub_aqi(None, pollutant="PM10") is None
 
     def test_pm10_fixture_value_0_81_is_sub_aqi_1(self) -> None:
         """PM10 = 0.81 µg/m³ (OWM fixture value) → sub-AQI 1."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         # sub = (50-0)/(54-0)*(0.81-0)+0 = 50/54*0.81 = 0.75 → round → 1
         result = concentration_to_sub_aqi(0.81, pollutant="PM10")
         assert result == 1, f"PM10=0.81 (fixture) → expected 1, got {result!r}"
@@ -606,37 +645,49 @@ class TestConcentrationToSubAqiO3:
 
     def test_o3_zero_is_sub_aqi_0(self) -> None:
         """O3 = 0.0 ppm → sub-AQI 0."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="O3")
         assert result == 0, f"O3=0.0 → expected 0, got {result!r}"
 
     def test_o3_0_054_is_sub_aqi_50_top_of_good(self) -> None:
         """O3 = 0.054 ppm → sub-AQI 50 (top of Good band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.054, pollutant="O3")
         assert result == 50, f"O3=0.054 → expected 50, got {result!r}"
 
     def test_o3_0_027_midpoint_of_good_band(self) -> None:
         """O3 = 0.027 ppm (midpoint of Good band) → sub-AQI 25."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.027, pollutant="O3")
         assert result == 25, f"O3=0.027 midpoint → expected 25, got {result!r}"
 
     def test_o3_0_055_is_sub_aqi_51_bottom_of_moderate(self) -> None:
         """O3 = 0.055 ppm → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.055, pollutant="O3")
         assert result == 51, f"O3=0.055 → expected 51, got {result!r}"
 
     def test_o3_0_070_is_sub_aqi_100_top_of_moderate(self) -> None:
         """O3 = 0.070 ppm → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.070, pollutant="O3")
         assert result == 100, f"O3=0.070 → expected 100, got {result!r}"
 
     def test_o3_0_200_is_sub_aqi_300_top_of_table(self) -> None:
         """O3 = 0.200 ppm → sub-AQI 300 (top of 8-hr table, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.200, pollutant="O3")
         assert result == 300, f"O3=0.200 → expected 300 (table top), got {result!r}"
 
@@ -646,7 +697,9 @@ class TestConcentrationToSubAqiO3:
         This is distinct from PM2.5/PM10/CO/NO2 which cap at 500.
         The 8-hr O3 table has no 301–500 band; we cap at the table top (300).
         """
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.5, pollutant="O3")
         assert result == 300, (
             f"O3 > 0.200 ppm must cap at 300 (Q1 Option A, 8-hr table only), got {result!r}"
@@ -654,12 +707,16 @@ class TestConcentrationToSubAqiO3:
 
     def test_o3_none_returns_none(self) -> None:
         """O3 = None → sub-AQI None."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         assert concentration_to_sub_aqi(None, pollutant="O3") is None
 
     def test_o3_0_153_midpoint_of_very_unhealthy_band(self) -> None:
         """O3 = 0.153 ppm (midpoint of 201–300 band 0.106–0.200) → sub-AQI 250."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         # sub = (300-201)/(0.200-0.106)*(0.153-0.106)+201 = (99/0.094)*0.047+201 ≈ 49.5+201 = 250/251
         result = concentration_to_sub_aqi(0.153, pollutant="O3")
         assert result in (250, 251), f"O3=0.153 midpoint VU band → expected ~250-251, got {result!r}"
@@ -679,43 +736,57 @@ class TestConcentrationToSubAqiCO:
 
     def test_co_zero_is_sub_aqi_0(self) -> None:
         """CO = 0.0 ppm → sub-AQI 0."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="CO")
         assert result == 0, f"CO=0.0 → expected 0, got {result!r}"
 
     def test_co_4_4_is_sub_aqi_50_top_of_good(self) -> None:
         """CO = 4.4 ppm → sub-AQI 50 (top of Good band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(4.4, pollutant="CO")
         assert result == 50, f"CO=4.4 → expected 50, got {result!r}"
 
     def test_co_2_2_midpoint_of_good_band(self) -> None:
         """CO = 2.2 ppm (midpoint of Good band 0–4.4) → sub-AQI 25."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(2.2, pollutant="CO")
         assert result == 25, f"CO=2.2 midpoint → expected 25, got {result!r}"
 
     def test_co_4_5_is_sub_aqi_51_bottom_of_moderate(self) -> None:
         """CO = 4.5 ppm → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(4.5, pollutant="CO")
         assert result == 51, f"CO=4.5 → expected 51, got {result!r}"
 
     def test_co_9_4_is_sub_aqi_100_top_of_moderate(self) -> None:
         """CO = 9.4 ppm → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(9.4, pollutant="CO")
         assert result == 100, f"CO=9.4 → expected 100, got {result!r}"
 
     def test_co_above_50_4_caps_at_500(self) -> None:
         """CO > 50.4 ppm → cap at 500 (full table range, no early cap for CO)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(100.0, pollutant="CO")
         assert result == 500, f"CO > 50.4 ppm → expected 500 cap, got {result!r}"
 
     def test_co_none_returns_none(self) -> None:
         """CO = None → sub-AQI None."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         assert concentration_to_sub_aqi(None, pollutant="CO") is None
 
 
@@ -732,31 +803,41 @@ class TestConcentrationToSubAqiSO2:
 
     def test_so2_zero_is_sub_aqi_0(self) -> None:
         """SO2 = 0.0 ppm → sub-AQI 0."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="SO2")
         assert result == 0, f"SO2=0.0 → expected 0, got {result!r}"
 
     def test_so2_0_035_is_sub_aqi_50_top_of_good(self) -> None:
         """SO2 = 0.035 ppm → sub-AQI 50 (top of Good band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.035, pollutant="SO2")
         assert result == 50, f"SO2=0.035 → expected 50, got {result!r}"
 
     def test_so2_0_036_is_sub_aqi_51_bottom_of_moderate(self) -> None:
         """SO2 = 0.036 ppm → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.036, pollutant="SO2")
         assert result == 51, f"SO2=0.036 → expected 51, got {result!r}"
 
     def test_so2_0_075_is_sub_aqi_100_top_of_moderate(self) -> None:
         """SO2 = 0.075 ppm → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.075, pollutant="SO2")
         assert result == 100, f"SO2=0.075 → expected 100, got {result!r}"
 
     def test_so2_0_304_is_sub_aqi_200_top_of_table(self) -> None:
         """SO2 = 0.304 ppm → sub-AQI 200 (top of 1-hr table, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.304, pollutant="SO2")
         assert result == 200, f"SO2=0.304 → expected 200 (table top), got {result!r}"
 
@@ -766,7 +847,9 @@ class TestConcentrationToSubAqiSO2:
         Distinct from PM2.5/PM10/CO/NO2 which cap at 500.
         The 1-hr SO2 table has no 201–300 or 301–500 bands.
         """
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.5, pollutant="SO2")
         assert result == 200, (
             f"SO2 > 0.304 ppm must cap at 200 (Q1 Option A, 1-hr table only), got {result!r}"
@@ -774,12 +857,16 @@ class TestConcentrationToSubAqiSO2:
 
     def test_so2_none_returns_none(self) -> None:
         """SO2 = None → sub-AQI None."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         assert concentration_to_sub_aqi(None, pollutant="SO2") is None
 
     def test_so2_0_055_midpoint_of_moderate_band(self) -> None:
         """SO2 = 0.055 ppm (approx midpoint of Moderate 0.036–0.075) → sub-AQI 75."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         # sub = (100-51)/(0.075-0.036)*(0.055-0.036)+51 = (49/0.039)*0.019+51 ≈ 23.8+51 ≈ 75
         result = concentration_to_sub_aqi(0.055, pollutant="SO2")
         assert result in (75, 76), f"SO2=0.055 midpoint → expected ~75-76, got {result!r}"
@@ -799,44 +886,58 @@ class TestConcentrationToSubAqiNO2:
 
     def test_no2_zero_is_sub_aqi_0(self) -> None:
         """NO2 = 0.0 ppm → sub-AQI 0."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.0, pollutant="NO2")
         assert result == 0, f"NO2=0.0 → expected 0, got {result!r}"
 
     def test_no2_0_053_is_sub_aqi_50_top_of_good(self) -> None:
         """NO2 = 0.053 ppm → sub-AQI 50 (top of Good band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.053, pollutant="NO2")
         assert result == 50, f"NO2=0.053 → expected 50, got {result!r}"
 
     def test_no2_0_027_midpoint_of_good_band(self) -> None:
         """NO2 = 0.027 ppm (approx midpoint of Good band 0–0.053) → sub-AQI 25."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.027, pollutant="NO2")
         # sub = (50-0)/(0.053-0.000)*(0.027-0)+0 ≈ 943.4*0.027 ≈ 25.5 → 25 or 26
         assert result in (25, 26), f"NO2=0.027 midpoint → expected ~25-26, got {result!r}"
 
     def test_no2_0_054_is_sub_aqi_51_bottom_of_moderate(self) -> None:
         """NO2 = 0.054 ppm → sub-AQI 51 (bottom of Moderate band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.054, pollutant="NO2")
         assert result == 51, f"NO2=0.054 → expected 51, got {result!r}"
 
     def test_no2_0_100_is_sub_aqi_100_top_of_moderate(self) -> None:
         """NO2 = 0.100 ppm → sub-AQI 100 (top of Moderate band, inclusive)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.100, pollutant="NO2")
         assert result == 100, f"NO2=0.100 → expected 100, got {result!r}"
 
     def test_no2_above_2_049_caps_at_500(self) -> None:
         """NO2 > 2.049 ppm → cap at 500."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(3.0, pollutant="NO2")
         assert result == 500, f"NO2 above table top → expected 500 cap, got {result!r}"
 
     def test_no2_none_returns_none(self) -> None:
         """NO2 = None → sub-AQI None."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         assert concentration_to_sub_aqi(None, pollutant="NO2") is None
 
     def test_no2_1_089_ppm_synthetic_high_is_in_very_unhealthy_band(self) -> None:
@@ -850,7 +951,9 @@ class TestConcentrationToSubAqiNO2:
         Band [0.650, 1.249, 201, 300]: sub = (300-201)/(1.249-0.650)*(1.089-0.650)+201.
         Approximate: (99/0.599)*0.439+201 ≈ 72.6+201 = 273.6 → 274
         """
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(1.089, pollutant="NO2")
         assert result is not None
         assert 270 <= result <= 278, (
@@ -864,7 +967,9 @@ class TestConcentrationToSubAqiNO2:
         Band (0.000, 0.053, 0, 50): sub = (50/0.053) × 0.001089 ≈ 1.03 → 1.
         Verifies the fixture-real-value mapping against EPA after the chemistry fix.
         """
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         result = concentration_to_sub_aqi(0.001089, pollutant="NO2")
         assert result is not None
         assert result <= 5, (
@@ -877,18 +982,24 @@ class TestConcentrationToSubAqiUnknownPollutant:
 
     def test_unknown_pollutant_raises_key_error(self) -> None:
         """concentration_to_sub_aqi('NH3') → KeyError (NH3 has no EPA AQI band)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         with pytest.raises(KeyError):
             concentration_to_sub_aqi(10.0, pollutant="NH3")
 
     def test_totally_unknown_pollutant_raises_key_error(self) -> None:
         """concentration_to_sub_aqi('UNKNOWN') → KeyError (canonical id required)."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         with pytest.raises(KeyError):
             concentration_to_sub_aqi(10.0, pollutant="UNKNOWN")
 
     def test_lowercase_pollutant_id_raises_key_error(self) -> None:
         """concentration_to_sub_aqi('pm2.5') → KeyError (must use canonical 'PM2.5')."""
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         with pytest.raises(KeyError):
             concentration_to_sub_aqi(5.0, pollutant="pm2.5")

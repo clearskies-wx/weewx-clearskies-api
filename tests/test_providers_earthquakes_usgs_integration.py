@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -147,8 +148,11 @@ def _wire_integration_state(
     provider: str | None = "usgs",
 ) -> None:
     """Wire DB, station, units, cache, and provider registry for integration tests."""
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP  # noqa: PLC0415
-    from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,  # noqa: PLC0415
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
@@ -160,11 +164,13 @@ def _wire_integration_state(
         wire_providers,
     )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
-    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
 
@@ -221,7 +227,9 @@ def _make_earthquakes_app(db_engine: Engine, provider: str | None = "usgs") -> F
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings  # noqa: PLC0415
+    from weewx_clearskies_api.endpoints.earthquakes import (
+        wire_earthquakes_settings,  # noqa: PLC0415
+    )
 
     _wire_integration_state(db_engine, provider=provider)
 
@@ -244,8 +252,8 @@ def _reset_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     reset_cache_for_tests()
@@ -392,14 +400,13 @@ class TestUSGSProviderConfigured:
         """Memory cache hit on second request → 0 additional HTTP calls."""
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -434,6 +441,8 @@ class TestUSGSProviderConfigured:
         _require_redis()
 
         import redis as redis_lib  # noqa: PLC0415
+
+        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             RedisCache,
             reset_cache_for_tests,
@@ -442,10 +451,9 @@ class TestUSGSProviderConfigured:
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.earthquakes.usgs import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
-        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()

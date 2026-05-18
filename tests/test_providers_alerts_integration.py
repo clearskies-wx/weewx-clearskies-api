@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -161,19 +162,24 @@ def _make_integration_settings(provider: str | None = None) -> Any:
 def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with no provider configured."""
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP  # noqa: PLC0415
-    from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,  # noqa: PLC0415
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
-    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
 
@@ -243,25 +249,32 @@ def integration_client_no_provider(
 def integration_app_nws(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with NWS provider configured."""
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP  # noqa: PLC0415
-    from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,  # noqa: PLC0415
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.cache import (
+        reset_cache_for_tests,  # noqa: PLC0415
+        wire_cache_from_env,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
+        reset_provider_registry_for_tests,
+        wire_providers,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
-    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
-        reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-        reset_provider_registry_for_tests,
+    from weewx_clearskies_api.services.units import (
+        reset_cache as reset_units_cache,
     )
 
     # Reset state
@@ -409,8 +422,8 @@ class TestAlertsNWSIntegration:
         self, integration_client_nws: TestClient
     ) -> None:
         """NWS configured + respx mock → 200 with alerts from fixture."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
 
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
@@ -434,8 +447,8 @@ class TestAlertsNWSIntegration:
         self, integration_client_nws: TestClient
     ) -> None:
         """Each AlertRecord in the response has all required fields per OpenAPI schema."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
 
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
@@ -463,8 +476,8 @@ class TestAlertsNWSIntegration:
         self, integration_client_nws: TestClient
     ) -> None:
         """effective field in AlertRecord response is UTC ISO-8601 with Z suffix (ADR-020)."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
 
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
@@ -485,8 +498,8 @@ class TestAlertsNWSIntegration:
         self, integration_client_nws: TestClient
     ) -> None:
         """NWS returning empty features → /alerts returns 200 alerts=[] source='nws'."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
 
         fixture = _load_fixture("alerts_active_empty.json")
         with respx.mock:
@@ -564,7 +577,9 @@ class TestStartupFailurePathsIntegration:
         Tests the dispatch.get_provider_module() code path that __main__.py
         calls at startup — an unknown provider id must fail closed.
         """
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         with pytest.raises(KeyError):
             get_provider_module(domain="alerts", provider_id="unknown_provider")
 
@@ -645,8 +660,8 @@ class TestAlertsRedisBackendIntegration:
         self, integration_client_nws: TestClient
     ) -> None:
         """With real Redis, second /alerts call returns cached data (one NWS call total)."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
 
         fixture = _load_fixture("alerts_active.json")
         nws_call_count = 0

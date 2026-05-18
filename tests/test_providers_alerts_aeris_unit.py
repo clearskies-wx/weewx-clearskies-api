@@ -111,6 +111,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.alerts.aeris as _aeris  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -118,8 +119,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.alerts.aeris import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.alerts.aeris as _aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.alerts.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -157,51 +159,69 @@ class TestAerisSeverityFromType:
 
     def test_vtec_warning_suffix_maps_to_warning(self) -> None:
         """`TO.W` (Tornado Warning, VTEC `.W`) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("TO.W") == "warning"
 
     def test_vtec_watch_suffix_maps_to_watch(self) -> None:
         """`FW.A` (Fire Weather Watch, VTEC `.A`) → 'watch'. Real fixture case."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("FW.A") == "watch"
 
     def test_vtec_advisory_suffix_maps_to_advisory(self) -> None:
         """`WI.Y` (Wind Advisory, VTEC `.Y`) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("WI.Y") == "advisory"
 
     def test_vtec_statement_suffix_maps_to_advisory(self) -> None:
         """`SV.S` (Severe Weather Statement, VTEC `.S`) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("SV.S") == "advisory"
 
     # --- Non-US Aeris severity suffixes ---
 
     def test_aeris_extreme_suffix_maps_to_warning(self) -> None:
         """`AW.TS.EX` (Extreme thunderstorm) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("AW.TS.EX") == "warning"
 
     def test_aeris_severe_suffix_maps_to_watch(self) -> None:
         """`AW.TS.SV` (Severe thunderstorm) → 'watch'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("AW.TS.SV") == "watch"
 
     def test_aeris_moderate_suffix_maps_to_advisory(self) -> None:
         """`AW.TS.MD` (Moderate thunderstorm — api-docs example) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("AW.TS.MD") == "advisory"
 
     def test_aeris_minor_suffix_maps_to_advisory(self) -> None:
         """`AW.TS.MN` (Minor thunderstorm) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("AW.TS.MN") == "advisory"
 
     # --- Dispatch-table coverage ---
 
     def test_vtec_dispatch_table_covers_all_four_codes(self) -> None:
         """_VTEC_SUFFIX_TO_SEVERITY has W, A, Y, S keys (NWS VTEC action codes)."""
-        from weewx_clearskies_api.providers.alerts.aeris import _VTEC_SUFFIX_TO_SEVERITY  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _VTEC_SUFFIX_TO_SEVERITY,  # noqa: PLC0415
+        )
         for suffix in ("W", "A", "Y", "S"):
             assert suffix in _VTEC_SUFFIX_TO_SEVERITY, (
                 f"_VTEC_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
@@ -209,7 +229,9 @@ class TestAerisSeverityFromType:
 
     def test_aeris_dispatch_table_covers_all_four_codes(self) -> None:
         """_AERIS_SUFFIX_TO_SEVERITY has EX, SV, MD, MN keys (Aeris non-US severity codes)."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AERIS_SUFFIX_TO_SEVERITY  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _AERIS_SUFFIX_TO_SEVERITY,  # noqa: PLC0415
+        )
         for suffix in ("EX", "SV", "MD", "MN"):
             assert suffix in _AERIS_SUFFIX_TO_SEVERITY, (
                 f"_AERIS_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
@@ -219,17 +241,23 @@ class TestAerisSeverityFromType:
 
     def test_unknown_suffix_defaults_to_advisory(self) -> None:
         """Unknown suffix → 'advisory' default."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("XX.YY.ZZ") == "advisory"
 
     def test_no_suffix_defaults_to_advisory(self) -> None:
         """type code with no dot (e.g. 'TOR') → suffix='TOR', not in dispatch tables → advisory."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("TOR") == "advisory"
 
     def test_unknown_suffix_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
         """Unknown suffix emits WARNING log to surface schema drift to operator."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
             _parse_severity_from_type("XX.YY.ZZ")
         assert any("ZZ" in record.message for record in caplog.records), (
@@ -238,17 +266,23 @@ class TestAerisSeverityFromType:
 
     def test_none_type_defaults_to_advisory(self) -> None:
         """None type → 'advisory' default with WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type(None) == "advisory"
 
     def test_empty_type_defaults_to_advisory(self) -> None:
         """Empty string type → 'advisory' default with WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         assert _parse_severity_from_type("") == "advisory"
 
     def test_none_type_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
         """None/empty type emits WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_from_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (
+            _parse_severity_from_type,  # noqa: PLC0415
+        )
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
             _parse_severity_from_type(None)
         assert any("null" in record.message.lower() or "empty" in record.message.lower()
@@ -260,7 +294,10 @@ class TestAerisSeverityFromType:
 
     def test_real_fixture_type_FW_A_yields_watch(self) -> None:
         """Real fixture 'FW.A' (Fire Weather Watch) → severity 'watch'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
         fixture = _load_fixture("alerts.json")
         first_raw = fixture["response"][0]
         record = _AerisAlertRecord.model_validate(first_raw)
@@ -335,7 +372,10 @@ class TestAerisDatetimeConversion:
 
     def test_real_fixture_timestamps_convert_to_utc_z(self) -> None:
         """Real fixture (alerts.json) timestamps are ISO+offset → Z after conversion."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
         # Use the real fixture but bypass the emergency=False bug by patching it out
         fixture = _load_fixture("alerts.json")
         first_raw = dict(fixture["response"][0])
@@ -458,7 +498,10 @@ class TestAerisSenderNameDisjunction:
 
         Real fixture: place.name="valley" → senderName="valley".
         """
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
         fixture = _load_fixture("alerts.json")
         first_raw = fixture["response"][0]
         # Confirm emergency=False is boolean in real fixture
@@ -603,7 +646,10 @@ class TestAerisFieldPassthrough:
 
     def test_real_fixture_yields_category_fire(self) -> None:
         """Real fixture has details.cat='fire' → canonical category='fire'."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
         fixture = _load_fixture("alerts.json")
         record = _AerisAlertRecord.model_validate(fixture["response"][0])
         result = _to_canonical(record)
@@ -644,7 +690,10 @@ class TestAerisFieldPassthrough:
 
     def test_area_desc_from_place_name(self) -> None:
         """areaDesc = place.name passthrough."""
-        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord, _to_canonical  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
         record_data = {
             "id": "test-area-001",
             "details": {"type": "WI.Y", "name": "Wind Advisory", "priority": 2, "body": "Test."},
@@ -744,6 +793,7 @@ class TestAerisWireShapePydantic:
     def test_missing_required_id_raises_validation_error(self) -> None:
         """Missing required 'id' field on alert record raises ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord  # noqa: PLC0415
         with pytest.raises(ValidationError):
             _AerisAlertRecord.model_validate({
@@ -918,8 +968,8 @@ class TestFetchCacheMissAndHit:
         """Empty response[] (no active alerts) → empty list; empty list cached."""
         _reset_provider_state()
         empty_data = {"success": True, "error": None, "response": []}
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_AERIS_ALERTS_URL).mock(
@@ -977,8 +1027,8 @@ class TestFetchMissingCredentials:
     def test_missing_client_id_raises_key_invalid_before_http(self) -> None:
         """client_id=None → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -991,8 +1041,8 @@ class TestFetchMissingCredentials:
     def test_missing_client_secret_raises_key_invalid_before_http(self) -> None:
         """client_secret=None → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -1005,8 +1055,8 @@ class TestFetchMissingCredentials:
     def test_both_credentials_missing_raises_key_invalid(self) -> None:
         """Both None → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -1019,8 +1069,8 @@ class TestFetchMissingCredentials:
     def test_empty_string_client_id_raises_key_invalid(self) -> None:
         """Empty string client_id (falsy) → KeyInvalid."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -1042,8 +1092,8 @@ class TestFetchHttpErrorPaths:
     def test_401_raises_key_invalid_with_status_code_attribute(self) -> None:
         """HTTP 401 → KeyInvalid; exc.status_code == 401 (F2 attribute-dispatch)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         error_data = _load_fixture("alerts_error_401.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1063,8 +1113,8 @@ class TestFetchHttpErrorPaths:
     def test_429_raises_quota_exhausted(self) -> None:
         """HTTP 429 → QuotaExhausted."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         error_data = _load_fixture("alerts_error_429.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1083,8 +1133,8 @@ class TestFetchHttpErrorPaths:
         3b-4 F1 carry-forward: assert retry_after_seconds propagated through.
         """
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
         error_data = _load_fixture("alerts_error_429.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1107,8 +1157,10 @@ class TestFetchHttpErrorPaths:
     def test_500_raises_transient_network_error(self) -> None:
         """HTTP 500 → TransientNetworkError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_AERIS_ALERTS_URL).mock(
@@ -1132,8 +1184,10 @@ class TestFetchEnvelopeErrorPaths:
     def test_success_false_envelope_raises_provider_protocol_error(self) -> None:
         """Aeris envelope success=false → ProviderProtocolError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         error_envelope = {
             "success": False,
             "error": {"code": "internal_error", "description": "Internal API error"},
@@ -1180,8 +1234,10 @@ class TestFetchEnvelopeErrorPaths:
     def test_pydantic_validation_error_on_record_raises_provider_protocol_error(self) -> None:
         """Pydantic ValidationError on alert record → ProviderProtocolError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         # Valid envelope but record missing required 'id' field
         malformed = {
             "success": True,
@@ -1264,11 +1320,11 @@ class TestCapabilityRegistry:
     def test_wire_providers_registers_aeris_alerts_capability(self) -> None:
         """wire_providers([aeris.CAPABILITY]) → registry contains aeris alerts entry."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-            wire_providers,
             get_provider_registry,
+            wire_providers,
         )
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
         wire_providers([CAPABILITY])
         registry = get_provider_registry()
         aeris_entries = [p for p in registry if p.provider_id == "aeris" and p.domain == "alerts"]

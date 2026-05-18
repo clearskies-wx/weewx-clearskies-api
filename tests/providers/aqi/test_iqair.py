@@ -70,7 +70,6 @@ ADR references: ADR-013, ADR-017, ADR-020, ADR-038.
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -121,6 +120,8 @@ def _reset_provider_state() -> None:
     from one test contaminating the next (3b-11 isolation pattern applied to unit tests).
     """
     import os  # noqa: PLC0415
+
+    import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -128,8 +129,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.aqi.iqair import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.aqi.iqair as _iqair  # noqa: PLC0415
+    from weewx_clearskies_api.providers.aqi.iqair import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     # Flush Redis if configured (3b-11 isolation pattern) — prevents cache hits from
     # earlier tests masking misses/errors in subsequent tests at the same coordinates.
@@ -600,7 +602,9 @@ class TestEnvelopeErrorMapping:
     def test_key_invalid_messages_raise_key_invalid(self, error_message: str) -> None:
         """status='fail' + auth/expired/permission message → KeyInvalid."""
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import (
+            _raise_for_envelope_error,  # noqa: PLC0415
+        )
         with pytest.raises(KeyInvalid):
             _raise_for_envelope_error(error_message)
 
@@ -611,7 +615,9 @@ class TestEnvelopeErrorMapping:
     def test_quota_messages_raise_quota_exhausted(self, error_message: str) -> None:
         """status='fail' + rate-limit message → QuotaExhausted(retry_after_seconds=None)."""
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.iqair import (
+            _raise_for_envelope_error,  # noqa: PLC0415
+        )
         with pytest.raises(QuotaExhausted) as exc_info:
             _raise_for_envelope_error(error_message)
         assert exc_info.value.retry_after_seconds is None, (
@@ -627,15 +633,23 @@ class TestEnvelopeErrorMapping:
         self, error_message: str
     ) -> None:
         """status='fail' + geographic/not-found message → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.aqi.iqair import (
+            _raise_for_envelope_error,  # noqa: PLC0415
+        )
         with pytest.raises(ProviderProtocolError):
             _raise_for_envelope_error(error_message)
 
     def test_unknown_fail_message_raises_provider_protocol_error(self) -> None:
         """status='fail' + unknown message → ProviderProtocolError (defensive default)."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.iqair import _raise_for_envelope_error  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.aqi.iqair import (
+            _raise_for_envelope_error,  # noqa: PLC0415
+        )
         with pytest.raises(ProviderProtocolError):
             _raise_for_envelope_error("some_unknown_error_not_in_table")
 
@@ -886,7 +900,9 @@ class TestCacheThreeWayPath:
 
     def test_wire_validation_failure_raises_provider_protocol_error(self) -> None:
         """Cache miss + malformed JSON (missing required status) → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
         _reset_provider_state()
 
@@ -945,9 +961,10 @@ class TestCacheKeyProperties:
 
     def test_cache_key_does_not_contain_api_key(self) -> None:
         """API key value must NOT appear in the cache key (privacy/leakage per LC9)."""
-        from weewx_clearskies_api.providers.aqi.iqair import _build_cache_key  # noqa: PLC0415
         # _build_cache_key takes only lat/lon — verifying signature does not accept key
         import inspect  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.iqair import _build_cache_key  # noqa: PLC0415
         sig = inspect.signature(_build_cache_key)
         param_names = list(sig.parameters.keys())
         assert "key" not in param_names, (
@@ -956,8 +973,12 @@ class TestCacheKeyProperties:
 
     def test_iqair_aqi_cache_key_distinct_from_aeris_aqi_key_at_same_coords(self) -> None:
         """IQAir cache key differs from Aeris cache key at same lat/lon (different provider_id)."""
-        from weewx_clearskies_api.providers.aqi.iqair import _build_cache_key as iqair_key  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.aeris import _build_cache_key as aeris_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.aeris import (
+            _build_cache_key as aeris_key,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.aqi.iqair import (
+            _build_cache_key as iqair_key,  # noqa: PLC0415
+        )
         k1 = iqair_key(_LAT, _LON)
         k2 = aeris_key(_LAT, _LON)
         assert k1 != k2, (
@@ -1139,7 +1160,9 @@ class TestHttpErrorPropagation:
 
     def test_http_5xx_raises_transient_network_error(self) -> None:
         """Provider HTTP 5xx → TransientNetworkError (L2 bare propagation)."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.iqair import fetch  # noqa: PLC0415
         _reset_provider_state()
 

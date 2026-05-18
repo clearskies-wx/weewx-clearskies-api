@@ -65,4 +65,4 @@ class JsonFormatter(logging.Formatter):
 
     @staticmethod
     def _utc_now() -> str:
-        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"

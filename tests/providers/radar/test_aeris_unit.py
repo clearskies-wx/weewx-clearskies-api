@@ -361,7 +361,9 @@ class TestAerisRadarTileCacheKey:
 
     def test_cache_key_does_not_include_credentials(self) -> None:
         """Two different credential pairs produce the same cache key (credentials excluded)."""
-        from weewx_clearskies_api.providers.radar.aeris import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.aeris import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
@@ -369,7 +371,9 @@ class TestAerisRadarTileCacheKey:
 
     def test_cache_key_differs_by_z(self) -> None:
         """Different z values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.aeris import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.aeris import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=5, x=4, y=6, t=None)
@@ -377,7 +381,9 @@ class TestAerisRadarTileCacheKey:
 
     def test_cache_key_differs_by_x(self) -> None:
         """Different x values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.aeris import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.aeris import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=5, y=6, t=None)
@@ -385,7 +391,9 @@ class TestAerisRadarTileCacheKey:
 
     def test_cache_key_differs_by_y(self) -> None:
         """Different y values produce different cache keys."""
-        from weewx_clearskies_api.providers.radar.aeris import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.aeris import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key1 = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         key2 = _build_tile_cache_key(z=4, x=4, y=7, t=None)
@@ -393,7 +401,9 @@ class TestAerisRadarTileCacheKey:
 
     def test_cache_key_is_sha256_hex_digest(self) -> None:
         """Cache key is a 64-char SHA-256 hex digest."""
-        from weewx_clearskies_api.providers.radar.aeris import _build_tile_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.aeris import (
+            _build_tile_cache_key,  # noqa: PLC0415
+        )
 
         key = _build_tile_cache_key(z=4, x=4, y=6, t=None)
         assert len(key) == 64
@@ -671,7 +681,9 @@ class TestAerisRadarTileUpstreamErrors:
         The provider module must NOT create a custom exception class — dispatch
         is on attribute per coding.md §3 "Dispatch on exception state via attributes."
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.aeris import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -688,7 +700,9 @@ class TestAerisRadarTileUpstreamErrors:
 
     def test_upstream_5xx_raises_transient_network_error(self) -> None:
         """Upstream 5xx after retries → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.aeris import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -700,7 +714,9 @@ class TestAerisRadarTileUpstreamErrors:
 
     def test_upstream_network_error_raises_transient_network_error(self) -> None:
         """DNS/TCP failure → TransientNetworkError (after retries exhausted)."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.aeris import get_tile  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:

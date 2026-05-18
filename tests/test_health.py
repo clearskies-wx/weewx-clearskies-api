@@ -82,6 +82,7 @@ def test_readiness_unhealthy_probe_returns_503() -> None:
 
 def test_health_endpoints_not_on_public_app() -> None:
     """Health routes are NOT present on the public API app."""
+    from weewx_clearskies_api.app import create_app
     from weewx_clearskies_api.config.settings import (
         ApiSettings,
         DatabaseSettings,
@@ -90,7 +91,6 @@ def test_health_endpoints_not_on_public_app() -> None:
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.app import create_app
 
     settings = Settings(
         api=ApiSettings({}),

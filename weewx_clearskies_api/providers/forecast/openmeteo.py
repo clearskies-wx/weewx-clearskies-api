@@ -81,7 +81,6 @@ from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import ProviderCapability
 from weewx_clearskies_api.providers._common.errors import (
     ProviderProtocolError,
-    QuotaExhausted,
 )
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter

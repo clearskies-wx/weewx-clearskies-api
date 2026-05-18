@@ -47,7 +47,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

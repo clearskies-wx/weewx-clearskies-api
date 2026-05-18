@@ -28,12 +28,13 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
+import httpx
 import pytest
 import respx
-import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
@@ -149,6 +150,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers all wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         AlertsSettings,
@@ -160,7 +162,11 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
@@ -172,16 +178,19 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.forecast.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.forecast.openmeteo as _om  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -264,7 +273,9 @@ def integration_app_no_provider(db_engine: Engine) -> Generator[FastAPI, None, N
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, provider=None)
     yield app
@@ -288,7 +299,9 @@ def integration_app_openmeteo(db_engine: Engine) -> Generator[FastAPI, None, Non
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, provider="openmeteo")
     yield app
@@ -312,7 +325,9 @@ def integration_app_both_providers(db_engine: Engine) -> Generator[FastAPI, None
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(
         db_engine,
@@ -512,7 +527,9 @@ class TestIntegrationStartupWiring:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -555,7 +572,9 @@ class TestIntegrationStartupWiring:
         For providers still NOT wired, see test_startup_with_aeris_as_forecast_provider
         in test_providers_forecast_nws_integration.py.
         """
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="forecast", provider_id="nws")
         assert hasattr(module, "CAPABILITY")
         assert hasattr(module, "fetch")
@@ -585,7 +604,9 @@ class TestIntegrationForecastRedisBackend:
             wire_providers,
         )
         from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -654,7 +675,11 @@ def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
@@ -665,16 +690,20 @@ def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris  # noqa: PLC0415
-    from weewx_clearskies_api.providers.forecast.aeris import _reset_http_client_for_tests  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -748,8 +777,12 @@ def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
 def integration_app_aeris(db_engine: Engine) -> Any:
     """Integration app with Aeris forecast provider configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.forecast.aeris import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.forecast.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_aeris_integration_stack(db_engine)
     yield app

@@ -103,6 +103,7 @@ def _reset_provider_state() -> None:
     Every test that calls fetch() needs a wired cache and clean state.
     Matches the pattern from NWS unit tests (3b-3).
     """
+    import weewx_clearskies_api.providers.forecast.aeris as _aeris  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -110,8 +111,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.forecast.aeris import _reset_http_client_for_tests  # noqa: PLC0415
-    import weewx_clearskies_api.providers.forecast.aeris as _aeris  # noqa: PLC0415
+    from weewx_clearskies_api.providers.forecast.aeris import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -147,59 +149,81 @@ class TestAerisDescriptorToPrecipType:
 
     def test_rain_descriptor_R_returns_rain(self) -> None:
         """Descriptor 'R' (rain) maps to 'rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type(":HV:R") == "rain"
 
     def test_rain_shower_descriptor_RW_returns_rain(self) -> None:
         """Descriptor 'RW' (rain shower) maps to 'rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::RW") == "rain"
 
     def test_drizzle_descriptor_L_returns_rain(self) -> None:
         """Descriptor 'L' (drizzle) maps to 'rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::L") == "rain"
 
     def test_snow_descriptor_S_returns_snow(self) -> None:
         """Descriptor 'S' (snow) maps to 'snow'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::S") == "snow"
 
     def test_snow_shower_descriptor_SW_returns_snow(self) -> None:
         """Descriptor 'SW' (snow showers) maps to 'snow'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type(":LGT:SW") == "snow"
 
     def test_freezing_rain_descriptor_ZR_returns_freezing_rain(self) -> None:
         """Descriptor 'ZR' (freezing rain) maps to 'freezing-rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::ZR") == "freezing-rain"
 
     def test_freezing_drizzle_descriptor_ZL_returns_freezing_rain(self) -> None:
         """Descriptor 'ZL' (freezing drizzle) maps to 'freezing-rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::ZL") == "freezing-rain"
 
     def test_ice_pellets_descriptor_IP_returns_sleet(self) -> None:
         """Descriptor 'IP' (ice pellets/sleet) maps to 'sleet'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::IP") == "sleet"
 
     def test_hail_descriptor_A_returns_hail(self) -> None:
         """Descriptor 'A' (hail) maps to 'hail'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::A") == "hail"
 
     def test_thunderstorm_descriptor_T_returns_rain(self) -> None:
         """Descriptor 'T' (thunderstorms) maps to 'rain' (consistent with NWS tsra)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::T") == "rain"
 
     def test_rain_snow_mix_descriptor_RS_returns_rain(self, caplog: Any) -> None:
         """Descriptor 'RS' (rain/snow mix) maps to 'rain'; DEBUG log emitted once."""
         import weewx_clearskies_api.providers.forecast.aeris as _aeris  # noqa: PLC0415
         _aeris._logged_mixed_precip.clear()
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         with caplog.at_level(logging.DEBUG, logger="weewx_clearskies_api.providers.forecast.aeris"):
             result = _aeris_descriptor_to_precip_type("::RS")
         assert result == "rain"
@@ -207,34 +231,46 @@ class TestAerisDescriptorToPrecipType:
 
     def test_wintry_mix_descriptor_WM_returns_rain(self) -> None:
         """Descriptor 'WM' (wintry mix) maps to 'rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::WM") == "rain"
 
     def test_snow_sleet_mix_descriptor_SI_returns_rain(self) -> None:
         """Descriptor 'SI' (snow/sleet) maps to 'rain'."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::SI") == "rain"
 
     def test_overcast_descriptor_OVC_returns_none(self) -> None:
         """Descriptor 'OVC' (overcast, no precip) maps to None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::OVC") is None
 
     def test_scattered_clouds_descriptor_SCT_returns_none(self) -> None:
         """Descriptor 'SCT' (scattered clouds) maps to None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::SCT") is None
 
     def test_fog_descriptor_F_returns_none(self) -> None:
         """Descriptor 'F' (fog) maps to None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("::F") is None
 
     def test_unknown_descriptor_logs_debug_and_returns_none(self, caplog: Any) -> None:
         """Unknown descriptor 'XYZZY' logs DEBUG once and returns None."""
         import weewx_clearskies_api.providers.forecast.aeris as _aeris  # noqa: PLC0415
         _aeris._logged_unknown_descriptors.clear()
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         with caplog.at_level(logging.DEBUG, logger="weewx_clearskies_api.providers.forecast.aeris"):
             result = _aeris_descriptor_to_precip_type("::XYZZY")
         assert result is None
@@ -244,7 +280,9 @@ class TestAerisDescriptorToPrecipType:
         """Second call with the same unknown descriptor doesn't log again."""
         import weewx_clearskies_api.providers.forecast.aeris as _aeris  # noqa: PLC0415
         _aeris._logged_unknown_descriptors.clear()
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         _aeris_descriptor_to_precip_type("::NOVEL")
         _aeris._logged_unknown_descriptors.add("NOVEL")  # already logged from first call
         # Second call — should not double-add
@@ -254,28 +292,38 @@ class TestAerisDescriptorToPrecipType:
 
     def test_none_input_returns_none(self) -> None:
         """None input returns None — no crash."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type(None) is None
 
     def test_empty_string_returns_none(self) -> None:
         """Empty string returns None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type("") is None
 
     def test_coded_string_with_no_descriptor_segment_returns_none(self) -> None:
         """String with fewer than 3 colon-segments returns None (defensive)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         # "onlyone" has no colons → split gives ["onlyone"] → no segment [2]
         assert _aeris_descriptor_to_precip_type("onlyone") is None
 
     def test_coded_string_with_empty_descriptor_segment_returns_none(self) -> None:
         """String ':HV:' has empty third segment → returns None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         assert _aeris_descriptor_to_precip_type(":HV:") is None
 
     def test_partial_split_only_two_segments_returns_none(self) -> None:
         """String 'HV:R' has only two colon-segments (index 0 and 1) → no index 2 → None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _aeris_descriptor_to_precip_type  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _aeris_descriptor_to_precip_type,  # noqa: PLC0415
+        )
         # "HV:R" splits to ["HV", "R"] — index 2 doesn't exist
         assert _aeris_descriptor_to_precip_type("HV:R") is None
 
@@ -290,7 +338,9 @@ class TestWindMaxMpsHelpers:
 
     def _make_period(self, **kwargs: Any) -> Any:
         """Build a minimal _AerisDayNightPeriod with only the supplied fields."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisDayNightPeriod,  # noqa: PLC0415
+        )
         # dateTimeISO + timestamp are required (3b-4 audit F4 — match brief)
         data = {
             "dateTimeISO": "2026-05-08T07:00:00-07:00",
@@ -301,13 +351,17 @@ class TestWindMaxMpsHelpers:
 
     def test_wind_speed_max_mps_uses_mps_field_when_present(self) -> None:
         """windSpeedMaxMPS present → returned directly."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_speed_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_speed_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windSpeedMaxMPS=5.0, windSpeedMaxKPH=18.0)
         assert _wind_speed_max_mps(period) == 5.0
 
     def test_wind_speed_max_mps_falls_back_to_kph_divided_by_3_6(self) -> None:
         """windSpeedMaxMPS absent + windSpeedMaxKPH present → KPH ÷ 3.6."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_speed_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_speed_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windSpeedMaxMPS=None, windSpeedMaxKPH=36.0)
         result = _wind_speed_max_mps(period)
         assert result is not None
@@ -315,19 +369,25 @@ class TestWindMaxMpsHelpers:
 
     def test_wind_speed_max_mps_returns_none_when_both_absent(self) -> None:
         """Both windSpeedMaxMPS and windSpeedMaxKPH absent → None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_speed_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_speed_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windSpeedMaxMPS=None, windSpeedMaxKPH=None)
         assert _wind_speed_max_mps(period) is None
 
     def test_wind_gust_max_mps_uses_mps_field_when_present(self) -> None:
         """windGustMaxMPS present → returned directly."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_gust_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_gust_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windGustMaxMPS=7.0, windGustMaxKPH=25.0)
         assert _wind_gust_max_mps(period) == 7.0
 
     def test_wind_gust_max_mps_falls_back_to_kph_divided_by_3_6(self) -> None:
         """windGustMaxMPS absent + windGustMaxKPH present → KPH ÷ 3.6."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_gust_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_gust_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windGustMaxMPS=None, windGustMaxKPH=25.2)
         result = _wind_gust_max_mps(period)
         assert result is not None
@@ -335,7 +395,9 @@ class TestWindMaxMpsHelpers:
 
     def test_wind_gust_max_mps_returns_none_when_both_absent(self) -> None:
         """Both windGustMaxMPS and windGustMaxKPH absent → None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _wind_gust_max_mps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _wind_gust_max_mps,  # noqa: PLC0415
+        )
         period = self._make_period(windGustMaxMPS=None, windGustMaxKPH=None)
         assert _wind_gust_max_mps(period) is None
 
@@ -350,7 +412,9 @@ class TestWireShapePydanticModels:
 
     def test_hourly_period_loads_from_real_fixture_first_period(self) -> None:
         """First period of forecasts_hourly.json validates against _AerisHourlyPeriod."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisHourlyPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisHourlyPeriod,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_hourly.json")
         raw_period = fixture["response"][0]["periods"][0]
         period = _AerisHourlyPeriod.model_validate(raw_period)
@@ -362,7 +426,9 @@ class TestWireShapePydanticModels:
 
     def test_hourly_period_extra_fields_are_ignored(self) -> None:
         """Extra fields in the wire shape are silently ignored (extras='ignore')."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisHourlyPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisHourlyPeriod,  # noqa: PLC0415
+        )
         raw = {
             "dateTimeISO": "2026-05-08T13:00:00-07:00",
             "timestamp": 1746738000,
@@ -376,13 +442,18 @@ class TestWireShapePydanticModels:
     def test_hourly_period_missing_required_dateTimeISO_raises_validation_error(self) -> None:
         """Missing dateTimeISO (required field) raises pydantic.ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisHourlyPeriod  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisHourlyPeriod,  # noqa: PLC0415
+        )
         with pytest.raises(ValidationError):
             _AerisHourlyPeriod.model_validate({"tempC": 14.3})
 
     def test_daynight_period_loads_from_real_fixture_first_period(self) -> None:
         """First period of forecasts_daynight.json validates against _AerisDayNightPeriod."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisDayNightPeriod,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_daynight.json")
         raw_period = fixture["response"][0]["periods"][0]
         period = _AerisDayNightPeriod.model_validate(raw_period)
@@ -393,7 +464,9 @@ class TestWireShapePydanticModels:
 
     def test_daynight_period_extra_fields_ignored(self) -> None:
         """Extra fields in daynight wire shape are ignored."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisDayNightPeriod,  # noqa: PLC0415
+        )
         raw = {
             "dateTimeISO": "2026-05-08T07:00:00-07:00",
             "timestamp": 1746716400,
@@ -406,7 +479,10 @@ class TestWireShapePydanticModels:
     def test_daynight_period_missing_required_dateTimeISO_raises_validation_error(self) -> None:
         """Missing dateTimeISO on daynight period raises ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisDayNightPeriod,  # noqa: PLC0415
+        )
         with pytest.raises(ValidationError):
             _AerisDayNightPeriod.model_validate({"maxTempF": 65.0})
 
@@ -440,7 +516,9 @@ class TestWireShapePydanticModels:
 
     def test_all_hourly_periods_from_fixture_validate_cleanly(self) -> None:
         """All 24 periods in forecasts_hourly.json validate against _AerisHourlyPeriod."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisHourlyPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisHourlyPeriod,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_hourly.json")
         periods = fixture["response"][0]["periods"]
         assert len(periods) == 24
@@ -449,7 +527,9 @@ class TestWireShapePydanticModels:
 
     def test_all_daynight_periods_from_fixture_validate_cleanly(self) -> None:
         """All 14 periods in forecasts_daynight.json validate against _AerisDayNightPeriod."""
-        from weewx_clearskies_api.providers.forecast.aeris import _AerisDayNightPeriod  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _AerisDayNightPeriod,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_daynight.json")
         periods = fixture["response"][0]["periods"]
         assert len(periods) == 14
@@ -478,8 +558,8 @@ class TestDetectDiscussion:
     def test_response_level_summary_returns_forecast_discussion(self) -> None:
         """Non-empty response[0].summary → ForecastDiscussion with body=that string."""
         from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
-            _extract_aeris_discussion,
             ForecastDiscussion,
+            _extract_aeris_discussion,
         )
         daynight_raw = {
             "summary": "Partly cloudy skies expected through the period.",
@@ -501,7 +581,9 @@ class TestDetectDiscussion:
 
     def test_period_level_summary_returns_forecast_discussion(self) -> None:
         """Non-empty periods[0].summary → ForecastDiscussion (second detection point)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         first_period = self._make_first_period_raw(
             summary="Partly cloudy with a high near 65F."
         )
@@ -521,7 +603,9 @@ class TestDetectDiscussion:
 
     def test_response_level_takes_precedence_over_period_level(self) -> None:
         """Response-level summary is used when both are present (first detection wins)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         first_period = self._make_first_period_raw(summary="Period-level summary.")
         daynight_raw = {
             "summary": "Response-level summary (preferred).",
@@ -538,7 +622,9 @@ class TestDetectDiscussion:
 
     def test_neither_summary_field_returns_none(self) -> None:
         """When neither response nor period has summary → None (free-tier default)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         daynight_raw: dict[str, Any] = {"summary": None, "periods": [{}]}
         result = _extract_aeris_discussion(
             daynight_raw=daynight_raw,
@@ -550,7 +636,9 @@ class TestDetectDiscussion:
 
     def test_empty_string_summary_returns_none(self) -> None:
         """Empty string summary is treated as absent → returns None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         daynight_raw = {"summary": "", "periods": []}
         result = _extract_aeris_discussion(
             daynight_raw=daynight_raw,
@@ -562,7 +650,9 @@ class TestDetectDiscussion:
 
     def test_whitespace_only_summary_returns_none(self) -> None:
         """Whitespace-only summary is treated as absent → returns None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         daynight_raw = {"summary": "   \t\n  ", "periods": []}
         result = _extract_aeris_discussion(
             daynight_raw=daynight_raw,
@@ -574,7 +664,9 @@ class TestDetectDiscussion:
 
     def test_none_first_period_raw_returns_none_when_no_response_summary(self) -> None:
         """first_period_raw=None and no response-level summary → None."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         daynight_raw: dict[str, Any] = {"summary": None}
         result = _extract_aeris_discussion(
             daynight_raw=daynight_raw,
@@ -586,7 +678,9 @@ class TestDetectDiscussion:
 
     def test_extract_aeris_discussion_with_real_free_tier_fixture_returns_none(self) -> None:
         """Real free-tier forecasts_daynight.json → discussion=None (no summary field)."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_daynight.json")
         raw_first = fixture["response"][0]
         first_period_raw = raw_first.get("periods", [None])[0]
@@ -600,7 +694,9 @@ class TestDetectDiscussion:
 
     def test_extract_aeris_discussion_with_synthetic_summary_fixture_returns_discussion(self) -> None:
         """Synthetic forecasts_daynight_with_summary.json → discussion populated."""
-        from weewx_clearskies_api.providers.forecast.aeris import _extract_aeris_discussion  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast.aeris import (
+            _extract_aeris_discussion,  # noqa: PLC0415
+        )
         fixture = _load_fixture("forecasts_daynight_with_summary.json")
         raw_first = fixture["response"][0]
         first_period_raw = raw_first.get("periods", [None])[0]
@@ -630,10 +726,8 @@ class TestToCanonical:
     ) -> tuple[Any, Any, dict[str, Any]]:
         """Load fixtures and validate into wire-shape models."""
         from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
-            _AerisHourlyPeriod,
-            _AerisHourlyResponse,
-            _AerisDayNightPeriod,
             _AerisDayNightResponse,
+            _AerisHourlyResponse,
         )
         hourly_data = _load_fixture(hourly_fixture)
         daynight_data = _load_fixture(daynight_fixture)
@@ -831,8 +925,8 @@ class TestFetchCacheMissAndHit:
         hourly_data = _load_fixture("forecasts_hourly.json")
         daynight_data = _load_fixture("forecasts_daynight.json")
 
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             _mock_aeris_both_calls(mock, hourly_data, daynight_data)
@@ -945,8 +1039,8 @@ class TestFetchMissingCredentials:
     def test_missing_client_id_raises_key_invalid(self) -> None:
         """client_id=None with valid secret → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -959,8 +1053,8 @@ class TestFetchMissingCredentials:
     def test_missing_client_secret_raises_key_invalid(self) -> None:
         """client_secret=None with valid id → KeyInvalid before any HTTP call."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -973,8 +1067,8 @@ class TestFetchMissingCredentials:
     def test_both_credentials_missing_raises_key_invalid(self) -> None:
         """Both client_id=None and client_secret=None → KeyInvalid immediately."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -987,8 +1081,8 @@ class TestFetchMissingCredentials:
     def test_empty_string_client_id_raises_key_invalid(self) -> None:
         """Empty string client_id (falsy) → KeyInvalid (brief lead-call 12)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             with pytest.raises(KeyInvalid):
@@ -1005,8 +1099,8 @@ class TestFetchErrorPaths:
     def test_401_on_hourly_call_raises_key_invalid(self) -> None:
         """HTTP 401 on /forecasts call → KeyInvalid (lead-call 9: exc.status_code == 401)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         error_data = _load_fixture("error_401_invalid_credentials.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1022,8 +1116,8 @@ class TestFetchErrorPaths:
     def test_429_on_hourly_call_raises_quota_exhausted(self) -> None:
         """HTTP 429 on /forecasts call → QuotaExhausted."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
         error_data = _load_fixture("error_429_rate_limit.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1039,8 +1133,10 @@ class TestFetchErrorPaths:
     def test_5xx_on_hourly_call_raises_transient_network_error(self) -> None:
         """HTTP 500 on /forecasts → TransientNetworkError after retries."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_AERIS_HOURLY_URL, params={"filter": "1hr"}).mock(
@@ -1055,8 +1151,10 @@ class TestFetchErrorPaths:
     def test_success_false_envelope_raises_provider_protocol_error(self) -> None:
         """Aeris returns success=false in envelope → ProviderProtocolError (not KeyInvalid)."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         # success=false envelope (different from 401 HTTP error)
         error_envelope = {
             "success": False,
@@ -1102,8 +1200,10 @@ class TestFetchErrorPaths:
     def test_malformed_hourly_wire_shape_raises_provider_protocol_error(self) -> None:
         """Pydantic validation failure on hourly wire shape → ProviderProtocolError."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         # Valid envelope but period missing required dateTimeISO
         malformed = {
             "success": True,
@@ -1244,8 +1344,8 @@ class TestCapabilityRegistry:
         """wire_providers([aeris.CAPABILITY]) → registry has 'aeris' forecast entry."""
         _reset_provider_state()
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-            wire_providers,
             get_provider_registry,
+            wire_providers,
         )
         from weewx_clearskies_api.providers.forecast.aeris import CAPABILITY  # noqa: PLC0415
 
@@ -1259,8 +1359,8 @@ class TestCapabilityRegistry:
         """get_provider_registry() returns the aeris entry with all fields populated."""
         _reset_provider_state()
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-            wire_providers,
             get_provider_registry,
+            wire_providers,
         )
         from weewx_clearskies_api.providers.forecast.aeris import CAPABILITY  # noqa: PLC0415
 

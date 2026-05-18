@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -49,7 +48,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_four_built_in_groups_defined(self) -> None:
         """Exactly 4 built-in groups: homepage, monthly, ANNUAL, averageclimate."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         group_ids = {g.group_id for g in _BUILTIN_GROUPS}
         assert group_ids == {"homepage", "monthly", "ANNUAL", "averageclimate"}, (
             f"Expected 4 built-in group IDs, got {group_ids!r}"
@@ -57,7 +58,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_homepage_group_has_correct_default_members(self) -> None:
         """homepage group default members match brief spec."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         homepage = next(g for g in _BUILTIN_GROUPS if g.group_id == "homepage")
         assert set(homepage.members) == set(_HOMEPAGE_DEFAULTS), (
             f"homepage default members mismatch. "
@@ -67,7 +70,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_homepage_default_range_is_1d(self) -> None:
         """homepage default_range is '1d'."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         homepage = next(g for g in _BUILTIN_GROUPS if g.group_id == "homepage")
         assert homepage.default_range == "1d", (
             f"homepage default_range must be '1d', got {homepage.default_range!r}"
@@ -75,7 +80,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_monthly_default_range_is_none(self) -> None:
         """monthly default_range is None (has its own month-dropdown selector)."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         monthly = next(g for g in _BUILTIN_GROUPS if g.group_id == "monthly")
         assert monthly.default_range is None, (
             f"monthly default_range must be None, got {monthly.default_range!r}"
@@ -83,13 +90,17 @@ class TestBuiltInChartGroupConstants:
 
     def test_annual_default_range_is_none(self) -> None:
         """ANNUAL default_range is None (year dropdown)."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         annual = next(g for g in _BUILTIN_GROUPS if g.group_id == "ANNUAL")
         assert annual.default_range is None
 
     def test_all_built_in_groups_have_built_in_true(self) -> None:
         """All 4 built-in groups have built_in=True."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         for group in _BUILTIN_GROUPS:
             assert group.built_in is True, (
                 f"Group {group.group_id!r} built_in must be True"
@@ -97,7 +108,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_monthly_default_members_match_brief(self) -> None:
         """monthly group default members: outTemp, rain, windSpeed, barometer."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         monthly = next(g for g in _BUILTIN_GROUPS if g.group_id == "monthly")
         assert set(monthly.members) == set(_MONTHLY_DEFAULTS), (
             f"monthly members mismatch: {set(monthly.members)} vs {set(_MONTHLY_DEFAULTS)}"
@@ -105,7 +118,9 @@ class TestBuiltInChartGroupConstants:
 
     def test_annual_default_members_match_brief(self) -> None:
         """ANNUAL group default members: outTemp, rain."""
-        from weewx_clearskies_api.services.charts import _BUILTIN_GROUPS  # type: ignore[attr-defined]
+        from weewx_clearskies_api.services.charts import (
+            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
+        )
         annual = next(g for g in _BUILTIN_GROUPS if g.group_id == "ANNUAL")
         assert set(annual.members) == set(_ANNUAL_DEFAULTS)
 

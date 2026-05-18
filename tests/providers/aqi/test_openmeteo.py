@@ -99,6 +99,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -109,7 +110,6 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -154,7 +154,10 @@ class TestWireShapePydanticValidation:
     def test_current_block_time_field_is_required(self) -> None:
         """Missing 'time' in current block → ValidationError (time is required)."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         broken = _load_fixture("openmeteo_current.json")
         del broken["current"]["time"]
         with pytest.raises(ValidationError):
@@ -163,7 +166,10 @@ class TestWireShapePydanticValidation:
     def test_missing_current_block_raises_validation_error(self) -> None:
         """Missing top-level 'current' key → ValidationError (current is required)."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         broken = _load_fixture("openmeteo_current.json")
         del broken["current"]
         with pytest.raises(ValidationError):
@@ -171,7 +177,9 @@ class TestWireShapePydanticValidation:
 
     def test_all_null_fixture_loads_cleanly(self) -> None:
         """openmeteo_current_all_null.json loads cleanly (all fields optional except time)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("openmeteo_current_all_null.json")
         response = _OpenMeteoAQResponse.model_validate(raw)
         assert response.current.us_aqi is None
@@ -179,7 +187,9 @@ class TestWireShapePydanticValidation:
 
     def test_us_aqi_only_fixture_loads_cleanly(self) -> None:
         """openmeteo_current_us_aqi_only.json loads cleanly."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("openmeteo_current_us_aqi_only.json")
         response = _OpenMeteoAQResponse.model_validate(raw)
         assert response.current.us_aqi == 73
@@ -187,7 +197,9 @@ class TestWireShapePydanticValidation:
 
     def test_current_extra_fields_ignored(self) -> None:
         """Extra fields in current block are silently ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("openmeteo_current.json")
         raw["current"]["FUTURE_FIELD_NOT_IN_SPEC"] = "should be ignored"
         # Should not raise
@@ -197,7 +209,10 @@ class TestWireShapePydanticValidation:
     def test_latitude_and_longitude_are_required(self) -> None:
         """Missing latitude → ValidationError (latitude is a required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("openmeteo_current.json")
         del raw["latitude"]
         with pytest.raises(ValidationError):
@@ -214,7 +229,9 @@ class TestWireToCanonicalHappyPath:
 
     def _load_wire(self, filename: str = "openmeteo_current.json") -> Any:
         """Load and parse a fixture into the wire model."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoAQResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
         return _OpenMeteoAQResponse.model_validate(_load_fixture(filename))
 
     def test_aqi_field_is_integer_73(self) -> None:
@@ -360,8 +377,8 @@ class TestWireToCanonicalHappyPath:
 
     def test_reading_is_aqi_reading_instance(self) -> None:
         """Return type is AQIReading (not dict, not None) for valid wire input."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         from weewx_clearskies_api.models.responses import AQIReading  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
         wire = self._load_wire()
         reading = _wire_to_canonical(wire)
         assert isinstance(reading, AQIReading), (
@@ -485,7 +502,9 @@ class TestMainPollutantFromSubAqis:
 
     def _make_current_block(self, **sub_aqi_overrides: float | None) -> Any:
         """Build a _OpenMeteoCurrentBlock with specified sub-AQI values."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _OpenMeteoCurrentBlock  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoCurrentBlock,  # noqa: PLC0415
+        )
         data: dict[str, Any] = {
             "time": "2026-05-10T22:00",
             "us_aqi": 50,
@@ -501,7 +520,9 @@ class TestMainPollutantFromSubAqis:
 
     def test_argmax_returns_pollutant_with_highest_sub_aqi(self) -> None:
         """Highest sub-AQI wins: us_aqi_ozone=100 > pm2_5=50 → 'O3'."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(
             us_aqi_pm2_5=50, us_aqi_pm10=30, us_aqi_ozone=100,
         )
@@ -510,7 +531,9 @@ class TestMainPollutantFromSubAqis:
 
     def test_tie_break_pm25_beats_pm10(self) -> None:
         """Tie: pm2_5=80 == pm10=80 → 'PM2.5' wins (PM2.5 before PM10 in table, LC14)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(
             us_aqi_pm2_5=80, us_aqi_pm10=80,
         )
@@ -521,7 +544,9 @@ class TestMainPollutantFromSubAqis:
 
     def test_tie_break_pm10_beats_no2(self) -> None:
         """Tie: pm10=60 == no2=60 → 'PM10' wins (PM10 before NO2 in table, LC14)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(
             us_aqi_pm10=60, us_aqi_nitrogen_dioxide=60,
         )
@@ -532,7 +557,9 @@ class TestMainPollutantFromSubAqis:
 
     def test_all_none_returns_none(self) -> None:
         """All six sub-AQI fields None → None (cannot derive main pollutant)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block()  # all defaults are None
         result = _main_pollutant_from_sub_aqis(current)
         assert result is None, (
@@ -541,7 +568,9 @@ class TestMainPollutantFromSubAqis:
 
     def test_single_non_none_value_wins_regardless(self) -> None:
         """Single non-None value (even if small) → that pollutant wins."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_sulphur_dioxide=1)
         result = _main_pollutant_from_sub_aqis(current)
         assert result == "SO2", (
@@ -550,37 +579,49 @@ class TestMainPollutantFromSubAqis:
 
     def test_pm25_sub_aqi_maps_to_pm25_canonical(self) -> None:
         """us_aqi_pm2_5 highest → canonical pollutant id 'PM2.5' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_pm2_5=73)
         assert _main_pollutant_from_sub_aqis(current) == "PM2.5"
 
     def test_pm10_sub_aqi_maps_to_pm10_canonical(self) -> None:
         """us_aqi_pm10 highest → canonical pollutant id 'PM10' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_pm10=80)
         assert _main_pollutant_from_sub_aqis(current) == "PM10"
 
     def test_nitrogen_dioxide_sub_aqi_maps_to_no2_canonical(self) -> None:
         """us_aqi_nitrogen_dioxide highest → canonical 'NO2' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_nitrogen_dioxide=90)
         assert _main_pollutant_from_sub_aqis(current) == "NO2"
 
     def test_ozone_sub_aqi_maps_to_o3_canonical(self) -> None:
         """us_aqi_ozone highest → canonical 'O3' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_ozone=70)
         assert _main_pollutant_from_sub_aqis(current) == "O3"
 
     def test_sulphur_dioxide_sub_aqi_maps_to_so2_canonical(self) -> None:
         """us_aqi_sulphur_dioxide highest → canonical 'SO2' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_sulphur_dioxide=55)
         assert _main_pollutant_from_sub_aqis(current) == "SO2"
 
     def test_carbon_monoxide_sub_aqi_maps_to_co_canonical(self) -> None:
         """us_aqi_carbon_monoxide highest → canonical 'CO' (LC14 mapping table)."""
-        from weewx_clearskies_api.providers.aqi.openmeteo import _main_pollutant_from_sub_aqis  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _main_pollutant_from_sub_aqis,  # noqa: PLC0415
+        )
         current = self._make_current_block(us_aqi_carbon_monoxide=30)
         assert _main_pollutant_from_sub_aqis(current) == "CO"
 
@@ -630,8 +671,12 @@ class TestBuildCacheKey:
         Logical endpoint key 'aqi_current' (LC7) distinct from 'forecast_bundle'
         ensures separate cache entries for AQI and forecast even at same station.
         """
-        from weewx_clearskies_api.providers.aqi.openmeteo import _build_cache_key as _aqi_key  # noqa: PLC0415
-        from weewx_clearskies_api.providers.forecast.openmeteo import _build_cache_key as _forecast_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _build_cache_key as _aqi_key,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.forecast.openmeteo import (
+            _build_cache_key as _forecast_key,  # noqa: PLC0415
+        )
         aqi_cache_key = _aqi_key(_LAT, _LON)
         forecast_cache_key = _forecast_key(_LAT, _LON, "US")
         assert aqi_cache_key != forecast_cache_key, (
@@ -654,8 +699,8 @@ class TestFetchCachePaths:
     def test_cache_miss_makes_outbound_call_and_returns_reading(self) -> None:
         """Cache miss: HTTP call made; AQIReading returned."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.models.responses import AQIReading  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         data = self._make_valid_wire_response()
 
         with respx.mock(assert_all_called=False) as mock:
@@ -779,8 +824,10 @@ class TestFetchErrorPaths:
     def test_wire_validation_failure_raises_provider_protocol_error(self) -> None:
         """Cache miss + missing 'current' block → ProviderProtocolError (ValidationError → wrap)."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         broken = _load_fixture("openmeteo_current.json")
         del broken["current"]  # Remove required field → ValidationError
 
@@ -794,8 +841,10 @@ class TestFetchErrorPaths:
     def test_provider_502_raises_transient_network_error(self) -> None:
         """Provider 5xx → TransientNetworkError (L2 bare propagation)."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OPENMETEO_AQ_URL).mock(
@@ -807,8 +856,10 @@ class TestFetchErrorPaths:
     def test_provider_500_raises_transient_network_error(self) -> None:
         """Provider 500 → TransientNetworkError (L2 bare propagation)."""
         _reset_provider_state()
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OPENMETEO_AQ_URL).mock(
@@ -820,8 +871,8 @@ class TestFetchErrorPaths:
     def test_provider_429_raises_quota_exhausted(self) -> None:
         """Provider 429 → QuotaExhausted (L2 bare propagation)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OPENMETEO_AQ_URL).mock(
@@ -833,8 +884,8 @@ class TestFetchErrorPaths:
     def test_provider_429_retry_after_seconds_propagated(self) -> None:
         """429 with Retry-After header → QuotaExhausted.retry_after_seconds not None (3b-4 F1)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OPENMETEO_AQ_URL).mock(
@@ -854,10 +905,10 @@ class TestFetchErrorPaths:
     def test_provider_422_raises_canonical_exception(self) -> None:
         """Provider 422 → canonical exception (ProviderProtocolError or TransientNetworkError)."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import (  # noqa: PLC0415
             ProviderError,
         )
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
             mock.get(_OPENMETEO_AQ_URL).mock(
@@ -927,11 +978,11 @@ class TestCapabilityDeclaration:
     def test_wire_providers_registers_openmeteo_aqi_capability(self) -> None:
         """wire_providers([CAPABILITY]) → registry has openmeteo aqi entry."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers.aqi.openmeteo import CAPABILITY  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             get_provider_registry,
             wire_providers,
         )
+        from weewx_clearskies_api.providers.aqi.openmeteo import CAPABILITY  # noqa: PLC0415
         wire_providers([CAPABILITY])
         registry = get_provider_registry()
         aqi_entries = [

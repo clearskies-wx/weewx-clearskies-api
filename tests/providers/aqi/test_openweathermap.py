@@ -115,6 +115,7 @@ def _load_fixture(name: str) -> dict[str, Any]:
 
 def _reset_provider_state() -> None:
     """Reset provider registry, cache, rate limiter, and re-wire memory cache."""
+    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
         reset_cache_for_tests,
         wire_cache_from_env,
@@ -125,7 +126,6 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
         _reset_http_client_for_tests,
     )
-    import weewx_clearskies_api.providers.aqi.openweathermap as _owm_aqi  # noqa: PLC0415
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -406,10 +406,10 @@ class TestWireToCanonicalHappyPath:
 
     def test_fixture_o3_is_ppm_from_ugm3(self) -> None:
         """pollutantO3 is in ppm (66.23 µg/m³ → via ugm3_to_ppm with MW=48.00)."""
+        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
@@ -420,10 +420,10 @@ class TestWireToCanonicalHappyPath:
 
     def test_fixture_no2_is_ppm_from_ugm3(self) -> None:
         """pollutantNO2 is in ppm (2.05 µg/m³ → via ugm3_to_ppm with MW=46.01)."""
+        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
@@ -434,10 +434,10 @@ class TestWireToCanonicalHappyPath:
 
     def test_fixture_so2_is_ppm_from_ugm3(self) -> None:
         """pollutantSO2 is in ppm (0.34 µg/m³ → via ugm3_to_ppm with MW=64.07)."""
+        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
@@ -448,10 +448,10 @@ class TestWireToCanonicalHappyPath:
 
     def test_fixture_co_is_ppm_from_ugm3(self) -> None:
         """pollutantCO is in ppm (139.79 µg/m³ → via ugm3_to_ppm with MW=28.01)."""
+        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        from weewx_clearskies_api.providers.aqi._units import ugm3_to_ppm  # noqa: PLC0415
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
@@ -546,10 +546,12 @@ class TestWireToCanonicalEdgeCases:
 
     def test_pm25_tie_break_wins_over_pm10(self) -> None:
         """PM2.5 and PM10 tied sub-AQI → PM2.5 wins (table-order tie-break per LC14)."""
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
         # Find concentrations that produce the same sub-AQI for PM2.5 and PM10
         # PM2.5 = 4.5 µg/m³ → midpoint of first band → sub-AQI = 25
         # PM10 = 27.0 µg/m³ → midpoint of first band → sub-AQI = ~25
@@ -649,10 +651,12 @@ class TestComputeOwmAqiMax:
 
     def test_max_taken_correctly_from_multiple_pollutants(self) -> None:
         """Multiple pollutants → max sub-AQI is returned with correct dominant."""
+        from weewx_clearskies_api.providers.aqi._units import (
+            concentration_to_sub_aqi,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _compute_owm_aqi_max,
         )
-        from weewx_clearskies_api.providers.aqi._units import concentration_to_sub_aqi  # noqa: PLC0415
         pm25_sub = concentration_to_sub_aqi(20.0, pollutant="PM2.5")  # in moderate band
         pm10_sub = concentration_to_sub_aqi(4.0, pollutant="PM10")    # in good band
         assert pm25_sub is not None and pm10_sub is not None
@@ -691,21 +695,27 @@ class TestBuildCacheKey:
 
     def test_same_lat_lon_produces_same_key(self) -> None:
         """Same lat/lon → same cache key (deterministic)."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
+        )
         key1 = _build_cache_key(_LAT, _LON)
         key2 = _build_cache_key(_LAT, _LON)
         assert key1 == key2, "Same coordinates must produce the same cache key"
 
     def test_different_lat_lon_produces_different_key(self) -> None:
         """Different lat/lon → different cache key."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
+        )
         key1 = _build_cache_key(_LAT, _LON)
         key2 = _build_cache_key(40.7128, -74.0060)
         assert key1 != key2, "Different coordinates must produce different cache keys"
 
     def test_key_is_64_char_lowercase_hex(self) -> None:
         """Cache key is a 64-character lowercase hexadecimal string (SHA-256)."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
+        )
         key = _build_cache_key(_LAT, _LON)
         assert len(key) == 64, f"Expected 64-char key, got {len(key)}"
         assert all(c in "0123456789abcdef" for c in key), (
@@ -714,7 +724,9 @@ class TestBuildCacheKey:
 
     def test_lat_lon_rounded_to_4_decimal_places_for_key(self) -> None:
         """High-precision lat/lon rounds to 4dp — equivalent coordinates produce same key."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
+        )
         # These differ only beyond 4dp — must produce the same key
         key1 = _build_cache_key(47.60620001, -122.33210001)
         key2 = _build_cache_key(47.60620009, -122.33210009)
@@ -724,9 +736,11 @@ class TestBuildCacheKey:
 
     def test_owm_aqi_key_distinct_from_openmeteo_aqi_key(self) -> None:
         """OWM AQI key differs from Open-Meteo AQI key at same coordinates (provider_id differs)."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
             _build_cache_key as om_key,
+        )
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
         )
         owm_key = _build_cache_key(_LAT, _LON)
         openmeteo_key = om_key(_LAT, _LON)
@@ -736,9 +750,11 @@ class TestBuildCacheKey:
 
     def test_owm_aqi_key_distinct_from_aeris_aqi_key(self) -> None:
         """OWM AQI key differs from Aeris AQI key at same coordinates."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.aeris import (  # noqa: PLC0415
             _build_cache_key as aeris_key,
+        )
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
         )
         owm_key = _build_cache_key(_LAT, _LON)
         aeris_cache_key = aeris_key(_LAT, _LON)
@@ -749,7 +765,10 @@ class TestBuildCacheKey:
     def test_appid_not_accepted_as_parameter_in_cache_key(self) -> None:
         """_build_cache_key signature does NOT accept appid (credentials not in key — LC7)."""
         import inspect  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openweathermap import _build_cache_key  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.aqi.openweathermap import (
+            _build_cache_key,  # noqa: PLC0415
+        )
         sig = inspect.signature(_build_cache_key)
         param_names = list(sig.parameters.keys())
         assert "appid" not in param_names, (
@@ -771,13 +790,13 @@ class TestFetchCachePaths:
 
     def test_cache_hit_returns_reading_without_http_call(self) -> None:
         """Cache hit → AQIReading reconstructed from dict; NO outbound HTTP call made."""
+        from weewx_clearskies_api.models.responses import AQIReading  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             DEFAULT_AQI_TTL_SECONDS,
-            fetch,
             _build_cache_key,
+            fetch,
         )
-        from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-        from weewx_clearskies_api.models.responses import AQIReading  # noqa: PLC0415
 
         # Populate cache manually
         cache = get_cache()
@@ -812,13 +831,12 @@ class TestFetchCachePaths:
 
     def test_cache_hit_with_sentinel_returns_none(self) -> None:
         """Cache hit with _no_reading sentinel → None returned without HTTP call."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
-            fetch,
-            _build_cache_key,
-        )
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
-
-        from weewx_clearskies_api.providers.aqi.openweathermap import DEFAULT_AQI_TTL_SECONDS  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
+            DEFAULT_AQI_TTL_SECONDS,  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
         cache = get_cache()
         key = _build_cache_key(_LAT, _LON)
         cache.set(key, {"_no_reading": True}, ttl_seconds=DEFAULT_AQI_TTL_SECONDS)
@@ -834,11 +852,11 @@ class TestFetchCachePaths:
 
     def test_cache_miss_happy_path_returns_aqi_reading(self) -> None:
         """Cache miss + valid OWM response → canonical AQIReading returned + cached."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
-            fetch,
-            _build_cache_key,
-        )
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         fixture = _load_fixture("openweathermap_current.json")
 
@@ -863,11 +881,11 @@ class TestFetchCachePaths:
 
     def test_cache_miss_empty_list_returns_none_and_caches_sentinel(self) -> None:
         """Cache miss + empty list[] → None returned + sentinel cached."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
-            fetch,
-            _build_cache_key,
-        )
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         empty_response = {"coord": {"lon": _LON, "lat": _LAT}, "list": []}
 
@@ -889,11 +907,11 @@ class TestFetchCachePaths:
 
     def test_cache_miss_all_null_components_returns_none_and_caches_sentinel(self) -> None:
         """Cache miss + all-null components → None returned + sentinel cached."""
-        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
-            fetch,
-            _build_cache_key,
-        )
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
+            _build_cache_key,
+            fetch,
+        )
 
         null_response = {
             "coord": {"lon": _LON, "lat": _LAT},
@@ -1001,7 +1019,9 @@ class TestFetchErrorPaths:
 
     def test_provider_5xx_raises_transient_network_error(self) -> None:
         """Provider HTTP 5xx → TransientNetworkError (bare propagation per L2)."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.openweathermap import fetch  # noqa: PLC0415
 
         with respx.mock(assert_all_called=False) as mock:
@@ -1018,7 +1038,9 @@ class TestFetchErrorPaths:
         defaults), but a list entry with dt='not-an-int' fails Pydantic validation
         because _OWMAirPollutionEntry.dt is required as an int.
         """
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.aqi.openweathermap import fetch  # noqa: PLC0415
 
         # dt must be int; "not-a-timestamp" string fails Pydantic validation
@@ -1142,9 +1164,9 @@ class TestCapabilityDeclaration:
     def test_wire_providers_registers_openweathermap_aqi_entry(self) -> None:
         """wire_providers([CAPABILITY]) registers ('aqi', 'openweathermap') in registry."""
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
-            wire_providers,
             get_provider_registry,
             reset_provider_registry_for_tests,
+            wire_providers,
         )
         from weewx_clearskies_api.providers.aqi.openweathermap import CAPABILITY  # noqa: PLC0415
 

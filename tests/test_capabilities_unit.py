@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a hand-crafted ColumnRegistry
 # ---------------------------------------------------------------------------

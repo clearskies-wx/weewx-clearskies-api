@@ -65,8 +65,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.radar.noaa_mrms import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -90,7 +90,9 @@ class TestNOAAMRMSFixtureParsing:
 
     def test_fixture_parses_to_nonempty_timestamp_list(self) -> None:
         """get_capabilities.xml parses to non-empty list for layer '0'."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -103,7 +105,9 @@ class TestNOAAMRMSFixtureParsing:
 
     def test_all_timestamps_end_with_z(self) -> None:
         """All NOAA MRMS parsed timestamps end with 'Z' (ADR-020)."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -117,7 +121,9 @@ class TestNOAAMRMSFixtureParsing:
 
     def test_real_layer_name_also_parseable(self) -> None:
         """Real layer 'radar_base_reflectivity_time' also parses from fixture."""
-        from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.wms_capabilities import (
+            parse_wms_time_dimension,  # noqa: PLC0415
+        )
 
         xml_bytes = _load_fixture("get_capabilities.xml")
         result = parse_wms_time_dimension(
@@ -189,7 +195,9 @@ class TestNOAAMRMSErrorMapping:
 
     def test_5xx_raises_transient_network_error(self) -> None:
         """HTTP 5xx → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.noaa_mrms import get_frames  # noqa: PLC0415
 
         _reset_provider_state()
@@ -203,7 +211,9 @@ class TestNOAAMRMSErrorMapping:
 
     def test_malformed_xml_raises_provider_protocol_error(self) -> None:
         """Malformed XML → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.noaa_mrms import get_frames  # noqa: PLC0415
 
         _reset_provider_state()

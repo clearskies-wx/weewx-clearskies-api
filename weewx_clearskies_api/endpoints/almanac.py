@@ -14,7 +14,7 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
@@ -32,8 +32,8 @@ from weewx_clearskies_api.models.responses import (
     MoonSnapshot,
     SunSnapshot,
     SunTimesDay,
-    SunTimesSeries,
     SunTimesResponse,
+    SunTimesSeries,
     utc_isoformat,
 )
 from weewx_clearskies_api.services import almanac as almanac_svc

@@ -111,8 +111,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.earthquakes.renass import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -141,7 +141,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_fixture_loads_cleanly_via_response_model(self) -> None:
         """renass_france_recent.json loads via _RenassResponse without error."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -150,7 +152,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_extra_wire_fields_are_ignored(self) -> None:
         """Extra wire fields ignored (extra='ignore')."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         raw["unexpected_future_field"] = "dropped"
@@ -159,7 +163,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_first_feature_id_is_fr2026trycyd(self) -> None:
         """Feature[0].id = 'fr2026trycyd' (top-level Feature.id)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -169,7 +175,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_description_is_bilingual_dict(self) -> None:
         """properties.description is dict with 'fr' and 'en' keys."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -181,7 +189,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_url_is_bilingual_dict(self) -> None:
         """properties.url is dict with 'fr' and 'en' keys."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -193,7 +203,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_automatic_is_boolean(self) -> None:
         """properties.automatic is Python bool (True/False, not int 0/1)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -202,7 +214,9 @@ class TestReNaSSWireShapeValidation:
 
     def test_depth_from_properties_is_positive(self) -> None:
         """properties.depth = 14.126... (POSITIVE; geometry.coordinates[2] is -14.126 NEGATIVE)."""
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassResponse,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         response = _RenassResponse.model_validate(raw)
@@ -214,7 +228,9 @@ class TestReNaSSWireShapeValidation:
         """Dropping 'id' from Feature → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.renass import _RenassEventFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.renass import (
+            _RenassEventFeature,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("renass_france_recent.json")
         feature_raw = {k: v for k, v in raw["features"][0].items() if k != "id"}
@@ -475,6 +491,7 @@ class TestFetchHappyPath:
         pytest.importorskip("fakeredis", reason="fakeredis not installed")
         import fakeredis  # noqa: PLC0415
 
+        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             RedisCache,
             reset_cache_for_tests,
@@ -483,10 +500,9 @@ class TestFetchHappyPath:
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.earthquakes.renass import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
-        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -530,7 +546,9 @@ class TestProviderProtocolErrorOnInvalidWireShape:
 
     def test_missing_id_raises_provider_protocol_error(self) -> None:
         """Drop 'id' from features → ValidationError → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.earthquakes.renass import fetch  # noqa: PLC0415
 
         _reset_provider_state()

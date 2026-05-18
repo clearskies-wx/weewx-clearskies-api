@@ -63,7 +63,9 @@ def _reset_provider_state() -> None:
     from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
         reset_provider_registry_for_tests,
     )
-    from weewx_clearskies_api.providers.alerts.nws import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers.alerts.nws import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     reset_cache_for_tests()
     reset_provider_registry_for_tests()
@@ -101,6 +103,7 @@ def _make_alerts_settings(provider: str | None = None) -> Any:
 def alerts_client_no_provider() -> Any:
     """TestClient for the alerts endpoint with NO provider configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
@@ -119,6 +122,7 @@ def alerts_client_no_provider() -> Any:
 def alerts_client_nws() -> Any:
     """TestClient for the alerts endpoint with NWS provider configured."""
     from fastapi.testclient import TestClient  # noqa: PLC0415
+
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
@@ -211,15 +215,19 @@ class TestNwsTimeNormalization:
 
     def test_naive_timestamp_raises_provider_protocol_error(self) -> None:
         """Naive timestamp (no timezone offset) → ProviderProtocolError."""
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         with pytest.raises(ProviderProtocolError):
             nws._to_utc_iso8601("2026-04-30T16:00:00")
 
     def test_bogus_timestamp_raises_provider_protocol_error(self) -> None:
         """Non-ISO string → ProviderProtocolError."""
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         with pytest.raises(ProviderProtocolError):
             nws._to_utc_iso8601("not-a-date")
 
@@ -365,7 +373,9 @@ class TestNwsWireShapePydantic:
 
     def test_real_fixture_loads_cleanly(self) -> None:
         """The primary alerts_active.json fixture round-trips through Pydantic without error."""
-        from weewx_clearskies_api.providers.alerts.nws import _NwsAlertsActiveResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.nws import (
+            _NwsAlertsActiveResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("alerts_active.json")
         model = _NwsAlertsActiveResponse.model_validate(raw)
         assert model.type == "FeatureCollection"
@@ -375,14 +385,18 @@ class TestNwsWireShapePydantic:
 
     def test_empty_fixture_loads_cleanly(self) -> None:
         """alerts_active_empty.json (features=[]) loads without error."""
-        from weewx_clearskies_api.providers.alerts.nws import _NwsAlertsActiveResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.nws import (
+            _NwsAlertsActiveResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("alerts_active_empty.json")
         model = _NwsAlertsActiveResponse.model_validate(raw)
         assert model.features == []
 
     def test_extreme_fixture_loads_cleanly(self) -> None:
         """alerts_active_extreme.json loads and contains Extreme/Severe severity values."""
-        from weewx_clearskies_api.providers.alerts.nws import _NwsAlertsActiveResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.nws import (
+            _NwsAlertsActiveResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("alerts_active_extreme.json")
         model = _NwsAlertsActiveResponse.model_validate(raw)
         severities = {f.properties.severity for f in model.features}
@@ -391,6 +405,7 @@ class TestNwsWireShapePydantic:
     def test_missing_required_headline_raises_validation_error(self) -> None:
         """Missing required 'headline' field raises Pydantic ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts.nws import _NwsAlertProperties  # noqa: PLC0415
         with pytest.raises(ValidationError):
             _NwsAlertProperties(
@@ -405,6 +420,7 @@ class TestNwsWireShapePydantic:
     def test_missing_required_event_raises_validation_error(self) -> None:
         """Missing required 'event' field raises Pydantic ValidationError."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts.nws import _NwsAlertProperties  # noqa: PLC0415
         with pytest.raises(ValidationError):
             _NwsAlertProperties(
@@ -434,7 +450,10 @@ class TestNwsWireShapePydantic:
     def test_malformed_fixture_missing_headline_fails_validation(self) -> None:
         """alerts_active_malformed.json (missing headline) fails Pydantic validation."""
         from pydantic import ValidationError  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts.nws import _NwsAlertsActiveResponse  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers.alerts.nws import (
+            _NwsAlertsActiveResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("alerts_active_malformed.json")
         # The feature's properties are missing 'headline' — ValidationError expected
         with pytest.raises(ValidationError):
@@ -442,7 +461,9 @@ class TestNwsWireShapePydantic:
 
     def test_unknown_severity_fixture_loads_cleanly(self) -> None:
         """alerts_active_unknown_severity.json loads (severity is just a string field)."""
-        from weewx_clearskies_api.providers.alerts.nws import _NwsAlertsActiveResponse  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.nws import (
+            _NwsAlertsActiveResponse,  # noqa: PLC0415
+        )
         raw = _load_fixture("alerts_active_unknown_severity.json")
         model = _NwsAlertsActiveResponse.model_validate(raw)
         assert model.features[0].properties.severity == "Critical"
@@ -480,6 +501,7 @@ class TestAlertsQueryParams:
     def test_invalid_severity_value_raises_validation_error(self) -> None:
         """Unrecognised severity value is rejected."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             AlertsQueryParams(severity="critical")
@@ -487,6 +509,7 @@ class TestAlertsQueryParams:
     def test_unknown_query_key_raises_validation_error(self) -> None:
         """extra='forbid' on AlertsQueryParams rejects unknown query keys."""
         from pydantic import ValidationError  # noqa: PLC0415
+
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
             AlertsQueryParams(severity="advisory", unknown_key="bad")  # type: ignore[call-arg]
@@ -629,8 +652,8 @@ class TestMemoryCache:
 
     def test_alert_dict_list_round_trips(self) -> None:
         """A list of canonical alert dicts stores and retrieves correctly."""
-        from weewx_clearskies_api.providers._common.cache import MemoryCache  # noqa: PLC0415
         from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import MemoryCache  # noqa: PLC0415
         record = AlertRecord(
             id="urn:oid:test.cache",
             headline="Cache test",
@@ -737,7 +760,9 @@ class TestWireCacheFromEnv:
     def _reset(self) -> Any:
         """Reset cache state before each test."""
         yield
-        from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            reset_cache_for_tests,  # noqa: PLC0415
+        )
         reset_cache_for_tests()
 
     def test_unset_env_var_produces_memory_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -778,7 +803,10 @@ class TestWireCacheFromEnv:
 
     def test_bogus_scheme_raises_config_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unrecognised CLEARSKIES_CACHE_URL scheme raises ConfigError."""
-        from weewx_clearskies_api.providers._common.cache import ConfigError, wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            ConfigError,
+            wire_cache_from_env,
+        )
         monkeypatch.setenv("CLEARSKIES_CACHE_URL", "memcached://localhost:11211")
         with pytest.raises(ConfigError):
             wire_cache_from_env()
@@ -823,8 +851,8 @@ class TestRateLimiter:
 
     def test_sixth_call_raises_quota_exhausted(self) -> None:
         """6th call within the window raises QuotaExhausted."""
-        from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter  # noqa: PLC0415
         limiter = RateLimiter(
             name="test", provider_id="nws", domain="alerts", max_calls=5, window_seconds=1
         )
@@ -835,8 +863,8 @@ class TestRateLimiter:
 
     def test_quota_exhausted_has_retry_after_seconds(self) -> None:
         """QuotaExhausted carries retry_after_seconds > 0."""
-        from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter  # noqa: PLC0415
         limiter = RateLimiter(
             name="test", provider_id="nws", domain="alerts", max_calls=1, window_seconds=10
         )
@@ -880,8 +908,8 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_200_response_returned_no_exception(self) -> None:
         """200 response from upstream → response returned, no exception raised."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
         client = self._make_client()
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -895,9 +923,12 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_5xx_after_retries_raises_transient_network_error(self) -> None:
         """5xx response → TransientNetworkError after all retries exhausted."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         client = self._make_client()
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -908,8 +939,9 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_429_raises_quota_exhausted(self) -> None:
         """HTTP 429 → QuotaExhausted."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
         client = self._make_client()
         with respx.mock:
@@ -926,8 +958,9 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_401_raises_key_invalid(self) -> None:
         """HTTP 401 → KeyInvalid."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers._common.errors import KeyInvalid  # noqa: PLC0415
         client = self._make_client()
         with respx.mock:
@@ -939,9 +972,12 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_connect_error_raises_transient_network_error(self) -> None:
         """httpx.ConnectError → TransientNetworkError after retries."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         client = self._make_client()
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -952,9 +988,12 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_read_timeout_raises_transient_network_error(self) -> None:
         """httpx.ReadTimeout → TransientNetworkError after retries."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         client = self._make_client()
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -965,9 +1004,12 @@ class TestProviderHTTPClientErrorTranslation:
 
     def test_4xx_other_than_429_401_403_raises_provider_protocol_error(self) -> None:
         """Unexpected 4xx (e.g. 422) → ProviderProtocolError (not retried)."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         client = self._make_client()
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -989,15 +1031,18 @@ class TestNwsModuleFetch:
     def _reset(self) -> Any:
         """Reset cache and NWS module state between tests."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
         yield
         _reset_provider_state()
 
     def test_fetch_200_empty_features_returns_empty_list(self) -> None:
         """fetch() with empty features returns [] AlertRecord list."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         empty_fixture = _load_fixture("alerts_active_empty.json")
         with respx.mock:
@@ -1009,8 +1054,9 @@ class TestNwsModuleFetch:
 
     def test_fetch_200_with_alerts_returns_canonical_alert_records(self) -> None:
         """fetch() with 2-alert fixture returns 2 canonical AlertRecord objects."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
@@ -1027,8 +1073,9 @@ class TestNwsModuleFetch:
 
     def test_fetch_description_instruction_concatenated(self) -> None:
         """fetch() result has description+instruction concatenated for alert 1 of fixture."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
@@ -1044,10 +1091,13 @@ class TestNwsModuleFetch:
 
     def test_fetch_malformed_response_raises_provider_protocol_error(self) -> None:
         """fetch() with malformed payload (missing headline) → ProviderProtocolError."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
         malformed = _load_fixture("alerts_active_malformed.json")
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -1058,10 +1108,13 @@ class TestNwsModuleFetch:
 
     def test_fetch_5xx_raises_transient_network_error(self) -> None:
         """fetch() on NWS 5xx → TransientNetworkError after retries."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
                 return_value=httpx.Response(503, json={"detail": "unavailable"})
@@ -1071,10 +1124,11 @@ class TestNwsModuleFetch:
 
     def test_fetch_429_raises_quota_exhausted(self) -> None:
         """fetch() on NWS 429 → QuotaExhausted."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers._common.errors import QuotaExhausted  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
                 return_value=httpx.Response(
@@ -1088,8 +1142,9 @@ class TestNwsModuleFetch:
 
     def test_fetch_extreme_severity_maps_to_warning(self) -> None:
         """fetch() with Extreme severity alert returns canonical 'warning' severity AlertRecord."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
+
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         fixture = _load_fixture("alerts_active_extreme.json")
         with respx.mock:
@@ -1136,7 +1191,9 @@ class TestCapabilityRegistry:
 
     def test_wire_providers_duplicate_domain_provider_id_raises_value_error(self) -> None:
         """Duplicate (domain, provider_id) raises ValueError."""
-        from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.capability import (
+            wire_providers,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         with pytest.raises(ValueError, match="[Dd]uplicate"):
             wire_providers([nws.CAPABILITY, nws.CAPABILITY])
@@ -1278,15 +1335,17 @@ class TestAlertsEndpointWithNWS:
     def _reset(self) -> Any:
         """Reset NWS cache between tests."""
         _reset_provider_state()
-        from weewx_clearskies_api.providers._common.cache import wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            wire_cache_from_env,  # noqa: PLC0415
+        )
         wire_cache_from_env()
         yield
         _reset_provider_state()
 
     def test_nws_happy_path_returns_200_source_nws(self, alerts_client_nws: Any) -> None:
         """NWS configured + respx-mocked NWS → 200 with source='nws'."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
         fixture = _load_fixture("alerts_active.json")
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
@@ -1304,8 +1363,8 @@ class TestAlertsEndpointWithNWS:
 
     def test_nws_down_returns_502_provider_problem(self, alerts_client_nws: Any) -> None:
         """NWS returning 5xx → /alerts returns 502 ProviderProblem."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
                 return_value=httpx.Response(503, json={"detail": "unavailable"})
@@ -1323,8 +1382,8 @@ class TestAlertsEndpointWithNWS:
         self, alerts_client_nws: Any
     ) -> None:
         """NWS 429 → /alerts returns 503 ProviderProblem with Retry-After header."""
-        import respx  # noqa: PLC0415
         import httpx  # noqa: PLC0415
+        import respx  # noqa: PLC0415
         with respx.mock:
             respx.get("https://api.weather.gov/alerts/active").mock(
                 return_value=httpx.Response(
@@ -1365,10 +1424,10 @@ class TestAlertsEndpointWithNWS:
     ) -> None:
         """Pre-populated cache → endpoint returns cached alerts; no NWS call."""
         import respx  # noqa: PLC0415
-        import httpx  # noqa: PLC0415
+
+        from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import get_cache  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
 
         # Pre-populate cache with one canonical record dict
         # Station lat/lon from _wire_test_station: 42.375, -72.519
@@ -1428,7 +1487,9 @@ class TestCanonicalErrorTaxonomy:
 
     def test_provider_error_carries_provider_id_and_domain(self) -> None:
         """ProviderError instances carry provider_id and domain attributes."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         exc = TransientNetworkError(
             "test error",
             provider_id="nws",
@@ -1450,7 +1511,9 @@ class TestCanonicalErrorTaxonomy:
 
     def test_provider_error_retry_after_seconds_defaults_to_none(self) -> None:
         """retry_after_seconds defaults to None when not set."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         exc = TransientNetworkError(
             "transient error",
             provider_id="nws",
@@ -1469,7 +1532,9 @@ class TestStartupFailurePaths:
 
     def test_dispatch_with_unknown_provider_raises_key_error(self) -> None:
         """get_provider_module with unknown_provider raises KeyError."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         with pytest.raises(KeyError):
             get_provider_module(domain="alerts", provider_id="unknown_provider")
 
@@ -1483,7 +1548,10 @@ class TestStartupFailurePaths:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """wire_cache_from_env() raises ConfigError for memcached:// scheme."""
-        from weewx_clearskies_api.providers._common.cache import ConfigError, wire_cache_from_env  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            ConfigError,
+            wire_cache_from_env,
+        )
         monkeypatch.setenv("CLEARSKIES_CACHE_URL", "memcached://localhost:11211")
         with pytest.raises(ConfigError):
             wire_cache_from_env()

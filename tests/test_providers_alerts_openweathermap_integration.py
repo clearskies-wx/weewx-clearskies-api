@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -179,6 +180,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers all wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.alerts.openweathermap as _owm_alerts  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         AlertsSettings,
@@ -189,7 +191,11 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.endpoints.alerts import (  # noqa: PLC0415
@@ -205,19 +211,20 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
+        _reset_basic_tier_warned_for_tests,
+        _reset_http_client_for_tests,
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
-        _reset_basic_tier_warned_for_tests,
-    )
-    import weewx_clearskies_api.providers.alerts.openweathermap as _owm_alerts  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -352,8 +359,12 @@ def _make_warning_only_fixture() -> dict[str, Any]:
 def integration_app_owm(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with OWM alerts provider configured + test credentials."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.alerts.openweathermap import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.alerts.openweathermap import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(
         db_engine,
@@ -371,8 +382,12 @@ def integration_app_owm(db_engine: Engine) -> Generator[FastAPI, None, None]:
 def integration_app_owm_no_credentials(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with OWM provider but no credentials (tests 502 path)."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.alerts.openweathermap import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.alerts.openweathermap import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(
         db_engine,
@@ -410,7 +425,9 @@ class TestIntegrationOwmAlertsDispatchTable:
 
     def test_openweathermap_is_in_alerts_dispatch_table(self) -> None:
         """get_provider_module(domain='alerts', provider_id='openweathermap') returns module."""
-        from weewx_clearskies_api.providers._common.dispatch import get_provider_module  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.dispatch import (
+            get_provider_module,  # noqa: PLC0415
+        )
         module = get_provider_module(domain="alerts", provider_id="openweathermap")
         assert module is not None
         assert hasattr(module, "CAPABILITY")
@@ -435,8 +452,10 @@ class TestIntegrationOwmAlertsStartupWiring:
 
     def test_wire_openweathermap_credentials_stores_test_appid(self) -> None:
         """wire_openweathermap_credentials() stores the appid accessible by the endpoint."""
-        from weewx_clearskies_api.endpoints.alerts import wire_openweathermap_credentials  # noqa: PLC0415
         import weewx_clearskies_api.endpoints.alerts as alerts_mod  # noqa: PLC0415
+        from weewx_clearskies_api.endpoints.alerts import (
+            wire_openweathermap_credentials,  # noqa: PLC0415
+        )
         wire_openweathermap_credentials("TEST_APPID_WIRING")
         assert alerts_mod._openweathermap_appid == "TEST_APPID_WIRING"
         # Restore None
@@ -479,6 +498,7 @@ class TestIntegrationOwmAlertsStartupWiring:
     def test_alerts_settings_openweathermap_appid_none_when_env_absent(self) -> None:
         """AlertsSettings.openweathermap_appid = None when env var not set."""
         import os  # noqa: PLC0415
+
         from weewx_clearskies_api.config.settings import AlertsSettings  # noqa: PLC0415
         # Ensure env var is not set
         env_key = "WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID"
@@ -640,9 +660,15 @@ class TestIntegrationOwmAlertsEndpoint:
 
         Uses a fresh app (not shared fixture) to control cache state.
         """
-        from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-        from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-        from weewx_clearskies_api.providers.alerts.openweathermap import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.cache import (
+            reset_cache_for_tests,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers._common.capability import (
+            reset_provider_registry_for_tests,  # noqa: PLC0415
+        )
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -743,15 +769,15 @@ class TestIntegrationOwmAlertsMemoryCache:
         self, db_engine: Engine
     ) -> None:
         """Memory cache miss → one OWM HTTP call; result cached."""
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            get_cache,
             reset_cache_for_tests,
             wire_cache_from_env,
-            get_cache,
         )
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _reset_basic_tier_warned_for_tests,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -776,7 +802,9 @@ class TestIntegrationOwmAlertsMemoryCache:
         assert all(r.source == "openweathermap" for r in records)
 
         # Cache populated
-        from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _build_alerts_cache_key,  # noqa: PLC0415
+        )
         cached = get_cache().get(_build_alerts_cache_key(_LAT, _LON))
         assert cached is not None
 
@@ -787,14 +815,14 @@ class TestIntegrationOwmAlertsMemoryCache:
         self, db_engine: Engine
     ) -> None:
         """Memory cache hit → zero OWM HTTP calls; records match first fetch."""
-        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             reset_cache_for_tests,
             wire_cache_from_env,
         )
+        from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _reset_basic_tier_warned_for_tests,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -853,8 +881,8 @@ class TestIntegrationOwmAlertsRedisCache:
         )
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _reset_basic_tier_warned_for_tests,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -886,7 +914,9 @@ class TestIntegrationOwmAlertsRedisCache:
             assert all(r.source == "openweathermap" for r in records)
 
             # Verify records in Redis
-            from weewx_clearskies_api.providers.alerts.openweathermap import _build_alerts_cache_key  # noqa: PLC0415
+            from weewx_clearskies_api.providers.alerts.openweathermap import (
+                _build_alerts_cache_key,  # noqa: PLC0415
+            )
             cache_key = _build_alerts_cache_key(_LAT, _LON)
             cached = cache_mod._cache.get(cache_key)
             assert cached is not None, "Records should be stored in Redis after cache miss"
@@ -909,8 +939,8 @@ class TestIntegrationOwmAlertsRedisCache:
         )
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _reset_basic_tier_warned_for_tests,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()

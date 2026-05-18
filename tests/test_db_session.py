@@ -18,7 +18,6 @@ from sqlalchemy.pool import StaticPool
 
 from weewx_clearskies_api.db.session import get_db_session, get_engine, wire_engine
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

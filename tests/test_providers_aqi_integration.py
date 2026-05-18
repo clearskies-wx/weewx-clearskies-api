@@ -38,8 +38,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 import httpx
 import pytest
@@ -175,6 +176,7 @@ def _wire_integration_stack(
     Returns (settings, app) with DB, station, units, cache, providers wired.
     Handles both MariaDB and SQLite backends identically.
     """
+    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
         ApiSettings,
@@ -184,7 +186,11 @@ def _wire_integration_stack(
         RateLimitSettings,
         Settings,
     )
-    from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry  # noqa: PLC0415
+    from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
+        STOCK_COLUMN_MAP,
+        ColumnInfo,
+        ColumnRegistry,
+    )
     from weewx_clearskies_api.db.registry import wire_registry  # noqa: PLC0415
     from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
@@ -196,18 +202,19 @@ def _wire_integration_stack(
         reset_provider_registry_for_tests,
         wire_providers,
     )
+    from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
+        _reset_http_client_for_tests,
+    )
     from weewx_clearskies_api.services import station as station_mod  # noqa: PLC0415
     from weewx_clearskies_api.services import units as units_mod  # noqa: PLC0415
     from weewx_clearskies_api.services.station import StationInfo, reset_cache  # noqa: PLC0415
     from weewx_clearskies_api.services.units import (  # noqa: PLC0415
         _GROUP_MEMBERS,
         _SYSTEM_PRESETS,
+    )
+    from weewx_clearskies_api.services.units import (
         reset_cache as reset_units_cache,
     )
-    from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
-    )
-    import weewx_clearskies_api.providers.aqi.openmeteo as _om_aqi  # noqa: PLC0415
 
     # Reset state
     reset_cache_for_tests()
@@ -279,8 +286,12 @@ def _wire_integration_stack(
 def integration_app_openmeteo(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with Open-Meteo AQI provider configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers.aqi.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
+    from weewx_clearskies_api.providers.aqi.openmeteo import (
+        _reset_http_client_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, aqi_provider="openmeteo")
     yield app
@@ -294,7 +305,9 @@ def integration_app_openmeteo(db_engine: Engine) -> Generator[FastAPI, None, Non
 def integration_app_no_aqi(db_engine: Engine) -> Generator[FastAPI, None, None]:
     """Integration app with no AQI provider configured."""
     from weewx_clearskies_api.providers._common.cache import reset_cache_for_tests  # noqa: PLC0415
-    from weewx_clearskies_api.providers._common.capability import reset_provider_registry_for_tests  # noqa: PLC0415
+    from weewx_clearskies_api.providers._common.capability import (
+        reset_provider_registry_for_tests,  # noqa: PLC0415
+    )
 
     _, app = _wire_integration_stack(db_engine, aqi_provider=None)
     yield app
@@ -592,14 +605,14 @@ class TestIntegrationAqiMemoryCache:
     ) -> None:
         """Memory cache miss → one HTTP call; result cached for next poll."""
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
+            get_cache,
             reset_cache_for_tests,
             wire_cache_from_env,
-            get_cache,
         )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _build_cache_key,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -633,7 +646,9 @@ class TestIntegrationAqiMemoryCache:
             wire_cache_from_env,
         )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         _reset_http_client_for_tests()
@@ -687,8 +702,8 @@ class TestIntegrationAqiRedisCache:
         )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
         from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _build_cache_key,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -735,7 +750,9 @@ class TestIntegrationAqiRedisCache:
             reset_cache_for_tests,
         )
         from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
-        from weewx_clearskies_api.providers.aqi.openmeteo import _reset_http_client_for_tests  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _reset_http_client_for_tests,  # noqa: PLC0415
+        )
 
         reset_cache_for_tests()
         _reset_http_client_for_tests()

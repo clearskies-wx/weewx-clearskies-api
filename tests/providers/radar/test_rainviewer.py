@@ -69,8 +69,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.radar.rainviewer import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -99,7 +99,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_fixture_loads_via_rainviewer_weather_maps_model(self) -> None:
         """weather-maps.json loads via _RainViewerWeatherMaps without error."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -107,7 +109,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_fixture_version_is_2_0(self) -> None:
         """Fixture version field = '2.0'."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -115,7 +119,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_fixture_has_13_past_frames(self) -> None:
         """Fixture has exactly 13 past frames (from live capture 2026-05-11)."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -125,7 +131,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_fixture_nowcast_is_empty_list(self) -> None:
         """Fixture nowcast = [] (was empty at capture time; module must tolerate this)."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -135,7 +143,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_extra_wire_fields_are_ignored(self) -> None:
         """Extra top-level wire fields (satellite, etc.) silently ignored."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         raw["unexpected_new_field"] = "should_be_ignored"
@@ -144,7 +154,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_host_field_is_tilecache_url(self) -> None:
         """Fixture host = 'https://tilecache.rainviewer.com'."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -154,7 +166,9 @@ class TestRainViewerWireShapeValidation:
 
     def test_first_past_entry_has_time_and_path(self) -> None:
         """First past entry has 'time' (int) and 'path' (str) fields."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _RainViewerWeatherMaps  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _RainViewerWeatherMaps,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("weather-maps.json")
         result = _RainViewerWeatherMaps.model_validate(raw)
@@ -201,7 +215,9 @@ class TestToCanonicalFrames:
 
     def test_latest_past_frame_has_kind_current(self) -> None:
         """past[-1].time == generated → kind='current'."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         # generated = last past time
         parsed = self._make_weather_maps(generated=1778548200, past_times=[1778541000, 1778544600, 1778548200])
@@ -211,19 +227,25 @@ class TestToCanonicalFrames:
 
     def test_latest_past_frame_kind_matches_current_expected_time(self) -> None:
         """The frame with kind='current' corresponds to the largest past time."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         parsed = self._make_weather_maps(generated=1778548200, past_times=[1778541000, 1778544600, 1778548200])
         frames = _to_canonical_frames(parsed)
         current_frames = [f for f in frames if f.kind == "current"]
         # The current frame should correspond to time=1778548200
-        from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.datetime_utils import (
+            epoch_to_utc_iso8601,  # noqa: PLC0415
+        )
         expected_time = epoch_to_utc_iso8601(1778548200, provider_id="rainviewer", domain="radar")
         assert current_frames[0].time == expected_time
 
     def test_earlier_past_frames_have_kind_past(self) -> None:
         """past[i].time < generated → kind='past' (all non-latest)."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         parsed = self._make_weather_maps(generated=1778548200, past_times=[1778541000, 1778544600, 1778548200])
         frames = _to_canonical_frames(parsed)
@@ -232,7 +254,9 @@ class TestToCanonicalFrames:
 
     def test_nowcast_frames_have_kind_nowcast(self) -> None:
         """nowcast entries → kind='nowcast'."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         parsed = self._make_weather_maps(
             generated=1778548200,
@@ -245,7 +269,9 @@ class TestToCanonicalFrames:
 
     def test_empty_nowcast_array_produces_no_nowcast_frames(self) -> None:
         """Empty nowcast array → no nowcast kind frames (matches live capture state)."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         parsed = self._make_weather_maps(past_times=[1778541000, 1778548200], nowcast_times=[])
         frames = _to_canonical_frames(parsed)
@@ -254,7 +280,9 @@ class TestToCanonicalFrames:
 
     def test_all_frame_times_end_with_z(self) -> None:
         """All RadarFrame.time values end with 'Z' suffix (ADR-020)."""
-        from weewx_clearskies_api.providers.radar.rainviewer import _to_canonical_frames  # noqa: PLC0415
+        from weewx_clearskies_api.providers.radar.rainviewer import (
+            _to_canonical_frames,  # noqa: PLC0415
+        )
 
         parsed = self._make_weather_maps()
         frames = _to_canonical_frames(parsed)
@@ -355,14 +383,13 @@ class TestGetFramesHappyPath:
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             RedisCache,
             reset_cache_for_tests,
-            wire_cache_from_env,
         )
         from weewx_clearskies_api.providers._common.capability import (  # noqa: PLC0415
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.radar.rainviewer import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
 
         reset_cache_for_tests()
@@ -430,7 +457,9 @@ class TestErrorMapping:
 
     def test_5xx_raises_transient_network_error(self) -> None:
         """HTTP 5xx → TransientNetworkError."""
-        from weewx_clearskies_api.providers._common.errors import TransientNetworkError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            TransientNetworkError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.rainviewer import get_frames  # noqa: PLC0415
 
         _reset_provider_state()
@@ -444,7 +473,9 @@ class TestErrorMapping:
 
     def test_malformed_json_raises_provider_protocol_error(self) -> None:
         """Non-JSON response body → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.rainviewer import get_frames  # noqa: PLC0415
 
         _reset_provider_state()
@@ -458,7 +489,9 @@ class TestErrorMapping:
 
     def test_missing_required_field_raises_provider_protocol_error(self) -> None:
         """JSON missing required 'radar' field → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.radar.rainviewer import get_frames  # noqa: PLC0415
 
         _reset_provider_state()

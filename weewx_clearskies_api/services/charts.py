@@ -10,11 +10,10 @@ Custom chart groups are out of scope for 3a-2 (Phase 4 config UI).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final
 
 from weewx_clearskies_api.db.reflection import ColumnRegistry
-
 
 # ---------------------------------------------------------------------------
 # Built-in group definitions (per lead-confirmed brief call #5)

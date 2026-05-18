@@ -109,8 +109,8 @@ def _reset_provider_state() -> None:
         reset_provider_registry_for_tests,
     )
     from weewx_clearskies_api.providers.earthquakes.emsc import (  # noqa: PLC0415
-        _reset_http_client_for_tests,
         _rate_limiter,
+        _reset_http_client_for_tests,
     )
 
     cache_url = os.environ.get("CLEARSKIES_CACHE_URL")
@@ -190,7 +190,9 @@ class TestEMSCWireShapeValidation:
         """Dropping 'mag' from properties → ValidationError (required field)."""
         from pydantic import ValidationError  # noqa: PLC0415
 
-        from weewx_clearskies_api.providers.earthquakes.emsc import _EmscEventFeature  # noqa: PLC0415
+        from weewx_clearskies_api.providers.earthquakes.emsc import (
+            _EmscEventFeature,  # noqa: PLC0415
+        )
 
         raw = _load_fixture("emsc_global_m2_5.json")
         feature_raw = dict(raw["features"][0])
@@ -447,7 +449,9 @@ class TestFetchHappyPath:
         """With fakeredis backend: cache hit → 0 HTTP calls."""
         pytest.importorskip("fakeredis", reason="fakeredis not installed")
         import fakeredis  # noqa: PLC0415
+        import redis as _redis_lib  # noqa: PLC0415
 
+        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
         from weewx_clearskies_api.providers._common.cache import (  # noqa: PLC0415
             RedisCache,
             reset_cache_for_tests,
@@ -456,11 +460,9 @@ class TestFetchHappyPath:
             reset_provider_registry_for_tests,
         )
         from weewx_clearskies_api.providers.earthquakes.emsc import (  # noqa: PLC0415
-            _reset_http_client_for_tests,
             _rate_limiter,
+            _reset_http_client_for_tests,
         )
-        import redis as _redis_lib  # noqa: PLC0415
-        import weewx_clearskies_api.providers._common.cache as _cache_mod  # noqa: PLC0415
 
         reset_cache_for_tests()
         reset_provider_registry_for_tests()
@@ -503,7 +505,9 @@ class TestProviderProtocolErrorOnInvalidWireShape:
 
     def test_missing_mag_raises_provider_protocol_error(self) -> None:
         """Drop 'mag' from properties → ValidationError → ProviderProtocolError."""
-        from weewx_clearskies_api.providers._common.errors import ProviderProtocolError  # noqa: PLC0415
+        from weewx_clearskies_api.providers._common.errors import (
+            ProviderProtocolError,  # noqa: PLC0415
+        )
         from weewx_clearskies_api.providers.earthquakes.emsc import fetch  # noqa: PLC0415
 
         _reset_provider_state()
