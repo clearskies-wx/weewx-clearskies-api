@@ -424,6 +424,11 @@ class CapabilityDeclaration(BaseModel):
     geographicCoverage: str
     defaultPollIntervalSeconds: int | None = None
     operatorNotes: str | None = None
+    tileUrlTemplate: str | None = None
+    wmsEndpointUrl: str | None = None
+    wmsLayerName: str | None = None
+    tileContentType: str | None = None
+    iframeUrl: str | None = None
 
 
 class CapabilityRegistry(BaseModel):

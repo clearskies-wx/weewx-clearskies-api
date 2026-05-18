@@ -74,6 +74,11 @@ def get_capabilities() -> CapabilityResponse:
             geographicCoverage=cap.geographic_coverage,
             defaultPollIntervalSeconds=cap.default_poll_interval_seconds,
             operatorNotes=cap.operator_notes,
+            tileUrlTemplate=cap.tile_url_template,
+            wmsEndpointUrl=cap.wms_endpoint_url,
+            wmsLayerName=cap.wms_layer_name,
+            tileContentType=cap.tile_content_type,
+            iframeUrl=cap.iframe_url,
         )
         for cap in provider_registry
     ]
