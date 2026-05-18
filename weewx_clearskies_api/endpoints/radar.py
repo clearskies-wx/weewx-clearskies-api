@@ -64,9 +64,12 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from pydantic import ValidationError
 
+from weewx_clearskies_api.models.params import RadarFramesQueryParams, RadarTileQueryParams
 from weewx_clearskies_api.models.responses import RadarFramesResponse, utc_isoformat
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.providers._common.dispatch import get_provider_module
@@ -185,6 +188,29 @@ def wire_radar_settings(settings: object) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Query-param validators (Depends wrappers — extra="forbid" enforcement)
+# ---------------------------------------------------------------------------
+
+
+def _get_radar_frames_params(request: Request) -> RadarFramesQueryParams:
+    try:
+        return RadarFramesQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        from fastapi.exceptions import RequestValidationError
+
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_radar_tile_params(request: Request) -> RadarTileQueryParams:
+    try:
+        return RadarTileQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        from fastapi.exceptions import RequestValidationError
+
+        raise RequestValidationError(exc.errors()) from exc
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -195,7 +221,10 @@ def wire_radar_settings(settings: object) -> None:
     tags=["Radar"],
     response_model=RadarFramesResponse,
 )
-def get_radar_frames(provider_id: str) -> RadarFramesResponse:
+def get_radar_frames(
+    provider_id: str,
+    params: Annotated[RadarFramesQueryParams, Depends(_get_radar_frames_params)],
+) -> RadarFramesResponse:
     """Return the available radar frame timestamps for the given provider.
 
     Reads the capability registry at request time to confirm the operator has
@@ -291,7 +320,7 @@ def get_radar_tile(
     z: int = Path(..., ge=0, le=22, description="Slippy-map zoom level"),
     x: int = Path(..., ge=0, description="Slippy-map tile X"),
     y: int = Path(..., ge=0, description="Slippy-map tile Y"),
-    t: str | None = None,
+    params: Annotated[RadarTileQueryParams, Depends(_get_radar_tile_params)],
 ) -> Response:
     """Server-side proxy for keyed radar tile providers (ADR-015 + ADR-037).
 
@@ -316,14 +345,14 @@ def get_radar_tile(
       10. Upstream 401/403 → 502.
     """
     # LC-F: ?t accepted but logged + ignored at v0.1.
-    if t is not None:
+    if params.t is not None:
         logger.debug(
             "[radar tile proxy] provider=%r z=%d x=%d y=%d t=%r (ignored at v0.1)",
             provider_id,
             z,
             x,
             y,
-            t,
+            params.t,
         )
 
     # --- Branch 1: /tiles is keyed-only ---
@@ -384,7 +413,7 @@ def get_radar_tile(
                 z,
                 x,
                 y,
-                t=t,
+                t=params.t,
                 client_id=_RADAR_AERIS_CLIENT_ID,
                 client_secret=_RADAR_AERIS_CLIENT_SECRET,
             )
@@ -393,7 +422,7 @@ def get_radar_tile(
                 z,
                 x,
                 y,
-                t=t,
+                t=params.t,
                 appid=_RADAR_OWM_APPID,
             )
         else:

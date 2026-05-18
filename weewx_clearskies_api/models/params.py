@@ -325,3 +325,29 @@ class EarthquakesQueryParams(BaseModel):
     to: datetime | None = None
     min_magnitude: float | None = Field(None, ge=0)
     radius_km: float | None = Field(None, ge=0)
+
+
+# ---------------------------------------------------------------------------
+# /radar query params
+# ---------------------------------------------------------------------------
+
+
+class RadarFramesQueryParams(BaseModel):
+    """Query params for /radar/providers/{provider_id}/frames.
+
+    No query params accepted — extra="forbid" rejects everything.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RadarTileQueryParams(BaseModel):
+    """Query params for /radar/providers/{provider_id}/tiles/{z}/{x}/{y}.
+
+    Only the optional `t` (time) query param is accepted.
+    extra="forbid" rejects unknown keys per security-baseline §3.5.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    t: str | None = None
