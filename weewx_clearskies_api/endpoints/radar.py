@@ -317,10 +317,10 @@ def get_radar_frames(
 )
 def get_radar_tile(
     provider_id: str,
+    params: Annotated[RadarTileQueryParams, Depends(_get_radar_tile_params)],
     z: int = Path(..., ge=0, le=22, description="Slippy-map zoom level"),
     x: int = Path(..., ge=0, description="Slippy-map tile X"),
     y: int = Path(..., ge=0, description="Slippy-map tile Y"),
-    params: Annotated[RadarTileQueryParams, Depends(_get_radar_tile_params)],
 ) -> Response:
     """Server-side proxy for keyed radar tile providers (ADR-015 + ADR-037).
 
