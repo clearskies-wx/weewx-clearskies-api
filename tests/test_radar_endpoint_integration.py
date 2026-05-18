@@ -678,3 +678,41 @@ class TestBranch6ParseFailure:
         assert response.status_code == 502, (
             f"Malformed XML should return 502, got {response.status_code}"
         )
+
+
+# ===========================================================================
+# Query-param hardening — extra="forbid" on /frames (3b-16)
+# ===========================================================================
+
+
+def _assert_problem_json_frames(response: object) -> None:
+    """Assert RFC 9457 problem+json shape (status field required)."""
+    content_type = response.headers.get("content-type", "")  # type: ignore[attr-defined]
+    assert "json" in content_type, (
+        f"Expected JSON content-type for error response, got {content_type!r}"
+    )
+    body = response.json()  # type: ignore[attr-defined]
+    assert "status" in body, f"Problem response must have 'status'; got {body}"
+
+
+class TestFramesQueryParamHardening:
+    """GET /frames rejects unknown query params (extra='forbid' on RadarFramesQueryParams).
+
+    The endpoint wires a Pydantic model via Depends() so any unrecognised query
+    key is caught before handler logic runs and returns 400 or 422 + problem+json.
+    """
+
+    def test_radar_frames_unknown_query_param_returns_400_or_422(self) -> None:
+        """Unknown query param on /frames → 400 or 422 problem+json (extra='forbid')."""
+        app = _make_radar_app(provider="rainviewer")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(
+            "/api/v1/radar/providers/rainviewer/frames",
+            params={"totally_unknown_param": "yes"},
+        )
+        _reset_all_provider_state()
+        assert response.status_code in (400, 422), (
+            f"Expected 400/422 for unknown query param on /frames, "
+            f"got {response.status_code}: {response.text[:300]}"
+        )
+        _assert_problem_json_frames(response)

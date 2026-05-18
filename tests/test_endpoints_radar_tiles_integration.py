@@ -666,3 +666,61 @@ class TestBranch7PathParameterValidation:
 
         _reset_all_provider_state()
         assert response.status_code != 422
+
+
+# ===========================================================================
+# Query-param hardening — extra="forbid" on /tiles and valid ?t param (3b-16)
+# ===========================================================================
+
+
+def _assert_problem_json_tiles(response: object) -> None:
+    """Assert RFC 9457 problem+json shape (status field required)."""
+    content_type = response.headers.get("content-type", "")  # type: ignore[attr-defined]
+    assert "json" in content_type, (
+        f"Expected JSON content-type for error response, got {content_type!r}"
+    )
+    body = response.json()  # type: ignore[attr-defined]
+    assert "status" in body, f"Problem response must have 'status'; got {body}"
+
+
+class TestTilesQueryParamHardening:
+    """GET /tiles rejects unknown query params but accepts valid ?t (extra='forbid' on RadarTilesQueryParams).
+
+    The endpoint wires a Pydantic model via Depends() so any unrecognised query
+    key is rejected before handler logic runs.  The only accepted param is the
+    optional timestamp hint ?t (logged and ignored at v0.1 per LC-F).
+    """
+
+    def test_radar_tiles_unknown_query_param_returns_400_or_422(self) -> None:
+        """Unknown query param on /tiles → 400 or 422 problem+json (extra='forbid')."""
+        app = _make_tile_app(provider="aeris", wire_credentials=True)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(
+            "/api/v1/radar/providers/aeris/tiles/5/16/11",
+            params={"totally_unknown_param": "yes"},
+        )
+        _reset_all_provider_state()
+        assert response.status_code in (400, 422), (
+            f"Expected 400/422 for unknown query param on /tiles, "
+            f"got {response.status_code}: {response.text[:300]}"
+        )
+        _assert_problem_json_tiles(response)
+
+    def test_radar_tiles_valid_t_param_accepted(self) -> None:
+        """?t=<unix-timestamp> on /tiles is accepted (not rejected as unknown).
+
+        The endpoint may return 404 or 502 because aeris credentials are not
+        configured in the test environment — that is expected and acceptable.
+        The assertion is that ?t does NOT produce 400 or 422 (param must be accepted).
+        """
+        app = _make_tile_app(provider="aeris", wire_credentials=False)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(
+            "/api/v1/radar/providers/aeris/tiles/5/16/11",
+            params={"t": "1234567890"},
+        )
+        _reset_all_provider_state()
+        assert response.status_code not in (400, 422), (
+            f"Valid ?t query param must be accepted (not 400/422); "
+            f"got {response.status_code}: {response.text[:300]}"
+        )
