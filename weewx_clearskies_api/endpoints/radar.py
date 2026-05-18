@@ -10,11 +10,13 @@ Behavior decision tree for /frames per brief §per-endpoint spec:
   2. provider_id IS in dispatch but NOT in capability registry → 404 Problem
      (operator configured a different provider). Same HTTP status as #1;
      detail text distinguishes them.
-  3. Provider configured + registered, fetch succeeds → 200 RadarFramesResponse.
-  4. Frame-index fetch returns network failure / 5xx after retries → 502 ProviderProblem
+  3. provider_id == "iframe" → 501 (no frame index; dashboard reads iframe_url
+     from /capabilities).
+  4. Provider configured + registered, fetch succeeds → 200 RadarFramesResponse.
+  5. Frame-index fetch returns network failure / 5xx after retries → 502 ProviderProblem
      (TransientNetworkError).
-  5. Frame-index fetch returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After.
-  6. Frame-index parse failure (JSON malformed / XML missing TIME dimension) → 502
+  6. Frame-index fetch returns 429 → 503 ProviderProblem (QuotaExhausted) + Retry-After.
+  7. Frame-index parse failure (JSON malformed / XML missing TIME dimension) → 502
      ProviderProblem (ProviderProtocolError).
 
 Behavior decision tree for /tiles/{z}/{x}/{y} per brief §per-endpoint spec:
@@ -41,7 +43,7 @@ wire_radar_settings() (3b-15):
   Called from __main__.py at startup step 6n, after wire_providers (6i).
 
 Dispatch table:
-  /frames: _KNOWN_RADAR_PROVIDERS — all 7 providers (5 keyless + 2 keyed).
+  /frames: _KNOWN_RADAR_PROVIDERS — all 8 providers (5 keyless + 2 keyed + 1 iframe).
   /tiles:  _KEYED_RADAR_PROVIDERS — keyed-only (aeris, openweathermap).
 
 No DB hit — radar frames / tiles come from the provider, not weewx archive.
@@ -201,10 +203,11 @@ def get_radar_frames(provider_id: str) -> RadarFramesResponse:
 
       1. provider_id not in known radar dispatch table → 404.
       2. provider_id in dispatch but not in registry → 404 (different detail).
-      3. Provider registered → call get_frames(), return 200 RadarFramesResponse.
-      4. get_frames() raises TransientNetworkError → FastAPI error handler → 502.
-      5. get_frames() raises QuotaExhausted → FastAPI error handler → 503 + Retry-After.
-      6. get_frames() raises ProviderProtocolError → FastAPI error handler → 502.
+      3. provider_id == "iframe" → 501 (no frame index).
+      4. Provider registered → call get_frames(), return 200 RadarFramesResponse.
+      5. get_frames() raises TransientNetworkError → FastAPI error handler → 502.
+      6. get_frames() raises QuotaExhausted → FastAPI error handler → 503 + Retry-After.
+      7. get_frames() raises ProviderProtocolError → FastAPI error handler → 502.
     """
     now_str = utc_isoformat(datetime.now(tz=UTC))
 
