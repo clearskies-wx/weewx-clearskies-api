@@ -17,12 +17,13 @@ Covers per the task-3b-9 brief §Test-author parallel scope (test_aqi.py):
   /aqi/current — unknown query key:
   - ?unknown_key=bad → 422 (extra="forbid" via Depends pattern).
 
-  /aqi/history:
-  - → 501 RFC 9457 problem+json (always, regardless of provider config).
-  - application/problem+json content-type.
-  - Body has type, title, status=501, detail, instance fields.
-  - With valid from/to params → still 501 (params validate, then 501).
-  - With unknown query key → 422 (extra="forbid" fires before 501).
+  /aqi/history (P4-T3, ADR-013 corrected — reads from weewx archive):
+  - → 200 AQIHistoryResponse with data, units, source, generatedAt, page fields.
+  - No AQI columns configured (Path B default) → 200 + empty data list.
+  - source = "weewx" (always; reads from archive, not external provider).
+  - page field present with limit and totalRecords=0 for unconfigured Path B.
+  - Valid from/to params → 200 (not 501; endpoint is now implemented).
+  - With unknown query key → 422 (extra="forbid" fires).
 
 3b-10 extension — /aqi/current — aeris provider:
   - aeris registered + credentials wired + respx mock → 200 + canonical AQIReading.
@@ -423,84 +424,112 @@ class TestAqiCurrentUnknownQueryKey:
 
 
 # ===========================================================================
-# 5. /aqi/history — 501 stub
+# 5. /aqi/history — reads from weewx archive (P4-T3, ADR-013 corrected)
 # ===========================================================================
 
 
 class TestAqiHistory:
-    """/aqi/history → 501 RFC 9457 regardless of provider config (LC21)."""
+    """/aqi/history → 200 AQIHistoryResponse (P4-T3; reads from weewx archive).
 
-    def test_aqi_history_returns_501(self) -> None:
-        """/aqi/history → 501 Not Implemented (always; AQI history not yet implemented)."""
+    Default state: no AQI columns configured in [aqi.history] (Path B).
+    Endpoint returns 200 + empty data list + total=0 — not an error.
+    source is always "weewx" (archive-backed, not provider-backed).
+    """
+
+    def test_aqi_history_returns_200(self) -> None:
+        """/aqi/history → 200 OK (implemented; reads from weewx archive)."""
         app = _make_aqi_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/aqi/history")
-        assert response.status_code == 501, (
-            f"Expected 501, got {response.status_code}: {response.text[:300]}"
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text[:300]}"
         )
 
-    def test_aqi_history_content_type_is_problem_json(self) -> None:
-        """/aqi/history content-type is application/problem+json (RFC 9457 per ADR-018)."""
+    def test_aqi_history_content_type_is_json(self) -> None:
+        """/aqi/history content-type is application/json."""
         app = _make_aqi_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/aqi/history")
-        assert "application/problem+json" in response.headers.get("content-type", ""), (
-            "501 must return application/problem+json (RFC 9457)"
+        assert "application/json" in response.headers.get("content-type", ""), (
+            f"Expected application/json, got {response.headers.get('content-type')!r}"
         )
 
-    def test_aqi_history_body_has_rfc9457_shape(self) -> None:
-        """/aqi/history body has type, title, status, detail, instance (LC21 spec)."""
+    def test_aqi_history_envelope_has_required_fields(self) -> None:
+        """/aqi/history response has data, units, source, generatedAt, page."""
         app = _make_aqi_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/aqi/history")
         body = response.json()
-        assert "type" in body, "RFC 9457 must have 'type' field"
-        assert "title" in body, "RFC 9457 must have 'title' field"
-        assert "status" in body, "RFC 9457 must have 'status' field"
-        assert body["status"] == 501
-        assert "detail" in body, "RFC 9457 must have 'detail' field"
+        for field in ("data", "units", "source", "generatedAt", "page"):
+            assert field in body, f"AQIHistoryResponse missing required field {field!r}"
 
-    def test_aqi_history_with_openmeteo_provider_still_returns_501(self) -> None:
-        """/aqi/history returns 501 even when openmeteo is configured (stub is unconditional)."""
+    def test_aqi_history_no_columns_returns_empty_data(self) -> None:
+        """No [aqi.history] columns configured (Path B) → data is an empty list."""
+        app = _make_aqi_app(provider=None)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/aqi/history")
+        body = response.json()
+        assert body["data"] == [], (
+            f"Expected empty data list (Path B), got {body.get('data')!r}"
+        )
+
+    def test_aqi_history_source_is_weewx(self) -> None:
+        """source = 'weewx' (reads from archive, not from an external provider)."""
+        app = _make_aqi_app(provider=None)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/aqi/history")
+        body = response.json()
+        assert body["source"] == "weewx", (
+            f"Expected source='weewx', got {body.get('source')!r}"
+        )
+
+    def test_aqi_history_generated_at_is_utc_z(self) -> None:
+        """generatedAt ends with Z (UTC ISO-8601, ADR-020)."""
+        app = _make_aqi_app(provider=None)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/aqi/history")
+        body = response.json()
+        assert body["generatedAt"].endswith("Z"), (
+            f"generatedAt must end with Z, got {body['generatedAt']!r}"
+        )
+
+    def test_aqi_history_page_has_limit_field(self) -> None:
+        """page block present and contains a limit field."""
+        app = _make_aqi_app(provider=None)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/aqi/history")
+        body = response.json()
+        page = body.get("page", {})
+        assert "limit" in page, f"page block must have 'limit', got {page!r}"
+
+    def test_aqi_history_with_openmeteo_provider_returns_200(self) -> None:
+        """/aqi/history returns 200 when openmeteo is configured (archive-based; provider-independent)."""
         app = _make_aqi_app(provider="openmeteo")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/aqi/history")
-        assert response.status_code == 501, (
-            f"Expected 501 even with provider configured, got {response.status_code}"
+        assert response.status_code == 200, (
+            f"Expected 200 with openmeteo configured, got {response.status_code}"
         )
 
-    def test_aqi_history_with_valid_from_to_params_still_returns_501(self) -> None:
-        """Valid from/to params validate OK but endpoint still returns 501 (stub)."""
+    def test_aqi_history_with_valid_from_to_params_returns_200(self) -> None:
+        """Valid from/to params → 200 (endpoint is implemented; params validated OK)."""
         app = _make_aqi_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(
             "/api/v1/aqi/history?from=2026-05-01T00:00:00Z&to=2026-05-10T00:00:00Z"
         )
-        # Valid params → 501 (not 422); handler always returns 501 per LC21
-        assert response.status_code == 501, (
-            f"Expected 501 for valid from/to params on history stub, got {response.status_code}"
+        assert response.status_code == 200, (
+            f"Expected 200 for valid from/to params, got {response.status_code}"
         )
 
     def test_aqi_history_with_unknown_query_key_returns_422(self) -> None:
-        """Unknown query param on /aqi/history → 422 (params validate before 501 fires)."""
+        """Unknown query param on /aqi/history → 422 (extra='forbid' via Depends wrapper)."""
         app = _make_aqi_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/aqi/history?totally_unknown=oops")
         assert response.status_code == 422, (
             f"Expected 422 for unknown query param on /aqi/history, got {response.status_code}"
         )
-
-    def test_aqi_history_instance_field_is_aqi_history_path(self) -> None:
-        """/aqi/history RFC 9457 body instance field points to /aqi/history (LC21)."""
-        app = _make_aqi_app(provider=None)
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/api/v1/aqi/history")
-        body = response.json()
-        # LC21 spec: "instance": "/aqi/history"
-        if "instance" in body:
-            assert "aqi/history" in body["instance"], (
-                f"instance should reference aqi/history, got {body['instance']!r}"
-            )
 
 
 # ===========================================================================

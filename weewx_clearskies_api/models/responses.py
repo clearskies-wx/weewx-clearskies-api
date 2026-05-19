@@ -734,6 +734,23 @@ class AQIResponse(BaseModel):
     generatedAt: str  # UTC ISO-8601 with Z
 
 
+class AQIHistoryResponse(BaseModel):
+    """AQIHistoryResponse envelope (OpenAPI AQIHistoryResponse schema, P4-T3).
+
+    data: list of AQIReading from the weewx archive (Path A operators).
+    units: UnitsBlock — pollutant unit declarations (same as /aqi/current).
+    source: always "weewx" (reads from weewx archive per ADR-013 corrected).
+    generatedAt: UTC ISO-8601 with Z.
+    page: pagination metadata.
+    """
+
+    data: list[AQIReading]
+    units: dict[str, str]
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+    page: PageInfo
+
+
 # ---------------------------------------------------------------------------
 # Earthquakes (ADR-040, canonical-data-model §3.7 + §2.4)
 # ---------------------------------------------------------------------------

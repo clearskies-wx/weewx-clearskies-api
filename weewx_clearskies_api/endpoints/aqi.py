@@ -10,12 +10,13 @@ Behavior decision tree for /aqi/current per brief §per-endpoint spec:
   6. Provider returns 401/403 → 502 (KeyInvalid)
   7. Pydantic validation failure on wire model → 502 (ProviderProtocolError → RFC 9457)
 
-/aqi/history always returns 501 Not Implemented (LC21):
-  AQI history persistence is deferred to a future round per ADR-013 §Out of scope.
-  RFC 9457 problem+json body regardless of provider config or query params.
-  Params are validated first (invalid params → 422; valid params → 501).
+/aqi/history reads from the weewx archive (ADR-013 corrected, P4-T3):
+  Path A: AQI columns present in archive → returns historical AQIReading list.
+  Path B: no [aqi.history] columns configured → returns empty list (not error).
+  DB session injected via Depends(get_db_session).  AQIHistorySettings wired
+  at startup via wire_aqi_settings().
 
-No DB hit.  AQI comes from the configured provider (Path B), not weewx archive.
+No DB hit for /aqi/current.  AQI comes from the configured provider (Path B).
 
 Operator lat/lon: from get_station_info() (services/station.py) per ADR-011
   (single-station scope).  No ?station= param.
@@ -50,11 +51,20 @@ from typing import Annotated
 import pydantic
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
+from sqlalchemy.orm import Session
+
+from weewx_clearskies_api.config.settings import AQIHistorySettings
+from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import AQIHistoryQueryParams, AQIQueryParams
-from weewx_clearskies_api.models.responses import AQIReading, AQIResponse, utc_isoformat
+from weewx_clearskies_api.models.responses import (
+    AQIHistoryResponse,
+    AQIReading,
+    AQIResponse,
+    utc_isoformat,
+)
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
+from weewx_clearskies_api.services.aqi_history import get_aqi_history
 from weewx_clearskies_api.services.station import get_station_info
 from weewx_clearskies_api.services.units import get_units_block
 
@@ -67,12 +77,15 @@ router = APIRouter()
 # Aeris: client_id + client_secret (3b-10).
 # OWM: appid (3b-11 — provider-scoped per 3b-5 Q2; same env var as forecast/alerts OWM).
 # IQAir: key (3b-12 — domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
+# AQI history: column mapping from [aqi.history] section (P4-T3, ADR-013 corrected).
 # ---------------------------------------------------------------------------
 
 _AERIS_CLIENT_ID: str | None = None
 _AERIS_CLIENT_SECRET: str | None = None
 _OWM_APPID: str | None = None
 _IQAIR_KEY: str | None = None
+# AQI history settings — defaults to all-empty (Path B) until wired at startup.
+_AQI_HISTORY_SETTINGS: AQIHistorySettings = AQIHistorySettings({})
 
 # ---------------------------------------------------------------------------
 # Depends wrappers — Pydantic + Depends pattern (coding.md §1)
@@ -113,7 +126,8 @@ def _get_aqi_history_params(request: Request) -> AQIHistoryQueryParams:
 def wire_aqi_settings(settings: object) -> None:
     """Wire AQI-related settings from the Settings object.
 
-    For Open-Meteo (keyless): no-op — no credentials to extract.
+    For Open-Meteo (keyless): no-op for credentials — but AQI history settings
+      are always wired from settings.aqi_history (P4-T3).
     For Aeris (3b-10): extracts client_id + client_secret from settings.forecast
       (provider-scoped per 3b-4 Q1 user decision; same [aeris] section as
       forecast/alerts Aeris) and stores in module-level _AERIS_CLIENT_ID +
@@ -124,8 +138,17 @@ def wire_aqi_settings(settings: object) -> None:
     For IQAir (3b-12): extracts iqair_key from settings.aqi (domain-scoped per
       Q1 user decision 2026-05-11; IQAir is AQI-only, not multi-domain like Aeris/OWM)
       and stores in _IQAIR_KEY.
+    AQI history (P4-T3): stores settings.aqi_history in _AQI_HISTORY_SETTINGS so
+      get_aqi_history() can read archive column mappings at request time.
     """
     global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _OWM_APPID, _IQAIR_KEY  # noqa: PLW0603
+    global _AQI_HISTORY_SETTINGS  # noqa: PLW0603
+
+    # Wire AQI history column settings (Path A operators configure these;
+    # Path B operators get all-empty defaults — no error).
+    aqi_history_section = getattr(settings, "aqi_history", None)
+    if aqi_history_section is not None:
+        _AQI_HISTORY_SETTINGS = aqi_history_section
 
     aqi_section = getattr(settings, "aqi", None)
     if aqi_section is None:
@@ -327,27 +350,50 @@ def get_aqi_current(
     "/aqi/history",
     summary="Historical AQI readings",
     tags=["AQI"],
+    response_model=AQIHistoryResponse,
 )
-def get_aqi_history(
+def get_aqi_history_endpoint(
+    db: Annotated[Session, Depends(get_db_session)],
     params: Annotated[AQIHistoryQueryParams, Depends(_get_aqi_history_params)],
-) -> JSONResponse:
-    """Return 501 Not Implemented — AQI history persistence is deferred (LC21).
+) -> AQIHistoryResponse:
+    """Return historical AQI readings from the weewx archive (ADR-013 corrected, P4-T3).
 
-    AQI history requires a writeable datastore separate from the read-only
-    weewx archive (ADR-013 §Out of scope).  Deferred to a future round.
-    This stub always returns 501 regardless of provider config or query params.
+    Path A (archive columns configured): queries the weewx archive for AQI data
+      and returns paginated AQIReading objects.
+    Path B (no archive columns): returns an empty data list and total=0.
+      This is the expected state for operators who only use the /aqi/current
+      provider-based path and have no AQI columns in their weewx archive.
+
+    Supports cursor-based and page-number pagination (mutually exclusive).
+    Units block populated from the cached units service (same as /aqi/current).
     """
-    return JSONResponse(
-        status_code=501,
-        content={
-            "type": "https://example.com/probs/not-implemented",
-            "title": "Not Implemented",
-            "status": 501,
-            "detail": (
-                "AQI history persistence is not yet implemented. "
-                "Tracked for a future release."
-            ),
-            "instance": "/aqi/history",
-        },
-        media_type="application/problem+json",
+    now_str = utc_isoformat(datetime.now(tz=UTC))
+
+    # Assemble units block (AQI fields are unit-system-invariant;
+    # block populated by the units service from weewx.conf at startup).
+    try:
+        units = get_units_block()
+    except RuntimeError:
+        logger.error(
+            "Units block not available at /aqi/history — "
+            "this should not happen after successful startup"
+        )
+        raise HTTPException(status_code=503, detail="Service starting")
+
+    readings, page_info = get_aqi_history(
+        db=db,
+        hist=_AQI_HISTORY_SETTINGS,
+        from_dt=params.from_,
+        to_dt=params.to,
+        limit=params.limit,
+        cursor=params.cursor,
+        page=params.page,
+    )
+
+    return AQIHistoryResponse(
+        data=readings,
+        units=units,
+        source="weewx",
+        generatedAt=now_str,
+        page=page_info,
     )

@@ -421,6 +421,54 @@ class AQISettings:
             )
 
 
+class AQIHistorySettings:
+    """[aqi.history] section settings (P4-T3, ADR-013 corrected).
+
+    Maps canonical AQI field names to weewx archive column names.
+    Empty string = field not available in this operator's archive.
+
+    Path A operators: populate columns matching their archive schema.
+    Path B operators: leave all fields empty (all-empty defaults); /aqi/history
+      returns an empty data list (not an error).
+
+    Column names come exclusively from this config object (trusted constants),
+    never from user input.  Bound into the service via wire_aqi_settings().
+    """
+
+    #: Archive column name for the composite AQI value.  Empty = not present.
+    column_aqi: str
+    #: Archive column name for the AQI category label.  Empty = not present.
+    column_aqi_category: str
+    #: Archive column name for the main pollutant label.  Empty = not present.
+    column_aqi_main_pollutant: str
+    #: Archive column name for the AQI location label.  Empty = not present.
+    column_aqi_location: str
+    #: Archive column name for PM2.5 concentration (µg/m³).  Empty = not present.
+    column_pm25: str
+    #: Archive column name for PM10 concentration (µg/m³).  Empty = not present.
+    column_pm10: str
+    #: Archive column name for O3 concentration (ppm).  Empty = not present.
+    column_o3: str
+    #: Archive column name for NO2 concentration (ppm).  Empty = not present.
+    column_no2: str
+    #: Archive column name for SO2 concentration (ppm).  Empty = not present.
+    column_so2: str
+    #: Archive column name for CO concentration (ppm).  Empty = not present.
+    column_co: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.column_aqi = str(section.get("column_aqi", "")).strip()
+        self.column_aqi_category = str(section.get("column_aqi_category", "")).strip()
+        self.column_aqi_main_pollutant = str(section.get("column_aqi_main_pollutant", "")).strip()
+        self.column_aqi_location = str(section.get("column_aqi_location", "")).strip()
+        self.column_pm25 = str(section.get("column_pm25", "")).strip()
+        self.column_pm10 = str(section.get("column_pm10", "")).strip()
+        self.column_o3 = str(section.get("column_o3", "")).strip()
+        self.column_no2 = str(section.get("column_no2", "")).strip()
+        self.column_so2 = str(section.get("column_so2", "")).strip()
+        self.column_co = str(section.get("column_co", "")).strip()
+
+
 class EarthquakesSettings:
     """[earthquakes] section settings (3b-13).
 
@@ -634,6 +682,7 @@ class Settings:
     pages: PagesSettings
     alerts: AlertsSettings
     aqi: AQISettings
+    aqi_history: AQIHistorySettings
     earthquakes: EarthquakesSettings
     radar: RadarSettings
     forecast: ForecastSettings
@@ -652,6 +701,7 @@ class Settings:
         pages: PagesSettings | None = None,
         alerts: AlertsSettings | None = None,
         aqi: AQISettings | None = None,
+        aqi_history: AQIHistorySettings | None = None,
         earthquakes: EarthquakesSettings | None = None,
         radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
@@ -668,6 +718,7 @@ class Settings:
         self.pages = pages if pages is not None else PagesSettings({})
         self.alerts = alerts if alerts is not None else AlertsSettings({})
         self.aqi = aqi if aqi is not None else AQISettings({})
+        self.aqi_history = aqi_history if aqi_history is not None else AQIHistorySettings({})
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
@@ -773,6 +824,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
+    aqi_history_cfg = AQIHistorySettings(dict(cfg.get("aqi.history", {})))
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
@@ -790,6 +842,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         pages=pages_cfg,
         alerts=alerts_cfg,
         aqi=aqi_cfg,
+        aqi_history=aqi_history_cfg,
         earthquakes=earthquakes_cfg,
         radar=radar_cfg,
         forecast=forecast_cfg,
