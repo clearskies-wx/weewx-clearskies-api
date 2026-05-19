@@ -1093,3 +1093,188 @@ class TestAqiCurrentOpenWeatherMapErrorPaths:
         assert "application/problem+json" in response.headers.get("content-type", ""), (
             "502 must return application/problem+json (RFC 9457)"
         )
+
+
+# ===========================================================================
+# 8. /aqi/history — Path A (archive columns configured + rows present)
+# ===========================================================================
+
+
+class TestAqiHistoryPathA:
+    """Path A: AQI columns configured in AQIHistorySettings + row in archive.
+
+    Tests the service function directly (get_aqi_history) rather than going
+    through HTTP so we can control the DB schema freely without touching the
+    shared in-memory SQLite fixture.  This exercises _build_column_map →
+    parameterized SQL query → row-to-AQIReading mapping (source="weewx").
+    """
+
+    def test_path_a_returns_one_reading_with_aqi_populated(self) -> None:
+        """Path A: one archive row with aqi column → one AQIReading, aqi field set."""
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        from sqlalchemy import Column, Float, Integer, MetaData, Table, create_engine  # noqa: PLC0415
+        from sqlalchemy.orm import Session  # noqa: PLC0415
+        from sqlalchemy.pool import StaticPool  # noqa: PLC0415
+
+        from weewx_clearskies_api.config.settings import AQIHistorySettings  # noqa: PLC0415
+        from weewx_clearskies_api.services.aqi_history import get_aqi_history  # noqa: PLC0415
+
+        # Build a private in-memory SQLite engine with an "aqi" column present.
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        meta = MetaData()
+        Table(
+            "archive",
+            meta,
+            Column("dateTime", Integer, primary_key=True),
+            Column("usUnits", Integer, nullable=False),
+            Column("interval", Integer, nullable=False),
+            Column("aqi", Float, nullable=True),
+        )
+        meta.create_all(engine)
+
+        # Insert one row with a known aqi value.
+        now_epoch = int(datetime.now(tz=UTC).timestamp())
+        one_hour_ago = now_epoch - 3600
+        with engine.begin() as conn:
+            conn.execute(
+                meta.tables["archive"].insert(),
+                {"dateTime": one_hour_ago, "usUnits": 1, "interval": 5, "aqi": 42.0},
+            )
+
+        # Wire AQIHistorySettings with column_aqi pointing to the "aqi" column.
+        hist = AQIHistorySettings({})
+        hist.column_aqi = "aqi"
+
+        # Use a time window that encompasses the inserted row.
+        from_dt = datetime.now(tz=UTC) - timedelta(hours=48)
+        to_dt = datetime.now(tz=UTC) + timedelta(hours=1)
+
+        with Session(engine) as db:
+            readings, page_info = get_aqi_history(
+                db=db,
+                hist=hist,
+                from_dt=from_dt,
+                to_dt=to_dt,
+                limit=50,
+                cursor=None,
+                page=None,
+            )
+
+        assert len(readings) == 1, (
+            f"Expected 1 AQIReading (Path A), got {len(readings)}"
+        )
+        reading = readings[0]
+        assert reading.aqi == 42.0, (
+            f"Expected aqi=42.0, got {reading.aqi!r}"
+        )
+        assert reading.source == "weewx", (
+            f"Expected source='weewx', got {reading.source!r}"
+        )
+        assert reading.observedAt.endswith("Z"), (
+            f"observedAt must be UTC Z format, got {reading.observedAt!r}"
+        )
+
+    def test_path_a_empty_time_window_returns_empty_list(self) -> None:
+        """Path A: AQI column configured but no rows in range → empty list (not error)."""
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        from sqlalchemy import Column, Float, Integer, MetaData, Table, create_engine  # noqa: PLC0415
+        from sqlalchemy.orm import Session  # noqa: PLC0415
+        from sqlalchemy.pool import StaticPool  # noqa: PLC0415
+
+        from weewx_clearskies_api.config.settings import AQIHistorySettings  # noqa: PLC0415
+        from weewx_clearskies_api.services.aqi_history import get_aqi_history  # noqa: PLC0415
+
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        meta = MetaData()
+        Table(
+            "archive",
+            meta,
+            Column("dateTime", Integer, primary_key=True),
+            Column("usUnits", Integer, nullable=False),
+            Column("interval", Integer, nullable=False),
+            Column("aqi", Float, nullable=True),
+        )
+        meta.create_all(engine)
+        # No rows inserted — table is empty.
+
+        hist = AQIHistorySettings({})
+        hist.column_aqi = "aqi"
+
+        # Time window in the distant future — no rows can match.
+        from_dt = datetime.now(tz=UTC) + timedelta(days=365)
+        to_dt = datetime.now(tz=UTC) + timedelta(days=366)
+
+        with Session(engine) as db:
+            readings, page_info = get_aqi_history(
+                db=db,
+                hist=hist,
+                from_dt=from_dt,
+                to_dt=to_dt,
+                limit=50,
+                cursor=None,
+                page=None,
+            )
+
+        assert readings == [], (
+            f"Expected empty list for out-of-range window (Path A), got {readings!r}"
+        )
+        assert page_info.totalRecords is None  # cursor mode, not page mode
+
+    def test_path_a_malformed_cursor_raises_400_at_endpoint(self) -> None:
+        """Malformed cursor on /aqi/history with Path A configured → 400.
+
+        Path B (no columns) returns 200 immediately without touching the cursor.
+        Path A reaches decode_cursor and raises ValueError, which the endpoint
+        catches and returns as 400.
+        """
+        import weewx_clearskies_api.endpoints.aqi as _aqi_endpoint  # noqa: PLC0415
+
+        from sqlalchemy import Column, Float, Integer, MetaData, Table, create_engine  # noqa: PLC0415
+        from sqlalchemy.pool import StaticPool  # noqa: PLC0415
+
+        from weewx_clearskies_api.config.settings import AQIHistorySettings  # noqa: PLC0415
+        from weewx_clearskies_api.db.session import wire_engine  # noqa: PLC0415
+
+        # Build a private SQLite engine with the "aqi" column.
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        meta = MetaData()
+        Table(
+            "archive",
+            meta,
+            Column("dateTime", Integer, primary_key=True),
+            Column("usUnits", Integer, nullable=False),
+            Column("interval", Integer, nullable=False),
+            Column("aqi", Float, nullable=True),
+        )
+        meta.create_all(engine)
+        wire_engine(engine)
+
+        # Wire Path A settings into the endpoint module.
+        hist = AQIHistorySettings({})
+        hist.column_aqi = "aqi"
+        _aqi_endpoint._AQI_HISTORY_SETTINGS = hist
+
+        app = _make_aqi_app(provider=None)
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/aqi/history?cursor=!!!notbase64!!!")
+
+        # Reset to Path B defaults after the test.
+        _aqi_endpoint._AQI_HISTORY_SETTINGS = AQIHistorySettings({})
+
+        assert response.status_code == 400, (
+            f"Malformed cursor (Path A) must return 400, got {response.status_code}: {response.text[:300]}"
+        )

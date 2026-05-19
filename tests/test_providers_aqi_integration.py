@@ -559,37 +559,59 @@ class TestIntegrationAqiErrorPropagation:
 
 
 # ===========================================================================
-# Integration: /aqi/history — 501 stub
+# Integration: /aqi/history — reads from weewx archive (P4-T3, ADR-013)
 # ===========================================================================
 
 
 class TestIntegrationAqiHistory:
-    """/api/v1/aqi/history always returns 501 (stub; LC21)."""
+    """/api/v1/aqi/history returns 200 AQIHistoryResponse (P4-T3, ADR-013 corrected).
 
-    def test_aqi_history_returns_501_with_no_provider(
+    No AQI columns are configured in the test environment, so the integration
+    stack exercises Path B: empty data list, source="weewx", total=0.
+    """
+
+    def test_aqi_history_returns_200_with_no_provider(
         self, integration_client_no_aqi: TestClient
     ) -> None:
-        """No AQI provider → /aqi/history still returns 501."""
+        """No AQI provider configured → /aqi/history returns 200 (archive-based, not provider-based)."""
         response = integration_client_no_aqi.get("/api/v1/aqi/history")
-        assert response.status_code == 501, (
-            f"Expected 501 from /aqi/history, got {response.status_code}"
+        assert response.status_code == 200, (
+            f"Expected 200 from /aqi/history, got {response.status_code}: {response.text[:300]}"
         )
 
-    def test_aqi_history_returns_501_with_openmeteo_provider(
+    def test_aqi_history_returns_200_with_openmeteo_provider(
         self, integration_client_openmeteo: TestClient
     ) -> None:
-        """Open-Meteo configured → /aqi/history still returns 501 (stub is unconditional)."""
+        """Open-Meteo configured → /aqi/history still returns 200 (archive-based; provider-independent)."""
         response = integration_client_openmeteo.get("/api/v1/aqi/history")
-        assert response.status_code == 501, (
-            f"Expected 501, got {response.status_code}"
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}: {response.text[:300]}"
         )
 
-    def test_aqi_history_content_type_is_problem_json(
+    def test_aqi_history_content_type_is_json(
         self, integration_client_no_aqi: TestClient
     ) -> None:
-        """/aqi/history 501 body is application/problem+json (RFC 9457, ADR-018)."""
+        """/aqi/history response content-type is application/json (not problem+json)."""
         response = integration_client_no_aqi.get("/api/v1/aqi/history")
-        assert "application/problem+json" in response.headers.get("content-type", "")
+        assert "application/json" in response.headers.get("content-type", ""), (
+            f"Expected application/json, got {response.headers.get('content-type')!r}"
+        )
+
+    def test_aqi_history_path_b_returns_expected_shape(
+        self, integration_client_no_aqi: TestClient
+    ) -> None:
+        """Path B (no archive columns configured) → correct AQIHistoryResponse shape."""
+        response = integration_client_no_aqi.get("/api/v1/aqi/history")
+        body = response.json()
+        # data is an empty list (no columns configured in test env)
+        assert body["data"] == [], (
+            f"Expected empty data list (Path B), got {body.get('data')!r}"
+        )
+        assert body["source"] == "weewx", (
+            f"Expected source='weewx', got {body.get('source')!r}"
+        )
+        assert "generatedAt" in body, "generatedAt must be present"
+        assert "page" in body, "page block must be present"
 
 
 # ===========================================================================

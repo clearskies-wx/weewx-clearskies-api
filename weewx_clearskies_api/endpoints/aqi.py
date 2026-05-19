@@ -108,9 +108,10 @@ def _get_aqi_params(request: Request) -> AQIQueryParams:
 def _get_aqi_history_params(request: Request) -> AQIHistoryQueryParams:
     """Extract and validate /aqi/history query parameters via Pydantic.
 
-    Params are validated (invalid → 422) before the 501 handler fires
-    (valid params → 501).  This ensures a coherent response: unknown keys
-    get 422, valid params get 501.
+    Params are validated (invalid → 422) before the weewx archive query
+    executes.  This ensures a coherent response: unknown keys get 422,
+    valid params proceed to the archive query (Path A) or return an empty
+    result (Path B — no AQI columns configured).
     """
     try:
         return AQIHistoryQueryParams.model_validate(dict(request.query_params))
@@ -380,15 +381,18 @@ def get_aqi_history_endpoint(
         )
         raise HTTPException(status_code=503, detail="Service starting")
 
-    readings, page_info = get_aqi_history(
-        db=db,
-        hist=_AQI_HISTORY_SETTINGS,
-        from_dt=params.from_,
-        to_dt=params.to,
-        limit=params.limit,
-        cursor=params.cursor,
-        page=params.page,
-    )
+    try:
+        readings, page_info = get_aqi_history(
+            db=db,
+            hist=_AQI_HISTORY_SETTINGS,
+            from_dt=params.from_,
+            to_dt=params.to,
+            limit=params.limit,
+            cursor=params.cursor,
+            page=params.page,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return AQIHistoryResponse(
         data=readings,
