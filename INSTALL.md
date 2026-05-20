@@ -90,6 +90,25 @@ Alternatively, the example is also available in the repository at `etc/api.conf.
 
 See [CONFIG.md](CONFIG.md) for a full description of every option.
 
+The API reads station metadata (location, latitude, longitude, altitude, timezone) from the weewx configuration file at startup. If weewx is installed on the same host, this works automatically. If the API runs on a separate host (e.g., a Docker deployment or a dedicated dashboard server), create a minimal `weewx.conf`:
+
+```bash
+sudo mkdir -p /etc/weewx
+sudo tee /etc/weewx/weewx.conf <<'EOF'
+[Station]
+    location = "My Weather Station"
+    latitude = 42.200
+    longitude = -72.400
+    altitude = 300, foot
+    station_type = Simulator
+    week_start = 6
+[StdConvert]
+    target_unit = US
+EOF
+```
+
+Replace the values with your station's actual coordinates and altitude. Set `[weewx] config_path` in `api.conf` if the file is not at the default `/etc/weewx/weewx.conf` path.
+
 ### 5. Create the secrets file
 
 Credentials must **not** go in `api.conf`. Place them in a mode-0600 file:
@@ -254,6 +273,7 @@ Read [CHANGELOG.md](CHANGELOG.md) before upgrading. It documents any manual step
 | `FATAL: config key ... looks like a secret` | A credential was placed in `api.conf` | Move it to `secrets.env` |
 | `/health/ready` returns `{"status": "degraded"}` | DB connection not yet established | Check DB credentials and connectivity |
 | API returns 401 | `WEEWX_CLEARSKIES_PROXY_SECRET` is set but the request didn't carry the header | Configure the reverse proxy to inject the header (see SECURITY.md) |
+| `FATAL: weewx.conf not found` at startup | weewx is not installed, or `config_path` is wrong | Create a stub `weewx.conf` with `[Station]` metadata (see step 4) or set `[weewx] config_path` in `api.conf` |
 | Skyfield ephemeris download fails | No internet access on first run | Pre-download `de421.bsp` and place it in `[almanac] ephemeris_directory` |
 
 Check the service logs for structured JSON entries:
