@@ -1,7 +1,8 @@
 """Setup endpoints (ADR-038 §secure channel).
 
 Six endpoints that let the config UI wizard pair with the API over TLS during
-initial setup.  All endpoints return 410 once setup_complete is True.
+initial setup.  After initial setup, endpoints accept re-runs authenticated via
+X-Clearskies-Proxy-Auth (the same shared secret used for normal API requests).
 
 Endpoints:
   POST /setup/handshake    — exchange trust token for a session_id
@@ -17,8 +18,10 @@ in app.py.  All endpoints live directly under /setup/...
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import logging
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -45,16 +48,63 @@ router = APIRouter(prefix="/setup", tags=["setup"])
 # ---------------------------------------------------------------------------
 
 
+def _check_proxy_auth(request: Request) -> bool:
+    """Return True if the request carries a valid X-Clearskies-Proxy-Auth header.
+
+    Mirrors ProxyAuthMiddleware logic exactly — constant-time comparison against
+    WEEWX_CLEARSKIES_PROXY_SECRET.  Returns False (not raises) when the secret
+    env var is unset so callers can decide how to handle that case.
+    """
+    secret = os.environ.get("WEEWX_CLEARSKIES_PROXY_SECRET", "").strip()
+    if not secret:
+        return False
+    provided = request.headers.get("X-Clearskies-Proxy-Auth", "")
+    # Both empty strings would hmac-match, but an empty secret means "not configured"
+    # which is already guarded above.  An absent header must not match a set secret.
+    if not provided:
+        return False
+    return hmac.compare_digest(secret.encode("utf-8"), provided.encode("utf-8"))
+
+
 async def require_setup_active(request: Request) -> TrustManager:
-    """Ensure setup is not yet complete. Returns TrustManager. Raises 410 if complete."""
+    """Gate access to setup endpoints.
+
+    - Setup NOT complete: passes through (trust session required by the individual
+      endpoint via require_setup_session).
+    - Setup IS complete: requires a valid X-Clearskies-Proxy-Auth header so that
+      re-configuration (e.g. credential rotation) remains possible without 410.
+      Raises 401 if the header is absent or wrong, 503 if the secret is not
+      configured (admin access not possible without it).
+    """
     tm: TrustManager = request.app.state.trust_manager
     if tm.setup_complete:
-        raise HTTPException(410, detail="Setup already complete")
+        secret_configured = bool(os.environ.get("WEEWX_CLEARSKIES_PROXY_SECRET", "").strip())
+        if not secret_configured:
+            raise HTTPException(
+                503,
+                detail="Setup complete; proxy secret not configured — admin re-run unavailable.",
+            )
+        if not _check_proxy_auth(request):
+            raise HTTPException(401, detail="Admin re-run requires valid X-Clearskies-Proxy-Auth")
     return tm
 
 
 async def require_setup_session(request: Request) -> TrustManager:
-    """Ensure valid setup session exists. Returns TrustManager. Raises 410 if complete, 401 if no/invalid session."""
+    """Ensure the caller is authorised to drive a setup step.
+
+    - Setup NOT complete: require Bearer setup-session token (issued by handshake).
+    - Setup IS complete: require valid X-Clearskies-Proxy-Auth header (same check
+      as require_setup_active — re-run case already passed that gate, but we
+      validate again here for defence-in-depth).
+    """
+    tm: TrustManager = request.app.state.trust_manager
+    if tm.setup_complete:
+        # require_setup_active already validated proxy auth; call it again to keep
+        # the dependency chain explicit and guard against direct endpoint calls.
+        await require_setup_active(request)
+        return tm
+
+    # Setup not yet complete — fall through to trust-session check.
     tm = await require_setup_active(request)
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
@@ -203,6 +253,18 @@ class ApplyResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Canonical provider name aliases.  The wizard (and other callers) may send
+# variant names; these are normalised before being written to api.conf so that
+# settings.py always sees the canonical form.
+_PROVIDER_ALIASES: dict[str, str] = {
+    "nws_alerts": "nws",
+}
+
+
+def _canonical_provider(name: str) -> str:
+    """Return the canonical provider name, resolving any known aliases."""
+    return _PROVIDER_ALIASES.get(name, name)
+
 
 def _build_temp_mysql_url(host: str, port: int, user: str, password: str, name: str) -> str:
     """Build a pymysql URL for a one-shot test connection.
@@ -245,7 +307,7 @@ def _provider_secrets(domain: str, pc: ProviderConfig) -> dict[str, str]:
     are not overwritten with empty strings.
     """
     secrets: dict[str, str] = {}
-    p = pc.provider.lower()
+    p = _canonical_provider(pc.provider.lower())
 
     if p == "aeris":
         # Provider-scoped: same key works for forecast / alerts / aqi / radar.
@@ -324,7 +386,7 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             section = domain.lower()
             if section not in cfg:
                 cfg[section] = {}
-            cfg[section]["provider"] = pc.provider
+            cfg[section]["provider"] = _canonical_provider(pc.provider)
 
             # NWS contact email/URL (non-secret; stored in api.conf per settings.py).
             # Valid for forecast and alerts domains.
@@ -624,8 +686,11 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         logger.error("Failed to write secrets.env during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write secrets file.") from exc
 
-    # 3. Mark setup complete — invalidates session and trust token.
-    tm.mark_setup_complete()
+    # 3. Mark setup complete — consumes trust token and invalidates session.
+    # Skip on re-run (setup already complete) to avoid redundant file writes and
+    # to preserve the proxy-auth-based session that authorised this re-run.
+    if not tm.setup_complete:
+        tm.mark_setup_complete()
 
     return ApplyResponse(
         success=True,

@@ -2,7 +2,8 @@
 
 Handles the one-time trust token used to pair the config UI with the API on
 first setup (ADR-038 §secure channel).  Token lives in secrets.env alongside
-other runtime secrets; it is consumed on successful pairing.
+other runtime secrets; it is consumed only when setup is fully committed via
+mark_setup_complete(), not at handshake time.
 
 Secrets file I/O is direct (not via env vars) because this module manages the
 first-start state before the process manager has had a chance to write the env.
@@ -57,10 +58,12 @@ class TrustManager:
       - Complete (SETUP_COMPLETE=1)     → no token, no session possible.
 
     Session lifecycle:
-      - create_session() validates the token (constant-time), consumes it, and
-        returns a new session_id (token_hex(32)).
+      - create_session() validates the token (constant-time) and returns a new
+        session_id (token_hex(32)).  The token is NOT consumed here — it survives
+        so that a partial or failed apply can be retried without a new token.
       - validate_session() checks session_id against the active session.
-      - mark_setup_complete() writes SETUP_COMPLETE=1, clears the session.
+      - mark_setup_complete() consumes the token (removes from secrets.env),
+        writes SETUP_COMPLETE=1, and clears the session.
     """
 
     def __init__(self, secrets_path: Path) -> None:
@@ -99,7 +102,11 @@ class TrustManager:
     def create_session(self, token: str) -> str | None:
         """Validate the trust token and open a setup session.
 
-        Consumes the token on success (removes from secrets.env) to prevent replay.
+        The token is NOT consumed here — it survives across multiple handshake
+        attempts so that a failed apply does not lock the operator out.  The
+        token is consumed only when setup is fully committed via
+        mark_setup_complete().
+
         Returns a new session_id, or None if the token is invalid or setup is done.
         """
         if self._setup_complete or self._token is None:
@@ -110,15 +117,9 @@ class TrustManager:
             logger.warning("Setup trust token validation failed (incorrect token).")
             return None
 
-        # Consume the token — write it out of secrets.env immediately.
-        env = _read_secrets_env(self._secrets_path)
-        env.pop(_TOKEN_KEY, None)
-        _write_secrets_env(self._secrets_path, env)
-        self._token = None
-
         session_id = secrets.token_hex(32)
         self._session_id = session_id
-        logger.info("Trust token consumed; setup session opened.")
+        logger.info("Trust token validated; setup session opened (token still live).")
         return session_id
 
     def validate_session(self, session_id: str) -> bool:
@@ -136,12 +137,16 @@ class TrustManager:
         self._session_data[key] = value
 
     def mark_setup_complete(self) -> None:
-        """Mark setup complete, persist the flag, and invalidate the session."""
+        """Mark setup complete, persist the flag, and invalidate the token and session.
+
+        This is the single point where the trust token is consumed — removing it
+        from secrets.env so it cannot be reused after a successful apply.
+        """
         env = _read_secrets_env(self._secrets_path)
-        env.pop(_TOKEN_KEY, None)
+        env.pop(_TOKEN_KEY, None)   # consume the trust token now that setup is done
         env[_COMPLETE_KEY] = "1"
         _write_secrets_env(self._secrets_path, env)
         self._session_id = None
         self._token = None
         self._setup_complete = True
-        logger.info("Setup marked complete; trust token and session cleared.")
+        logger.info("Setup marked complete; trust token consumed and session cleared.")
