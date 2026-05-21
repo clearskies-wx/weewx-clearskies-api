@@ -52,6 +52,7 @@ from weewx_clearskies_api.endpoints.pages import router as pages_router
 from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
+from weewx_clearskies_api.endpoints.setup import router as setup_router
 from weewx_clearskies_api.endpoints.station import router as station_router
 from weewx_clearskies_api.errors import register_error_handlers
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
@@ -118,6 +119,9 @@ def create_app(settings: Settings) -> FastAPI:
     # 3b-14 new routers.
     app.include_router(radar_router, prefix="/api/v1")
 
+    # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
+    app.include_router(setup_router)
+
     # ---------------------------------------------------------------------------
     # Middleware registration order.
     #
@@ -148,7 +152,7 @@ def create_app(settings: Settings) -> FastAPI:
             CORSMiddleware,
             allow_origins=cors_origins,
             allow_credentials=False,  # API has no cookies/credentials per ADR-008.
-            allow_methods=["GET", "HEAD", "OPTIONS"],
+            allow_methods=["GET", "HEAD", "OPTIONS", "POST"],
             allow_headers=["*"],
         )
     else:
@@ -158,7 +162,7 @@ def create_app(settings: Settings) -> FastAPI:
             CORSMiddleware,
             allow_origins=[],
             allow_credentials=False,
-            allow_methods=["GET", "HEAD", "OPTIONS"],
+            allow_methods=["GET", "HEAD", "OPTIONS", "POST"],
             allow_headers=["*"],
         )
 

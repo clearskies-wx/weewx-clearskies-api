@@ -38,6 +38,10 @@ dependencies = [
     # defusedxml is a pure-Python MIT-licensed replacement that disables these
     # attack vectors. Lead call 1 in 3b-14 brief.
     "defusedxml==0.7.1",
+    # ADR-038: TLS by default for all connections. cryptography provides
+    # Ed25519 key generation and X.509 self-signed cert creation for first-start
+    # auto-TLS (operator can supply their own cert via --tls-cert / --tls-key).
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]

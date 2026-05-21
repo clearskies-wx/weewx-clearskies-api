@@ -47,6 +47,7 @@ Startup sequence (ADR-012):
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import ipaddress
 import logging
@@ -55,11 +56,15 @@ import socket
 import sys
 import threading
 import time
+from pathlib import Path
 
 import uvicorn
+from fastapi import FastAPI
 
 from weewx_clearskies_api.app import create_app
-from weewx_clearskies_api.config.settings import Settings, load_settings
+from weewx_clearskies_api.config.settings import Settings, find_config_file, load_settings
+from weewx_clearskies_api.tls import compute_fingerprint, ensure_tls_cert
+from weewx_clearskies_api.trust import TrustManager
 from weewx_clearskies_api.db.engine import build_engine
 from weewx_clearskies_api.db.health import wire_db_health_probe
 from weewx_clearskies_api.db.probe import run_write_probe
@@ -92,6 +97,13 @@ from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_we
 logger = logging.getLogger(__name__)
 
 _LOOPBACK_PREFIXES = ("127.", "::1", "localhost")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Clear Skies Weather API")
+    parser.add_argument("--tls-cert", type=Path, help="Path to TLS certificate (PEM)")
+    parser.add_argument("--tls-key", type=Path, help="Path to TLS private key (PEM)")
+    return parser.parse_args()
 
 
 def _is_loopback(host: str) -> bool:
@@ -144,15 +156,23 @@ def _resolve_bind_addresses(host: str, port: int) -> list[tuple[str, int]]:
     return results
 
 
-def _run_server(settings: Settings) -> None:
+def _run_server(
+    settings: Settings,
+    cert_path: Path,
+    key_path: Path,
+    app: FastAPI,
+) -> None:
     """Start the public API and health servers.
 
     Public API: one uvicorn Server per resolved (family, addr) from [api] bind_host.
     Health API: one uvicorn Server per resolved (family, addr) from [health] bind_host.
 
     Both run concurrently via asyncio.gather in the main thread.
+    TLS is applied to every uvicorn Config via ssl_certfile / ssl_keyfile (ADR-038).
+
+    app is passed in (rather than created here) so main() can attach state to it
+    before the server starts.
     """
-    app = create_app(settings)
     health_app = create_health_app()
 
     api_addresses = _resolve_bind_addresses(settings.api.bind_host, settings.api.bind_port)
@@ -179,14 +199,32 @@ def _run_server(settings: Settings) -> None:
             t.start()
 
     log_level = settings.logging.level.lower()
+    cert_str = str(cert_path)
+    key_str = str(key_path)
 
-    # Build uvicorn configs for each bind address.
+    # Build uvicorn configs for each bind address — TLS on every listener (ADR-038).
     api_configs = [
-        uvicorn.Config(app, host=addr, port=port, log_level=log_level, access_log=False)
+        uvicorn.Config(
+            app,
+            host=addr,
+            port=port,
+            log_level=log_level,
+            access_log=False,
+            ssl_certfile=cert_str,
+            ssl_keyfile=key_str,
+        )
         for addr, port in api_addresses
     ]
     health_configs = [
-        uvicorn.Config(health_app, host=addr, port=port, log_level=log_level, access_log=False)
+        uvicorn.Config(
+            health_app,
+            host=addr,
+            port=port,
+            log_level=log_level,
+            access_log=False,
+            ssl_certfile=cert_str,
+            ssl_keyfile=key_str,
+        )
         for addr, port in health_addresses
     ]
 
@@ -205,6 +243,24 @@ def _run_server(settings: Settings) -> None:
         await asyncio.gather(*[server.serve() for server in servers])
 
     asyncio.run(_serve_all())
+
+
+def _format_address_for_url(host: str, port: int) -> str:
+    """Return ``https://<host>:<port>`` with IPv6 literals in brackets.
+
+    When host is a wildcard (``::`` or ``0.0.0.0``), substitutes ``localhost``
+    so the operator gets a usable address to paste into a browser.
+    """
+    if host in ("::", "0.0.0.0"):
+        host = "localhost"
+    # Wrap raw IPv6 literals in brackets per coding.md §1 / RFC 3986.
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.version == 6:
+            host = f"[{host}]"
+    except ValueError:
+        pass  # hostname — no brackets needed
+    return f"https://{host}:{port}"
 
 
 def _wire_providers_from_config(settings: Settings) -> None:
@@ -334,10 +390,18 @@ def _wire_providers_from_config(settings: Settings) -> None:
 def main() -> None:
     """Main entry point.
 
-    Startup sequence (ADR-012):
+    Startup sequence (ADR-012, extended for ADR-038 TLS):
+      0. Parse CLI args (--tls-cert, --tls-key).
       1. Bootstrap logging (INFO) so config-load errors are JSON.
       2. Load + validate settings from api.conf.
+      2a. Apply CLI TLS overrides to settings.tls.
       3. Re-configure logging at the operator's log level.
+      3a. Determine config_dir from the loaded config file path.
+      3b. Ensure TLS cert exists (auto-generate if absent) — ADR-038.
+      3c. Compute cert fingerprint for the operator banner.
+      3d. Init TrustManager — generates/reads setup token from secrets.env.
+      3e. Attach trust_manager to app.state for setup endpoints (Round 2).
+      3f. Print operator startup banner.
       4. Build the SQLAlchemy engine.
       5. Run the write-probe — exits 1 if DB user has write privileges.
       6. Run schema reflection — logs unmapped columns; does NOT exit.
@@ -348,8 +412,11 @@ def main() -> None:
       6m. Wire forecast settings.
       6o. Wire radar settings (keyed provider credentials — 3b-15; no-op for keyless).
       7. Register DB health probe.
-      8. Start uvicorn.
+      8. Start uvicorn (TLS-enabled).
     """
+    # Step 0: Parse CLI args before logging so --help works cleanly.
+    args = _parse_args()
+
     # Step 1: Bootstrap logging before anything else so config errors appear
     # as JSON (ADR-029).
     setup_logging("INFO")
@@ -357,8 +424,60 @@ def main() -> None:
     # Step 2: Load and validate settings.
     settings = load_settings()
 
+    # Step 2a: CLI flags override [tls] section values.
+    if args.tls_cert is not None:
+        settings.tls.cert_path = str(args.tls_cert)
+    if args.tls_key is not None:
+        settings.tls.key_path = str(args.tls_key)
+
     # Step 3: Reconfigure logging at the operator's level.
     setup_logging(settings.logging.level)
+
+    # Step 3a: Determine config_dir from the resolved config file path.
+    # find_config_file() follows the same ADR-027 search order as load_settings().
+    # We call it here (after load_settings succeeded) so config_dir is always valid.
+    _config_file = find_config_file()
+    config_dir = _config_file.parent if _config_file is not None else Path("/etc/weewx-clearskies")
+
+    # Step 3b: Ensure TLS cert (auto-generate if operator hasn't supplied one).
+    cli_cert = Path(settings.tls.cert_path) if settings.tls.cert_path else None
+    cli_key = Path(settings.tls.key_path) if settings.tls.key_path else None
+    try:
+        cert_path, key_path = ensure_tls_cert(config_dir, cli_cert, cli_key)
+    except FileNotFoundError as exc:
+        logger.critical(
+            "FATAL: TLS cert/key not found — clearskies-api cannot start. Cause: %s. "
+            "Check --tls-cert / --tls-key paths or [tls] cert_path / key_path in api.conf.",
+            exc,
+        )
+        sys.exit(1)
+
+    # Step 3c: Compute fingerprint for the operator banner.
+    fingerprint = compute_fingerprint(cert_path)
+
+    # Step 3d: Init TrustManager (reads/generates setup token from secrets.env).
+    secrets_path = config_dir / "secrets.env"
+    trust_manager = TrustManager(secrets_path=secrets_path)
+
+    # Step 3e: Attach trust_manager, settings, and config_dir to the app for
+    # setup endpoints (Round 2).
+    app = create_app(settings)
+    app.state.trust_manager = trust_manager
+    app.state.settings = settings
+    app.state.config_dir = config_dir
+
+    # Step 3f: Print operator startup banner.
+    address_url = _format_address_for_url(settings.api.bind_host, settings.api.bind_port)
+
+    if trust_manager.setup_complete:
+        print(f"API ready at {address_url}")
+    else:
+        print(
+            f"API ready. To connect your config UI:\n"
+            f"  Address:     {address_url}\n"
+            f"  Trust token: {trust_manager.token}\n"
+            f"  Fingerprint: {fingerprint}"
+        )
 
     # Step 4: Build the SQLAlchemy engine.
     engine = build_engine(settings.database)
@@ -490,8 +609,8 @@ def main() -> None:
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()
 
-    # Step 8: Start servers.
-    _run_server(settings)
+    # Step 8: Start servers (TLS-enabled via cert_path / key_path from step 3b).
+    _run_server(settings, cert_path=cert_path, key_path=key_path, app=app)
 
 
 if __name__ == "__main__":

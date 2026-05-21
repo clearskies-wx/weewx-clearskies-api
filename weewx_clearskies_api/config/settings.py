@@ -666,6 +666,38 @@ class ForecastSettings:
             )
 
 
+class TlsSettings:
+    """[tls] section settings (ADR-038).
+
+    Paths to operator-supplied TLS cert and key PEM files.  Both must be set
+    together or not at all (validated in validate()).  When absent, the API
+    auto-generates a self-signed Ed25519 cert in config_dir at startup.
+
+    Paths may also be overridden at startup via --tls-cert / --tls-key CLI flags;
+    those override these settings values in main() before any file I/O happens.
+    """
+
+    #: Path to operator-supplied TLS certificate (PEM).  Empty = auto-generate.
+    cert_path: str
+    #: Path to operator-supplied TLS private key (PEM).  Empty = auto-generate.
+    key_path: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.cert_path = str(section.get("cert_path", "")).strip()
+        self.key_path = str(section.get("key_path", "")).strip()
+
+    def validate(self) -> None:
+        """Raise ValueError if exactly one of cert_path / key_path is set."""
+        has_cert = bool(self.cert_path)
+        has_key = bool(self.key_path)
+        if has_cert != has_key:
+            raise ValueError(
+                "[tls] cert_path and key_path must both be set or both be absent. "
+                "Supply both paths for operator-managed TLS, or omit both to "
+                "use auto-generated self-signed certificates."
+            )
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -685,6 +717,7 @@ class Settings:
     earthquakes: EarthquakesSettings
     radar: RadarSettings
     forecast: ForecastSettings
+    tls: TlsSettings
 
     def __init__(
         self,
@@ -704,6 +737,7 @@ class Settings:
         earthquakes: EarthquakesSettings | None = None,
         radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
+        tls: TlsSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
@@ -721,6 +755,7 @@ class Settings:
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
+        self.tls = tls if tls is not None else TlsSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -733,6 +768,7 @@ class Settings:
         self.earthquakes.validate()
         self.radar.validate()
         self.forecast.validate()
+        self.tls.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +776,7 @@ class Settings:
 # ---------------------------------------------------------------------------
 
 
-def _find_config_file() -> Path | None:
+def find_config_file() -> Path | None:
     """Return the first config file that exists, following ADR-027 search order."""
     env_path = os.environ.get("CLEARSKIES_CONFIG", "").strip()
     if env_path:
@@ -749,6 +785,10 @@ def _find_config_file() -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+# Keep the private alias for backwards-compat with any internal callers.
+_find_config_file = find_config_file
 
 
 def _check_for_secrets_in_conf(cfg: configobj.ConfigObj) -> None:
@@ -827,6 +867,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
+    tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -845,6 +886,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         earthquakes=earthquakes_cfg,
         radar=radar_cfg,
         forecast=forecast_cfg,
+        tls=tls_cfg,
     )
     settings.validate()
 
