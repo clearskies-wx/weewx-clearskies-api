@@ -250,6 +250,45 @@ class ApplyResponse(BaseModel):
     message: str
 
 
+class CurrentConfigDatabaseSection(BaseModel):
+    host: str
+    port: int
+    user: str
+    password: str
+    name: str
+
+
+class CurrentConfigProviderCredentials(BaseModel):
+    """Credential fields for a single provider (all fields optional)."""
+
+    client_id: str | None = None       # Aeris: AERIS_CLIENT_ID
+    client_secret: str | None = None   # Aeris: AERIS_CLIENT_SECRET
+    appid: str | None = None           # OpenWeatherMap: OPENWEATHERMAP_APPID
+    api_key: str | None = None         # Wunderground: WUNDERGROUND_API_KEY
+    pws_station_id: str | None = None  # Wunderground: WUNDERGROUND_PWS_STATION_ID
+    key: str | None = None             # IQAir: IQAIR_KEY
+
+
+class CurrentConfigProviderSection(BaseModel):
+    provider: str
+    credentials: CurrentConfigProviderCredentials
+
+
+class CurrentConfigStationSection(BaseModel):
+    name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    altitude_meters: float | None = None
+    altitude_unit: str = "meter"
+    timezone: str | None = None
+
+
+class CurrentConfigResponse(BaseModel):
+    database: CurrentConfigDatabaseSection
+    providers: dict[str, CurrentConfigProviderSection]
+    station: CurrentConfigStationSection
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -372,6 +411,16 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
         cfg["station"] = {}
     if st.timezone:
         cfg["station"]["timezone"] = st.timezone
+    # Also persist the other station identity fields so /setup/current-config can
+    # return them on re-run without having to parse weewx.conf again.
+    if st.name:
+        cfg["station"]["name"] = st.name
+    if st.latitude is not None:
+        cfg["station"]["latitude"] = str(st.latitude)
+    if st.longitude is not None:
+        cfg["station"]["longitude"] = str(st.longitude)
+    if st.altitude_meters is not None:
+        cfg["station"]["altitude_meters"] = str(st.altitude_meters)
 
     # [column_mapping] — operator-supplied canonical → archive column pairs.
     if apply.column_mapping:
@@ -708,4 +757,134 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
     return ApplyResponse(
         success=True,
         message="Configuration saved. Restart the API to apply.",
+    )
+
+
+@router.get("/current-config", response_model=CurrentConfigResponse)
+async def current_config(request: Request) -> CurrentConfigResponse:
+    """Return the full current configuration including secrets.
+
+    Requires proxy auth (X-Clearskies-Proxy-Auth header).  Called by the config
+    UI wizard in re-run mode to pre-populate all fields so the operator does not
+    have to re-enter every password and API key.
+
+    Secrets are read from secrets.env (already written by a prior /setup/apply
+    call).  Non-secret fields come from api.conf.  The response includes the DB
+    password, provider API keys, and the DB username — everything the wizard
+    needs to populate its state without user re-entry.
+    """
+    # require_setup_active enforces proxy auth when setup is complete, which is
+    # the only case this endpoint is reachable (setup must have been done to have
+    # a proxy secret in the first place).
+    await require_setup_active(request)
+
+    config_dir: Path = request.app.state.config_dir
+    secrets_path = config_dir / "secrets.env"
+    secrets = _read_secrets_env(secrets_path)
+
+    # --- Database ---
+    db_host = "localhost"
+    db_port = 3306
+    db_user = ""
+    db_name = "weewx"
+
+    conf_path = config_dir / "api.conf"
+    api_cfg: configobj.ConfigObj | None = None
+    if conf_path.exists():
+        try:
+            api_cfg = configobj.ConfigObj(str(conf_path), interpolation=False)
+        except Exception:  # noqa: BLE001
+            api_cfg = None
+
+    if api_cfg is not None:
+        db_section = api_cfg.get("database", {})
+        if isinstance(db_section, dict):
+            if db_section.get("host"):
+                db_host = str(db_section["host"])
+            if db_section.get("port"):
+                try:
+                    db_port = int(db_section["port"])
+                except (ValueError, TypeError):
+                    pass
+            if db_section.get("name"):
+                db_name = str(db_section["name"])
+
+    # DB user and password come from secrets.env (the authoritative source for
+    # credentials; api.conf only stores the non-secret DB fields).
+    db_user = secrets.get("WEEWX_CLEARSKIES_DB_USER", db_user)
+    db_password = secrets.get("WEEWX_CLEARSKIES_DB_PASSWORD", "")
+
+    database = CurrentConfigDatabaseSection(
+        host=db_host,
+        port=db_port,
+        user=db_user,
+        password=db_password,
+        name=db_name,
+    )
+
+    # --- Providers ---
+    # Non-secret fields (provider id) come from api.conf.
+    # Credentials come from secrets.env using the provider-scoped naming that
+    # _provider_secrets() wrote at apply time.
+    _PROVIDER_DOMAINS = ("forecast", "aqi", "alerts", "radar", "earthquakes")
+    providers: dict[str, CurrentConfigProviderSection] = {}
+    for domain in _PROVIDER_DOMAINS:
+        domain_section = {}
+        if api_cfg is not None:
+            raw = api_cfg.get(domain, {})
+            if isinstance(raw, dict):
+                domain_section = raw
+        provider_id = str(domain_section.get("provider", "")).strip()
+        if not provider_id:
+            continue
+        p = _canonical_provider(provider_id.lower())
+        creds = CurrentConfigProviderCredentials()
+        if p == "aeris":
+            creds.client_id = secrets.get("WEEWX_CLEARSKIES_AERIS_CLIENT_ID") or None
+            creds.client_secret = secrets.get("WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET") or None
+        elif p == "openweathermap":
+            creds.appid = secrets.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID") or None
+        elif p == "wunderground":
+            creds.api_key = secrets.get("WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY") or None
+            creds.pws_station_id = secrets.get("WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID") or None
+        elif p == "iqair":
+            creds.key = secrets.get("WEEWX_CLEARSKIES_IQAIR_KEY") or None
+        # Keyless providers (nws, openmeteo, rainviewer, etc.) have no credential fields.
+        providers[domain] = CurrentConfigProviderSection(
+            provider=provider_id,
+            credentials=creds,
+        )
+
+    # --- Station ---
+    station = CurrentConfigStationSection()
+    if api_cfg is not None:
+        st_section = api_cfg.get("station", {})
+        if isinstance(st_section, dict):
+            if st_section.get("timezone"):
+                station.timezone = str(st_section["timezone"])
+        # Station name, lat, lon, altitude come from [station] in api.conf if
+        # the apply call persisted them there.  For installs where these live only
+        # in weewx.conf and were never explicitly stored in api.conf, the wizard
+        # will fall back to the existing /setup/station endpoint.
+        if isinstance(st_section, dict):
+            if st_section.get("name"):
+                station.name = str(st_section["name"])
+            for float_key, attr in (
+                ("latitude", "latitude"),
+                ("longitude", "longitude"),
+                ("altitude_meters", "altitude_meters"),
+            ):
+                raw_val = st_section.get(float_key)
+                if raw_val:
+                    try:
+                        setattr(station, attr, float(str(raw_val)))
+                    except (ValueError, TypeError):
+                        pass
+            if st_section.get("altitude_unit"):
+                station.altitude_unit = str(st_section["altitude_unit"])
+
+    return CurrentConfigResponse(
+        database=database,
+        providers=providers,
+        station=station,
     )
