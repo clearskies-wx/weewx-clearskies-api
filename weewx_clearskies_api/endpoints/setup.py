@@ -172,6 +172,7 @@ class StationResponse(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     altitude_meters: float | None = None
+    altitude_unit: str = "meter"  # "foot" or "meter" — matches weewx.conf unit string
     station_type: str | None = None
 
 
@@ -622,6 +623,7 @@ async def station(request: Request) -> StationResponse:
             pass
 
     altitude_meters: float | None = None
+    altitude_unit: str = "meter"
     raw_altitude_val = station_section.get("altitude", "")
     if isinstance(raw_altitude_val, list):
         raw_altitude = ", ".join(str(x) for x in raw_altitude_val)
@@ -630,6 +632,16 @@ async def station(request: Request) -> StationResponse:
     if raw_altitude:
         try:
             altitude_meters = _parse_altitude(raw_altitude)
+            # _parse_altitude returns the raw numeric value unchanged; parse the
+            # unit string from the same field so the wizard can display and
+            # convert correctly (weewx.conf: "altitude = 700, foot" or "200, meter").
+            parts = raw_altitude.split(",", 1)
+            if len(parts) == 2:
+                unit_str = parts[1].strip().lower()
+                if "foot" in unit_str or "feet" in unit_str or unit_str == "ft":
+                    altitude_unit = "foot"
+                else:
+                    altitude_unit = "meter"
         except Exception:  # noqa: BLE001
             pass
 
@@ -640,6 +652,7 @@ async def station(request: Request) -> StationResponse:
         latitude=latitude,
         longitude=longitude,
         altitude_meters=altitude_meters,
+        altitude_unit=altitude_unit,
         station_type=station_type,
     )
 
