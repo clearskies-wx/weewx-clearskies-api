@@ -64,6 +64,7 @@ class StationInfo:
     timezone_offset_minutes: int
     unit_system: str
     hardware: str | None
+    default_locale: str
 
     def __init__(
         self,
@@ -76,6 +77,7 @@ class StationInfo:
         timezone_offset_minutes: int,
         unit_system: str,
         hardware: str | None,
+        default_locale: str = "en",
     ) -> None:
         self.station_id = station_id
         self.name = name
@@ -86,6 +88,7 @@ class StationInfo:
         self.timezone_offset_minutes = timezone_offset_minutes
         self.unit_system = unit_system
         self.hardware = hardware
+        self.default_locale = default_locale
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +244,7 @@ def load_station_metadata(
     api_station_id: str | None,
     api_timezone: str | None,
     unit_system: str,
+    api_default_locale: str = "en",
 ) -> StationInfo:
     """Load and cache station metadata from the parsed weewx.conf ConfigObj.
 
@@ -252,6 +256,8 @@ def load_station_metadata(
         api_station_id: Optional operator override from api.conf [station] station_id.
         api_timezone: Optional operator override from api.conf [station] timezone.
         unit_system: The resolved target_unit string from services.units.
+        api_default_locale: Operator-configured default locale (ADR-021).
+            Defaults to "en". Sourced from settings.station.default_locale.
 
     Returns:
         StationInfo with all fields populated except firstRecord / lastRecord
@@ -356,6 +362,7 @@ def load_station_metadata(
         timezone_offset_minutes=tz_offset,
         unit_system=unit_system,
         hardware=hardware,
+        default_locale=api_default_locale,
     )
 
     logger.info(

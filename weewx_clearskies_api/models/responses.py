@@ -393,6 +393,7 @@ class StationMetadata(BaseModel):
     firstRecord: str | None = None
     lastRecord: str | None = None
     hardware: str | None = None
+    defaultLocale: str = "en"
 
 
 class StationResponse(BaseModel):

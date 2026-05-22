@@ -535,6 +535,7 @@ def main() -> None:
             api_station_id=settings.station.station_id,
             api_timezone=settings.station.timezone,
             unit_system=get_target_unit(),
+            api_default_locale=settings.station.default_locale,
         )
     except StationConfigError as exc:
         logger.critical("%s", exc)

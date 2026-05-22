@@ -20,6 +20,7 @@ from weewx_clearskies_api.config.settings import (
     HealthSettings,
     LoggingSettings,
     RateLimitSettings,
+    StationSettings,
     load_settings,
 )
 
@@ -188,3 +189,67 @@ class TestAQISettingsIQAir:
         for provider in ("openmeteo", "aeris", "openweathermap", "iqair"):
             settings = AQISettings({"provider": provider})
             settings.validate()  # Must not raise for any of the four
+
+
+class TestStationSettingsDefaultLocale:
+    """StationSettings.default_locale — ADR-021 validation tests."""
+
+    def setup_method(self) -> None:
+        """Clear env var before each test to avoid interference."""
+        os.environ.pop("CLEARSKIES_DEFAULT_LOCALE", None)
+
+    def teardown_method(self) -> None:
+        """Clean up env var after each test."""
+        os.environ.pop("CLEARSKIES_DEFAULT_LOCALE", None)
+
+    def test_default_locale_is_en_when_not_configured(self) -> None:
+        """StationSettings defaults to default_locale='en' when not set in INI."""
+        s = StationSettings({})
+        assert s.default_locale == "en", (
+            f"Expected default_locale='en', got {s.default_locale!r}"
+        )
+
+    def test_default_locale_en_validates_without_error(self) -> None:
+        """StationSettings default 'en' locale passes validate()."""
+        s = StationSettings({})
+        s.validate()  # Must not raise
+
+    def test_all_13_supported_locales_validate(self) -> None:
+        """All 13 ADR-021 locales pass validate() without error."""
+        supported = [
+            "en", "de", "es", "fil", "fr", "it", "ja",
+            "nl", "pt-PT", "pt-BR", "ru", "zh-CN", "zh-TW",
+        ]
+        for locale in supported:
+            s = StationSettings({"default_locale": locale})
+            s.validate()  # Must not raise for any supported locale
+
+    def test_invalid_locale_raises_value_error(self) -> None:
+        """StationSettings with an unsupported locale raises ValueError on validate()."""
+        s = StationSettings({"default_locale": "xx"})
+        with pytest.raises(ValueError, match="default_locale"):
+            s.validate()
+
+    def test_env_var_overrides_ini_value(self) -> None:
+        """CLEARSKIES_DEFAULT_LOCALE env var wins over the INI default_locale value."""
+        os.environ["CLEARSKIES_DEFAULT_LOCALE"] = "de"
+        s = StationSettings({"default_locale": "fr"})
+        assert s.default_locale == "de", (
+            f"Env var must win over INI; expected 'de', got {s.default_locale!r}"
+        )
+
+    def test_env_var_empty_string_falls_back_to_ini(self) -> None:
+        """An empty CLEARSKIES_DEFAULT_LOCALE env var falls back to the INI value."""
+        os.environ["CLEARSKIES_DEFAULT_LOCALE"] = ""
+        s = StationSettings({"default_locale": "fr"})
+        assert s.default_locale == "fr", (
+            f"Empty env var must fall back to INI; expected 'fr', got {s.default_locale!r}"
+        )
+
+    def test_env_var_strips_whitespace(self) -> None:
+        """CLEARSKIES_DEFAULT_LOCALE strips surrounding whitespace."""
+        os.environ["CLEARSKIES_DEFAULT_LOCALE"] = "  ja  "
+        s = StationSettings({})
+        assert s.default_locale == "ja", (
+            f"Env var whitespace must be stripped; expected 'ja', got {s.default_locale!r}"
+        )

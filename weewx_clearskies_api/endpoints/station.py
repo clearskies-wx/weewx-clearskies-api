@@ -102,6 +102,7 @@ def get_station(
         firstRecord=first_record,
         lastRecord=last_record,
         hardware=info.hardware,
+        defaultLocale=info.default_locale,
     )
 
     return StationResponse(

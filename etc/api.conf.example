@@ -102,6 +102,14 @@ path = /var/lib/weewx/weewx.sdb
 # Free-form region below — the configuration UI does not touch this.
 
 
+[station]
+# Default locale for the dashboard. The dashboard uses this as the initial
+# language, with browser preference as a fallback.
+# Supported: en, de, es, fil, fr, it, ja, nl, pt-PT, pt-BR, ru, zh-CN, zh-TW
+# Override with CLEARSKIES_DEFAULT_LOCALE env var (ADR-021).
+# default_locale = en
+
+
 [weewx]
 # Path to weewx.conf. The API reads station metadata (location, lat/lon,
 # altitude, timezone) from this file at startup. Change only when running

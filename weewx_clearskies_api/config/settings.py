@@ -245,16 +245,24 @@ class WeewxSettings:
 
 
 class StationSettings:
-    """[station] section settings (3a-2).
+    """[station] section settings (3a-2; default_locale added ADR-021).
 
     Optional overrides for station identity.  Absent → clearskies-api derives
     from weewx.conf [Station].
     """
 
+    #: Supported locale codes for the dashboard (ADR-021).
+    SUPPORTED_LOCALES: frozenset[str] = frozenset({
+        "en", "de", "es", "fil", "fr", "it", "ja",
+        "nl", "pt-PT", "pt-BR", "ru", "zh-CN", "zh-TW",
+    })
+
     #: Optional station_id override.  Absent → slug of weewx.conf location.
     station_id: str | None
     #: Optional IANA TZ override (api.conf is highest priority per ADR-020).
     timezone: str | None
+    #: Default locale for the dashboard (ADR-021). Env var wins over INI.
+    default_locale: str
     #: Comma-separated slugs (or INI list) of built-in pages to hide.
     hidden_pages: list[str]
 
@@ -265,10 +273,25 @@ class StationSettings:
         raw_tz = str(section.get("timezone", "")).strip()
         self.timezone = raw_tz if raw_tz else None
 
+        # ADR-021: env var wins over INI value; default "en".
+        env_locale = os.environ.get("CLEARSKIES_DEFAULT_LOCALE", "").strip()
+        if env_locale:
+            self.default_locale = env_locale
+        else:
+            self.default_locale = str(section.get("default_locale", "en"))
+
         raw_hidden = section.get("hidden", [])
         if isinstance(raw_hidden, str):
             raw_hidden = [s.strip() for s in raw_hidden.split(",") if s.strip()]
         self.hidden_pages = list(raw_hidden)
+
+    def validate(self) -> None:
+        """Raise ValueError if default_locale is not in the supported set (ADR-021)."""
+        if self.default_locale not in self.SUPPORTED_LOCALES:
+            raise ValueError(
+                f"[station] default_locale {self.default_locale!r} not in "
+                f"supported set: {sorted(self.SUPPORTED_LOCALES)}"
+            )
 
 
 class AlmanacSettings:
@@ -773,6 +796,7 @@ class Settings:
         self.health.validate()
         self.ratelimit.validate()
         self.database.validate()
+        self.station.validate()
         self.alerts.validate()
         self.aqi.validate()
         self.earthquakes.validate()
