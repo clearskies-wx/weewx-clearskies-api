@@ -34,15 +34,19 @@ class PageEntry:
 
 
 _BUILTIN_PAGES: Final[tuple[PageEntry, ...]] = (
-    PageEntry(slug="now",         name="Now",         icon="house",          nav_position=1, built_in=True),
-    PageEntry(slug="forecast",    name="Forecast",    icon="cloud-sun-rain", nav_position=2, built_in=True),
-    PageEntry(slug="charts",      name="Charts",      icon="chart-line",     nav_position=3, built_in=True),
-    PageEntry(slug="almanac",     name="Almanac",     icon="moon",           nav_position=4, built_in=True),
-    PageEntry(slug="earthquakes", name="Earthquakes", icon="activity",       nav_position=5, built_in=True),
-    PageEntry(slug="records",     name="Records",     icon="trophy",         nav_position=6, built_in=True),
-    PageEntry(slug="reports",     name="Reports",     icon="file-text",      nav_position=7, built_in=True),
-    PageEntry(slug="about",       name="About",       icon="info",           nav_position=8, built_in=True),
-    PageEntry(slug="legal",       name="Legal",       icon="scale",          nav_position=9, built_in=True),
+    PageEntry(slug="now", name="Now", icon="house", nav_position=1, built_in=True),
+    PageEntry(
+        slug="forecast", name="Forecast", icon="cloud-sun-rain", nav_position=2, built_in=True
+    ),
+    PageEntry(slug="charts", name="Charts", icon="chart-line", nav_position=3, built_in=True),
+    PageEntry(slug="almanac", name="Almanac", icon="moon", nav_position=4, built_in=True),
+    PageEntry(
+        slug="earthquakes", name="Earthquakes", icon="activity", nav_position=5, built_in=True
+    ),
+    PageEntry(slug="records", name="Records", icon="trophy", nav_position=6, built_in=True),
+    PageEntry(slug="reports", name="Reports", icon="file-text", nav_position=7, built_in=True),
+    PageEntry(slug="about", name="About", icon="info", nav_position=8, built_in=True),
+    PageEntry(slug="legal", name="Legal", icon="scale", nav_position=9, built_in=True),
 )
 
 _UNHIDEABLE_SLUG = "now"
@@ -51,6 +55,15 @@ _UNHIDEABLE_SLUG = "now"
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
+
+
+def get_all_pages() -> list[PageEntry]:
+    """Return all built-in pages regardless of operator hidden configuration.
+
+    Used by /pages/{slug}/content to verify a slug exists before serving
+    content, even if the page is operator-hidden.
+    """
+    return list(_BUILTIN_PAGES)
 
 
 def get_visible_pages(hidden_slugs: list[str]) -> list[PageEntry]:
