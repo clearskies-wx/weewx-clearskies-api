@@ -107,6 +107,24 @@ class TestMetricsEndpoint:
         body = client.get("/metrics").text
         assert "db_query_duration_seconds" in body
 
+    def test_metrics_response_contains_http_request_duration_seconds(self) -> None:
+        """/metrics body includes http_request_duration_seconds metric name."""
+        client = TestClient(create_health_app(metrics_enabled=True), raise_server_exceptions=False)
+        body = client.get("/metrics").text
+        assert "http_request_duration_seconds" in body
+
+    def test_metrics_response_contains_cache_misses_total(self) -> None:
+        """/metrics body includes cache_misses_total metric name."""
+        client = TestClient(create_health_app(metrics_enabled=True), raise_server_exceptions=False)
+        body = client.get("/metrics").text
+        assert "cache_misses_total" in body
+
+    def test_metrics_response_contains_provider_call_duration_seconds(self) -> None:
+        """/metrics body includes provider_call_duration_seconds metric name."""
+        client = TestClient(create_health_app(metrics_enabled=True), raise_server_exceptions=False)
+        body = client.get("/metrics").text
+        assert "provider_call_duration_seconds" in body
+
     def test_health_live_still_works_when_metrics_enabled(self) -> None:
         """/health/live is unaffected when metrics endpoint is active."""
         client = TestClient(create_health_app(metrics_enabled=True), raise_server_exceptions=False)
@@ -273,6 +291,25 @@ class TestHTTPMetricsMiddleware:
 
         assert after_template > before_template, "Template label must be incremented"
         assert after_concrete == before_concrete, "Concrete URL must not be used as label"
+
+    def test_unmatched_path_uses_sentinel_label(self) -> None:
+        """Requests to unmatched paths use '<unmatched>' sentinel, not the raw URL (ADR-031 cardinality)."""
+        app = _make_metrics_app()
+        client = TestClient(app, raise_server_exceptions=False)
+
+        sentinel_labels = {"method": "GET", "endpoint": "<unmatched>", "status": "404"}
+        raw_labels = {"method": "GET", "endpoint": "/wp-admin/evil-scanner-path", "status": "404"}
+
+        before_sentinel = _sample("http_requests_total", sentinel_labels)
+        before_raw = _sample("http_requests_total", raw_labels)
+
+        client.get("/wp-admin/evil-scanner-path")
+
+        after_sentinel = _sample("http_requests_total", sentinel_labels)
+        after_raw = _sample("http_requests_total", raw_labels)
+
+        assert after_sentinel > before_sentinel, "<unmatched> sentinel must be used for 404 paths"
+        assert after_raw == before_raw, "Raw scanner URL must never appear as a label value"
 
     def test_method_label_is_get(self) -> None:
         """The method label is GET for a GET request."""
