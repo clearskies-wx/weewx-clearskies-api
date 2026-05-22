@@ -10,6 +10,7 @@ FROM python:3.12-slim-bookworm AS builder
 WORKDIR /build
 
 COPY pyproject.toml .
+COPY README.md .
 COPY weewx_clearskies_api/ weewx_clearskies_api/
 
 RUN pip install --no-cache-dir .
