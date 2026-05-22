@@ -62,6 +62,9 @@ dev = [
     "httpx==0.28.1",
     "respx==0.22.0",
     "fakeredis==2.26.2",
+    # ADR-033: pytest-benchmark for API endpoint latency measurement.
+    # Benchmarks run on weather-dev with a real database; excluded from CI.
+    "pytest-benchmark==5.1.0",
 ]
 
 [project.scripts]
@@ -149,4 +152,5 @@ markers = [
     "integration: marks integration tests that require the dev/test stack (MariaDB or seeded SQLite)",
     "live_network: marks tests that require live network access",
     "redis: marks integration tests that require the redis compose profile (use with -m 'integration and redis')",
+    "benchmark: marks benchmark tests for endpoint performance measurement (ADR-033)",
 ]
