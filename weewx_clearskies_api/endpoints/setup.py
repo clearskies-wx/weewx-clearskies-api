@@ -18,16 +18,18 @@ in app.py.  All endpoints live directly under /setup/...
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
 import configobj
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -248,6 +250,10 @@ class ApplyRequest(BaseModel):
 class ApplyResponse(BaseModel):
     success: bool
     message: str
+
+
+class RestartResponse(BaseModel):
+    status: str
 
 
 class CurrentConfigDatabaseSection(BaseModel):
@@ -888,3 +894,38 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         providers=providers,
         station=station,
     )
+
+
+@router.post("/restart", response_model=RestartResponse)
+async def restart(request: Request, background_tasks: BackgroundTasks) -> RestartResponse:
+    """Trigger a graceful service restart.
+
+    Requires a valid X-Clearskies-Proxy-Auth header.  After the 200 response is
+    sent, a background task waits 1.5 s then sends SIGTERM to the running process.
+    Uvicorn handles SIGTERM gracefully (flushes in-flight requests, shuts down the
+    event loop).  The systemd unit (Restart=always) brings the process back with
+    fresh config loaded from disk.
+
+    Security: an unauthenticated restart endpoint would be a DoS vector.  Proxy
+    auth is enforced unconditionally — setup-session tokens are not accepted here.
+    """
+    secret_configured = bool(os.environ.get("WEEWX_CLEARSKIES_PROXY_SECRET", "").strip())
+    if not secret_configured:
+        raise HTTPException(
+            503,
+            detail="Proxy secret not configured — restart endpoint unavailable.",
+        )
+    if not _check_proxy_auth(request):
+        raise HTTPException(401, detail="Valid X-Clearskies-Proxy-Auth header required")
+
+    logger.warning(
+        "Restart requested via /setup/restart from %s — scheduling graceful shutdown",
+        request.client.host if request.client else "unknown",
+    )
+
+    async def _deferred_sigterm() -> None:
+        await asyncio.sleep(1.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    background_tasks.add_task(_deferred_sigterm)
+    return RestartResponse(status="restarting")
