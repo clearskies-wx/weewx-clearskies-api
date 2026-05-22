@@ -8,9 +8,9 @@ Route template extraction:
   After call_next() completes, Starlette has matched the route and stored it
   in request.scope["route"]. We use route.path (e.g. "/api/v1/archive") as
   the endpoint label — low cardinality, no per-user or per-IP data.
-  For unmatched paths (404 routes), we fall back to request.url.path, which
-  carries the raw URL. This is acceptable since 404s are rare and their paths
-  do not blow up cardinality in practice; operators can filter them by status.
+  For unmatched paths (404), we fall back to a fixed "<unmatched>" sentinel
+  to avoid cardinality explosion from scanner/fuzzer traffic (ADR-031
+  §Cardinality bounded).
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         endpoint: str = (
             route.path  # type: ignore[union-attr]
             if route and hasattr(route, "path")
-            else request.url.path
+            else "<unmatched>"
         )
         method = request.method
         status = str(response.status_code)

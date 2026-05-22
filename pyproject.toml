@@ -45,7 +45,7 @@ dependencies = [
     # ADR-031: Prometheus metrics endpoint on health port (opt-in via
     # CLEARSKIES_METRICS_ENABLED=true). prometheus-client is a pure-Python
     # library; no native build required.
-    "prometheus-client>=0.21.0",
+    "prometheus-client==0.25.0",
 ]
 
 [project.optional-dependencies]

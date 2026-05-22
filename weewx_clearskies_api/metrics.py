@@ -1,6 +1,10 @@
 """Prometheus metrics definitions per ADR-031.
 
-Metrics are always created and always incremented (negligible ~50ns overhead).
+Metrics are always created and always incremented (negligible ~50ns overhead)
+regardless of CLEARSKIES_METRICS_ENABLED. This is a deliberate interpretation
+of ADR-031 §Default ("no metrics endpoint by default"): the endpoint is gated,
+but collection is always-on so metrics are immediately available when an
+operator enables the flag without restarting.
 The /metrics endpoint is only exposed when CLEARSKIES_METRICS_ENABLED=true.
 
 Known gap: provider_calls_total{outcome="cache_hit"} is not emitted here.
