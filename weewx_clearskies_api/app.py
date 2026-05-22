@@ -122,6 +122,10 @@ def create_app(settings: Settings) -> FastAPI:
     # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
     app.include_router(setup_router)
 
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     # ---------------------------------------------------------------------------
     # Middleware registration order.
     #
