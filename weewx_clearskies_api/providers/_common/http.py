@@ -33,6 +33,10 @@ import time
 
 import httpx
 
+from weewx_clearskies_api.metrics import (
+    PROVIDER_CALL_DURATION,
+    PROVIDER_CALLS_TOTAL,
+)
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
     ProviderProtocolError,
@@ -234,6 +238,11 @@ class ProviderHTTPClient:
                         retry_seconds = 60  # default if header value is unparseable
                 else:
                     retry_seconds = 60  # polite default when NWS doesn't say
+                PROVIDER_CALLS_TOTAL.labels(
+                    provider_id=self.provider_id,
+                    domain=self.domain,
+                    outcome="cache_miss_failure",
+                ).inc()
                 raise QuotaExhausted(
                     f"Provider {self.provider_id} returned 429 Too Many Requests",
                     provider_id=self.provider_id,
@@ -243,6 +252,11 @@ class ProviderHTTPClient:
                 )
 
             if status in (401, 403):
+                PROVIDER_CALLS_TOTAL.labels(
+                    provider_id=self.provider_id,
+                    domain=self.domain,
+                    outcome="cache_miss_failure",
+                ).inc()
                 raise KeyInvalid(
                     f"Provider {self.provider_id} returned {status} (auth failure)",
                     provider_id=self.provider_id,
@@ -278,6 +292,11 @@ class ProviderHTTPClient:
                 detail = f"Provider {self.provider_id} returned unexpected {status}"
                 if body_excerpt:
                     detail = f"{detail}: {body_excerpt[:200]}"
+                PROVIDER_CALLS_TOTAL.labels(
+                    provider_id=self.provider_id,
+                    domain=self.domain,
+                    outcome="cache_miss_failure",
+                ).inc()
                 raise ProviderProtocolError(
                     detail,
                     provider_id=self.provider_id,
@@ -300,10 +319,25 @@ class ProviderHTTPClient:
 
             # Success (2xx/3xx — we set follow_redirects=False so 3xx is
             # returned to the caller; only 2xx is truly successful here).
+            elapsed_seconds = time.monotonic() - start_ms
+            PROVIDER_CALLS_TOTAL.labels(
+                provider_id=self.provider_id,
+                domain=self.domain,
+                outcome="cache_miss_success",
+            ).inc()
+            PROVIDER_CALL_DURATION.labels(
+                provider_id=self.provider_id,
+                domain=self.domain,
+            ).observe(elapsed_seconds)
             return response
 
         # All retries exhausted.
         if last_exc is not None:
+            PROVIDER_CALLS_TOTAL.labels(
+                provider_id=self.provider_id,
+                domain=self.domain,
+                outcome="cache_miss_failure",
+            ).inc()
             raise TransientNetworkError(
                 f"Provider {self.provider_id} network error after "
                 f"{self._max_retries + 1} attempts: {last_exc}",
@@ -313,6 +347,11 @@ class ProviderHTTPClient:
 
         # last_response is a 5xx — retries exhausted on server-side errors.
         assert last_response is not None  # guaranteed by loop logic above
+        PROVIDER_CALLS_TOTAL.labels(
+            provider_id=self.provider_id,
+            domain=self.domain,
+            outcome="cache_miss_failure",
+        ).inc()
         raise TransientNetworkError(
             f"Provider {self.provider_id} returned {last_response.status_code} "
             f"after {self._max_retries + 1} attempts",

@@ -42,6 +42,7 @@ from typing import Literal
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +121,17 @@ def _run_readiness_probes() -> tuple[StatusLiteral, dict[str, object]]:
 # ---------------------------------------------------------------------------
 
 
-def create_health_app() -> FastAPI:
+def create_health_app(*, metrics_enabled: bool = False) -> FastAPI:
     """Create the health FastAPI app (mounts on a separate loopback port).
 
     This app has no middleware. It is intentionally unauthenticated per
     ADR-030 — access control is the loopback bind.
+
+    Args:
+        metrics_enabled: When True, register GET /metrics (ADR-031).
+            Reads from settings.health.metrics_enabled, which is set by
+            CLEARSKIES_METRICS_ENABLED env var (or metrics_enabled = true in
+            the [health] section of api.conf).
     """
     health_app = FastAPI(
         title="weewx-clearskies-api health",
@@ -144,5 +151,16 @@ def create_health_app() -> FastAPI:
         overall_internal, body = _run_readiness_probes()
         http_status = 503 if overall_internal == "unhealthy" else 200
         return JSONResponse(body, status_code=http_status)
+
+    if metrics_enabled:
+        # ADR-031: Prometheus /metrics on the health port.
+        # Same loopback-only, unauthenticated posture as /health/live and /health/ready.
+        from weewx_clearskies_api.metrics import metrics_response  # deferred to avoid cycle
+
+        @health_app.get("/metrics")
+        async def metrics() -> Response:
+            """Prometheus metrics in text exposition format (ADR-031)."""
+            body, content_type = metrics_response()
+            return Response(content=body, media_type=content_type)
 
     return health_app

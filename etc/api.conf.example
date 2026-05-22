@@ -51,6 +51,13 @@ bind_host = 127.0.0.1
 # Bind port for /health/live and /health/ready. Default 8081 per ADR-030.
 bind_port = 8081
 
+# Enable Prometheus /metrics endpoint on the health port. Default false.
+# Set to true to allow Prometheus to scrape metrics at
+# https://<health_host>:<health_port>/metrics (ADR-031).
+# Override with CLEARSKIES_METRICS_ENABLED=true env var (takes priority over
+# this setting).
+metrics_enabled = false
+
 
 [logging]
 # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL.

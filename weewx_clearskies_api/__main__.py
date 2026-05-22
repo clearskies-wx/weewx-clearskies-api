@@ -173,7 +173,7 @@ def _run_server(
     app is passed in (rather than created here) so main() can attach state to it
     before the server starts.
     """
-    health_app = create_health_app()
+    health_app = create_health_app(metrics_enabled=settings.health.metrics_enabled)
 
     api_addresses = _resolve_bind_addresses(settings.api.bind_host, settings.api.bind_port)
     health_addresses = _resolve_bind_addresses(
@@ -578,6 +578,16 @@ def main() -> None:
             exc,
         )
         sys.exit(1)
+
+    # Step 6h½: Wire DB metrics (ADR-031).
+    # SQLAlchemy event listeners for query timing. Metrics are always created
+    # and always incremented; the /metrics endpoint exposure is controlled by
+    # settings.health.metrics_enabled.
+    from weewx_clearskies_api.metrics import wire_db_metrics  # noqa: PLC0415
+
+    wire_db_metrics(engine)
+    if settings.health.metrics_enabled:
+        logger.info("Prometheus metrics enabled on health port (/metrics)")
 
     # Step 6i: Wire provider capability registry (ADR-038 §4).
     # Registers configured providers' CAPABILITY declarations.

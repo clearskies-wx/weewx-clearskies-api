@@ -42,6 +42,10 @@ dependencies = [
     # Ed25519 key generation and X.509 self-signed cert creation for first-start
     # auto-TLS (operator can supply their own cert via --tls-cert / --tls-key).
     "cryptography>=43.0.0",
+    # ADR-031: Prometheus metrics endpoint on health port (opt-in via
+    # CLEARSKIES_METRICS_ENABLED=true). prometheus-client is a pure-Python
+    # library; no native build required.
+    "prometheus-client>=0.21.0",
 ]
 
 [project.optional-dependencies]
@@ -127,6 +131,11 @@ ignore_missing_stubs = true
 [[tool.mypy.overrides]]
 # defusedxml does not ship type stubs (3b-14).
 module = ["defusedxml.*"]
+ignore_missing_stubs = true
+
+[[tool.mypy.overrides]]
+# prometheus-client does not ship PEP 561 type stubs (ADR-031).
+module = ["prometheus_client.*"]
 ignore_missing_stubs = true
 
 # ---------------------------------------------------------------------------

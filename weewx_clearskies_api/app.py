@@ -16,7 +16,8 @@ Middleware execution order (outermost → innermost):
     the outermost wrapper (first to process each incoming request).
 
     Execution order (comment must stay in sync with middleware/__init__.py):
-      1. RequestIdMiddleware     — outermost; establishes request_id for all logs
+      0. MetricsMiddleware       — outermost; times total request including request-id gen
+      1. RequestIdMiddleware     — establishes request_id for all logs
       2. BodySizeLimitMiddleware — reject oversized bodies early (before auth/rate)
       3. ProxyAuthMiddleware     — mark request as trusted BEFORE rate-limit check
       4. RateLimitMiddleware     — bypass when proxy_trusted is True
@@ -27,15 +28,15 @@ Middleware execution order (outermost → innermost):
     via register_error_handlers() wrap the router.
 
     Registration order in the code below is the REVERSE of execution order
-    (SecurityHeaders registered first = innermost; RequestId registered last =
-    outermost). See the block comment in create_app() for detail.
+    (SecurityHeaders registered first = innermost; MetricsMiddleware registered
+    last = outermost). See the block comment in create_app() for detail.
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from weewx_clearskies_api.config.settings import Settings
@@ -55,13 +56,31 @@ from weewx_clearskies_api.endpoints.reports import router as reports_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
 from weewx_clearskies_api.endpoints.station import router as station_router
 from weewx_clearskies_api.errors import register_error_handlers
+from weewx_clearskies_api.metrics import current_endpoint
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
+from weewx_clearskies_api.middleware.metrics import MetricsMiddleware
 from weewx_clearskies_api.middleware.proxy_auth import ProxyAuthMiddleware
 from weewx_clearskies_api.middleware.rate_limit import RateLimitMiddleware
 from weewx_clearskies_api.middleware.request_id import RequestIdMiddleware
 from weewx_clearskies_api.middleware.security_headers import SecurityHeadersMiddleware
 
 logger = logging.getLogger(__name__)
+
+
+def _set_endpoint_context(request: Request) -> None:
+    """Set the current_endpoint ContextVar for DB metrics labeling (ADR-031).
+
+    Runs as a sync app-level dependency so it executes in the same thread as
+    sync route handlers, ensuring the ContextVar is visible to SQLAlchemy
+    event listeners when they fire during query execution.
+
+    Uses route.path (the route template, e.g. "/api/v1/archive") rather than
+    request.url.path (the concrete URL with substituted path params) to keep
+    the endpoint label low-cardinality.
+    """
+    route = request.scope.get("route")
+    if route and hasattr(route, "path"):
+        current_endpoint.set(route.path)  # type: ignore[union-attr]
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -88,6 +107,9 @@ def create_app(settings: Settings) -> FastAPI:
         openapi_url="/api/v1/openapi.json",
         # extra="forbid" on Pydantic models handles input validation at endpoints.
         # FastAPI's own validation layer is active by default.
+        # ADR-031: set current_endpoint ContextVar so DB metrics carry the route
+        # template label instead of "unknown".
+        dependencies=[Depends(_set_endpoint_context)],
     )
 
     # Register RFC 9457 error handlers (ADR-018).
@@ -133,15 +155,17 @@ def create_app(settings: Settings) -> FastAPI:
     # Therefore the LAST add_middleware() call becomes user_middleware[0] and
     # executes as the OUTERMOST wrapper (first to handle the incoming request).
     #
-    # We want execution order: 1=RequestId (outer) → ... → 6=SecurityHeaders (inner)
-    # So we register in REVERSE: SecurityHeaders first, RequestId last.
+    # We want execution order: 0=Metrics (outermost) → 1=RequestId → ...
+    #   → 6=SecurityHeaders (innermost).
+    # So we register in REVERSE: SecurityHeaders first, MetricsMiddleware last.
     #
     #   1st add_middleware call → SecurityHeadersMiddleware → executes innermost (step 6)
     #   2nd add_middleware call → CORSMiddleware            → executes step 5
     #   3rd add_middleware call → RateLimitMiddleware       → executes step 4
     #   4th add_middleware call → ProxyAuthMiddleware       → executes step 3
     #   5th add_middleware call → BodySizeLimitMiddleware   → executes step 2
-    #   6th add_middleware call → RequestIdMiddleware       → executes outermost (step 1)
+    #   6th add_middleware call → RequestIdMiddleware       → executes step 1
+    #   7th add_middleware call → MetricsMiddleware         → executes outermost (step 0)
     # ---------------------------------------------------------------------------
 
     # 1st add_middleware call → executes innermost (step 6)
@@ -186,8 +210,11 @@ def create_app(settings: Settings) -> FastAPI:
         max_bytes=settings.api.max_request_bytes,
     )
 
-    # 6th add_middleware call → executes outermost (step 1; establishes request_id for all logs)
+    # 6th add_middleware call → executes step 1 (request-id; establishes request_id for all logs)
     app.add_middleware(RequestIdMiddleware)
+
+    # 7th add_middleware call → executes outermost (step 0; ADR-031 HTTP timing wraps everything)
+    app.add_middleware(MetricsMiddleware)
 
     logger.info(
         "Public API app created",

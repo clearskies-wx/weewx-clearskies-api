@@ -105,10 +105,20 @@ class HealthSettings:
     bind_host: str
     #: Bind port for /health/live and /health/ready (default 8081 per ADR-030).
     bind_port: int
+    #: Expose Prometheus /metrics on the health port (ADR-031). Default False.
+    #: Env var CLEARSKIES_METRICS_ENABLED wins over the INI value.
+    metrics_enabled: bool
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.bind_host = str(section.get("bind_host", "127.0.0.1"))
         self.bind_port = int(section.get("bind_port", 8081))
+        # ADR-031: opt-in metrics endpoint. Env var wins over ini file.
+        env_val = os.environ.get("CLEARSKIES_METRICS_ENABLED", "").strip().lower()
+        if env_val:
+            self.metrics_enabled = env_val in ("true", "1", "yes")
+        else:
+            ini_val = str(section.get("metrics_enabled", "false")).strip().lower()
+            self.metrics_enabled = ini_val in ("true", "1", "yes")
 
     def validate(self) -> None:
         if not (1 <= self.bind_port <= 65535):

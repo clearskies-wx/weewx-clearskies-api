@@ -49,6 +49,7 @@ from cachetools import TTLCache
 # cache module and from config.settings directly.  Tests import it from
 # config.settings per their test-author's import path.
 from weewx_clearskies_api.config.settings import ConfigError  # noqa: F401 (re-exported)
+from weewx_clearskies_api.metrics import CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +114,16 @@ class MemoryCache:
         entry = self._cache.get(key)
         if entry is None:
             logger.debug("Cache miss: %s", key)
+            CACHE_MISSES_TOTAL.labels(backend="memory").inc()
             return None
         value, expires_at = entry
         if time.monotonic() >= expires_at:
             logger.debug("Cache expired: %s", key)
             # The outer TTLCache will handle eviction on its schedule.
+            CACHE_MISSES_TOTAL.labels(backend="memory").inc()
             return None
         logger.debug("Cache hit: %s", key)
+        CACHE_HITS_TOTAL.labels(backend="memory").inc()
         return value
 
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
@@ -192,16 +196,20 @@ class RedisCache:
                 type(exc).__name__,
                 exc,
             )
+            CACHE_MISSES_TOTAL.labels(backend="redis").inc()
             return None
         if raw is None:
             logger.debug("Cache miss: %s", key)
+            CACHE_MISSES_TOTAL.labels(backend="redis").inc()
             return None
         try:
             value = json.loads(raw)
             logger.debug("Cache hit: %s", key)
+            CACHE_HITS_TOTAL.labels(backend="redis").inc()
             return value
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("Cache JSON decode error for key %s: %s", key, exc)
+            CACHE_MISSES_TOTAL.labels(backend="redis").inc()
             return None
 
     def set(self, key: str, value: Any, ttl_seconds: int) -> None:
