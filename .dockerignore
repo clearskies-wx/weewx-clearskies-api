@@ -1,0 +1,13 @@
+.git
+__pycache__
+*.pyc
+.venv
+venv
+tests/
+dev/
+.github/
+*.md
+.env*
+.ruff_cache
+uv.lock
+.python-version
