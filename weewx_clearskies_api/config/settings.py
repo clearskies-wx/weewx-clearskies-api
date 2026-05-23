@@ -699,6 +699,58 @@ class ForecastSettings:
             )
 
 
+class BrandingSettings:
+    """[branding] section settings (ADR-022, Gap #10).
+
+    Operator-controlled branding values served by GET /api/v1/branding.
+    All fields are optional with safe defaults so the endpoint works even if
+    no [branding] section is present in api.conf.
+
+    v0.1 scope: read-only; logo upload pipeline is Phase 2.
+    """
+
+    #: Accent color name — one of the curated palette entries per ADR-022.
+    accent: str
+    #: Default theme mode for new visitors per ADR-023.
+    default_theme_mode: str
+    #: URL to operator's custom stylesheet. None = no custom CSS.
+    custom_css_url: str | None
+
+    #: Valid accent values from ADR-022 (curated palette, AA-tested).
+    VALID_ACCENTS: frozenset[str] = frozenset({
+        "blue", "teal", "indigo", "purple", "green", "amber"
+    })
+    #: Valid theme modes from ADR-023.
+    VALID_THEME_MODES: frozenset[str] = frozenset({
+        "light", "dark", "auto-os", "auto-sunrise-sunset"
+    })
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.accent = str(section.get("accent", "blue")).strip()
+        self.default_theme_mode = str(
+            section.get("default_theme_mode", "auto-os")
+        ).strip()
+        raw_css_url = str(section.get("custom_css_url", "")).strip()
+        self.custom_css_url = raw_css_url if raw_css_url else None
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid accent or theme mode."""
+        if self.accent not in self.VALID_ACCENTS:
+            raise ValueError(
+                f"[branding] accent {self.accent!r} not in "
+                f"{sorted(self.VALID_ACCENTS)}. "
+                "Supported values per ADR-022: "
+                "'blue', 'teal', 'indigo', 'purple', 'green', 'amber'."
+            )
+        if self.default_theme_mode not in self.VALID_THEME_MODES:
+            raise ValueError(
+                f"[branding] default_theme_mode {self.default_theme_mode!r} not in "
+                f"{sorted(self.VALID_THEME_MODES)}. "
+                "Supported values per ADR-023: "
+                "'light', 'dark', 'auto-os', 'auto-sunrise-sunset'."
+            )
+
+
 class TlsSettings:
     """[tls] section settings (ADR-038).
 
@@ -751,6 +803,7 @@ class Settings:
     radar: RadarSettings
     forecast: ForecastSettings
     tls: TlsSettings
+    branding: BrandingSettings
 
     def __init__(
         self,
@@ -771,6 +824,7 @@ class Settings:
         radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
+        branding: BrandingSettings | None = None,
     ) -> None:
         self.api = api
         self.health = health
@@ -789,6 +843,7 @@ class Settings:
         self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
         self.tls = tls if tls is not None else TlsSettings({})
+        self.branding = branding if branding is not None else BrandingSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -803,6 +858,7 @@ class Settings:
         self.radar.validate()
         self.forecast.validate()
         self.tls.validate()
+        self.branding.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -902,6 +958,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
+    branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -921,6 +978,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         radar=radar_cfg,
         forecast=forecast_cfg,
         tls=tls_cfg,
+        branding=branding_cfg,
     )
     settings.validate()
 

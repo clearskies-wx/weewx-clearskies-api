@@ -13,7 +13,7 @@ ruff: noqa: N815  (canonical fields use weewx camelCase: outTemp, windSpeed, etc
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -803,6 +803,44 @@ class EarthquakeListResponse(BaseModel):
 
     data: list[EarthquakeRecord]
     source: str  # provider_id or "none"
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+# ---------------------------------------------------------------------------
+# Branding (ADR-022, Gap #10)
+# ---------------------------------------------------------------------------
+
+
+class LogoBranding(BaseModel):
+    """Logo branding block within BrandingConfig (ADR-022).
+
+    lightUrl is required; darkUrl is optional (dashboard CSS-inverts when absent,
+    per ADR-022 §consequences).  Alt text is required per coding.md §5.5.
+    """
+
+    lightUrl: str
+    darkUrl: str | None = None
+    alt: str
+
+
+class BrandingConfig(BaseModel):
+    """Operator branding configuration (ADR-022, Gap #10).
+
+    v0.1 scope: accent, defaultThemeMode, and customCssUrl are read from
+    api.conf [branding] section.  logo is always null in v0.1 (upload
+    pipeline is Phase 2).
+    """
+
+    accent: Literal["blue", "teal", "indigo", "purple", "green", "amber"]
+    defaultThemeMode: Literal["light", "dark", "auto-os", "auto-sunrise-sunset"]
+    logo: LogoBranding | None = None
+    customCssUrl: str | None = None
+
+
+class BrandingResponse(BaseModel):
+    """BrandingResponse envelope (GET /api/v1/branding)."""
+
+    data: BrandingConfig
     generatedAt: str  # UTC ISO-8601 with Z
 
 

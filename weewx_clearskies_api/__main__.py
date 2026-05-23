@@ -73,6 +73,7 @@ from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import wire_engine
 from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
 from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
+from weewx_clearskies_api.endpoints.branding import wire_branding_settings
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
@@ -616,6 +617,9 @@ def main() -> None:
     # no-op. Aeris + OWM: extracts credentials from settings.forecast per 3b-5 Q2
     # provider-scoped decision (same env vars as forecast/alerts/AQI).
     wire_radar_settings(settings)
+
+    # Step 6p: Wire branding settings (ADR-022, Gap #10).
+    wire_branding_settings(settings.branding)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()
