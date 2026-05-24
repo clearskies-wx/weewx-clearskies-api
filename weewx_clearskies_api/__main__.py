@@ -174,7 +174,10 @@ def _run_server(
     app is passed in (rather than created here) so main() can attach state to it
     before the server starts.
     """
-    health_app = create_health_app(metrics_enabled=settings.health.metrics_enabled)
+    health_app = create_health_app(
+        metrics_enabled=settings.health.metrics_enabled,
+        configured=settings.configured,
+    )
 
     api_addresses = _resolve_bind_addresses(settings.api.bind_host, settings.api.bind_port)
     health_addresses = _resolve_bind_addresses(
@@ -469,6 +472,18 @@ def main() -> None:
 
     # Step 3f: Print operator startup banner.
     address_url = _format_address_for_url(settings.api.bind_host, settings.api.bind_port)
+
+    if not settings.configured:
+        print(
+            f"No configuration found — starting in setup mode.\n"
+            f"  Address:     {address_url}\n"
+            f"  Trust token: {trust_manager.token}\n"
+            f"  Fingerprint: {fingerprint}\n"
+            f"Visit the setup wizard to configure this installation."
+        )
+        # Skip DB, schema reflection, providers — none are available yet.
+        _run_server(settings, cert_path=cert_path, key_path=key_path, app=app)
+        return
 
     if trust_manager.setup_complete:
         print(f"API ready at {address_url}")

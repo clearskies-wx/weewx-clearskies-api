@@ -786,6 +786,7 @@ class TlsSettings:
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
+    configured: bool
     api: ApiSettings
     health: HealthSettings
     logging: LoggingSettings
@@ -825,7 +826,9 @@ class Settings:
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
+        configured: bool = True,
     ) -> None:
+        self.configured = configured
         self.api = api
         self.health = health
         self.logging = logging_settings
@@ -912,24 +915,27 @@ def load_settings(config_path: Path | None = None) -> Settings:
         config_path: Override path for tests. When None, uses ADR-027 search order.
 
     Returns:
-        Validated Settings instance.
+        Validated Settings instance. When no config file is found, returns a minimal
+        Settings with configured=False so the API can start in setup mode.
 
     Raises:
-        FileNotFoundError: No config file found at any path in the ADR-027 search order.
         RuntimeError: Secret detected in .conf file (ADR-027 leak guard).
         ValueError: A config value failed validation.
     """
     path = config_path or _find_config_file()
 
     if path is None:
-        # No config found. Per ADR-027: service refuses to start. Config generation
-        # belongs in weewx-clearskies-config (weewx-clearskies-stack repo) per ADR-027 §4.
-        searched = ", ".join(str(p) for p in _CONFIG_SEARCH_PATH)
-        raise FileNotFoundError(
-            f"No configuration file found at {searched}. "
-            "Generate one with the `weewx-clearskies-config` tool from the "
-            "`weewx-clearskies-stack` repo, or copy `etc/api.conf.example` to "
-            "`/etc/weewx-clearskies/api.conf` and edit it."
+        # No config found — start in setup mode. The API binds on defaults and
+        # serves only /setup/* and GET /api/v1/status so the wizard can connect.
+        logger.info("No configuration file found — starting in setup mode")
+        return Settings(
+            api=ApiSettings({"bind_host": "0.0.0.0", "bind_port": 8765}),
+            health=HealthSettings({"bind_host": "127.0.0.1", "bind_port": 8081}),
+            logging_settings=LoggingSettings({}),
+            ratelimit=RateLimitSettings({}),
+            database=DatabaseSettings({}),
+            tls=TlsSettings({}),
+            configured=False,
         )
 
     if not path.exists():

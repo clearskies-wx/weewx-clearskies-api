@@ -38,6 +38,7 @@ import logging
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.endpoints.alerts import router as alerts_router
@@ -89,6 +90,8 @@ def create_app(settings: Settings) -> FastAPI:
 
     Args:
         settings: Validated Settings instance from config/settings.py.
+            When settings.configured is False, only setup endpoints and a minimal
+            status endpoint are mounted; all data routers are omitted.
 
     Returns:
         Configured FastAPI app ready for uvicorn to serve.
@@ -116,36 +119,74 @@ def create_app(settings: Settings) -> FastAPI:
     # Register RFC 9457 error handlers (ADR-018).
     register_error_handlers(app)
 
-    # Register API routers.
-    # All endpoints at /api/v1/... per ADR-018.
-    # Route ordering: /reports/{year}/{month} BEFORE /reports/{year} so
-    # FastAPI matches the more-specific path first (brief §6 note).
-    app.include_router(station_router, prefix="/api/v1")
-    app.include_router(observations_router, prefix="/api/v1")
-    app.include_router(records_router, prefix="/api/v1")
-    # reports_router declares monthly before yearly internally; both included here.
-    app.include_router(reports_router, prefix="/api/v1")
-    # 3a-2 new routers.
-    app.include_router(almanac_router, prefix="/api/v1")
-    app.include_router(capabilities_router, prefix="/api/v1")
-    app.include_router(pages_router, prefix="/api/v1")
-    app.include_router(charts_router, prefix="/api/v1")
-    app.include_router(content_router, prefix="/api/v1")
-    # 3b-1 new routers.
-    app.include_router(alerts_router, prefix="/api/v1")
-    # 3b-2 new routers.
-    app.include_router(forecast_router, prefix="/api/v1")
-    # 3b-9 new routers.
-    app.include_router(aqi_router, prefix="/api/v1")
-    # 3b-13 new routers.
-    app.include_router(earthquakes_router, prefix="/api/v1")
-    # 3b-14 new routers.
-    app.include_router(radar_router, prefix="/api/v1")
-    # Gap #10 (ADR-022): branding configuration endpoint.
-    app.include_router(branding_router, prefix="/api/v1")
+    # GET /api/v1/status works in both modes — lets the dashboard detect setup state.
+    configured_flag = settings.configured
 
-    # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
-    app.include_router(setup_router)
+    @app.get("/api/v1/status")
+    async def status() -> dict[str, bool]:
+        return {"configured": configured_flag}
+
+    if not settings.configured:
+        # Setup mode: only the setup router and the catch-all 503 are mounted.
+        # No DB, no providers, no data routers.
+        app.include_router(setup_router)
+
+        @app.api_route(
+            "/api/v1/{path:path}",
+            methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        )
+        async def _not_configured(path: str, request: Request) -> JSONResponse:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "type": "urn:clearskies:not-configured",
+                    "title": "Clear Skies is not configured",
+                    "detail": "Run the setup wizard to configure this installation.",
+                    "status": 503,
+                },
+                media_type="application/problem+json",
+            )
+
+        logger.info("Public API app created in setup mode (unconfigured)")
+    else:
+        # Configured mode: mount all data routers.
+        # Route ordering: /reports/{year}/{month} BEFORE /reports/{year} so
+        # FastAPI matches the more-specific path first (brief §6 note).
+        app.include_router(station_router, prefix="/api/v1")
+        app.include_router(observations_router, prefix="/api/v1")
+        app.include_router(records_router, prefix="/api/v1")
+        # reports_router declares monthly before yearly internally; both included here.
+        app.include_router(reports_router, prefix="/api/v1")
+        # 3a-2 new routers.
+        app.include_router(almanac_router, prefix="/api/v1")
+        app.include_router(capabilities_router, prefix="/api/v1")
+        app.include_router(pages_router, prefix="/api/v1")
+        app.include_router(charts_router, prefix="/api/v1")
+        app.include_router(content_router, prefix="/api/v1")
+        # 3b-1 new routers.
+        app.include_router(alerts_router, prefix="/api/v1")
+        # 3b-2 new routers.
+        app.include_router(forecast_router, prefix="/api/v1")
+        # 3b-9 new routers.
+        app.include_router(aqi_router, prefix="/api/v1")
+        # 3b-13 new routers.
+        app.include_router(earthquakes_router, prefix="/api/v1")
+        # 3b-14 new routers.
+        app.include_router(radar_router, prefix="/api/v1")
+        # Gap #10 (ADR-022): branding configuration endpoint.
+        app.include_router(branding_router, prefix="/api/v1")
+
+        # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
+        app.include_router(setup_router)
+
+        logger.info(
+            "Public API app created",
+            extra={
+                "bind_host": settings.api.bind_host,
+                "bind_port": settings.api.bind_port,
+                "cors_origins": settings.api.cors_origins,
+            },
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -218,14 +259,5 @@ def create_app(settings: Settings) -> FastAPI:
 
     # 7th add_middleware call → executes outermost (step 0; ADR-031 HTTP timing wraps everything)
     app.add_middleware(MetricsMiddleware)
-
-    logger.info(
-        "Public API app created",
-        extra={
-            "bind_host": settings.api.bind_host,
-            "bind_port": settings.api.bind_port,
-            "cors_origins": cors_origins,
-        },
-    )
 
     return app
