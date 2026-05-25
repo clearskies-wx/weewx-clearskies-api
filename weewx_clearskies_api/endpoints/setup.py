@@ -23,7 +23,9 @@ import hmac
 import ipaddress
 import logging
 import os
+import secrets
 import signal
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -251,6 +253,11 @@ class ApplyRequest(BaseModel):
 class ApplyResponse(BaseModel):
     success: bool
     message: str
+    #: One-time token valid for a single POST /setup/restart call within 60 s.
+    #: Issued so the wizard can trigger a restart immediately after apply even
+    #: before WEEWX_CLEARSKIES_PROXY_SECRET is loaded into the running process's
+    #: environment (the secret was just written to secrets.env by this call).
+    restart_token: str | None = None
 
 
 class RestartResponse(BaseModel):
@@ -758,15 +765,32 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         logger.error("Failed to write secrets.env during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write secrets file.") from exc
 
+    # 2b. Mirror any newly-written secrets into the running process's environment
+    # so that the restart endpoint can authenticate the immediately-following restart
+    # call without waiting for a process restart to reload secrets.env.
+    # This is safe: apply is already authenticated; we are only surfacing values that
+    # were just persisted to disk.
+    if body.proxy_secret:
+        os.environ["WEEWX_CLEARSKIES_PROXY_SECRET"] = body.proxy_secret
+
     # 3. Mark setup complete — consumes trust token and invalidates session.
     # Skip on re-run (setup already complete) to avoid redundant file writes and
     # to preserve the proxy-auth-based session that authorised this re-run.
     if not tm.setup_complete:
         tm.mark_setup_complete()
 
+    # 4. Issue a one-time restart token so the wizard can call /setup/restart
+    # immediately after apply.  The token is valid for 60 s and is consumed on
+    # first use.  This handles the case where no proxy secret exists (same-host
+    # topology) and the wizard has no proxy auth to send.
+    restart_token = secrets.token_hex(32)
+    request.app.state.restart_token = restart_token
+    request.app.state.restart_token_expires = time.monotonic() + 60.0
+
     return ApplyResponse(
         success=True,
         message="Configuration saved. Restart the API to apply.",
+        restart_token=restart_token,
     )
 
 
@@ -902,31 +926,74 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     )
 
 
+def _check_restart_token(request: Request) -> bool:
+    """Return True if the request carries a valid one-time restart token.
+
+    The token is issued by /setup/apply (stored in app.state) and is valid for
+    60 s.  It is consumed on first use so it cannot be replayed.  This lets the
+    wizard trigger a restart immediately after apply before the process has
+    reloaded its environment (the proxy secret was just written to disk).
+    """
+    provided = request.headers.get("X-Clearskies-Restart-Token", "").strip()
+    if not provided:
+        return False
+    stored = getattr(request.app.state, "restart_token", None)
+    if not stored:
+        return False
+    expires = getattr(request.app.state, "restart_token_expires", 0.0)
+    if time.monotonic() > expires:
+        # Expired — clear so it cannot be used again even if timing is borderline.
+        request.app.state.restart_token = None
+        return False
+    if not hmac.compare_digest(stored.encode("utf-8"), provided.encode("utf-8")):
+        return False
+    # Consume: token is single-use.
+    request.app.state.restart_token = None
+    return True
+
+
 @router.post("/restart", response_model=RestartResponse)
 async def restart(request: Request, background_tasks: BackgroundTasks) -> RestartResponse:
     """Trigger a graceful service restart.
 
-    Requires a valid X-Clearskies-Proxy-Auth header.  After the 200 response is
-    sent, a background task waits 1.5 s then sends SIGTERM to the running process.
-    Uvicorn handles SIGTERM gracefully (flushes in-flight requests, shuts down the
-    event loop).  The systemd unit (Restart=always) brings the process back with
-    fresh config loaded from disk.
+    Accepts two authentication mechanisms (in priority order):
 
-    Security: an unauthenticated restart endpoint would be a DoS vector.  Proxy
-    auth is enforced unconditionally — setup-session tokens are not accepted here.
+    1. **One-time restart token** (``X-Clearskies-Restart-Token`` header):
+       Issued by /setup/apply, valid for 60 s, single-use.  Used by the wizard
+       to restart the API immediately after the first-run apply, before the
+       running process has reloaded its environment with the newly-written
+       WEEWX_CLEARSKIES_PROXY_SECRET.
+
+    2. **Proxy auth** (``X-Clearskies-Proxy-Auth`` header):
+       The normal mechanism for restarts triggered outside the wizard apply
+       flow (e.g. admin re-runs, external tooling).  Requires
+       WEEWX_CLEARSKIES_PROXY_SECRET to be set in the process environment.
+
+    After the 200 response is sent, a background task waits 1.5 s then sends
+    SIGTERM to the running process.  Uvicorn handles SIGTERM gracefully (flushes
+    in-flight requests, shuts down the event loop).  The process supervisor
+    (systemd Restart=always or Docker restart: unless-stopped) brings the process
+    back with fresh config loaded from disk.
+
+    Security: an unauthenticated restart endpoint would be a DoS vector.  Both
+    auth paths are constant-time compared.
     """
-    secret_configured = bool(os.environ.get("WEEWX_CLEARSKIES_PROXY_SECRET", "").strip())
-    if not secret_configured:
-        raise HTTPException(
-            503,
-            detail="Proxy secret not configured — restart endpoint unavailable.",
-        )
-    if not _check_proxy_auth(request):
-        raise HTTPException(401, detail="Valid X-Clearskies-Proxy-Auth header required")
+    authed_via_token = _check_restart_token(request)
+    if not authed_via_token:
+        secret_configured = bool(os.environ.get("WEEWX_CLEARSKIES_PROXY_SECRET", "").strip())
+        if not secret_configured:
+            raise HTTPException(
+                503,
+                detail="Proxy secret not configured — restart endpoint unavailable. "
+                "Use the wizard to complete setup, which issues a one-time restart token.",
+            )
+        if not _check_proxy_auth(request):
+            raise HTTPException(401, detail="Valid X-Clearskies-Proxy-Auth or X-Clearskies-Restart-Token header required")
 
     logger.warning(
-        "Restart requested via /setup/restart from %s — scheduling graceful shutdown",
+        "Restart requested via /setup/restart from %s (auth: %s) — scheduling graceful shutdown",
         request.client.host if request.client else "unknown",
+        "restart-token" if authed_via_token else "proxy-auth",
     )
 
     async def _deferred_sigterm() -> None:
