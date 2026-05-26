@@ -783,6 +783,44 @@ class TlsSettings:
             )
 
 
+class WebcamSettings:
+    """[webcam] section settings (Phase 6A).
+
+    Controls the webcam live-view and timelapse feature served by
+    GET /api/v1/webcam.  All fields are optional with safe defaults so the
+    endpoint works even if no [webcam] section is present in api.conf.
+    """
+
+    #: Whether the webcam feature is enabled.
+    enabled: bool
+    #: URL to the live webcam snapshot image (e.g. http://cam-ip/snapshot.jpg).
+    image_url: str | None
+    #: Seconds between image refreshes on the dashboard.
+    refresh_interval: int
+    #: Local filesystem path where timelapse frame images are stored.
+    timelapse_directory: str | None
+    #: Maximum number of timelapse frames to return (most recent N).
+    timelapse_max_frames: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.enabled = str(section.get("enabled", "false")).lower() in ("true", "1", "yes")
+        raw_image_url = str(section.get("image_url", "")).strip()
+        self.image_url = raw_image_url if raw_image_url else None
+        self.refresh_interval = int(section.get("refresh_interval", 60))
+        raw_timelapse_dir = str(section.get("timelapse_directory", "")).strip()
+        self.timelapse_directory = raw_timelapse_dir if raw_timelapse_dir else None
+        self.timelapse_max_frames = int(section.get("timelapse_max_frames", 100))
+
+    def validate(self) -> None:
+        """Raise ValueError on bad values. Called at startup."""
+        if self.enabled and not self.image_url:
+            raise ValueError("[webcam] enabled=true but image_url is not set")
+        if self.refresh_interval < 1:
+            raise ValueError("[webcam] refresh_interval must be >= 1")
+        if self.timelapse_max_frames < 1:
+            raise ValueError("[webcam] timelapse_max_frames must be >= 1")
+
+
 class ConditionsSettings:
     """[conditions] section settings (Phase 0B).
 
@@ -836,6 +874,7 @@ class Settings:
     tls: TlsSettings
     branding: BrandingSettings
     conditions: ConditionsSettings
+    webcam: WebcamSettings
 
     def __init__(
         self,
@@ -858,6 +897,7 @@ class Settings:
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
         conditions: ConditionsSettings | None = None,
+        webcam: WebcamSettings | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -880,6 +920,7 @@ class Settings:
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
+        self.webcam = webcam if webcam is not None else WebcamSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -896,6 +937,7 @@ class Settings:
         self.tls.validate()
         self.branding.validate()
         self.conditions.validate()
+        self.webcam.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1000,6 +1042,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
+    webcam_cfg = WebcamSettings(dict(cfg.get("webcam", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -1021,6 +1064,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         tls=tls_cfg,
         branding=branding_cfg,
         conditions=conditions_cfg,
+        webcam=webcam_cfg,
     )
     settings.validate()
 

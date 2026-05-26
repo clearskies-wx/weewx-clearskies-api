@@ -42,6 +42,8 @@ Startup sequence (ADR-012):
     6n. wire conditions settings — pass engine mode + station coords to observations endpoint.
     6o. wire radar — register configured radar provider's CAPABILITY in registry.
     6p. wire radar settings — wire credentials for keyed radar providers (aeris, openweathermap).
+    6q. wire webcam settings — pass settings to webcam endpoint (image_url, refresh_interval,
+                               timelapse_directory, timelapse_max_frames from api.conf [webcam]).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
     8. start uvicorn          — public API + health app.
 """
@@ -80,6 +82,7 @@ from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.observations import wire_conditions_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
+from weewx_clearskies_api.endpoints.webcam import wire_webcam_settings
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
 from weewx_clearskies_api.providers._common.cache import ConfigError as CacheConfigError
@@ -418,6 +421,7 @@ def main() -> None:
       6m. Wire forecast settings.
       6n. Wire conditions settings (Phase 0B blending engine mode + station coords).
       6o. Wire radar settings (keyed provider credentials — 3b-15; no-op for keyless).
+      6p. Wire webcam settings (image_url, refresh_interval, timelapse config — Phase 6A).
       7. Register DB health probe.
       8. Start uvicorn (TLS-enabled).
     """
@@ -643,6 +647,11 @@ def main() -> None:
 
     # Step 6p: Wire branding settings (ADR-022, Gap #10).
     wire_branding_settings(settings.branding)
+
+    # Step 6q: Wire webcam settings (Phase 6A).
+    # Passes image_url, refresh_interval, timelapse_directory, timelapse_max_frames
+    # to the webcam endpoint.  No-op when [webcam] enabled=false (default).
+    wire_webcam_settings(settings.webcam)
 
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()
