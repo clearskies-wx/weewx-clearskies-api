@@ -21,7 +21,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -30,6 +30,7 @@ from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.responses import (
     StationMetadata,
     StationResponse,
+    WebcamConfig,
     utc_isoformat,
 )
 from weewx_clearskies_api.services.station import get_station_info
@@ -42,6 +43,7 @@ router = APIRouter()
 
 @router.get("/station", summary="Station identity and metadata", tags=["Station"])
 def get_station(
+    request: Request,
     db: Annotated[Session, Depends(get_db_session)],
 ) -> StationResponse:
     """Return station metadata.
@@ -90,6 +92,14 @@ def get_station(
 
     units = get_units_block()
 
+    settings = request.app.state.settings
+    webcam_cfg = WebcamConfig(
+        enabled=settings.webcam.enabled,
+        imageUrl=settings.webcam.image_url,
+        videoUrl=settings.webcam.video_url,
+        refreshInterval=settings.webcam.refresh_interval,
+    )
+
     metadata = StationMetadata(
         stationId=info.station_id,
         name=info.name,
@@ -103,6 +113,7 @@ def get_station(
         lastRecord=last_record,
         hardware=info.hardware,
         defaultLocale=info.default_locale,
+        webcam=webcam_cfg,
     )
 
     return StationResponse(

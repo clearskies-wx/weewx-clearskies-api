@@ -406,6 +406,15 @@ class MoonPhaseResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class WebcamConfig(BaseModel):
+    """Webcam configuration block within StationMetadata."""
+
+    enabled: bool
+    imageUrl: str
+    videoUrl: str
+    refreshInterval: int
+
+
 class StationMetadata(BaseModel):
     """StationMetadata matching OpenAPI StationMetadata schema."""
 
@@ -421,6 +430,7 @@ class StationMetadata(BaseModel):
     lastRecord: str | None = None
     hardware: str | None = None
     defaultLocale: str = "en"
+    webcam: WebcamConfig | None = None
 
 
 class StationResponse(BaseModel):

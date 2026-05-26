@@ -813,6 +813,25 @@ class ConditionsSettings:
             )
 
 
+class WebcamSettings:
+    """[webcam] section settings."""
+
+    #: Whether webcam display is enabled on the dashboard.
+    enabled: bool
+    #: URL path to the live still image.
+    image_url: str
+    #: URL path to the timelapse video.
+    video_url: str
+    #: How often the image is updated, in seconds (controls cache-busting refresh).
+    refresh_interval: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.enabled = str(section.get("enabled", "false")).strip().lower() in ("true", "1", "yes")
+        self.image_url = str(section.get("image_url", "/webcam/weather_cam.jpg")).strip()
+        self.video_url = str(section.get("video_url", "/webcam/weewx_timelapse.mp4")).strip()
+        self.refresh_interval = int(section.get("refresh_interval", 60))
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -836,6 +855,7 @@ class Settings:
     tls: TlsSettings
     branding: BrandingSettings
     conditions: ConditionsSettings
+    webcam: WebcamSettings
 
     def __init__(
         self,
@@ -858,6 +878,7 @@ class Settings:
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
         conditions: ConditionsSettings | None = None,
+        webcam: WebcamSettings | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -880,6 +901,7 @@ class Settings:
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
+        self.webcam = webcam if webcam is not None else WebcamSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -1000,6 +1022,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
+    webcam_cfg = WebcamSettings(dict(cfg.get("webcam", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -1021,6 +1044,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         tls=tls_cfg,
         branding=branding_cfg,
         conditions=conditions_cfg,
+        webcam=webcam_cfg,
     )
     settings.validate()
 
