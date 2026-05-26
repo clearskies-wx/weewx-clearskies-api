@@ -121,17 +121,6 @@ path = /var/lib/weewx/weewx.sdb
 # reports_directory = /var/www/html/weewx/NOAA
 
 
-[webcam]
-# Enable webcam display on the dashboard
-enabled = false
-# URL path to the live still image
-image_url = /webcam/weather_cam.jpg
-# URL path to the timelapse video
-video_url = /webcam/weewx_timelapse.mp4
-# How often the image is updated, in seconds (controls cache-busting refresh)
-refresh_interval = 60
-
-
 [conditions]
 # Controls the Current Conditions text on the dashboard.
 # "auto" (default) — blends local sensor data with provider conditions
