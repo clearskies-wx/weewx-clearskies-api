@@ -492,11 +492,14 @@ def _write_skin_conf(skin_data: dict[str, Any]) -> Path:
     """
     try:
         wconf = get_weewx_conf()
-        skin_root = wconf.get("StdReport", {}).get("SKIN_ROOT", "/etc/weewx/skins")
+        raw = wconf.get("StdReport", {}).get("SKIN_ROOT", "skins")
+        skin_root = Path(raw)
+        if not skin_root.is_absolute():
+            skin_root = Path(wconf.filename).parent / skin_root
     except RuntimeError:
-        skin_root = "/etc/weewx/skins"
+        skin_root = Path("/etc/weewx/skins")
 
-    skin_dir = Path(skin_root) / "ClearSkies"
+    skin_dir = skin_root / "ClearSkies"
     skin_dir.mkdir(parents=True, exist_ok=True)
     skin_path = skin_dir / "skin.conf"
 
@@ -1020,9 +1023,10 @@ async def get_skin_file(
 
     try:
         wconf = get_weewx_conf()
-        skin_root = Path(
-            wconf.get("StdReport", {}).get("SKIN_ROOT", "/etc/weewx/skins")
-        )
+        raw = wconf.get("StdReport", {}).get("SKIN_ROOT", "skins")
+        skin_root = Path(raw)
+        if not skin_root.is_absolute():
+            skin_root = Path(wconf.filename).parent / skin_root
     except RuntimeError:
         skin_root = Path("/etc/weewx/skins")
 
