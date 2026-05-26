@@ -32,6 +32,7 @@ from urllib.parse import quote_plus
 
 import configobj
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -1002,6 +1003,47 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         providers=providers,
         station=station,
     )
+
+
+@router.get("/skin-file")
+async def get_skin_file(
+    skin: str,
+    path: str,
+    request: Request,
+) -> FileResponse:
+    """Serve a file from a weewx skin directory (ADR-043 image import).
+
+    Used by the wizard to fetch image assets (logos, favicons) from an
+    existing skin when importing its skin.conf.
+    """
+    await require_setup_session(request)
+
+    try:
+        wconf = get_weewx_conf()
+        skin_root = Path(
+            wconf.get("StdReport", {}).get("SKIN_ROOT", "/etc/weewx/skins")
+        )
+    except RuntimeError:
+        skin_root = Path("/etc/weewx/skins")
+
+    # Validate skin name — no path separators or traversal sequences.
+    if "/" in skin or "\\" in skin or ".." in skin:
+        raise HTTPException(400, detail="Invalid skin name")
+
+    # Build and validate full path — prevent directory traversal.
+    skin_dir = (skin_root / skin).resolve()
+    file_path = (skin_dir / path).resolve()
+
+    # Ensure the resolved file_path is strictly inside skin_dir.
+    # The os.sep suffix prevents prefix attacks, e.g. /skins/Foo matching
+    # /skins/FooBar/secret when skin_dir is /skins/Foo.
+    if not str(file_path).startswith(str(skin_dir) + os.sep) and file_path != skin_dir:
+        raise HTTPException(400, detail="Invalid path")
+
+    if not file_path.is_file():
+        raise HTTPException(404, detail="File not found in skin directory")
+
+    return FileResponse(file_path)
 
 
 def _check_restart_token(request: Request) -> bool:
