@@ -144,22 +144,16 @@ def _derive_sky(
 ) -> str | None:
     """Derive current sky condition text.
 
-    Daytime (sun_altitude > 10°): uses the clearness index (Kt) computed
-    from the local solar radiation sensor vs the theoretical maximum for
-    this moment and location.  Falls back to provider when sensor data is
-    unavailable.
+    Always tries the local clearness index (Kt) first when the solar radiation
+    sensor and theoretical maximum are both available and non-zero.  Kt from
+    real sensor data is meaningful at any sun angle, including dusk — if the
+    sensor is reporting, it tells us about actual cloud cover.
 
-    Nighttime / dawn / dusk (sun_altitude is None or <= 10°): station solar
-    sensor is unreliable, so the provider is authoritative.  Extracts sky
-    keywords from provider.weatherText or maps provider.cloudCover.
+    Falls back to the provider only when local sensors cannot determine sky
+    (radiation unavailable, maxSolarRad missing/zero).
     """
-    daytime = sun_altitude is not None and sun_altitude > 10.0
-
-    if not daytime:
-        # Use provider for night / dawn / dusk.
-        return _sky_from_provider(provider_conditions)
-
-    # Daytime: try Kt from local radiation sensor.
+    # Always try local clearness index first — if sensors are reporting,
+    # they tell us about actual cloud cover regardless of sun angle.
     obs_rad = observation.radiation
     if obs_rad is not None and max_solar_rad is not None and max_solar_rad > 0:
         kt = obs_rad / max_solar_rad
@@ -173,7 +167,8 @@ def _derive_sky(
             return "Mostly Cloudy"
         return "Overcast"
 
-    # Sensor data unavailable — fall back to provider.
+    # Local sensors can't determine sky — fall back to provider
+    # (only meaningful at night/dusk when provider has sky data).
     return _sky_from_provider(provider_conditions)
 
 

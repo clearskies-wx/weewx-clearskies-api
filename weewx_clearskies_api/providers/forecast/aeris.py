@@ -902,7 +902,13 @@ def _parse_aeris_envelope_raw(response: Any, *, call_label: str) -> list[dict[st
         ProviderProtocolError: success=false or envelope parse failure.
     """
     try:
-        envelope = _AerisEnvelope.model_validate(response.json())
+        raw = response.json()
+        # Aeris returns response as a list for batch queries but as a single
+        # object for single-location queries (/observations/{lat},{lon}).
+        # Normalize to list so the envelope model always sees a list.
+        if isinstance(raw.get("response"), dict):
+            raw["response"] = [raw["response"]]
+        envelope = _AerisEnvelope.model_validate(raw)
     except (ValidationError, ValueError) as exc:
         logger.error(
             "Aeris %s envelope parse failed: %s. Body (first 2000 chars): %.2000s",
