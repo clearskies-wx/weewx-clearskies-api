@@ -128,21 +128,3 @@ path = /var/lib/weewx/weewx.sdb
 # "off" — no weatherText field on observations
 # engine = auto
 
-
-[webcam]
-# Live webcam image and timelapse configuration (Phase 6A).
-# When enabled=false (default), the webcam UI is hidden on the dashboard.
-# enabled = false
-
-# URL to the live webcam snapshot image.  Required when enabled=true.
-# image_url = http://your-webcam-ip/snapshot.jpg
-
-# Seconds between dashboard image refreshes.  Default 60.
-# refresh_interval = 60
-
-# Local filesystem path to the directory containing timelapse frame images
-# (*.jpg, *.png).  Leave unset to disable the timelapse player.
-# timelapse_directory = /var/lib/weewx/timelapse
-
-# Maximum number of timelapse frames to return (most recent N, sorted by name).
-# timelapse_max_frames = 100

@@ -928,29 +928,3 @@ class RadarFramesResponse(BaseModel):
     data: RadarFrameList
     generatedAt: str  # UTC ISO-8601 with Z
 
-
-# ---------------------------------------------------------------------------
-# Webcam (Phase 6A)
-# ---------------------------------------------------------------------------
-
-
-class WebcamResponse(BaseModel):
-    """Webcam configuration and timelapse frame list (Phase 6A).
-
-    Returned by GET /api/v1/webcam.
-
-    When enabled=false the dashboard should hide the webcam UI entirely.
-    When enabled=true:
-      - imageUrl is the live snapshot URL the dashboard polls at refreshInterval.
-      - timelapseFrames is a list of filenames (not full paths) from the
-        timelapse_directory, sorted by name (timestamp-based filenames sort
-        chronologically), last timelapse_max_frames files.  The dashboard
-        constructs the full file URL via GET /api/v1/webcam/timelapse/{filename}.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool
-    imageUrl: str | None = None
-    refreshInterval: int = 60
-    timelapseFrames: list[str] = Field(default_factory=list)

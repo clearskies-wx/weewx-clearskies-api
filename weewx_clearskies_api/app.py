@@ -57,7 +57,6 @@ from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
 from weewx_clearskies_api.endpoints.station import router as station_router
-from weewx_clearskies_api.endpoints.webcam import router as webcam_router
 from weewx_clearskies_api.errors import register_error_handlers
 from weewx_clearskies_api.metrics import current_endpoint
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
@@ -176,10 +175,6 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(radar_router, prefix="/api/v1")
         # Gap #10 (ADR-022): branding configuration endpoint.
         app.include_router(branding_router, prefix="/api/v1")
-        # Phase 6A: webcam live view and timelapse.
-        # Note: /webcam/timelapse/{filename} MUST be registered on the same router
-        # as /webcam so FastAPI resolves the more-specific path first.
-        app.include_router(webcam_router, prefix="/api/v1")
 
         # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
         app.include_router(setup_router)

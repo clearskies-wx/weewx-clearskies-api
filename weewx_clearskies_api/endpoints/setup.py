@@ -234,15 +234,6 @@ class ProviderConfig(BaseModel):
     iframe_url: str | None = None
 
 
-class WebcamApplyConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    enabled: bool = False
-    image_url: str = ""
-    refresh_interval: int = 60
-    timelapse_directory: str = ""
-    timelapse_max_frames: int = 100
-
-
 class ApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -257,7 +248,6 @@ class ApplyRequest(BaseModel):
     #: MQTT/realtime proxy shared secret.  Written to secrets.env as
     #: WEEWX_CLEARSKIES_PROXY_SECRET.
     proxy_secret: str | None = None
-    webcam: WebcamApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -473,18 +463,6 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             # Radar iframe URL (non-secret; stored in api.conf per settings.py).
             if pc.iframe_url and section == "radar":
                 cfg[section]["iframe_url"] = pc.iframe_url
-
-    # [webcam] — optional webcam configuration.
-    if apply.webcam is not None:
-        if "webcam" not in cfg:
-            cfg["webcam"] = {}
-        cfg["webcam"]["enabled"] = "true" if apply.webcam.enabled else "false"
-        if apply.webcam.image_url:
-            cfg["webcam"]["image_url"] = apply.webcam.image_url
-        cfg["webcam"]["refresh_interval"] = str(apply.webcam.refresh_interval)
-        if apply.webcam.timelapse_directory:
-            cfg["webcam"]["timelapse_directory"] = apply.webcam.timelapse_directory
-        cfg["webcam"]["timelapse_max_frames"] = str(apply.webcam.timelapse_max_frames)
 
     cfg.write()
 
