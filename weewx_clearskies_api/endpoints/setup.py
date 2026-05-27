@@ -24,6 +24,7 @@ import ipaddress
 import logging
 import os
 import secrets
+import shutil
 import signal
 import time
 from pathlib import Path
@@ -468,6 +469,9 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             # Radar iframe URL (non-secret; stored in api.conf per settings.py).
             if pc.iframe_url and section == "radar":
                 cfg[section]["iframe_url"] = pc.iframe_url
+
+    if conf_path.exists():
+        shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
 
     cfg.write()
 
