@@ -22,14 +22,30 @@ from weewx_clearskies_api.models.params import (
     AlmanacQueryParams,
     MoonPhasesQueryParams,
     SunTimesQueryParams,
+    PlanetsQueryParams,
+    EclipsesQueryParams,
+    MeteorShowersQueryParams,
+    MoonNamesQueryParams,
 )
 from weewx_clearskies_api.models.responses import (
     AlmanacResponse,
     AlmanacSnapshot,
+    EclipseResponse,
+    LunarEclipseEntry,
+    LunarEclipseList,
+    MeteorShowerEntry,
+    MeteorShowerList,
+    MeteorShowerResponse,
+    MoonNamesCalendar,
+    MoonNamesResponse,
     MoonPhaseCalendar,
     MoonPhaseDay,
     MoonPhaseResponse,
     MoonSnapshot,
+    PlanetEntry,
+    PlanetResponse,
+    PlanetVisibility,
+    SpecialMoonEntry,
     SunSnapshot,
     SunTimesDay,
     SunTimesResponse,
@@ -69,6 +85,38 @@ def _get_moon_phases_params(request: Request) -> MoonPhasesQueryParams:
     """Validate GET /almanac/moon-phases query parameters."""
     try:
         return MoonPhasesQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_planets_params(request: Request) -> PlanetsQueryParams:
+    """Validate GET /almanac/planets query parameters."""
+    try:
+        return PlanetsQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_eclipses_params(request: Request) -> EclipsesQueryParams:
+    """Validate GET /almanac/eclipses query parameters."""
+    try:
+        return EclipsesQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_meteor_showers_params(request: Request) -> MeteorShowersQueryParams:
+    """Validate GET /almanac/meteor-showers query parameters."""
+    try:
+        return MeteorShowersQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_moon_names_params(request: Request) -> MoonNamesQueryParams:
+    """Validate GET /almanac/moon-names query parameters."""
+    try:
+        return MoonNamesQueryParams.model_validate(dict(request.query_params))
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
@@ -216,5 +264,132 @@ def get_moon_phases(
 
     return MoonPhaseResponse(
         data=MoonPhaseCalendar(year=year, month=month, days=days),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )
+
+
+@router.get("/almanac/moon-names", summary="Special full moon names", tags=["Almanac"])
+def get_moon_names(
+    params: Annotated[MoonNamesQueryParams, Depends(_get_moon_names_params)],
+) -> MoonNamesResponse:
+    """Full moons for a year with traditional and special name annotations.
+
+    Returns one entry per full moon: traditional name (Wolf, Snow, etc.),
+    Harvest Moon, Blue Moon, Hunter's Moon, and Supermoon flags.
+    """
+    year = params.year if params.year is not None else _current_year_in_station_tz()
+
+    moons_raw = almanac_svc.compute_special_moon_names(year)
+    moons = [
+        SpecialMoonEntry(
+            date=m["date"],
+            traditionalName=m["traditionalName"],
+            isHarvestMoon=m["isHarvestMoon"],
+            isBlueMoon=m["isBlueMoon"],
+            isHuntersMoon=m["isHuntersMoon"],
+            isSupermoon=m["isSupermoon"],
+        )
+        for m in moons_raw
+    ]
+
+    return MoonNamesResponse(
+        data=MoonNamesCalendar(year=year, moons=moons),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )
+
+
+@router.get("/almanac/planets", summary="Planet visibility", tags=["Almanac"])
+def get_planets(
+    params: Annotated[PlanetsQueryParams, Depends(_get_planets_params)],
+) -> PlanetResponse:
+    """Evening/morning/all-night planet visibility for a given date.
+
+    Returns Mercury through Saturn classified by visibility period.
+    Only planets with apparent magnitude < 6.0 are included.
+    """
+    target_date = params.date if params.date is not None else _today_in_station_tz()
+    lat, lon, alt = _station_location()
+    station_tz = get_station_info().timezone
+
+    visibility_raw = almanac_svc.compute_planets(
+        target_date, lat, lon, alt, station_tz=station_tz
+    )
+
+    def _to_entries(raw_list: list[dict]) -> list[PlanetEntry]:
+        return [
+            PlanetEntry(
+                name=p["name"],
+                magnitude=p["magnitude"],
+                rise=p["rise"],
+                set=p["set"],
+                constellation=p["constellation"],
+            )
+            for p in raw_list
+        ]
+
+    return PlanetResponse(
+        data=PlanetVisibility(
+            evening=_to_entries(visibility_raw["evening"]),
+            morning=_to_entries(visibility_raw["morning"]),
+            allNight=_to_entries(visibility_raw["allNight"]),
+        ),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )
+
+
+@router.get("/almanac/eclipses", summary="Lunar eclipses", tags=["Almanac"])
+def get_eclipses(
+    params: Annotated[EclipsesQueryParams, Depends(_get_eclipses_params)],
+) -> EclipseResponse:
+    """Lunar eclipse dates and types for a given year.
+
+    Uses skyfield.eclipselib; returns an empty list if unavailable.
+    Types: penumbral, partial, total.
+    """
+    year = params.year if params.year is not None else _current_year_in_station_tz()
+
+    eclipses_raw = almanac_svc.compute_lunar_eclipses(year)
+    eclipses = [
+        LunarEclipseEntry(date=e["date"], type=e["type"])
+        for e in eclipses_raw
+    ]
+
+    return EclipseResponse(
+        data=LunarEclipseList(year=year, eclipses=eclipses),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )
+
+
+@router.get("/almanac/meteor-showers", summary="Meteor shower viewing conditions", tags=["Almanac"])
+def get_meteor_showers(
+    params: Annotated[MeteorShowersQueryParams, Depends(_get_meteor_showers_params)],
+) -> MeteorShowerResponse:
+    """Meteor shower viewing conditions for a given year.
+
+    Returns 12 major annual showers with radiant altitude, moon illumination,
+    and a viewing conditions rating (excellent / good / fair / poor).
+    """
+    year = params.year if params.year is not None else _current_year_in_station_tz()
+    lat, lon, alt = _station_location()
+    station_tz = get_station_info().timezone
+
+    showers_raw = almanac_svc.compute_meteor_showers(
+        year, lat, lon, alt, station_tz=station_tz
+    )
+    showers = [
+        MeteorShowerEntry(
+            name=s["name"],
+            peakDate=s["peakDate"],
+            zhr=s["zhr"],
+            radiantAltitudeDeg=s["radiantAltitudeDeg"],
+            moonIlluminationPercent=s["moonIlluminationPercent"],
+            viewingConditions=s["viewingConditions"],
+            parentBody=s["parentBody"],
+        )
+        for s in showers_raw
+    ]
+
+    return MeteorShowerResponse(
+        data=MeteorShowerList(year=year, showers=showers),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )

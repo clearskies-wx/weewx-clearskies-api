@@ -92,7 +92,7 @@ class ArchiveQueryParams(BaseModel):
 
 _VALID_SECTIONS = frozenset({
     "temperature", "wind", "rain", "humidity", "barometer",
-    "sun", "aqi", "inside-temp", "custom",
+    "sun", "aqi",
 })
 
 _YEAR_RE = re.compile(r"^\d{4}$")
@@ -221,6 +221,76 @@ class MoonPhasesQueryParams(BaseModel):
 
     year: int | None = Field(default=None, ge=1900)
     month: int | None = Field(default=None, ge=1, le=12)
+
+
+# ---------------------------------------------------------------------------
+# /almanac/moon-names query params
+# ---------------------------------------------------------------------------
+
+
+class MoonNamesQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/moon-names."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=1900)
+
+
+# ---------------------------------------------------------------------------
+# /almanac/planets query params
+# ---------------------------------------------------------------------------
+
+
+class PlanetsQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/planets.
+
+    The 'date' field uses `_datetime_mod.date` (fully qualified) to avoid
+    the Pydantic forward-ref shadowing bug (same as AlmanacQueryParams).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: _datetime_mod.date | None = None
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def validate_date_field(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            try:
+                return _datetime_mod.date.fromisoformat(v)
+            except ValueError as exc:
+                raise ValueError(
+                    f"date must be a valid ISO date (YYYY-MM-DD), got {v!r}"
+                ) from exc
+        return v
+
+
+# ---------------------------------------------------------------------------
+# /almanac/eclipses query params
+# ---------------------------------------------------------------------------
+
+
+class EclipsesQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/eclipses."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=1900)
+
+
+# ---------------------------------------------------------------------------
+# /almanac/meteor-showers query params
+# ---------------------------------------------------------------------------
+
+
+class MeteorShowersQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/meteor-showers."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=1900)
 
 
 # ---------------------------------------------------------------------------

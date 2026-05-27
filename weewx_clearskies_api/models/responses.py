@@ -401,6 +401,103 @@ class MoonPhaseResponse(BaseModel):
     generatedAt: str
 
 
+class SpecialMoonEntry(BaseModel):
+    """One full moon with traditional and special name flags."""
+
+    date: str
+    traditionalName: str
+    isHarvestMoon: bool
+    isBlueMoon: bool
+    isHuntersMoon: bool
+    isSupermoon: bool
+
+
+class MoonNamesCalendar(BaseModel):
+    """All full moons for a year with their special name flags."""
+
+    year: int
+    moons: list[SpecialMoonEntry]
+
+
+class MoonNamesResponse(BaseModel):
+    """MoonNamesResponse envelope (GET /almanac/moon-names)."""
+
+    data: MoonNamesCalendar
+    generatedAt: str
+
+
+class PlanetEntry(BaseModel):
+    """One visible planet entry."""
+
+    name: str
+    magnitude: float | None = None
+    rise: str | None = None
+    set: str | None = None
+    constellation: str | None = None
+
+
+class PlanetVisibility(BaseModel):
+    """Planet visibility grouped by period."""
+
+    evening: list[PlanetEntry]
+    morning: list[PlanetEntry]
+    allNight: list[PlanetEntry]
+
+
+class PlanetResponse(BaseModel):
+    """PlanetResponse envelope (GET /almanac/planets)."""
+
+    data: PlanetVisibility
+    generatedAt: str
+
+
+class LunarEclipseEntry(BaseModel):
+    """One lunar eclipse."""
+
+    date: str
+    type: str  # "penumbral" | "partial" | "total"
+
+
+class LunarEclipseList(BaseModel):
+    """List of lunar eclipses for a year."""
+
+    year: int
+    eclipses: list[LunarEclipseEntry]
+
+
+class EclipseResponse(BaseModel):
+    """EclipseResponse envelope (GET /almanac/eclipses)."""
+
+    data: LunarEclipseList
+    generatedAt: str
+
+
+class MeteorShowerEntry(BaseModel):
+    """One meteor shower with viewing conditions."""
+
+    name: str
+    peakDate: str
+    zhr: int
+    radiantAltitudeDeg: float
+    moonIlluminationPercent: int
+    viewingConditions: str  # "excellent" | "good" | "fair" | "poor"
+    parentBody: str
+
+
+class MeteorShowerList(BaseModel):
+    """List of meteor showers for a year."""
+
+    year: int
+    showers: list[MeteorShowerEntry]
+
+
+class MeteorShowerResponse(BaseModel):
+    """MeteorShowerResponse envelope (GET /almanac/meteor-showers)."""
+
+    data: MeteorShowerList
+    generatedAt: str
+
+
 # ---------------------------------------------------------------------------
 # Station
 # ---------------------------------------------------------------------------
