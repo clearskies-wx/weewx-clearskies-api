@@ -52,8 +52,6 @@ SECTION_MAP: dict[str, list[_RecordSpec]] = {
     "temperature": [
         _RecordSpec("High temperature", "outTemp", "high", "max"),
         _RecordSpec("Low temperature", "outTemp", "low", "min"),
-        _RecordSpec("High dewpoint", "dewpoint", "high", "max"),
-        _RecordSpec("Low dewpoint", "dewpoint", "low", "min"),
         _RecordSpec("High heat index", "heatindex", "high", "max"),
         _RecordSpec("Low wind chill", "windchill", "low", "min"),
         _RecordSpec("High apparent temperature", "appTemp", "high", "max"),
@@ -78,6 +76,8 @@ SECTION_MAP: dict[str, list[_RecordSpec]] = {
     "humidity": [
         _RecordSpec("High humidity", "outHumidity", "high", "max"),
         _RecordSpec("Low humidity", "outHumidity", "low", "min"),
+        _RecordSpec("High dewpoint", "dewpoint", "high", "max"),
+        _RecordSpec("Low dewpoint", "dewpoint", "low", "min"),
     ],
     "barometer": [
         _RecordSpec("High barometer", "barometer", "high", "max"),
@@ -461,10 +461,14 @@ def get_records(
                 )
                 val, ts = None, None
 
+            response_field = spec.canonicalField
+            if spec.aggregator in ("max-consecutive-rain-days", "max-consecutive-dry-days"):
+                response_field = "consecutiveDays"
+
             entries.append(
                 RecordEntry(
                     label=spec.label,
-                    canonicalField=spec.canonicalField,
+                    canonicalField=response_field,
                     value=float(val) if val is not None else None,
                     observedAt=_epoch_to_utc_z(ts) if ts is not None else None,
                     brokenInLast30Days=_is_broken_in_last_30_days(ts),
