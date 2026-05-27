@@ -183,3 +183,21 @@ path = /var/lib/weewx/weewx.sdb
 # instagram_url =
 # youtube_url =
 
+
+[earthquakes]
+# Earthquake data configuration (ADR-040).
+# provider: data source — usgs | geonet | emsc | renass (all keyless).
+# provider = usgs
+
+# Default search radius in km from station lat/lon.
+# Override per-request with ?radius_km.  Default 100.
+# default_radius_km = 100
+
+# Minimum magnitude to include when ?minmagnitude is not supplied.
+# Applied post-cache per ADR-017.  Default 2.0.
+# min_magnitude = 2.0
+
+# Lookback window in days used to compute starttime when ?from is not supplied.
+# Prevents open-ended queries against upstream providers.  Default 7.
+# default_days = 7
+

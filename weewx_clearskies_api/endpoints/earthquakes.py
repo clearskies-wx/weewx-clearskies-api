@@ -29,9 +29,8 @@ Provider discovery: endpoint reads the capability registry at request time.
 All four providers are keyless (per ADR-040) — no credential wiring functions
 needed here (no wire_*_credentials() calls; no module-level credential storage).
 
-wire_earthquakes_settings(settings) extracts default_radius_km from
-  settings.earthquakes for use as the per-request radius fallback when
-  ?radius_km is not supplied.
+wire_earthquakes_settings(settings) extracts default_radius_km, min_magnitude,
+  and default_days from settings.earthquakes for use as per-request fallbacks.
 
 GeoNet note: GeoNet does not support server-side radius filtering; all events
   returned and the endpoint's radius filter applies post-fetch at the canonical
@@ -42,7 +41,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import pydantic
@@ -66,20 +65,26 @@ router = APIRouter()
 # Module-level settings wiring (populated at startup)
 # ---------------------------------------------------------------------------
 
-_default_radius_km: float = 100.0  # fallback if wire_earthquakes_settings not called
+_default_radius_km: float = 100.0    # fallback if wire_earthquakes_settings not called
+_default_min_magnitude: float = 2.0  # fallback min magnitude from config
+_default_days: int = 7               # fallback lookback window in days
+_configured_provider: str | None = None  # provider id from config (for /config endpoint)
 
 
 def wire_earthquakes_settings(settings: object) -> None:
     """Store earthquakes settings for use by the endpoint.
 
-    Extracts default_radius_km from settings.earthquakes. Called from
-    __main__.py after settings load. Tests that don't care about the
-    configured radius leave this at the module default of 100 km.
+    Extracts default_radius_km, min_magnitude, and default_days from
+    settings.earthquakes. Called from __main__.py after settings load.
+    Tests that don't care about these values leave them at the module defaults.
     """
-    global _default_radius_km  # noqa: PLW0603
+    global _default_radius_km, _default_min_magnitude, _default_days, _configured_provider  # noqa: PLW0603
     eq_section = getattr(settings, "earthquakes", None)
     if eq_section is not None:
         _default_radius_km = float(getattr(eq_section, "default_radius_km", 100.0))
+        _default_min_magnitude = float(getattr(eq_section, "min_magnitude", 2.0))
+        _default_days = int(getattr(eq_section, "default_days", 7))
+        _configured_provider = getattr(eq_section, "provider", None)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +220,20 @@ def get_earthquakes(
     # Resolve effective radius: ?radius_km overrides configured default.
     effective_radius_km = params.radius_km if params.radius_km is not None else _default_radius_km
 
+    # Resolve effective time window: ?from overrides configured default_days lookback.
+    # When from_ is absent, compute starttime as now - default_days so the upstream
+    # provider call is bounded (avoids open-ended queries against providers that may
+    # return huge result sets).
+    effective_from = params.from_
+    if effective_from is None:
+        effective_from = datetime.now(tz=UTC) - timedelta(days=_default_days)
+
+    # Resolve effective min_magnitude: ?min_magnitude overrides configured default.
+    # When absent, use _default_min_magnitude from config (applied post-cache per ADR-017).
+    effective_min_magnitude = (
+        params.min_magnitude if params.min_magnitude is not None else _default_min_magnitude
+    )
+
     # --- Dispatch to provider module ---
     if provider_id == "usgs":
         from weewx_clearskies_api.providers.earthquakes import usgs  # noqa: PLC0415
@@ -223,7 +242,7 @@ def get_earthquakes(
             lat=station.latitude,
             lon=station.longitude,
             radius_km=effective_radius_km,
-            from_dt=params.from_,
+            from_dt=effective_from,
             to_dt=params.to,
         )
     elif provider_id == "geonet":
@@ -233,7 +252,7 @@ def get_earthquakes(
             lat=station.latitude,
             lon=station.longitude,
             radius_km=effective_radius_km,
-            from_dt=params.from_,
+            from_dt=effective_from,
             to_dt=params.to,
         )
         # GeoNet returns all NZ events — apply radius filter post-fetch.
@@ -247,7 +266,7 @@ def get_earthquakes(
             lat=station.latitude,
             lon=station.longitude,
             radius_km=effective_radius_km,
-            from_dt=params.from_,
+            from_dt=effective_from,
             to_dt=params.to,
         )
     elif provider_id == "renass":
@@ -257,7 +276,7 @@ def get_earthquakes(
             lat=station.latitude,
             lon=station.longitude,
             radius_km=effective_radius_km,
-            from_dt=params.from_,
+            from_dt=effective_from,
             to_dt=params.to,
         )
     else:
@@ -268,10 +287,88 @@ def get_earthquakes(
         )
 
     # --- Apply magnitude filter AFTER cache lookup + GeoNet radius filter (ADR-017) ---
-    filtered_records = _filter_by_magnitude(all_records, params.min_magnitude)
+    filtered_records = _filter_by_magnitude(all_records, effective_min_magnitude)
 
     return EarthquakeListResponse(
         data=filtered_records,
         source=provider_id,
         generatedAt=now_str,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /earthquakes/config
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/earthquakes/config",
+    summary="Current seismic configuration",
+    tags=["Earthquakes"],
+)
+def get_earthquakes_config() -> dict:
+    """Return the current seismic configuration from api.conf.
+
+    Includes the configured provider, radius, minMagnitude, and defaultDays.
+    The provider value reflects what is wired at startup; it may be None when
+    no earthquakes provider is configured.
+    """
+    now_str = utc_isoformat(datetime.now(tz=UTC))
+
+    # Derive the active provider id from the registry (consistent with /earthquakes).
+    provider_registry = get_provider_registry()
+    earthquakes_providers = [p for p in provider_registry if p.domain == "earthquakes"]
+    provider_id = earthquakes_providers[0].provider_id if earthquakes_providers else (
+        _configured_provider or "none"
+    )
+
+    return {
+        "data": {
+            "provider": provider_id,
+            "radiusKm": _default_radius_km,
+            "minMagnitude": _default_min_magnitude,
+            "defaultDays": _default_days,
+        },
+        "generatedAt": now_str,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /earthquakes/faults
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/earthquakes/faults",
+    summary="Active fault lines within configured radius",
+    tags=["Earthquakes"],
+)
+def get_faults() -> dict:
+    """Return GEM Active Faults GeoJSON clipped to the configured radius.
+
+    Faults are loaded from data/gem_active_faults.geojson (GEM Global Active
+    Faults Database, CC-BY-SA 4.0). Only fault features with at least one
+    vertex within the configured radius of the station are included.
+
+    When the GEM data file is absent, an empty FeatureCollection is returned.
+    """
+    from weewx_clearskies_api.services.faults import get_faults_within_radius  # noqa: PLC0415
+
+    now_str = utc_isoformat(datetime.now(tz=UTC))
+
+    try:
+        station = get_station_info()
+    except RuntimeError:
+        logger.error(
+            "Station metadata not available at faults endpoint — "
+            "this should not happen after successful startup"
+        )
+        raise HTTPException(status_code=503, detail="Service starting")
+
+    data = get_faults_within_radius(station.latitude, station.longitude, _default_radius_km)
+
+    return {
+        "data": data,
+        "attribution": "Active faults: GEM Global Active Faults Database, CC-BY-SA 4.0",
+        "generatedAt": now_str,
+    }

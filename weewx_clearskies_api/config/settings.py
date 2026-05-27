@@ -553,6 +553,10 @@ class EarthquakesSettings:
     provider: str | None
     #: Default radius in km from station lat/lon.  Override per-request via ?radius_km.
     default_radius_km: float
+    #: Default minimum magnitude filter.  Used when ?minmagnitude not supplied.
+    min_magnitude: float
+    #: Default lookback window in days.  Used to compute starttime when ?from not supplied.
+    default_days: int
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -568,6 +572,30 @@ class EarthquakesSettings:
         if self.default_radius_km < 0:
             raise ValueError(
                 f"[earthquakes] default_radius_km {self.default_radius_km!r} must be >= 0."
+            )
+
+        raw_min_mag = section.get("min_magnitude", 2.0)
+        try:
+            self.min_magnitude = float(raw_min_mag)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"[earthquakes] min_magnitude {raw_min_mag!r} must be a number."
+            ) from exc
+        if self.min_magnitude < 0:
+            raise ValueError(
+                f"[earthquakes] min_magnitude {self.min_magnitude!r} must be >= 0."
+            )
+
+        raw_days = section.get("default_days", 7)
+        try:
+            self.default_days = int(raw_days)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"[earthquakes] default_days {raw_days!r} must be an integer."
+            ) from exc
+        if self.default_days < 1:
+            raise ValueError(
+                f"[earthquakes] default_days {self.default_days!r} must be >= 1."
             )
 
     def validate(self) -> None:

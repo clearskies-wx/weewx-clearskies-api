@@ -1,0 +1,8 @@
+{
+  "type": "FeatureCollection",
+  "name": "GEM Global Active Faults Database",
+  "license": "CC-BY-SA 4.0",
+  "source": "https://github.com/GEMScienceTools/gem-global-active-faults",
+  "note": "Placeholder — download full dataset from GEM repository and replace this file.",
+  "features": []
+}

@@ -261,6 +261,26 @@ class SocialApplyConfig(BaseModel):
     youtube_url: str | None = None
 
 
+class EarthquakeApplyConfig(BaseModel):
+    """Earthquake settings for the [earthquakes] section of api.conf.
+
+    These are the seismic-specific knobs beyond the provider id (which is
+    handled by the ProviderConfig mechanism in the providers dict).
+
+    All fields are optional — absent means "leave existing value unchanged"
+    (same pattern as BrandingApplyConfig and SocialApplyConfig).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Default radius in km from station for earthquake queries.
+    default_radius_km: float | None = None
+    #: Minimum magnitude filter applied when ?minmagnitude not supplied.
+    min_magnitude: float | None = None
+    #: Lookback window in days used to compute starttime when ?from not supplied.
+    default_days: int | None = None
+
+
 class ApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -286,6 +306,9 @@ class ApplyRequest(BaseModel):
     #: Optional social media URLs.  When present, written to the [social]
     #: section of api.conf.  None → skip.
     social: SocialApplyConfig | None = None
+    #: Optional earthquake settings.  When present, written to the [earthquakes]
+    #: section of api.conf.  None → skip (leaves existing values unchanged).
+    earthquakes: EarthquakeApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -353,12 +376,21 @@ class CurrentConfigSocialSection(BaseModel):
     youtube_url: str = ""
 
 
+class CurrentConfigEarthquakeSection(BaseModel):
+    """Earthquake-specific knobs from the [earthquakes] section of api.conf."""
+
+    default_radius_km: float | None = None
+    min_magnitude: float | None = None
+    default_days: int | None = None
+
+
 class CurrentConfigResponse(BaseModel):
     database: CurrentConfigDatabaseSection
     providers: dict[str, CurrentConfigProviderSection]
     station: CurrentConfigStationSection
     branding: CurrentConfigBrandingSection = CurrentConfigBrandingSection()
     social: CurrentConfigSocialSection = CurrentConfigSocialSection()
+    earthquakes: CurrentConfigEarthquakeSection = CurrentConfigEarthquakeSection()
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +586,19 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             cfg["social"]["instagram_url"] = so.instagram_url
         if so.youtube_url is not None:
             cfg["social"]["youtube_url"] = so.youtube_url
+
+    # [earthquakes] — optional seismic knobs; only written when wizard sends this block.
+    # Provider id is handled by the providers dict above; these are the extra knobs.
+    if apply.earthquakes is not None:
+        if "earthquakes" not in cfg:
+            cfg["earthquakes"] = {}
+        eq = apply.earthquakes
+        if eq.default_radius_km is not None:
+            cfg["earthquakes"]["default_radius_km"] = str(eq.default_radius_km)
+        if eq.min_magnitude is not None:
+            cfg["earthquakes"]["min_magnitude"] = str(eq.min_magnitude)
+        if eq.default_days is not None:
+            cfg["earthquakes"]["default_days"] = str(eq.default_days)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1124,12 +1169,37 @@ async def current_config(request: Request) -> CurrentConfigResponse:
             if so_section.get("youtube_url"):
                 social.youtube_url = str(so_section["youtube_url"])
 
+    # --- Earthquakes (seismic knobs) ---
+    earthquakes_config = CurrentConfigEarthquakeSection()
+    if api_cfg is not None:
+        eq_section = api_cfg.get("earthquakes", {})
+        if isinstance(eq_section, dict):
+            raw_radius = eq_section.get("default_radius_km")
+            if raw_radius:
+                try:
+                    earthquakes_config.default_radius_km = float(str(raw_radius))
+                except (ValueError, TypeError):
+                    pass
+            raw_min_mag = eq_section.get("min_magnitude")
+            if raw_min_mag:
+                try:
+                    earthquakes_config.min_magnitude = float(str(raw_min_mag))
+                except (ValueError, TypeError):
+                    pass
+            raw_days = eq_section.get("default_days")
+            if raw_days:
+                try:
+                    earthquakes_config.default_days = int(str(raw_days))
+                except (ValueError, TypeError):
+                    pass
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
         station=station,
         branding=branding,
         social=social,
+        earthquakes=earthquakes_config,
     )
 
 
