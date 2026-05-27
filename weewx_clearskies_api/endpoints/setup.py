@@ -236,6 +236,31 @@ class ProviderConfig(BaseModel):
     iframe_url: str | None = None
 
 
+class BrandingApplyConfig(BaseModel):
+    """Branding fields for the [branding] section of api.conf."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    site_title: str | None = None
+    logo_light_url: str | None = None
+    logo_dark_url: str | None = None
+    favicon_url: str | None = None
+    accent: str | None = None
+    default_theme_mode: str | None = None
+    custom_css_url: str | None = None
+
+
+class SocialApplyConfig(BaseModel):
+    """Social media URL fields for the [social] section of api.conf."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    facebook_url: str | None = None
+    twitter_url: str | None = None
+    instagram_url: str | None = None
+    youtube_url: str | None = None
+
+
 class ApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -254,6 +279,13 @@ class ApplyRequest(BaseModel):
     #: /etc/weewx/skins/ClearSkies/skin.conf (ADR-043).  Old wizard versions
     #: that do not send this field are unaffected (None → skip).
     skin_conf: dict[str, Any] | None = None
+    #: Optional branding configuration.  When present, written to the
+    #: [branding] section of api.conf.  Old wizard versions that do not send
+    #: this field are unaffected (None → skip).
+    branding: BrandingApplyConfig | None = None
+    #: Optional social media URLs.  When present, written to the [social]
+    #: section of api.conf.  None → skip.
+    social: SocialApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -304,10 +336,29 @@ class CurrentConfigStationSection(BaseModel):
     default_locale: str | None = None
 
 
+class CurrentConfigBrandingSection(BaseModel):
+    site_title: str = ""
+    logo_light_url: str = ""
+    logo_dark_url: str = ""
+    favicon_url: str = ""
+    accent: str = ""
+    default_theme_mode: str = ""
+    custom_css_url: str = ""
+
+
+class CurrentConfigSocialSection(BaseModel):
+    facebook_url: str = ""
+    twitter_url: str = ""
+    instagram_url: str = ""
+    youtube_url: str = ""
+
+
 class CurrentConfigResponse(BaseModel):
     database: CurrentConfigDatabaseSection
     providers: dict[str, CurrentConfigProviderSection]
     station: CurrentConfigStationSection
+    branding: CurrentConfigBrandingSection = CurrentConfigBrandingSection()
+    social: CurrentConfigSocialSection = CurrentConfigSocialSection()
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +520,40 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             # Radar iframe URL (non-secret; stored in api.conf per settings.py).
             if pc.iframe_url and section == "radar":
                 cfg[section]["iframe_url"] = pc.iframe_url
+
+    # [branding] — optional; only written when wizard sends this block.
+    if apply.branding is not None:
+        if "branding" not in cfg:
+            cfg["branding"] = {}
+        br = apply.branding
+        if br.site_title is not None:
+            cfg["branding"]["site_title"] = br.site_title
+        if br.logo_light_url is not None:
+            cfg["branding"]["logo_light_url"] = br.logo_light_url
+        if br.logo_dark_url is not None:
+            cfg["branding"]["logo_dark_url"] = br.logo_dark_url
+        if br.favicon_url is not None:
+            cfg["branding"]["favicon_url"] = br.favicon_url
+        if br.accent is not None:
+            cfg["branding"]["accent"] = br.accent
+        if br.default_theme_mode is not None:
+            cfg["branding"]["default_theme_mode"] = br.default_theme_mode
+        if br.custom_css_url is not None:
+            cfg["branding"]["custom_css_url"] = br.custom_css_url
+
+    # [social] — optional; only written when wizard sends this block.
+    if apply.social is not None:
+        if "social" not in cfg:
+            cfg["social"] = {}
+        so = apply.social
+        if so.facebook_url is not None:
+            cfg["social"]["facebook_url"] = so.facebook_url
+        if so.twitter_url is not None:
+            cfg["social"]["twitter_url"] = so.twitter_url
+        if so.instagram_url is not None:
+            cfg["social"]["instagram_url"] = so.instagram_url
+        if so.youtube_url is not None:
+            cfg["social"]["youtube_url"] = so.youtube_url
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1005,10 +1090,46 @@ async def current_config(request: Request) -> CurrentConfigResponse:
             if st_section.get("default_locale"):
                 station.default_locale = str(st_section["default_locale"])
 
+    # --- Branding ---
+    branding = CurrentConfigBrandingSection()
+    if api_cfg is not None:
+        br_section = api_cfg.get("branding", {})
+        if isinstance(br_section, dict):
+            if br_section.get("site_title"):
+                branding.site_title = str(br_section["site_title"])
+            if br_section.get("logo_light_url"):
+                branding.logo_light_url = str(br_section["logo_light_url"])
+            if br_section.get("logo_dark_url"):
+                branding.logo_dark_url = str(br_section["logo_dark_url"])
+            if br_section.get("favicon_url"):
+                branding.favicon_url = str(br_section["favicon_url"])
+            if br_section.get("accent"):
+                branding.accent = str(br_section["accent"])
+            if br_section.get("default_theme_mode"):
+                branding.default_theme_mode = str(br_section["default_theme_mode"])
+            if br_section.get("custom_css_url"):
+                branding.custom_css_url = str(br_section["custom_css_url"])
+
+    # --- Social ---
+    social = CurrentConfigSocialSection()
+    if api_cfg is not None:
+        so_section = api_cfg.get("social", {})
+        if isinstance(so_section, dict):
+            if so_section.get("facebook_url"):
+                social.facebook_url = str(so_section["facebook_url"])
+            if so_section.get("twitter_url"):
+                social.twitter_url = str(so_section["twitter_url"])
+            if so_section.get("instagram_url"):
+                social.instagram_url = str(so_section["instagram_url"])
+            if so_section.get("youtube_url"):
+                social.youtube_url = str(so_section["youtube_url"])
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
         station=station,
+        branding=branding,
+        social=social,
     )
 
 

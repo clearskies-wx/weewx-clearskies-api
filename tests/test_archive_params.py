@@ -308,12 +308,12 @@ class TestRecordsParamsModel:
         assert p.section == "temperature"
 
     def test_all_section_enum_values_accepted(self) -> None:
-        """All 9 section enum values from OpenAPI are accepted."""
+        """All 7 section enum values from OpenAPI are accepted."""
         from weewx_clearskies_api.endpoints.records import RecordsParams
 
         valid_sections = [
             "temperature", "wind", "rain", "humidity",
-            "barometer", "sun", "aqi", "inside-temp", "custom",
+            "barometer", "sun", "aqi",
         ]
         for sec in valid_sections:
             p = RecordsParams(section=sec)

@@ -753,6 +753,14 @@ class BrandingSettings:
     default_theme_mode: str
     #: URL to operator's custom stylesheet. None = no custom CSS.
     custom_css_url: str | None
+    #: Human-readable station name shown in the dashboard title bar.
+    site_title: str
+    #: URL to the logo image used on light backgrounds. Empty = no custom logo.
+    logo_light_url: str
+    #: URL to the logo image used on dark backgrounds. Empty = falls back to logo_light_url.
+    logo_dark_url: str
+    #: URL to the favicon. Empty = default Clear Skies favicon.
+    favicon_url: str
 
     #: Valid accent values from ADR-022 (curated palette, AA-tested).
     VALID_ACCENTS: frozenset[str] = frozenset({
@@ -770,6 +778,10 @@ class BrandingSettings:
         ).strip()
         raw_css_url = str(section.get("custom_css_url", "")).strip()
         self.custom_css_url = raw_css_url if raw_css_url else None
+        self.site_title = str(section.get("site_title", "")).strip()
+        self.logo_light_url = str(section.get("logo_light_url", "")).strip()
+        self.logo_dark_url = str(section.get("logo_dark_url", "")).strip()
+        self.favicon_url = str(section.get("favicon_url", "")).strip()
 
     def validate(self) -> None:
         """Raise ValueError on invalid accent or theme mode."""
@@ -787,6 +799,30 @@ class BrandingSettings:
                 "Supported values per ADR-023: "
                 "'light', 'dark', 'auto-os', 'auto-sunrise-sunset'."
             )
+
+
+class SocialSettings:
+    """[social] section settings.
+
+    Social media profile URLs shown in the dashboard footer.
+    All fields default to empty string (absent/unconfigured).
+    Dashboard checks for non-empty before rendering social links.
+    """
+
+    #: Facebook profile or page URL.
+    facebook_url: str
+    #: Twitter/X profile URL.
+    twitter_url: str
+    #: Instagram profile URL.
+    instagram_url: str
+    #: YouTube channel URL.
+    youtube_url: str
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.facebook_url = str(section.get("facebook_url", "")).strip()
+        self.twitter_url = str(section.get("twitter_url", "")).strip()
+        self.instagram_url = str(section.get("instagram_url", "")).strip()
+        self.youtube_url = str(section.get("youtube_url", "")).strip()
 
 
 class TlsSettings:
@@ -873,6 +909,7 @@ class Settings:
     forecast: ForecastSettings
     tls: TlsSettings
     branding: BrandingSettings
+    social: SocialSettings
     conditions: ConditionsSettings
     cache_warmer: CacheWarmerSettings
 
@@ -896,6 +933,7 @@ class Settings:
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
+        social: SocialSettings | None = None,
         conditions: ConditionsSettings | None = None,
         cache_warmer: CacheWarmerSettings | None = None,
         configured: bool = True,
@@ -919,6 +957,7 @@ class Settings:
         self.forecast = forecast if forecast is not None else ForecastSettings({})
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
+        self.social = social if social is not None else SocialSettings({})
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
 
@@ -1041,6 +1080,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
+    social_cfg = SocialSettings(dict(cfg.get("social", {})))
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
 
@@ -1063,6 +1103,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         forecast=forecast_cfg,
         tls=tls_cfg,
         branding=branding_cfg,
+        social=social_cfg,
         conditions=conditions_cfg,
         cache_warmer=cache_warmer_cfg,
     )

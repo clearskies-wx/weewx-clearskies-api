@@ -149,3 +149,37 @@ path = /var/lib/weewx/weewx.sdb
 # How often to re-warm the /aqi/history endpoint (seconds).  Default 1800 (30 min).
 # aqi_history_interval_seconds = 1800
 
+
+[branding]
+# Site branding (ADR-022).
+# Human-readable station name shown in the dashboard title bar.
+# site_title = My Weather Station
+#
+# Accent colour — one of: blue, teal, indigo, purple, green, amber.
+# accent = blue
+#
+# Default theme mode for new visitors:
+#   light | dark | auto-os | auto-sunrise-sunset
+# default_theme_mode = auto-os
+#
+# URL to the logo image for light backgrounds.  Leave empty for no custom logo.
+# logo_light_url =
+#
+# URL to the logo image for dark backgrounds.  Falls back to logo_light_url when empty.
+# logo_dark_url =
+#
+# URL to the site favicon.  Leave empty to use the default Clear Skies favicon.
+# favicon_url =
+#
+# URL to an operator-supplied custom stylesheet.  Leave empty for none.
+# custom_css_url =
+
+
+[social]
+# Social media links shown in the dashboard footer.
+# Leave any URL empty to hide that icon.
+# facebook_url =
+# twitter_url =
+# instagram_url =
+# youtube_url =
+

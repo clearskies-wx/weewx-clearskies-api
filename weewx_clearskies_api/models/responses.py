@@ -939,26 +939,42 @@ class LogoBranding(BaseModel):
     """Logo branding block within BrandingConfig (ADR-022).
 
     lightUrl is required; darkUrl is optional (dashboard CSS-inverts when absent,
-    per ADR-022 §consequences).  Alt text is required per coding.md §5.5.
+    per ADR-022 §consequences).  Alt text is optional (empty when not configured).
     """
 
     lightUrl: str
     darkUrl: str | None = None
-    alt: str
+    alt: str = ""
+
+
+class SocialConfig(BaseModel):
+    """Social media URLs block within BrandingConfig.
+
+    All fields default to empty string (unconfigured).  Dashboard checks for
+    non-empty before rendering social links in the footer.
+    """
+
+    facebook: str = ""
+    twitter: str = ""
+    instagram: str = ""
+    youtube: str = ""
 
 
 class BrandingConfig(BaseModel):
     """Operator branding configuration (ADR-022, Gap #10).
 
-    v0.1 scope: accent, defaultThemeMode, and customCssUrl are read from
-    api.conf [branding] section.  logo is always null in v0.1 (upload
-    pipeline is Phase 2).
+    Fields read from api.conf [branding] and [social] sections.
+    All optional with safe defaults so the endpoint works even when no
+    [branding] or [social] section is present in api.conf.
     """
 
     accent: Literal["blue", "teal", "indigo", "purple", "green", "amber"]
     defaultThemeMode: Literal["light", "dark", "auto-os", "auto-sunrise-sunset"]
     logo: LogoBranding | None = None
     customCssUrl: str | None = None
+    siteTitle: str = ""
+    faviconUrl: str = ""
+    social: SocialConfig = SocialConfig()
 
 
 class BrandingResponse(BaseModel):
