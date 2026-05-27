@@ -36,9 +36,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Each tuple is (substring_to_match_in_provider_text, canonical_sky_label).
-# Ordered longest-first so "Mostly Cloudy" matches before "Cloudy".
+# Ordered longest-first so "Mostly Cloudy" matches before "Cloudy" and
+# "Freezing Fog" matches before "Fog".  ADR-044 §1b keyword table.
 _SKY_KEYWORDS: tuple[tuple[str, str], ...] = (
-    ("Mostly Sunny", "Mostly Sunny"),
+    ("Thunderstorm", "Thunderstorms"),
+    ("Blowing Snow", "Blowing Snow"),
+    ("Freezing Fog", "Freezing Fog"),
+    ("Mostly Sunny", "Mostly Clear"),
     ("Mostly Clear", "Mostly Clear"),
     ("Partly Cloudy", "Partly Cloudy"),
     ("Partly Sunny", "Partly Cloudy"),
@@ -48,6 +52,10 @@ _SKY_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("Sunny", "Clear"),
     ("Clear", "Clear"),
     ("Fair", "Clear"),
+    ("Fog", "Foggy"),
+    ("Mist", "Foggy"),
+    ("Haze", "Hazy"),
+    ("Smoke", "Hazy"),
 )
 
 
@@ -144,32 +152,59 @@ def _derive_sky(
 ) -> str | None:
     """Derive current sky condition text.
 
-    Always tries the local clearness index (Kt) first when the solar radiation
-    sensor and theoretical maximum are both available and non-zero.  Kt from
-    real sensor data is meaningful at any sun angle, including dusk — if the
-    sensor is reporting, it tells us about actual cloud cover.
+    During daytime (maxSolarRad >= 50 W/m²), tries the local clearness index
+    (Kt) first when the solar radiation sensor is reporting.
 
-    Falls back to the provider only when local sensors cannot determine sky
-    (radiation unavailable, maxSolarRad missing/zero).
+    At night or deep twilight (maxSolarRad < 50 W/m²), skips solar analysis
+    entirely — dividing by a near-zero maxSolarRad produces nonsensical Kt
+    values.  Falls back to the provider or the operator-custom ow_cloud_cover
+    extra field.
+
+    Falls back to the provider (then ow_cloud_cover) when local sensors cannot
+    determine sky (radiation unavailable, maxSolarRad missing or < 50).
     """
-    # Always try local clearness index first — if sensors are reporting,
-    # they tell us about actual cloud cover regardless of sun angle.
+    # Night / deep twilight: skip solar analysis (ADR-044 §1c, §2).
+    # maxSolarRad < 50 W/m² means the sun is effectively below the horizon;
+    # Kt computed from near-zero denominator is meaningless.
+    if max_solar_rad is None or max_solar_rad < 50:
+        return _sky_from_provider(provider_conditions) or _sky_from_extras(observation)
+
+    # Daytime — try local clearness index first.
     obs_rad = observation.radiation
-    if obs_rad is not None and max_solar_rad is not None and max_solar_rad > 0:
+    if obs_rad is not None:
         kt = obs_rad / max_solar_rad
         if kt > 0.80:
             return "Clear"
         if kt > 0.65:
-            return "Mostly Sunny"
+            return "Mostly Clear"
         if kt > 0.45:
             return "Partly Cloudy"
         if kt > 0.30:
             return "Mostly Cloudy"
         return "Overcast"
 
-    # Local sensors can't determine sky — fall back to provider
-    # (only meaningful at night/dusk when provider has sky data).
-    return _sky_from_provider(provider_conditions)
+    # Radiation sensor not reporting — fall back to provider, then extras.
+    return _sky_from_provider(provider_conditions) or _sky_from_extras(observation)
+
+
+def _sky_from_extras(observation: Observation) -> str | None:
+    """Extract a sky condition from the operator-custom ow_cloud_cover extra field.
+
+    OpenWeatherMap stores cloud cover percentage in observation.extras under the
+    key "ow_cloud_cover" (an operator-custom weewx archive column) rather than
+    in the ProviderConditions DTO.  This provides an additional fallback when
+    neither solar radiation nor provider conditions are available.
+
+    Returns None when the field is absent or not numeric.
+    """
+    raw = observation.extras.get("ow_cloud_cover")
+    if raw is None:
+        return None
+    try:
+        pct = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return _cloud_cover_to_sky(pct)
 
 
 def _sky_from_provider(provider_conditions: ProviderConditions | None) -> str | None:
@@ -213,11 +248,10 @@ def _derive_precipitation(
     rain_rate = observation.rainRate
 
     if rain_rate is not None and rain_rate > 0:
-        # Convert to in/hr for threshold comparisons.
+        # Convert to in/hr for threshold comparisons (AMS/WMO, ADR-044 §3).
         rate_in_hr = _rain_rate_to_in_per_hr(rain_rate, target_unit)
 
-        if rate_in_hr < 0.01:
-            return "Drizzle"
+        # No "Drizzle" category — ADR-044 uses AMS/WMO thresholds only.
         if rate_in_hr < 0.10:
             return "Light Rain"
         if rate_in_hr < 0.30:
@@ -323,11 +357,12 @@ def _derive_wind(observation: Observation, target_unit: str) -> str | None:
 def _derive_comfort(observation: Observation, target_unit: str) -> str | None:
     """Derive humidity comfort descriptor from the local dewpoint sensor.
 
-    Thresholds are in °F; values below 65°F return None (comfortable —
-    omit from composite).
+    Thresholds are in °F; values below 60°F return None (comfortable —
+    omit from composite).  Aligned with NWS dewpoint comfort scale (ADR-044 §5).
 
-    Dewpoint >= 65°F → "Humid"
-    Dewpoint >= 70°F → "Oppressive"
+    Dewpoint 60–64°F → "Humid"
+    Dewpoint 65–69°F → "Very Humid"
+    Dewpoint 70–74°F → "Oppressive"
     Dewpoint >= 75°F → "Miserable"
     """
     dewpoint = observation.dewpoint
@@ -345,6 +380,8 @@ def _derive_comfort(observation: Observation, target_unit: str) -> str | None:
     if dp_f >= 70:
         return "Oppressive"
     if dp_f >= 65:
+        return "Very Humid"
+    if dp_f >= 60:
         return "Humid"
     return None  # Comfortable — omit
 
