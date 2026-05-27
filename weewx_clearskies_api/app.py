@@ -44,6 +44,7 @@ from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.endpoints.alerts import router as alerts_router
 from weewx_clearskies_api.endpoints.branding import router as branding_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
+from weewx_clearskies_api.endpoints.climatology import router as climatology_router
 from weewx_clearskies_api.endpoints.aqi import router as aqi_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
@@ -175,6 +176,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(radar_router, prefix="/api/v1")
         # Gap #10 (ADR-022): branding configuration endpoint.
         app.include_router(branding_router, prefix="/api/v1")
+        # Climatology: 12-month averages from archive.
+        app.include_router(climatology_router, prefix="/api/v1")
 
         # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
         app.include_router(setup_router)
