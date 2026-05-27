@@ -24,11 +24,12 @@ from sqlalchemy.orm import Session
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import RecordsQueryParams
+from weewx_clearskies_api.providers._common.cache import get_cache
 
 # Alias kept for backwards-compatibility with tests that import RecordsParams
 # from this module (test_archive_params.py).
 RecordsParams = RecordsQueryParams
-from weewx_clearskies_api.models.responses import RecordsResponse
+from weewx_clearskies_api.models.responses import RecordsBundle, RecordsResponse
 from weewx_clearskies_api.services.records import get_records
 from weewx_clearskies_api.services.units import get_units_block
 
@@ -70,6 +71,25 @@ def get_records_endpoint(
     """
     registry = get_registry()
     units = get_units_block()
+
+    # Cache-check-first guard for unfiltered requests (ADR-045).
+    # Filtered requests (params.section is not None) bypass the warmer cache
+    # because the warmer only pre-computes the full unfiltered bundle.
+    if params.section is None:
+        try:
+            cached = get_cache().get(f"warmer:records:{params.period}")
+            if cached is not None:
+                logger.debug("records cache hit: period=%s", params.period)
+                bundle = RecordsBundle.model_validate(cached)
+                return RecordsResponse(
+                    data=bundle,
+                    units=units,
+                    source="weewx",
+                    generatedAt=_now_utc_z(),
+                )
+        except Exception:
+            # Cache miss or deserialisation error — fall through to live query.
+            logger.debug("records cache miss or error: period=%s", params.period, exc_info=True)
 
     bundle = get_records(
         db=db,

@@ -52,6 +52,7 @@ from weewx_clearskies_api.models.responses import (
     SunTimesSeries,
     utc_isoformat,
 )
+from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.services import almanac as almanac_svc
 from weewx_clearskies_api.services.station import get_station_info
 
@@ -225,6 +226,28 @@ def get_sun_times(
     lat, lon, alt = _station_location()
     station_tz = get_station_info().timezone
 
+    # Cache-check-first guard (ADR-045).  The warmer pre-computes the current
+    # year for the station location; use it when the request matches.
+    try:
+        cached = get_cache().get(f"warmer:almanac:sun-times:{year}")
+        if cached is not None:
+            logger.debug("sun-times cache hit: year=%d", year)
+            days = [
+                SunTimesDay(
+                    date=d["date_str"],
+                    sunrise=d["sunrise"],
+                    sunset=d["sunset"],
+                    daylightMinutes=d["daylight_minutes"],
+                )
+                for d in cached
+            ]
+            return SunTimesResponse(
+                data=SunTimesSeries(year=year, days=days),
+                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+            )
+    except Exception:
+        logger.debug("sun-times cache miss or error: year=%d", year, exc_info=True)
+
     days_raw = almanac_svc.compute_sun_times_year(year, lat, lon, alt, station_tz=station_tz)
     days = [
         SunTimesDay(
@@ -251,6 +274,28 @@ def get_moon_phases(
     month = params.month  # None = full year
     lat, lon, _alt = _station_location()
     station_tz = get_station_info().timezone
+
+    # Cache-check-first guard (ADR-045).  The warmer pre-computes the full year
+    # (month=None) only; per-month requests bypass the cache.
+    if month is None:
+        try:
+            cached = get_cache().get(f"warmer:almanac:moon-phases:{year}")
+            if cached is not None:
+                logger.debug("moon-phases cache hit: year=%d", year)
+                days = [
+                    MoonPhaseDay(
+                        date=d["date_str"],
+                        phaseName=d["phase_name"],
+                        illuminationPercent=d["illumination_percent"],
+                    )
+                    for d in cached
+                ]
+                return MoonPhaseResponse(
+                    data=MoonPhaseCalendar(year=year, month=month, days=days),
+                    generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                )
+        except Exception:
+            logger.debug("moon-phases cache miss or error: year=%d", year, exc_info=True)
 
     days_raw = almanac_svc.compute_moon_phases(year, lat, lon, month, station_tz=station_tz)
     days = [

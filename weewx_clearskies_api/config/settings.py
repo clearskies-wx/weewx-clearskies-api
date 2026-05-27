@@ -504,6 +504,41 @@ class AQIHistorySettings:
         self.column_co = str(section.get("column_co", "")).strip()
 
 
+class CacheWarmerSettings:
+    """[cache_warmer] section settings (ADR-045).
+
+    Background pre-computation of slow endpoints.  The warmer daemon thread
+    runs compute_sun_times_year, compute_moon_phases, and get_records on
+    configurable intervals, storing results in the ADR-017 CacheBackend so
+    that request-time endpoint handlers return in <10ms on cache hit.
+    """
+
+    #: Enable the background warmer.  Default True.
+    enabled: bool
+    #: How often to re-warm the records endpoints (seconds).  Default 1800 (30 min).
+    records_interval_seconds: int
+    #: How often to re-warm the almanac endpoints (seconds).  Default 21600 (6 h).
+    almanac_interval_seconds: int
+    #: How often to re-warm the AQI history endpoint (seconds).  Default 1800 (30 min).
+    aqi_history_interval_seconds: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_enabled = str(section.get("enabled", "true")).strip().lower()
+        self.enabled = raw_enabled in ("true", "1", "yes")
+        self.records_interval_seconds = int(section.get("records_interval_seconds", 1800))
+        self.almanac_interval_seconds = int(section.get("almanac_interval_seconds", 21600))
+        self.aqi_history_interval_seconds = int(section.get("aqi_history_interval_seconds", 1800))
+
+    def validate(self) -> None:
+        """Raise ValueError on non-positive intervals."""
+        if self.records_interval_seconds < 1:
+            raise ValueError("[cache_warmer] records_interval_seconds must be >= 1")
+        if self.almanac_interval_seconds < 1:
+            raise ValueError("[cache_warmer] almanac_interval_seconds must be >= 1")
+        if self.aqi_history_interval_seconds < 1:
+            raise ValueError("[cache_warmer] aqi_history_interval_seconds must be >= 1")
+
+
 class EarthquakesSettings:
     """[earthquakes] section settings (3b-13).
 
@@ -839,6 +874,7 @@ class Settings:
     tls: TlsSettings
     branding: BrandingSettings
     conditions: ConditionsSettings
+    cache_warmer: CacheWarmerSettings
 
     def __init__(
         self,
@@ -861,6 +897,7 @@ class Settings:
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
         conditions: ConditionsSettings | None = None,
+        cache_warmer: CacheWarmerSettings | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -883,6 +920,7 @@ class Settings:
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
+        self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -899,6 +937,7 @@ class Settings:
         self.tls.validate()
         self.branding.validate()
         self.conditions.validate()
+        self.cache_warmer.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1042,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
+    cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -1024,6 +1064,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         tls=tls_cfg,
         branding=branding_cfg,
         conditions=conditions_cfg,
+        cache_warmer=cache_warmer_cfg,
     )
     settings.validate()
 

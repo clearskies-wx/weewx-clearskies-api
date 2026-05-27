@@ -599,6 +599,30 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Step 6h½: Wire cache warmer (ADR-045).
+    # Must run after wire_cache_from_env() (step 6h) and after
+    # load_station_metadata() (step 6d) and wire_ephemeris_directory() (step 6e)
+    # so that station coordinates and the ephemeris are available.
+    if settings.cache_warmer.enabled:
+        from weewx_clearskies_api.services.cache_warmer import BackgroundCacheWarmer  # noqa: PLC0415
+        from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
+
+        _station_info = get_station_info()
+        _station_meta = {
+            "lat": _station_info.latitude,
+            "lon": _station_info.longitude,
+            "alt_m": _station_info.altitude,
+            "station_tz": _station_info.timezone,
+        }
+        _warmer = BackgroundCacheWarmer(
+            engine=engine,
+            registry=registry,
+            settings=settings.cache_warmer,
+            station_meta=_station_meta,
+        )
+        _warmer.initial_warm()
+        _warmer.start()
+
     # Step 6h½: Wire DB metrics (ADR-031).
     # SQLAlchemy event listeners for query timing. Metrics are always created
     # and always incremented; the /metrics endpoint exposure is controlled by

@@ -128,3 +128,24 @@ path = /var/lib/weewx/weewx.sdb
 # "off" — no weatherText field on observations
 # engine = auto
 
+
+[cache_warmer]
+# Background pre-computation of slow endpoints (ADR-045).
+# A daemon thread pre-computes records (all-time + YTD) and almanac
+# (sun-times, moon-phases) on configurable intervals and stores results in the
+# ADR-017 CacheBackend.  Endpoint handlers return the cached result in <10ms.
+# First warm runs synchronously at startup before the server begins accepting
+# requests.
+#
+# enabled = true
+#
+# How often to re-warm the /records endpoints (seconds).  Default 1800 (30 min).
+# records_interval_seconds = 1800
+#
+# How often to re-warm the /almanac/sun-times and /almanac/moon-phases endpoints
+# (seconds).  Almanac data changes slowly — default 21600 (6 hours).
+# almanac_interval_seconds = 21600
+#
+# How often to re-warm the /aqi/history endpoint (seconds).  Default 1800 (30 min).
+# aqi_history_interval_seconds = 1800
+
