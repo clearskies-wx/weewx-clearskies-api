@@ -108,6 +108,8 @@ class BackgroundCacheWarmer:
         logger.info("Cache warmer: initial warm starting")
         self._warm_records()
         self._warm_almanac()
+        self._warm_almanac_snapshot()
+        self._warm_moon_names()
         self._warm_climatology()
         self._warm_planets()
         self._warm_eclipses()
@@ -148,6 +150,8 @@ class BackgroundCacheWarmer:
 
             if last_almanac == _NEVER or (now - last_almanac) >= self._settings.almanac_interval_seconds:
                 self._warm_almanac()
+                self._warm_almanac_snapshot()
+                self._warm_moon_names()
                 last_almanac = time.monotonic()
 
             if last_climatology == _NEVER or (now - last_climatology) >= self._settings.climatology_interval_seconds:
@@ -233,6 +237,45 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: almanac refreshed for year %d", year)
         except Exception:
             logger.warning("Cache warmer: almanac warm failed", exc_info=True)
+
+    def _warm_almanac_snapshot(self) -> None:
+        """Warm GET /almanac (daily snapshot for today)."""
+        try:
+            from weewx_clearskies_api.services.almanac import compute_almanac
+
+            cache = get_cache()
+            today = datetime.now(timezone.utc).date()
+            lat = self._station["lat"]
+            lon = self._station["lon"]
+            alt_m = self._station["alt_m"]
+            station_tz = self._station["station_tz"]
+
+            day = compute_almanac(today, lat, lon, alt_m, station_tz=station_tz)
+            cache.set(
+                f"warmer:almanac:snapshot:{today.isoformat()}",
+                dataclasses.asdict(day),
+                self._settings.almanac_interval_seconds,
+            )
+            logger.info("Cache warmer: almanac snapshot refreshed for %s", today)
+        except Exception:
+            logger.warning("Cache warmer: almanac snapshot warm failed", exc_info=True)
+
+    def _warm_moon_names(self) -> None:
+        """Warm GET /almanac/moon-names for the current year."""
+        try:
+            from weewx_clearskies_api.services.almanac import compute_special_moon_names
+
+            cache = get_cache()
+            year = datetime.now(timezone.utc).year
+            moons = compute_special_moon_names(year)
+            cache.set(
+                f"warmer:almanac:moon-names:{year}",
+                moons,
+                self._settings.almanac_interval_seconds,
+            )
+            logger.info("Cache warmer: moon names refreshed for year %d", year)
+        except Exception:
+            logger.warning("Cache warmer: moon names warm failed", exc_info=True)
 
     def _warm_climatology(self) -> None:
         """Warm GET /climatology/monthly."""

@@ -180,6 +180,46 @@ def get_almanac(
     lat, lon, alt = _station_location()
     station_tz = get_station_info().timezone
 
+    # Cache-check-first guard (ADR-045).
+    try:
+        cached = get_cache().get(f"warmer:almanac:snapshot:{target_date.isoformat()}")
+        if cached is not None:
+            logger.debug("almanac snapshot cache hit: %s", target_date)
+            sun = SunSnapshot(
+                rise=cached["sun"]["rise"],
+                set=cached["sun"]["set"],
+                transit=cached["sun"]["transit"],
+                civilTwilightDawn=cached["sun"]["civil_twilight_dawn"],
+                civilTwilightDusk=cached["sun"]["civil_twilight_dusk"],
+                azimuth=cached["sun"]["azimuth"],
+                altitude=cached["sun"]["altitude"],
+                rightAscension=cached["sun"]["right_ascension"],
+                declination=cached["sun"]["declination"],
+                daylightMinutes=cached["sun"]["daylight_minutes"],
+                daylightDeltaVsYesterdayMinutes=cached["sun"]["daylight_delta_vs_yesterday_minutes"],
+                nextEquinox=cached["sun"]["next_equinox"],
+                nextSolstice=cached["sun"]["next_solstice"],
+            )
+            moon = MoonSnapshot(
+                rise=cached["moon"]["rise"],
+                set=cached["moon"]["set"],
+                transit=cached["moon"]["transit"],
+                azimuth=cached["moon"]["azimuth"],
+                altitude=cached["moon"]["altitude"],
+                rightAscension=cached["moon"]["right_ascension"],
+                declination=cached["moon"]["declination"],
+                phaseName=cached["moon"]["phase_name"],
+                illuminationPercent=cached["moon"]["illumination_percent"],
+                nextFullMoon=cached["moon"]["next_full_moon"],
+                nextNewMoon=cached["moon"]["next_new_moon"],
+            )
+            return AlmanacResponse(
+                data=AlmanacSnapshot(date=cached["date_str"], sun=sun, moon=moon),
+                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+            )
+    except Exception:
+        logger.debug("almanac snapshot cache miss or error: %s", target_date, exc_info=True)
+
     day = almanac_svc.compute_almanac(target_date, lat, lon, alt, station_tz=station_tz)
 
     sun = SunSnapshot(
@@ -323,6 +363,29 @@ def get_moon_names(
     Harvest Moon, Blue Moon, Hunter's Moon, and Supermoon flags.
     """
     year = params.year if params.year is not None else _current_year_in_station_tz()
+
+    # Cache-check-first guard (ADR-045).
+    try:
+        cached = get_cache().get(f"warmer:almanac:moon-names:{year}")
+        if cached is not None:
+            logger.debug("moon-names cache hit: year=%d", year)
+            moons = [
+                SpecialMoonEntry(
+                    date=m["date"],
+                    traditionalName=m["traditionalName"],
+                    isHarvestMoon=m["isHarvestMoon"],
+                    isBlueMoon=m["isBlueMoon"],
+                    isHuntersMoon=m["isHuntersMoon"],
+                    isSupermoon=m["isSupermoon"],
+                )
+                for m in cached
+            ]
+            return MoonNamesResponse(
+                data=MoonNamesCalendar(year=year, moons=moons),
+                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+            )
+    except Exception:
+        logger.debug("moon-names cache miss or error: year=%d", year, exc_info=True)
 
     moons_raw = almanac_svc.compute_special_moon_names(year)
     moons = [
