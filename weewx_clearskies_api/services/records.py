@@ -8,9 +8,6 @@ Self-hide rule: if none of a section's canonical fields are in the
 ColumnRegistry's mapped set, the section key is omitted from the response
 entirely (not returned as an empty list).
 
-The `custom` section always returns [] at v0.1 — operator mapping UI is
-Phase 4 per ADR-027.
-
 The `aqi` section self-hides this round — AQI columns are operator-custom
 and the Phase 4 mapping UI hasn't shipped yet (ADR-013 / ADR-035).
 
@@ -48,7 +45,7 @@ class _RecordSpec:
     label: str
     canonicalField: str  # noqa: N815 — weewx camelCase
     kind: str  # "high" | "low"
-    aggregator: str  # "max"|"min"|"sum-by-day-then-max"|"sum-by-month-then-max"|"sum-by-hour-then-max"
+    aggregator: str  # "max"|"min"|"sum-by-day-then-max"|"sum-by-month-then-max"|"sum-by-hour-then-max"|"sum-by-year-then-max"|"max-daily-range"|"min-daily-range"|"max-consecutive-rain-days"|"max-consecutive-dry-days"
 
 
 SECTION_MAP: dict[str, list[_RecordSpec]] = {
@@ -59,16 +56,24 @@ SECTION_MAP: dict[str, list[_RecordSpec]] = {
         _RecordSpec("Low dewpoint", "dewpoint", "low", "min"),
         _RecordSpec("High heat index", "heatindex", "high", "max"),
         _RecordSpec("Low wind chill", "windchill", "low", "min"),
+        _RecordSpec("High apparent temperature", "appTemp", "high", "max"),
+        _RecordSpec("Low apparent temperature", "appTemp", "low", "min"),
+        _RecordSpec("Largest daily temperature range", "outTemp", "high", "max-daily-range"),
+        _RecordSpec("Smallest daily temperature range", "outTemp", "low", "min-daily-range"),
     ],
     "wind": [
         _RecordSpec("High wind speed", "windSpeed", "high", "max"),
         _RecordSpec("High wind gust", "windGust", "high", "max"),
+        _RecordSpec("Highest daily wind run", "windrun", "high", "sum-by-day-then-max"),
     ],
     "rain": [
         _RecordSpec("High daily rainfall", "rain", "high", "sum-by-day-then-max"),
         _RecordSpec("High monthly rainfall", "rain", "high", "sum-by-month-then-max"),
         _RecordSpec("Most rain in 1 hour", "rain", "high", "sum-by-hour-then-max"),
+        _RecordSpec("Highest annual rainfall", "rain", "high", "sum-by-year-then-max"),
         _RecordSpec("Highest rain rate", "rainRate", "high", "max"),
+        _RecordSpec("Consecutive days with rain", "rain", "high", "max-consecutive-rain-days"),
+        _RecordSpec("Consecutive days without rain", "rain", "high", "max-consecutive-dry-days"),
     ],
     "humidity": [
         _RecordSpec("High humidity", "outHumidity", "high", "max"),
@@ -84,14 +89,6 @@ SECTION_MAP: dict[str, list[_RecordSpec]] = {
     ],
     # aqi self-hides this round — Phase 4 / ADR-013.
     "aqi": [],
-    "inside-temp": [
-        _RecordSpec("High indoor temperature", "inTemp", "high", "max"),
-        _RecordSpec("Low indoor temperature", "inTemp", "low", "min"),
-        _RecordSpec("High indoor humidity", "inHumidity", "high", "max"),
-        _RecordSpec("Low indoor humidity", "inHumidity", "low", "min"),
-    ],
-    # custom always returns [] at v0.1 — Phase 4 per ADR-027.
-    "custom": [],
 }
 
 # Trusted constant: canonical field name → archive DB column name.
@@ -101,16 +98,16 @@ _CANONICAL_TO_DB: dict[str, str] = {
     "dewpoint": "dewpoint",
     "windchill": "windchill",
     "heatindex": "heatindex",
+    "appTemp": "appTemp",
     "windSpeed": "windSpeed",
     "windGust": "windGust",
+    "windrun": "windrun",
     "rain": "rain",
     "rainRate": "rainRate",
     "outHumidity": "outHumidity",
     "barometer": "barometer",
     "radiation": "radiation",
     "UV": "UV",
-    "inTemp": "inTemp",
-    "inHumidity": "inHumidity",
 }
 
 
@@ -165,6 +162,14 @@ def _hour_bucket_sql(dialect_name: str) -> str:
         return "strftime('%Y-%m-%d %H:00:00', datetime(dateTime, 'unixepoch'))"
     # %% because SQLAlchemy text() escapes % to %% for pymysql pyformat driver.
     return "FROM_UNIXTIME(dateTime, '%%Y-%%m-%%d %%H:00:00')"
+
+
+def _year_bucket_sql(dialect_name: str) -> str:
+    if dialect_name == "sqlite":
+        return "strftime('%Y', datetime(dateTime, 'unixepoch', 'localtime'))"
+    # YEAR() + CONVERT_TZ for local-time year boundaries (matches other bucket helpers).
+    # %% not needed — no format strings passed to FROM_UNIXTIME here.
+    return "YEAR(CONVERT_TZ(FROM_UNIXTIME(dateTime), 'UTC', @@session.time_zone))"
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +245,114 @@ def _sum_by_bucket_then_max(
     return float(row[0]), int(row[1])
 
 
+def _daily_range_extreme(
+    db: Session,
+    db_col: str,
+    direction: str,   # "max" for largest range, "min" for smallest range
+    period_clause: str,
+    period_params: dict[str, Any],
+    dialect_name: str,
+) -> tuple[float | None, int | None]:
+    """Return (extreme_daily_range_value, epoch) for the day with the largest or smallest
+    intra-day temperature range.
+
+    direction == "max": day with the widest MAX-MIN spread.
+    direction == "min": day with the narrowest MAX-MIN spread (at least 2 readings,
+                        so days with only 1 archive row are excluded — their range of 0
+                        reflects data sparsity, not a genuinely isothermal day).
+
+    db_col comes from _CANONICAL_TO_DB — a hardcoded constant dict.
+    bucket_sql comes from _day_bucket_sql() — a trusted dialect expression.
+    All value bindings use named parameters (:period_from / :period_to).
+    """
+    bucket_sql = _day_bucket_sql(dialect_name)
+    where = _where(period_clause)
+    order = "DESC" if direction == "max" else "ASC"
+
+    if direction == "min":
+        # Exclude single-reading days (COUNT(*) < 2) to avoid false 0-range records.
+        having = "HAVING COUNT(*) >= 2 AND MAX({col}) - MIN({col}) > 0".format(col=db_col)
+    else:
+        having = ""
+
+    sql = text(
+        f"SELECT day_range, bucket_ts FROM ("
+        f"  SELECT MAX({db_col}) - MIN({db_col}) AS day_range, "
+        f"         MIN(dateTime) AS bucket_ts, "
+        f"         {bucket_sql} AS bucket "
+        f"  FROM archive {where} "
+        f"  GROUP BY bucket "
+        f"  {having}"
+        f") sub "
+        f"ORDER BY day_range {order} "
+        f"LIMIT 1"
+    )
+    row = db.execute(sql, period_params).fetchone()
+    if row is None or row[0] is None:
+        return None, None
+    return float(row[0]), int(row[1])
+
+
+def _consecutive_rain_days(
+    db: Session,
+    db_col: str,
+    period_clause: str,
+    period_params: dict[str, Any],
+    dialect_name: str,
+    with_rain: bool,
+) -> tuple[float | None, int | None]:
+    """Return (max_streak_length, epoch_of_last_day_in_longest_streak) for
+    consecutive days with rain (with_rain=True) or without rain (with_rain=False).
+
+    Strategy:
+    1. Query daily rain sums over the period, ordered by bucket ASC.
+    2. Iterate in Python: track current and max streaks.
+    3. Return the streak count as a dimensionless integer (number of days)
+       and the MIN(dateTime) of the bucket that closed the longest streak.
+
+    db_col comes from _CANONICAL_TO_DB — hardcoded constant.
+    bucket_sql comes from _day_bucket_sql() — trusted dialect expression.
+    All value bindings use named parameters.
+    """
+    bucket_sql = _day_bucket_sql(dialect_name)
+    where = _where(period_clause)
+
+    sql = text(
+        f"SELECT SUM({db_col}) AS day_rain, "
+        f"       MIN(dateTime) AS first_ts, "
+        f"       {bucket_sql} AS bucket "
+        f"FROM archive {where} "
+        f"GROUP BY bucket "
+        f"ORDER BY bucket ASC"
+    )
+    rows = db.execute(sql, period_params).fetchall()
+    if not rows:
+        return None, None
+
+    max_streak = 0
+    max_streak_ts: int | None = None
+    cur_streak = 0
+    cur_streak_ts: int | None = None
+
+    for row in rows:
+        day_rain = row[0]  # SUM(rain) for this day
+        first_ts = int(row[1])
+        qualifies = (day_rain is not None and day_rain > 0) if with_rain else (day_rain is None or day_rain == 0)
+        if qualifies:
+            cur_streak += 1
+            cur_streak_ts = first_ts
+            if cur_streak > max_streak:
+                max_streak = cur_streak
+                max_streak_ts = cur_streak_ts
+        else:
+            cur_streak = 0
+            cur_streak_ts = None
+
+    if max_streak == 0:
+        return None, None
+    return float(max_streak), max_streak_ts
+
+
 def _epoch_to_utc_z(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -280,10 +393,6 @@ def get_records(
     for section_name in sections_to_build:
         specs = SECTION_MAP.get(section_name, [])
 
-        if section_name == "custom":
-            sections[section_name] = []
-            continue
-
         # aqi self-hides this round.
         if section_name == "aqi":
             continue
@@ -322,6 +431,27 @@ def get_records(
                 val, ts = _sum_by_bucket_then_max(
                     db, db_col, period_clause, period_params,
                     _hour_bucket_sql(dialect_name),
+                )
+            elif spec.aggregator == "sum-by-year-then-max":
+                val, ts = _sum_by_bucket_then_max(
+                    db, db_col, period_clause, period_params,
+                    _year_bucket_sql(dialect_name),
+                )
+            elif spec.aggregator == "max-daily-range":
+                val, ts = _daily_range_extreme(
+                    db, db_col, "max", period_clause, period_params, dialect_name,
+                )
+            elif spec.aggregator == "min-daily-range":
+                val, ts = _daily_range_extreme(
+                    db, db_col, "min", period_clause, period_params, dialect_name,
+                )
+            elif spec.aggregator == "max-consecutive-rain-days":
+                val, ts = _consecutive_rain_days(
+                    db, db_col, period_clause, period_params, dialect_name, with_rain=True,
+                )
+            elif spec.aggregator == "max-consecutive-dry-days":
+                val, ts = _consecutive_rain_days(
+                    db, db_col, period_clause, period_params, dialect_name, with_rain=False,
                 )
             else:
                 logger.error(
