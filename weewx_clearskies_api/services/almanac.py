@@ -851,6 +851,24 @@ _TRADITIONAL_MOON_NAMES: dict[int, str] = {
 }
 
 
+def _azimuth_to_compass(azimuth_deg: float) -> str:
+    """Convert an azimuth in degrees (0=N, clockwise) to a 16-point compass direction.
+
+    16 points: N, NNE, NE, ENE, E, ESE, SE, SSE, S, SSW, SW, WSW, W, WNW, NW, NNW.
+    Each sector is 22.5° wide; the first sector is centred on 0° (North).
+    """
+    _COMPASS_POINTS = (
+        "North", "North-Northeast", "Northeast", "East-Northeast",
+        "East", "East-Southeast", "Southeast", "South-Southeast",
+        "South", "South-Southwest", "Southwest", "West-Southwest",
+        "West", "West-Northwest", "Northwest", "North-Northwest",
+    )
+    # Each sector is 360/16 = 22.5°.  Offset by half a sector (11.25°) so that
+    # North spans [-11.25°, +11.25°] (i.e. 348.75° to 11.25°).
+    index = int((azimuth_deg % 360.0 + 11.25) / 22.5) % 16
+    return _COMPASS_POINTS[index]
+
+
 def compute_planets(
     date_val: date,
     lat: float,
@@ -861,8 +879,12 @@ def compute_planets(
     """Compute evening/morning/allNight planet visibility for a given date.
 
     For each of Mercury, Venus, Mars, Jupiter, Saturn:
-      - Computes apparent magnitude at local noon.
+      - Computes apparent magnitude at local noon (used only for the naked-eye
+        threshold filter; not returned in the result).
       - Computes rise/set times within the station-local day window.
+      - Computes altitude (degrees) and compass direction at the midpoint of
+        the planet's visible window (or at 9 pm for evening, 5 am for morning,
+        local midnight for all-night).
       - Classifies visibility period relative to sunset/sunrise.
       - Filters out planets with magnitude >= 6.0 (naked-eye threshold).
 
@@ -873,7 +895,7 @@ def compute_planets(
 
     Returns:
         dict with keys "evening", "morning", "allNight" — each a list of
-        {"name", "magnitude", "rise", "set", "constellation"} dicts.
+        {"name", "altitude", "direction", "rise", "set", "constellation"} dicts.
     """
     import math
 
@@ -908,8 +930,16 @@ def compute_planets(
     # Midnight TT (midpoint of the window) for classification boundary.
     midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
 
-    # Noon time for position/magnitude computation.
+    # Noon time for magnitude computation (naked-eye threshold filter only).
     t_noon = ts.utc(date_val.year, date_val.month, date_val.day, 12, 0, 0)  # type: ignore[call-arg]
+
+    # Reference times for altitude/direction computation:
+    #   Evening planets — 9 pm local (21:00).
+    #   Morning planets — 5 am local (05:00).
+    #   All-night planets — local midnight (midpoint of window).
+    t_9pm = ts.utc(date_val.year, date_val.month, date_val.day, 21, 0, 0)  # type: ignore[call-arg]
+    t_5am = ts.utc(date_val.year, date_val.month, date_val.day, 5, 0, 0)  # type: ignore[call-arg]
+    t_midnight_chk = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
 
     evening: list[dict] = []
     morning: list[dict] = []
@@ -918,7 +948,7 @@ def compute_planets(
     for display_name, eph_key in _PLANET_KEYS:
         planet = eph[eph_key]  # type: ignore[index]
 
-        # --- Apparent magnitude at local noon ---
+        # --- Apparent magnitude at local noon (naked-eye threshold filter) ---
         magnitude: float | None = None
         if planetary_magnitude is not None:
             try:
@@ -947,25 +977,14 @@ def compute_planets(
                 planet_set_tt = t.tt  # type: ignore[attr-defined]
                 planet_set_iso = _to_utc_z(t)
 
-        entry = {
-            "name": display_name,
-            "magnitude": magnitude,
-            "rise": planet_rise_iso,
-            "set": planet_set_iso,
-            "constellation": None,
-        }
-
-        # --- Classify visibility period ---
-        # Determine if the planet is above the horizon at sunset and at sunrise.
-        # We check whether the planet rises before sunset and sets after sunrise
-        # (allNight), or is visible only in the first half (evening) or second
-        # half (morning) of the night.
-
-        # Altitude check at key moments to determine night visibility.
-        def _alt_at(t_check: object) -> float:
+        # --- Altitude check helper ---
+        def _alt_az_at(t_check: object) -> tuple[float, float]:
             obs = (earth + location).at(t_check).observe(planet).apparent()  # type: ignore[attr-defined]
-            alt_obj, _az, _dist = obs.altaz()  # type: ignore[attr-defined]
-            return float(alt_obj.degrees)  # type: ignore[attr-defined]
+            alt_obj, az_obj, _dist = obs.altaz()  # type: ignore[attr-defined]
+            return float(alt_obj.degrees), float(az_obj.degrees)  # type: ignore[attr-defined]
+
+        def _alt_at(t_check: object) -> float:
+            return _alt_az_at(t_check)[0]
 
         # We need sun to have set and planet to be above horizon to be "visible".
         if sunset_tt is None and sunrise_tt is None:
@@ -975,25 +994,44 @@ def compute_planets(
         # Build time objects for altitude checks.
         t_sunset_chk = ts.tt_jd(sunset_tt) if sunset_tt is not None else None  # type: ignore[attr-defined]
         t_sunrise_chk = ts.tt_jd(sunrise_tt) if sunrise_tt is not None else None  # type: ignore[attr-defined]
-        t_midnight_chk = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
 
         above_at_sunset = (t_sunset_chk is not None and _alt_at(t_sunset_chk) > 0)
         above_at_sunrise = (t_sunrise_chk is not None and _alt_at(t_sunrise_chk) > 0)
         above_at_midnight = _alt_at(t_midnight_chk) > 0
 
+        # --- Classify and compute altitude/direction at reference time ---
+        ref_time: object | None = None
         if above_at_sunset and above_at_sunrise:
-            all_night.append(entry)
+            ref_time = t_midnight_chk
+            target_list = all_night
         elif above_at_sunset or (planet_set_tt is not None and sunset_tt is not None
                                    and planet_set_tt > sunset_tt
                                    and (planet_set_tt < midnight_tt or not above_at_midnight)):
-            evening.append(entry)
+            ref_time = t_9pm
+            target_list = evening
         elif above_at_sunrise or (planet_rise_tt is not None and sunrise_tt is not None
                                     and planet_rise_tt < sunrise_tt
                                     and (planet_rise_tt > midnight_tt or not above_at_midnight)):
-            morning.append(entry)
+            ref_time = t_5am
+            target_list = morning
         elif above_at_midnight:
-            # Visible at midnight but classification is ambiguous — use midnight alt.
-            evening.append(entry)
+            # Visible at midnight but classification is ambiguous.
+            ref_time = t_midnight_chk
+            target_list = evening
+        else:
+            continue
+
+        # Compute altitude and compass direction at the reference time.
+        ref_alt, ref_az = _alt_az_at(ref_time)
+        entry = {
+            "name": display_name,
+            "altitude": round(ref_alt, 1),
+            "direction": _azimuth_to_compass(ref_az),
+            "rise": planet_rise_iso,
+            "set": planet_set_iso,
+            "constellation": None,
+        }
+        target_list.append(entry)
 
     return {"evening": evening, "morning": morning, "allNight": all_night}
 
@@ -1101,8 +1139,11 @@ def compute_special_moon_names(year: int) -> list[dict]:
     return results
 
 
-def compute_lunar_eclipses(year: int) -> list[dict]:
-    """Compute lunar eclipses in a given year using skyfield.eclipselib.
+def compute_lunar_eclipses(
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> list[dict]:
+    """Compute lunar eclipses in a rolling date window using skyfield.eclipselib.
 
     Returns an empty list if skyfield.eclipselib is not available (graceful
     fallback for older Skyfield versions).
@@ -1110,10 +1151,12 @@ def compute_lunar_eclipses(year: int) -> list[dict]:
     Type mapping: 0 = penumbral, 1 = partial, 2 = total.
 
     Args:
-        year: Calendar year to search.
+        from_date: Start of the search window (inclusive). Defaults to today.
+        to_date: End of the search window (inclusive). Defaults to today + 365 days.
 
     Returns:
-        List of {"date": "YYYY-MM-DD", "type": "total"|"partial"|"penumbral"}.
+        List of {"date": "YYYY-MM-DD", "type": "total"|"partial"|"penumbral"},
+        sorted by date, containing only eclipses on or after from_date.
     """
     try:
         from skyfield.eclipselib import lunar_eclipses
@@ -1123,8 +1166,12 @@ def compute_lunar_eclipses(year: int) -> list[dict]:
 
     ts, eph = get_ts_eph()
 
-    t0 = ts.utc(year, 1, 1)  # type: ignore[call-arg]
-    t1 = ts.utc(year, 12, 31, 23, 59, 59)  # type: ignore[call-arg]
+    today = date.today()
+    start = from_date if from_date is not None else today
+    end = to_date if to_date is not None else (today + timedelta(days=365))
+
+    t0 = ts.utc(start.year, start.month, start.day)  # type: ignore[call-arg]
+    t1 = ts.utc(end.year, end.month, end.day, 23, 59, 59)  # type: ignore[call-arg]
 
     try:
         times, types, _details = lunar_eclipses(t0, t1, eph)
@@ -1137,6 +1184,10 @@ def compute_lunar_eclipses(year: int) -> list[dict]:
     results: list[dict] = []
     for t, eclipse_type in zip(times, types, strict=False):
         dt = t.utc_datetime()  # type: ignore[attr-defined]
+        eclipse_date = dt.date()
+        # Filter: only include eclipses on or after the start date.
+        if eclipse_date < start:
+            continue
         results.append({
             "date": dt.strftime("%Y-%m-%d"),
             "type": _ECLIPSE_TYPE_NAMES.get(int(eclipse_type), "penumbral"),
@@ -1146,45 +1197,31 @@ def compute_lunar_eclipses(year: int) -> list[dict]:
 
 
 def compute_meteor_showers(
-    year: int,
     lat: float,
     lon: float,
     alt_m: float,
     station_tz: str = "UTC",
+    from_date: date | None = None,
+    to_date: date | None = None,
 ) -> list[dict]:
-    """Compute viewing conditions for all 12 major meteor showers in a given year.
+    """Compute moon data for all major meteor showers in a rolling date window.
 
-    For each shower:
-      - Computes the peak date for the given year.
+    For each shower whose peak date falls within the window:
+      - Computes the peak date (year inferred from the window).
       - Computes radiant altitude at local midnight on the peak night.
-      - Computes moon illumination at the peak date.
-      - Derives viewing conditions rating.
-
-    Viewing conditions logic:
-      Radiant position:
-        high: altitude > 30°
-        moderate: 10° to 30°
-        low: < 10° (or below horizon)
-      Moon illumination:
-        dark: < 25%
-        moderate: 25% to 50%
-        bright: > 50%
-      Rating:
-        excellent: high radiant + dark moon
-        good: (high radiant + moderate moon) OR (moderate radiant + dark moon)
-        fair: other combos with radiant > 10°
-        poor: radiant below horizon OR radiant low + bright moon
+      - Computes moon illumination percentage and phase name at the peak date.
 
     Args:
-        year: Calendar year.
         lat, lon, alt_m: Observer location.
         station_tz: IANA timezone identifier.
+        from_date: Start of the window (inclusive). Defaults to today.
+        to_date: End of the window (inclusive). Defaults to today + 365 days.
 
     Returns:
-        List of shower dicts sorted by peak date.
+        List of shower dicts, filtered to peak dates on or after from_date,
+        sorted by peak date (soonest first).
     """
     import math
-    import calendar as _cal
 
     from skyfield.api import Star
 
@@ -1194,87 +1231,66 @@ def compute_meteor_showers(
     location = wgs84.latlon(lat, lon, elevation_m=alt_m)  # type: ignore[call-arg]
     earth = eph["earth"]  # type: ignore[index]
 
+    today = date.today()
+    start = from_date if from_date is not None else today
+    end = to_date if to_date is not None else (today + timedelta(days=365))
+
     results: list[dict] = []
 
-    for shower in METEOR_SHOWERS:
-        # --- Peak date for this year ---
-        # Guard against month/day combos that don't exist every year
-        # (none of the 12 showers have this issue, but guard defensively).
-        try:
-            peak_date = date(year, shower.peak_month, shower.peak_day)
-        except ValueError:
-            # e.g. Feb 29 on a non-leap year; skip gracefully.
-            continue
+    # Search across the years spanned by the window (usually 1, sometimes 2).
+    years_to_search = range(start.year, end.year + 1)
 
-        # --- Radiant altitude at local midnight on peak night ---
-        # Build local midnight time using _station_local_window.
-        t0, t1 = _station_local_window(ts, peak_date, station_tz)
-        # Midnight = midpoint of the station-local day window.
-        midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
-        t_midnight = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
+    for year in years_to_search:
+        for shower in METEOR_SHOWERS:
+            # --- Peak date for this year ---
+            try:
+                peak_date = date(year, shower.peak_month, shower.peak_day)
+            except ValueError:
+                # e.g. Feb 29 on a non-leap year; skip gracefully.
+                continue
 
-        # RA/Dec given in degrees; Star wants ra_hours.
-        radiant = Star(  # type: ignore[call-arg]
-            ra_hours=shower.radiant_ra_deg / 15.0,
-            dec_degrees=shower.radiant_dec_deg,
-        )
-        obs_radiant = (earth + location).at(t_midnight).observe(radiant).apparent()  # type: ignore[attr-defined]
-        alt_obj, _az, _dist = obs_radiant.altaz()  # type: ignore[attr-defined]
-        radiant_alt = round(float(alt_obj.degrees), 1)  # type: ignore[attr-defined]
+            # Skip peak dates outside the window or before today.
+            if peak_date < start or peak_date > end:
+                continue
 
-        # --- Moon illumination at peak date ---
-        # Use ecliptic phase angle at local noon (same as _compute_moon_for_date).
-        moon = eph["moon"]  # type: ignore[index]
-        sun = eph["sun"]  # type: ignore[index]
-        t_noon = ts.utc(peak_date.year, peak_date.month, peak_date.day, 12, 0, 0)  # type: ignore[call-arg]
-        sun_ecl = earth.at(t_noon).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
-        moon_ecl = earth.at(t_noon).observe(moon).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
-        sun_lon = float(sun_ecl[1].degrees)  # type: ignore[index]
-        moon_lon = float(moon_ecl[1].degrees)  # type: ignore[index]
-        phase_angle = (moon_lon - sun_lon) % 360.0
-        illum = math.cos(math.radians((phase_angle - 180.0) / 2.0)) ** 2 * 100.0
-        moon_illum_pct = int(round(max(0.0, min(100.0, illum))))
+            # --- Radiant altitude at local midnight on peak night ---
+            t0, t1 = _station_local_window(ts, peak_date, station_tz)
+            midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
+            t_midnight = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
 
-        # --- Classify radiant position and moon ---
-        if radiant_alt > 30:
-            radiant_class = "high"
-        elif radiant_alt >= 10:
-            radiant_class = "moderate"
-        else:
-            radiant_class = "low"  # includes below horizon (alt < 0)
+            # RA/Dec given in degrees; Star wants ra_hours.
+            radiant = Star(  # type: ignore[call-arg]
+                ra_hours=shower.radiant_ra_deg / 15.0,
+                dec_degrees=shower.radiant_dec_deg,
+            )
+            obs_radiant = (earth + location).at(t_midnight).observe(radiant).apparent()  # type: ignore[attr-defined]
+            alt_obj, _az, _dist = obs_radiant.altaz()  # type: ignore[attr-defined]
+            radiant_alt = round(float(alt_obj.degrees), 1)  # type: ignore[attr-defined]
 
-        if moon_illum_pct < 25:
-            moon_class = "dark"
-        elif moon_illum_pct <= 50:
-            moon_class = "moderate"
-        else:
-            moon_class = "bright"
+            # --- Moon illumination and phase at peak date ---
+            # Use ecliptic phase angle at local noon (same as _compute_moon_for_date).
+            moon = eph["moon"]  # type: ignore[index]
+            sun = eph["sun"]  # type: ignore[index]
+            t_noon = ts.utc(peak_date.year, peak_date.month, peak_date.day, 12, 0, 0)  # type: ignore[call-arg]
+            sun_ecl = earth.at(t_noon).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
+            moon_ecl = earth.at(t_noon).observe(moon).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
+            sun_lon = float(sun_ecl[1].degrees)  # type: ignore[index]
+            moon_lon = float(moon_ecl[1].degrees)  # type: ignore[index]
+            phase_angle = (moon_lon - sun_lon) % 360.0
+            illum = math.cos(math.radians((phase_angle - 180.0) / 2.0)) ** 2 * 100.0
+            moon_illum_pct = round(max(0.0, min(100.0, illum)), 1)
+            moon_phase = _phase_name_from_angle(phase_angle)
 
-        # --- Viewing conditions rating ---
-        if radiant_alt <= 0:
-            viewing = "poor"
-        elif radiant_class == "high" and moon_class == "dark":
-            viewing = "excellent"
-        elif (radiant_class == "high" and moon_class == "moderate") or \
-             (radiant_class == "moderate" and moon_class == "dark"):
-            viewing = "good"
-        elif radiant_class == "low" and moon_class == "bright":
-            viewing = "poor"
-        elif radiant_class in ("high", "moderate"):
-            viewing = "fair"
-        else:
-            viewing = "poor"
+            results.append({
+                "name": shower.name,
+                "peakDate": peak_date.isoformat(),
+                "zhr": shower.zhr,
+                "radiantAltitudeDeg": radiant_alt,
+                "moonIlluminationPercent": moon_illum_pct,
+                "moonPhase": moon_phase,
+                "parentBody": shower.parent_body,
+            })
 
-        results.append({
-            "name": shower.name,
-            "peakDate": peak_date.isoformat(),
-            "zhr": shower.zhr,
-            "radiantAltitudeDeg": radiant_alt,
-            "moonIlluminationPercent": moon_illum_pct,
-            "viewingConditions": viewing,
-            "parentBody": shower.parent_body,
-        })
-
-    # Sort by peak date.
+    # Sort by peak date (soonest first).
     results.sort(key=lambda x: x["peakDate"])
     return results

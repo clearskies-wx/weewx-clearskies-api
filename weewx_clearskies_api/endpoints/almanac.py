@@ -414,6 +414,7 @@ def get_planets(
 
     Returns Mercury through Saturn classified by visibility period.
     Only planets with apparent magnitude < 6.0 are included.
+    Each planet entry includes altitude (degrees) and compass direction.
     """
     target_date = params.date if params.date is not None else _today_in_station_tz()
     lat, lon, alt = _station_location()
@@ -432,7 +433,8 @@ def get_planets(
                 return [
                     PlanetEntry(
                         name=p["name"],
-                        magnitude=p["magnitude"],
+                        altitude=p["altitude"],
+                        direction=p["direction"],
                         rise=p["rise"],
                         set=p["set"],
                         constellation=p["constellation"],
@@ -459,7 +461,8 @@ def get_planets(
         return [
             PlanetEntry(
                 name=p["name"],
-                magnitude=p["magnitude"],
+                altitude=p["altitude"],
+                direction=p["direction"],
                 rise=p["rise"],
                 set=p["set"],
                 constellation=p["constellation"],
@@ -481,84 +484,113 @@ def get_planets(
 def get_eclipses(
     params: Annotated[EclipsesQueryParams, Depends(_get_eclipses_params)],
 ) -> EclipseResponse:
-    """Lunar eclipse dates and types for a given year.
+    """Lunar eclipse dates and types for a rolling 1-year window.
 
+    Default: today through today + 365 days (future eclipses only).
+    Optional ?from=YYYY-MM-DD and ?to=YYYY-MM-DD override the window.
     Uses skyfield.eclipselib; returns an empty list if unavailable.
     Types: penumbral, partial, total.
     """
-    year = params.year if params.year is not None else _current_year_in_station_tz()
+    from datetime import timedelta
 
-    # Cache-check-first guard (ADR-045).  The warmer pre-computes the current
-    # year; use the cached result when the request matches.
-    try:
-        cache_key = f"warmer:almanac:eclipses:{year}"
-        cached = get_cache().get(cache_key)
-        if cached is not None:
-            logger.debug("eclipses cache hit: year=%d", year)
-            eclipses = [
-                LunarEclipseEntry(date=e["date"], type=e["type"])
-                for e in cached
-            ]
-            return EclipseResponse(
-                data=LunarEclipseList(year=year, eclipses=eclipses),
-                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
-            )
-    except Exception:
-        logger.debug("eclipses cache miss or error: year=%d", year, exc_info=True)
+    today = _today_in_station_tz()
+    from_date = params.from_ if params.from_ is not None else today
+    to_date = params.to if params.to is not None else (today + timedelta(days=365))
 
-    eclipses_raw = almanac_svc.compute_lunar_eclipses(year)
+    # Cache-check-first guard (ADR-045).  The warmer pre-computes the default
+    # rolling window; use the cached result when no override params were given.
+    use_cache = params.from_ is None and params.to is None
+    if use_cache:
+        try:
+            cache_key = f"warmer:almanac:eclipses:{today.isoformat()}"
+            cached = get_cache().get(cache_key)
+            if cached is not None:
+                logger.debug("eclipses cache hit: from=%s", today.isoformat())
+                eclipses = [
+                    LunarEclipseEntry(date=e["date"], type=e["type"])
+                    for e in cached
+                ]
+                return EclipseResponse(
+                    data=LunarEclipseList(
+                        from_date=from_date.isoformat(),
+                        to_date=to_date.isoformat(),
+                        eclipses=eclipses,
+                    ),
+                    generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                )
+        except Exception:
+            logger.debug("eclipses cache miss or error: from=%s", today.isoformat(), exc_info=True)
+
+    eclipses_raw = almanac_svc.compute_lunar_eclipses(from_date=from_date, to_date=to_date)
     eclipses = [
         LunarEclipseEntry(date=e["date"], type=e["type"])
         for e in eclipses_raw
     ]
 
     return EclipseResponse(
-        data=LunarEclipseList(year=year, eclipses=eclipses),
+        data=LunarEclipseList(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            eclipses=eclipses,
+        ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )
 
 
-@router.get("/almanac/meteor-showers", summary="Meteor shower viewing conditions", tags=["Almanac"])
+@router.get("/almanac/meteor-showers", summary="Meteor shower moon data", tags=["Almanac"])
 def get_meteor_showers(
     params: Annotated[MeteorShowersQueryParams, Depends(_get_meteor_showers_params)],
 ) -> MeteorShowerResponse:
-    """Meteor shower viewing conditions for a given year.
+    """Meteor shower moon data for a rolling 1-year window.
 
-    Returns 12 major annual showers with radiant altitude, moon illumination,
-    and a viewing conditions rating (excellent / good / fair / poor).
+    Default: today through today + 365 days (upcoming showers only).
+    Optional ?from=YYYY-MM-DD and ?to=YYYY-MM-DD override the window.
+    Returns showers sorted by peak date (soonest first).
+    Each shower includes moon illumination percentage and phase name.
     """
-    year = params.year if params.year is not None else _current_year_in_station_tz()
+    from datetime import timedelta
+
+    today = _today_in_station_tz()
+    from_date = params.from_ if params.from_ is not None else today
+    to_date = params.to if params.to is not None else (today + timedelta(days=365))
+
     lat, lon, alt = _station_location()
     station_tz = get_station_info().timezone
 
-    # Cache-check-first guard (ADR-045).  The warmer pre-computes the current
-    # year at the station location; use the cached result when available.
-    try:
-        cache_key = f"warmer:almanac:meteor-showers:{year}"
-        cached = get_cache().get(cache_key)
-        if cached is not None:
-            logger.debug("meteor-showers cache hit: year=%d", year)
-            showers = [
-                MeteorShowerEntry(
-                    name=s["name"],
-                    peakDate=s["peakDate"],
-                    zhr=s["zhr"],
-                    radiantAltitudeDeg=s["radiantAltitudeDeg"],
-                    moonIlluminationPercent=s["moonIlluminationPercent"],
-                    viewingConditions=s["viewingConditions"],
-                    parentBody=s["parentBody"],
+    # Cache-check-first guard (ADR-045).  The warmer pre-computes the default
+    # rolling window; use the cached result when no override params were given.
+    use_cache = params.from_ is None and params.to is None
+    if use_cache:
+        try:
+            cache_key = f"warmer:almanac:meteor-showers:{today.isoformat()}"
+            cached = get_cache().get(cache_key)
+            if cached is not None:
+                logger.debug("meteor-showers cache hit: from=%s", today.isoformat())
+                showers = [
+                    MeteorShowerEntry(
+                        name=s["name"],
+                        peakDate=s["peakDate"],
+                        zhr=s["zhr"],
+                        radiantAltitudeDeg=s["radiantAltitudeDeg"],
+                        moonIlluminationPercent=s["moonIlluminationPercent"],
+                        moonPhase=s["moonPhase"],
+                        parentBody=s["parentBody"],
+                    )
+                    for s in cached
+                ]
+                return MeteorShowerResponse(
+                    data=MeteorShowerList(
+                        from_date=from_date.isoformat(),
+                        to_date=to_date.isoformat(),
+                        showers=showers,
+                    ),
+                    generatedAt=utc_isoformat(datetime.now(tz=UTC)),
                 )
-                for s in cached
-            ]
-            return MeteorShowerResponse(
-                data=MeteorShowerList(year=year, showers=showers),
-                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
-            )
-    except Exception:
-        logger.debug("meteor-showers cache miss or error: year=%d", year, exc_info=True)
+        except Exception:
+            logger.debug("meteor-showers cache miss or error: from=%s", today.isoformat(), exc_info=True)
 
     showers_raw = almanac_svc.compute_meteor_showers(
-        year, lat, lon, alt, station_tz=station_tz
+        lat, lon, alt, station_tz=station_tz, from_date=from_date, to_date=to_date
     )
     showers = [
         MeteorShowerEntry(
@@ -567,13 +599,17 @@ def get_meteor_showers(
             zhr=s["zhr"],
             radiantAltitudeDeg=s["radiantAltitudeDeg"],
             moonIlluminationPercent=s["moonIlluminationPercent"],
-            viewingConditions=s["viewingConditions"],
+            moonPhase=s["moonPhase"],
             parentBody=s["parentBody"],
         )
         for s in showers_raw
     ]
 
     return MeteorShowerResponse(
-        data=MeteorShowerList(year=year, showers=showers),
+        data=MeteorShowerList(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            showers=showers,
+        ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )

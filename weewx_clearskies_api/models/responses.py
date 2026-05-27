@@ -430,7 +430,8 @@ class PlanetEntry(BaseModel):
     """One visible planet entry."""
 
     name: str
-    magnitude: float | None = None
+    altitude: float | None = None
+    direction: str | None = None
     rise: str | None = None
     set: str | None = None
     constellation: str | None = None
@@ -459,9 +460,10 @@ class LunarEclipseEntry(BaseModel):
 
 
 class LunarEclipseList(BaseModel):
-    """List of lunar eclipses for a year."""
+    """List of lunar eclipses for a rolling date window."""
 
-    year: int
+    from_date: str  # "YYYY-MM-DD" — start of search window
+    to_date: str    # "YYYY-MM-DD" — end of search window
     eclipses: list[LunarEclipseEntry]
 
 
@@ -473,21 +475,22 @@ class EclipseResponse(BaseModel):
 
 
 class MeteorShowerEntry(BaseModel):
-    """One meteor shower with viewing conditions."""
+    """One meteor shower with moon data."""
 
     name: str
     peakDate: str
     zhr: int
     radiantAltitudeDeg: float
-    moonIlluminationPercent: int
-    viewingConditions: str  # "excellent" | "good" | "fair" | "poor"
+    moonIlluminationPercent: float
+    moonPhase: str
     parentBody: str
 
 
 class MeteorShowerList(BaseModel):
-    """List of meteor showers for a year."""
+    """List of meteor showers for a rolling date window."""
 
-    year: int
+    from_date: str  # "YYYY-MM-DD" — start of search window
+    to_date: str    # "YYYY-MM-DD" — end of search window
     showers: list[MeteorShowerEntry]
 
 
@@ -973,6 +976,7 @@ class BrandingConfig(BaseModel):
     logo: LogoBranding | None = None
     customCssUrl: str | None = None
     siteTitle: str = ""
+    copyrightEntity: str = ""
     faviconUrl: str = ""
     social: SocialConfig = SocialConfig()
 

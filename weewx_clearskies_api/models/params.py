@@ -273,11 +273,30 @@ class PlanetsQueryParams(BaseModel):
 
 
 class EclipsesQueryParams(BaseModel):
-    """Validated query parameters for GET /almanac/eclipses."""
+    """Validated query parameters for GET /almanac/eclipses.
 
-    model_config = ConfigDict(extra="forbid")
+    Default window: today → today + 365 days (rolling).
+    Optional from/to override the window.
+    """
 
-    year: int | None = Field(default=None, ge=1900)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: _datetime_mod.date | None = Field(default=None, alias="from")
+    to: _datetime_mod.date | None = None
+
+    @field_validator("from_", "to", mode="before")
+    @classmethod
+    def validate_date_field(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            try:
+                return _datetime_mod.date.fromisoformat(v)
+            except ValueError as exc:
+                raise ValueError(
+                    f"date must be a valid ISO date (YYYY-MM-DD), got {v!r}"
+                ) from exc
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -286,11 +305,30 @@ class EclipsesQueryParams(BaseModel):
 
 
 class MeteorShowersQueryParams(BaseModel):
-    """Validated query parameters for GET /almanac/meteor-showers."""
+    """Validated query parameters for GET /almanac/meteor-showers.
 
-    model_config = ConfigDict(extra="forbid")
+    Default window: today → today + 365 days (rolling).
+    Optional from/to override the window.
+    """
 
-    year: int | None = Field(default=None, ge=1900)
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    from_: _datetime_mod.date | None = Field(default=None, alias="from")
+    to: _datetime_mod.date | None = None
+
+    @field_validator("from_", "to", mode="before")
+    @classmethod
+    def validate_date_field(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            try:
+                return _datetime_mod.date.fromisoformat(v)
+            except ValueError as exc:
+                raise ValueError(
+                    f"date must be a valid ISO date (YYYY-MM-DD), got {v!r}"
+                ) from exc
+        return v
 
 
 # ---------------------------------------------------------------------------

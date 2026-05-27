@@ -11,8 +11,8 @@ Warmed endpoints:
   - GET /almanac/moon-phases (current year, full-year, station location)
   - GET /climatology/monthly
   - GET /almanac/planets (today's date, station location)
-  - GET /almanac/eclipses (current year)
-  - GET /almanac/meteor-showers (current year, station location)
+  - GET /almanac/eclipses (rolling 1-year window from today)
+  - GET /almanac/meteor-showers (rolling 1-year window from today, station location)
   - GET /earthquakes/faults (station location, configured radius)
 
 Cache key format:
@@ -21,8 +21,8 @@ Cache key format:
   warmer:almanac:moon-phases:<year>
   warmer:climatology:monthly
   warmer:almanac:planets:<date>          e.g. warmer:almanac:planets:2026-05-27
-  warmer:almanac:eclipses:<year>         e.g. warmer:almanac:eclipses:2026
-  warmer:almanac:meteor-showers:<year>   e.g. warmer:almanac:meteor-showers:2026
+  warmer:almanac:eclipses:<date>         e.g. warmer:almanac:eclipses:2026-05-27
+  warmer:almanac:meteor-showers:<date>   e.g. warmer:almanac:meteor-showers:2026-05-27
   warmer:earthquakes:faults
 
 Cached values are plain dicts (JSON-safe) so both MemoryCache and RedisCache
@@ -317,42 +317,49 @@ class BackgroundCacheWarmer:
             logger.warning("Cache warmer: planets warm failed", exc_info=True)
 
     def _warm_eclipses(self) -> None:
-        """Warm GET /almanac/eclipses for the current year."""
+        """Warm GET /almanac/eclipses for the rolling 1-year window from today."""
         try:
+            from datetime import date, timedelta
             from weewx_clearskies_api.services.almanac import compute_lunar_eclipses
 
             cache = get_cache()
-            year = datetime.now(timezone.utc).year
+            today = date.today()
+            to_date = today + timedelta(days=365)
 
-            eclipses_data = compute_lunar_eclipses(year)
+            eclipses_data = compute_lunar_eclipses(from_date=today, to_date=to_date)
             cache.set(
-                f"warmer:almanac:eclipses:{year}",
+                f"warmer:almanac:eclipses:{today.isoformat()}",
                 eclipses_data,
                 self._settings.eclipses_interval_seconds,
             )
-            logger.info("Cache warmer: eclipses refreshed for year %d", year)
+            logger.info("Cache warmer: eclipses refreshed (from %s)", today.isoformat())
         except Exception:
             logger.warning("Cache warmer: eclipses warm failed", exc_info=True)
 
     def _warm_meteor_showers(self) -> None:
-        """Warm GET /almanac/meteor-showers for the current year at the station location."""
+        """Warm GET /almanac/meteor-showers for the rolling 1-year window from today."""
         try:
+            from datetime import date, timedelta
             from weewx_clearskies_api.services.almanac import compute_meteor_showers
 
             cache = get_cache()
-            year = datetime.now(timezone.utc).year
+            today = date.today()
+            to_date = today + timedelta(days=365)
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]
             station_tz = self._station["station_tz"]
 
-            showers_data = compute_meteor_showers(year, lat, lon, alt_m, station_tz)
+            showers_data = compute_meteor_showers(
+                lat, lon, alt_m, station_tz,
+                from_date=today, to_date=to_date,
+            )
             cache.set(
-                f"warmer:almanac:meteor-showers:{year}",
+                f"warmer:almanac:meteor-showers:{today.isoformat()}",
                 showers_data,
                 self._settings.meteor_showers_interval_seconds,
             )
-            logger.info("Cache warmer: meteor showers refreshed for year %d", year)
+            logger.info("Cache warmer: meteor showers refreshed (from %s)", today.isoformat())
         except Exception:
             logger.warning("Cache warmer: meteor showers warm failed", exc_info=True)
 

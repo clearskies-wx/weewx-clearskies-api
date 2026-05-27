@@ -808,6 +808,8 @@ class BrandingSettings:
     custom_css_url: str | None
     #: Human-readable station name shown in the dashboard title bar.
     site_title: str
+    #: Name shown in the footer copyright line. Empty = no custom copyright entity.
+    copyright_entity: str
     #: URL to the logo image used on light backgrounds. Empty = no custom logo.
     logo_light_url: str
     #: URL to the logo image used on dark backgrounds. Empty = falls back to logo_light_url.
@@ -832,6 +834,7 @@ class BrandingSettings:
         raw_css_url = str(section.get("custom_css_url", "")).strip()
         self.custom_css_url = raw_css_url if raw_css_url else None
         self.site_title = str(section.get("site_title", "")).strip()
+        self.copyright_entity = str(section.get("copyright_entity", "")).strip()
         self.logo_light_url = str(section.get("logo_light_url", "")).strip()
         self.logo_dark_url = str(section.get("logo_dark_url", "")).strip()
         self.favicon_url = str(section.get("favicon_url", "")).strip()

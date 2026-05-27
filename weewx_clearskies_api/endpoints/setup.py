@@ -242,6 +242,7 @@ class BrandingApplyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     site_title: str | None = None
+    copyright_entity: str | None = None
     logo_light_url: str | None = None
     logo_dark_url: str | None = None
     favicon_url: str | None = None
@@ -361,6 +362,7 @@ class CurrentConfigStationSection(BaseModel):
 
 class CurrentConfigBrandingSection(BaseModel):
     site_title: str = ""
+    copyright_entity: str = ""
     logo_light_url: str = ""
     logo_dark_url: str = ""
     favicon_url: str = ""
@@ -560,6 +562,8 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
         br = apply.branding
         if br.site_title is not None:
             cfg["branding"]["site_title"] = br.site_title
+        if br.copyright_entity is not None:
+            cfg["branding"]["copyright_entity"] = br.copyright_entity
         if br.logo_light_url is not None:
             cfg["branding"]["logo_light_url"] = br.logo_light_url
         if br.logo_dark_url is not None:
@@ -1142,6 +1146,8 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         if isinstance(br_section, dict):
             if br_section.get("site_title"):
                 branding.site_title = str(br_section["site_title"])
+            if br_section.get("copyright_entity"):
+                branding.copyright_entity = str(br_section["copyright_entity"])
             if br_section.get("logo_light_url"):
                 branding.logo_light_url = str(br_section["logo_light_url"])
             if br_section.get("logo_dark_url"):

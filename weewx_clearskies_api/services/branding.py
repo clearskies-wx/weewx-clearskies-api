@@ -52,6 +52,7 @@ def get_branding(
         logo=logo,
         customCssUrl=branding_settings.custom_css_url,
         siteTitle=branding_settings.site_title,
+        copyrightEntity=branding_settings.copyright_entity,
         faviconUrl=branding_settings.favicon_url,
         social=social,
     )
