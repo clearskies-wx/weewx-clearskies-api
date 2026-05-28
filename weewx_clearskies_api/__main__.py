@@ -39,7 +39,6 @@ Startup sequence (ADR-012):
                                 credentials wired for Aeris per 3b-10).
     6l. wire earthquakes settings — pass settings to earthquakes endpoint (default_radius_km).
     6m. wire forecast settings — pass settings to forecast endpoint (NWS UA).
-    6n. wire conditions settings — pass engine mode + station coords to observations endpoint.
     6o. wire radar — register configured radar provider's CAPABILITY in registry.
     6p. wire radar settings — wire credentials for keyed radar providers (aeris, openweathermap).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
@@ -77,7 +76,6 @@ from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
 from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire_social_settings
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
-from weewx_clearskies_api.endpoints.observations import wire_conditions_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
 from weewx_clearskies_api.health import create_health_app
@@ -416,7 +414,6 @@ def main() -> None:
       6k. Wire aqi settings.
       6l. Wire earthquakes settings.
       6m. Wire forecast settings.
-      6n. Wire conditions settings (Phase 0B blending engine mode + station coords).
       6o. Wire radar settings (keyed provider credentials — 3b-15; no-op for keyless).
       7. Register DB health probe.
       8. Start uvicorn (TLS-enabled).
@@ -653,11 +650,6 @@ def main() -> None:
 
     # Step 6m: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)
-
-    # Step 6n: Wire conditions engine mode and station coordinates.
-    # Must run after load_station_metadata() (step 6d) and load_units_block()
-    # (step 6c) so that station lat/lon and target_unit are available.
-    wire_conditions_settings(settings)
 
     # Step 6o: Pass settings to radar endpoint for keyed-provider credential wiring.
     # Keyless providers (rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan):
