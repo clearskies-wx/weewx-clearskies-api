@@ -774,12 +774,14 @@ class TestPreCallKeyValidation:
 
 
 class TestCategoryBandsParametrized:
-    """epa_category(aqius) bands beyond the Nashville aqi=10 'Good' fixture.
+    """EPA category bands for the Moderate / Unhealthy-Sensitive / Hazardous ranges.
 
-    Locks in LC1 derivation (`aqiCategory` from `aqius` via EPA bands) for
-    Moderate / Unhealthy-Sensitive / Hazardous bands. Below 'Good' is covered
-    by the Nashville happy-path fixture; above 'Hazardous' (>500) is defensive
-    cap behavior tested directly in `tests/providers/aqi/test_units.py`.
+    Per ADR-013, `aqiCategory` is always `None` from providers — it is
+    dashboard-computed from `aqi + aqiScale`. So this asserts two things: the
+    EPA band table (`epa_category`) maps each value to the correct label, and
+    the canonical parser still yields `aqiCategory is None` (the ADR-013
+    contract). Above 'Hazardous' (>500) cap behavior is tested directly in
+    `tests/providers/aqi/test_units.py`.
     """
 
     @pytest.mark.parametrize(
@@ -795,10 +797,16 @@ class TestCategoryBandsParametrized:
         aqius: int,
         expected_category: str,
     ) -> None:
+        from weewx_clearskies_api.providers.aqi._units import (  # noqa: PLC0415
+            epa_category,
+        )
         from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
             _IQAirData,
             _wire_to_canonical,
         )
+        # The EPA band table maps the value to the correct label ...
+        assert epa_category(aqius) == expected_category
+        # ... but the parser deliberately leaves aqiCategory unset (ADR-013).
         raw = {
             "city": "TestCity",
             "state": "TestState",
@@ -815,7 +823,7 @@ class TestCategoryBandsParametrized:
         data = _IQAirData.model_validate(raw)
         reading = _wire_to_canonical(data)
         assert reading is not None
-        assert reading.aqiCategory == expected_category
+        assert reading.aqiCategory is None
 
 
 # ===========================================================================

@@ -75,11 +75,15 @@ class TestSectionMapConstantShape:
             "temperature section must include 'Low temperature' entry"
         )
 
-    def test_temperature_section_has_high_dewpoint_entry(self) -> None:
-        """temperature section includes 'High dewpoint' entry."""
+    def test_humidity_section_has_high_dewpoint_entry(self) -> None:
+        """humidity section includes 'High dewpoint' entry.
+
+        Dewpoint records are grouped under Humidity (not Temperature), matching
+        the authoritative Belchertown skin taxonomy (Humidity Records header).
+        """
         from weewx_clearskies_api.services.records import SECTION_MAP
 
-        labels = [s.label for s in SECTION_MAP["temperature"]]
+        labels = [s.label for s in SECTION_MAP["humidity"]]
         assert "High dewpoint" in labels
 
     def test_temperature_section_high_out_temp_uses_max_aggregator(self) -> None:

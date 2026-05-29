@@ -387,8 +387,9 @@ class TestIntegrationIQAirAqiHappyPath:
             f"Expected aqi=10, got {body['data'].get('aqi')!r}"
         )
 
-    def test_iqair_aqi_data_category_is_good(self, integration_client: TestClient) -> None:
-        """data.aqiCategory = 'Good' (AQI 10 → 0–50 EPA band)."""
+    def test_iqair_aqi_data_category_is_none(self, integration_client: TestClient) -> None:
+        """data.aqiCategory is None — providers never derive it (ADR-013); the
+        dashboard computes the label from aqi + aqiScale."""
         data = _load_fixture("iqair_nearest_city_nashville.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -398,8 +399,8 @@ class TestIntegrationIQAirAqiHappyPath:
             response = integration_client.get("/api/v1/aqi/current")
 
         body = response.json()
-        assert body["data"]["aqiCategory"] == "Good", (
-            f"Expected aqiCategory='Good', got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] is None, (
+            f"Expected aqiCategory=None (ADR-013), got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_iqair_aqi_data_main_pollutant_is_pm25(self, integration_client: TestClient) -> None:
