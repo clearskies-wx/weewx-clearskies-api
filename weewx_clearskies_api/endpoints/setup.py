@@ -245,6 +245,10 @@ class BrandingApplyConfig(BaseModel):
     copyright_entity: str | None = None
     logo_light_url: str | None = None
     logo_dark_url: str | None = None
+    #: Alt text for the logo image (WCAG 2.1 AA, ADR-022 §5.5).
+    #: When omitted the service falls back to "<site_title> logo" or
+    #: "Weather station logo" so no logo is ever rendered with empty alt.
+    logo_alt: str | None = None
     favicon_url: str | None = None
     accent: str | None = None
     default_theme_mode: str | None = None
@@ -365,6 +369,8 @@ class CurrentConfigBrandingSection(BaseModel):
     copyright_entity: str = ""
     logo_light_url: str = ""
     logo_dark_url: str = ""
+    #: Alt text for the logo (WCAG 2.1 AA, ADR-022 §5.5).  Empty = not yet set.
+    logo_alt: str = ""
     favicon_url: str = ""
     accent: str = ""
     default_theme_mode: str = ""
@@ -568,6 +574,8 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             cfg["branding"]["logo_light_url"] = br.logo_light_url
         if br.logo_dark_url is not None:
             cfg["branding"]["logo_dark_url"] = br.logo_dark_url
+        if br.logo_alt is not None:
+            cfg["branding"]["logo_alt"] = br.logo_alt
         if br.favicon_url is not None:
             cfg["branding"]["favicon_url"] = br.favicon_url
         if br.accent is not None:
@@ -1152,6 +1160,12 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                 branding.logo_light_url = str(br_section["logo_light_url"])
             if br_section.get("logo_dark_url"):
                 branding.logo_dark_url = str(br_section["logo_dark_url"])
+            if br_section.get("logo_alt") is not None:
+                # Intentionally use `is not None` (not truthiness): an operator
+                # who explicitly clears the alt text should have that honoured
+                # and get the fallback at render time rather than having the
+                # wizard silently skip the field.
+                branding.logo_alt = str(br_section["logo_alt"])
             if br_section.get("favicon_url"):
                 branding.favicon_url = str(br_section["favicon_url"])
             if br_section.get("accent"):

@@ -814,6 +814,9 @@ class BrandingSettings:
     logo_light_url: str
     #: URL to the logo image used on dark backgrounds. Empty = falls back to logo_light_url.
     logo_dark_url: str
+    #: Alt text for the logo image (WCAG 2.1 AA, ADR-022 §5.5).
+    #: Empty = fallback to site_title or station name + " logo" at render time.
+    logo_alt: str
     #: URL to the favicon. Empty = default Clear Skies favicon.
     favicon_url: str
 
@@ -837,6 +840,7 @@ class BrandingSettings:
         self.copyright_entity = str(section.get("copyright_entity", "")).strip()
         self.logo_light_url = str(section.get("logo_light_url", "")).strip()
         self.logo_dark_url = str(section.get("logo_dark_url", "")).strip()
+        self.logo_alt = str(section.get("logo_alt", "")).strip()
         self.favicon_url = str(section.get("favicon_url", "")).strip()
 
     def validate(self) -> None:

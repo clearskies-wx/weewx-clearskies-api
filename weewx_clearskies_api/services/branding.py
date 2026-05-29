@@ -34,9 +34,19 @@ def get_branding(
     # Build logo block only when at least a light URL is configured.
     logo: LogoBranding | None = None
     if branding_settings.logo_light_url:
+        # Non-empty alt guarantee (WCAG 2.1 AA, ADR-022 §5.5 "alt text required at upload").
+        # If the operator left logo_alt blank, fall back to "<site_title> logo" or
+        # "Weather station logo" so the rendered <img> never emits alt="".
+        raw_alt = branding_settings.logo_alt
+        if not raw_alt:
+            if branding_settings.site_title:
+                raw_alt = f"{branding_settings.site_title} logo"
+            else:
+                raw_alt = "Weather station logo"
         logo = LogoBranding(
             lightUrl=branding_settings.logo_light_url,
             darkUrl=branding_settings.logo_dark_url if branding_settings.logo_dark_url else None,
+            alt=raw_alt,
         )
 
     social = SocialConfig(
