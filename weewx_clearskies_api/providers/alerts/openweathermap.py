@@ -1,4 +1,4 @@
-"""OpenWeatherMap One Call 3.0 alerts provider module (ADR-016, ADR-038).
+"""OpenWeatherMap One Call 3.0 alerts provider module (ADR-016, ADR-038, ADR-052).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
@@ -7,7 +7,7 @@ Five responsibilities per ADR-038 §2:
      is "current,minutely,alerts"). Two distinct cache entries, one appid env var.
      See brief lead-call 22 for the inverse-exclude pattern rationale.
   2. Response parsing — wire-shape Pydantic models for the alerts-only projection.
-  3. Translation to canonical AlertRecord (severity-from-event-keyword derivation +
+  3. Translation to canonical AlertRecord (passthrough mode per ADR-052 +
      datetime conversion + synthetic id synthesis).
   4. Capability declaration — CAPABILITY symbol consumed at startup.
   5. Error handling — provider errors translated to canonical taxonomy via
@@ -51,12 +51,13 @@ PARTIAL-DOMAIN per L1 rule (3b-7 lesson):
   (any tier). They populate as None on canonical AlertRecord unconditionally.
   These are NOT in CAPABILITY.supplied_canonical_fields.
 
-Severity normalization (brief lead-call 12, canonical-data-model §4.3):
-  OWM wire has no severity field. Derived from event keyword via case-insensitive
-  substring match. Priority order: Warning > Watch > Advisory/Statement > default.
-  Unknown event strings default to "advisory" with NO WARNING log — OWM event
-  field contains agency natural-language labels (NWS/MeteoFrance/JMA/etc.);
-  novel strings are expected and are not schema drift.
+Passthrough mode per ADR-052:
+  OWM strips structured severity metadata from the originating agency data.
+  severityLevel, severityLabel, nativeName, and color are set to None.
+  The dashboard renders OWM alerts with generic/neutral treatment.
+  hazardType is derived from the wire `tags` array (first element, if present).
+  alertSystem is parsed from sender_name for known agency IDs ("nws", "ukmet",
+  "meteofrance"); unknown senders resolve to None.
 
 ruff: noqa: N815  (field names match wire camelCase: senderName, etc.)
 """
@@ -102,26 +103,6 @@ DEFAULT_ALERTS_TTL_SECONDS = 300  # 5 minutes per ADR-016 + ADR-017
 _API_VERSION = "0.1.0"
 
 # ---------------------------------------------------------------------------
-# Severity keyword priority table (brief lead-call 12, canonical §4.3)
-#
-# Case-insensitive substring match in priority order:
-#   Warning > Watch > Advisory/Statement > default("advisory")
-#
-# Priority matters for overlap cases like "Severe Weather Warning" —
-# "Warning" is checked first and wins over any other keyword in the event string.
-# Unknown/unmatched events default to "advisory" with NO WARNING log (see
-# module docstring; OWM event = agency natural-language label, not OWM vocabulary).
-# ---------------------------------------------------------------------------
-
-# List of (canonical_severity, tuple_of_keywords_to_match) in priority order.
-# Each keyword is checked as a case-insensitive substring of the event string.
-_SEVERITY_KEYWORD_PRIORITY: list[tuple[str, tuple[str, ...]]] = [
-    ("warning", ("warning",)),
-    ("watch", ("watch",)),
-    ("advisory", ("advisory", "statement")),
-]
-
-# ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4, brief lead-call 16 + 17 + 18)
 # ---------------------------------------------------------------------------
 
@@ -129,17 +110,20 @@ CAPABILITY = ProviderCapability(
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
     supplied_canonical_fields=(
-        # Eight OWM-supplied canonical AlertRecord fields per canonical §4.3 OWM column.
+        # ADR-052 passthrough provider: severity fields (severityLevel, severityLabel,
+        # nativeName, color) are NOT in CAPABILITY — OWM strips structured severity
+        # from originating agency data.
         # PARTIAL-DOMAIN per L1 rule: urgency, certainty, areaDesc, category are NOT
         # in CAPABILITY — OWM categorically does not supply these on any tier.
         "id",
         "headline",
         "description",
-        "severity",
         "event",
         "effective",
         "expires",
         "senderName",
+        "hazardType",   # derived from wire tags[0] when present
+        "alertSystem",  # parsed from sender_name for known agency IDs
         # source is provider_id literal (canonical §3.6 field), not a fetched wire field.
         "source",
     ),
@@ -152,12 +136,12 @@ CAPABILITY = ProviderCapability(
         "gracefully returns empty alert list (Q1 user decision 2026-05-10; "
         "mirror of 3b-5 forecast/owm Q1 pattern). Coverage global per ADR-016 "
         "day-1 table ('Global government alerts'). "
+        "Passthrough provider per ADR-052: OWM strips structured severity metadata "
+        "from the originating agency; severityLevel, severityLabel, nativeName, and "
+        "color are always null. Dashboard renders OWM alerts with generic/neutral "
+        "treatment (neutral glass, generic icon, role='status'). "
         "urgency, certainty, areaDesc, and category are not provided by OWM on any "
-        "tier (PARTIAL-DOMAIN per canonical §4.3 OWM column); always null on the "
-        "canonical bundle for this provider. "
-        "Severity derived from event keyword substring match per canonical §4.3; "
-        "unknown events default to 'advisory' (no WARNING log — OWM event field "
-        "uses agency natural-language labels, not a fixed OWM vocabulary)."
+        "tier (PARTIAL-DOMAIN per canonical §4.3 OWM column); always null."
     ),
 )
 
@@ -181,12 +165,11 @@ class _OWMAlertEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     sender_name: str | None = None
-    event: str                    # required for id synthesis + severity derivation
+    event: str                    # required for id synthesis + hazardType derivation
     start: int                    # epoch UTC seconds; required for id + effective
     end: int | None = None        # epoch UTC seconds; nullable for expires
     description: str | None = None
-    # tags: list[str] | None = None  # OUT OF SCOPE — wire field exists; canonical
-    # AlertRecord has no extras bag (§3.6); dropped silently per brief lead-call 24.
+    tags: list[str] | None = None  # ADR-052: tags[0] → hazardType when present
 
 
 class _OWMOneCallAlertsResponse(BaseModel):
@@ -268,38 +251,33 @@ def _build_alerts_cache_key(lat: float, lon: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Severity normalization helpers (brief lead-call 12, canonical §4.3)
+# ADR-052 alertSystem derivation from sender_name
 # ---------------------------------------------------------------------------
 
 
-def _owm_severity_from_event(event: str) -> str:
-    """Derive canonical severity from OWM alert event string.
+def _owm_alert_system_from_sender(sender_name: str | None) -> str | None:
+    """Parse alertSystem id from OWM sender_name for known agencies.
 
-    Uses case-insensitive substring matching against the keyword priority table.
-    Priority order: warning > watch > advisory/statement > default("advisory").
-
-    Priority is important for overlapping event strings like "Severe Weather
-    Warning" — "Warning" is in the first priority slot and wins over any other
-    keyword that might appear in the event string.
-
-    No WARNING log for unknown events: OWM event field contains the issuing
-    agency's natural-language label (NWS/MeteoFrance/JMA/etc.), not an OWM
-    controlled vocabulary. New event strings are expected and are not schema drift.
+    OWM relays alerts from national meteorological agencies globally.
+    sender_name is the agency's self-reported name string — not a controlled
+    OWM vocabulary.  We identify a small set of well-known agencies by substring
+    match; unknown senders resolve to None (passthrough mode per ADR-052).
 
     Args:
-        event: OWM alert event string (e.g. "Wind Advisory", "Tornado Warning").
+        sender_name: OWM alert sender_name (may be None or empty string).
 
     Returns:
-        Canonical severity enum: "warning" | "watch" | "advisory".
+        Canonical alertSystem id, or None when sender is unknown.
     """
-    event_lower = event.lower()
-    for canonical_severity, keywords in _SEVERITY_KEYWORD_PRIORITY:
-        for keyword in keywords:
-            if keyword in event_lower:
-                return canonical_severity
-    # Default to "advisory" (least-severe per NWS + Aeris precedent in 3b-1 + 3b-7).
-    # No WARNING log — see module docstring rationale.
-    return "advisory"
+    if not sender_name:
+        return None
+    if "NWS" in sender_name:
+        return "nws"
+    if "Met Office" in sender_name:
+        return "ukmet"
+    if "Météo-France" in sender_name or "Meteo-France" in sender_name:
+        return "meteofrance"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -334,20 +312,26 @@ def _synthesize_alert_id(event: str, start: int, sender_name: str | None) -> str
 def _owm_alert_to_canonical(entry: _OWMAlertEntry) -> AlertRecord:
     """Map one OWM alerts[] entry to a canonical AlertRecord.
 
-    Field mapping per canonical-data-model §4.3 OWM column:
-      id          = concat(event + start + sender_name) via _synthesize_alert_id
-      headline    = event (direct passthrough; canonical §3.6 = "Provider's event name")
-      description = description (direct passthrough; OWM has no instruction-append)
-      severity    = _owm_severity_from_event(event) — keyword substring dispatch
-      urgency     = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
-      certainty   = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
-      event       = event (passthrough; human-readable agency label)
-      effective   = epoch_to_utc_iso8601(start) — UTC ISO-8601 Z (ADR-020)
-      expires     = epoch_to_utc_iso8601(end) or None — UTC ISO-8601 Z
-      senderName  = sender_name (direct passthrough)
-      areaDesc    = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
-      category    = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
-      source      = "openweathermap" (provider_id literal)
+    Field mapping per canonical-data-model §4.3 OWM column (ADR-052 passthrough):
+      id            = concat(event + start + sender_name) via _synthesize_alert_id
+      headline      = event (direct passthrough; canonical §3.6 = "Provider's event name")
+      description   = description (direct passthrough; OWM has no instruction-append)
+      urgency       = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
+      certainty     = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
+      event         = event (passthrough; human-readable agency label)
+      effective     = epoch_to_utc_iso8601(start) — UTC ISO-8601 Z (ADR-020)
+      expires       = epoch_to_utc_iso8601(end) or None — UTC ISO-8601 Z
+      senderName    = sender_name (direct passthrough)
+      areaDesc      = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
+      category      = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
+      source        = "openweathermap" (provider_id literal)
+      --- ADR-052 passthrough fields ---
+      severityLevel = None (OWM strips structured severity from agency data)
+      severityLabel = None (passthrough — no severity to label)
+      nativeName    = None (OWM event field is already English; no native-language original)
+      color         = None (OWM does not supply color codes)
+      hazardType    = tags[0] if tags non-empty, else None
+      alertSystem   = parsed from sender_name via _owm_alert_system_from_sender
     """
     # id synthesis (brief lead-call 13)
     alert_id = _synthesize_alert_id(entry.event, entry.start, entry.sender_name)
@@ -364,20 +348,34 @@ def _owm_alert_to_canonical(entry: _OWMAlertEntry) -> AlertRecord:
             entry.end, provider_id=PROVIDER_ID, domain=DOMAIN
         )
 
+    # ADR-052: hazardType from wire tags array (first element when present)
+    hazard_type: str | None = None
+    if entry.tags:
+        hazard_type = entry.tags[0]
+
+    # ADR-052: alertSystem parsed from sender_name for known agencies
+    alert_system = _owm_alert_system_from_sender(entry.sender_name)
+
     return AlertRecord(
         id=alert_id,
         headline=entry.event,
         description=entry.description or "",
-        severity=_owm_severity_from_event(entry.event),
-        urgency=None,    # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
-        certainty=None,  # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
+        urgency=None,         # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
+        certainty=None,       # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
         event=entry.event,
         effective=effective,
         expires=expires,
         senderName=entry.sender_name or None,
-        areaDesc=None,   # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
-        category=None,   # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
+        areaDesc=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
+        category=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
         source=PROVIDER_ID,
+        # ADR-052 passthrough fields
+        severityLevel=None,   # OWM strips structured severity from agency data
+        severityLabel=None,   # passthrough — no severity to label
+        nativeName=None,      # OWM event field is already English
+        color=None,           # OWM does not supply color codes
+        hazardType=hazard_type,
+        alertSystem=alert_system,
     )
 
 
