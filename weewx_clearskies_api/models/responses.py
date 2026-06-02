@@ -771,10 +771,10 @@ class ForecastResponse(BaseModel):
 
 
 class AlertRecord(BaseModel):
-    """Canonical alert record (ADR-010 §3.6, OpenAPI AlertRecord schema).
+    """Canonical alert record (ADR-010 §3.6, ADR-052, OpenAPI AlertRecord schema).
 
     extra="ignore" so provider wire shapes that have extra fields don't break
-    normalization.  Required fields per OpenAPI: id, headline, severity, event,
+    normalization.  Required fields per OpenAPI: id, headline, event,
     effective, source.
     """
 
@@ -783,7 +783,6 @@ class AlertRecord(BaseModel):
     id: str
     headline: str
     description: str = ""
-    severity: str  # enum: advisory | watch | warning
     urgency: str | None = None
     certainty: str | None = None
     event: str
@@ -793,6 +792,13 @@ class AlertRecord(BaseModel):
     areaDesc: str | None = None
     category: str | None = None
     source: str
+    # ADR-052: geography-correct alert model fields
+    severityLevel: int | None = None    # 1–4 ordinal; None for passthrough providers
+    severityLabel: str | None = None    # human-readable, locale-appropriate label
+    alertSystem: str | None = None      # originating system: "nws", "meteoalarm", etc.
+    hazardType: str | None = None       # category: "thunderstorm", "fire", etc.
+    nativeName: str | None = None       # alert name in original language
+    color: str | None = None            # provider-supplied hex color code
 
 
 class AlertList(BaseModel):
