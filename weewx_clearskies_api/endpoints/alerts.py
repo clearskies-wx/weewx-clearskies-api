@@ -10,9 +10,9 @@ Behavior decision tree per brief §per-endpoint spec:
   6. Provider returns 401/403 → 502 ProviderProblem (KeyInvalid)
   7. Pydantic validation failure on wire model → 502 ProviderProblem (ProviderProtocolError)
 
-Severity filter (ADR-017 §Cache key — filter applied AFTER cache lookup):
-  Cache stores the full canonical list (all severities), keyed by station lat/lon.
-  Severity filter is applied by the endpoint handler — one cache entry per station,
+minLevel filter (ADR-017 §Cache key, ADR-052 — filter applied AFTER cache lookup):
+  Cache stores the full canonical list (all severity levels), keyed by station lat/lon.
+  minLevel filter is applied by the endpoint handler — one cache entry per station,
   not one per filter value.  This avoids N × quota burn for N severity tiers.
 
 No DB hit.  Alerts come from the provider, not weewx archive.
@@ -53,7 +53,7 @@ import pydantic
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
-from weewx_clearskies_api.models.params import SEVERITY_ORDER, AlertsQueryParams
+from weewx_clearskies_api.models.params import AlertsQueryParams
 from weewx_clearskies_api.models.responses import (
     AlertList,
     AlertListResponse,
@@ -166,20 +166,28 @@ def _get_alerts_params(request: Request) -> AlertsQueryParams:
 # ---------------------------------------------------------------------------
 
 
-def _filter_by_severity(
-    records: list[AlertRecord], min_severity: str | None
+def _filter_by_min_level(
+    records: list[AlertRecord], min_level: int | None
 ) -> list[AlertRecord]:
-    """Return alerts at or above the minimum severity level.
+    """Return alerts at or above the minimum integer severity level.
 
-    advisory → return all (0+)
-    watch    → return watch + warning (1+)
-    warning  → return warning only (2+)
-    None     → return all (no filter)
+    None     → return all records (no filter applied)
+    1        → return all alerts (advisory+)
+    2        → return watch, warning, and emergency alerts
+    3        → return warning and emergency alerts
+    4        → return emergency alerts only
+
+    Records whose severityLevel is None (OWM passthrough providers that do
+    not populate the ordinal) are included when no filter is specified and
+    excluded when a minLevel IS specified, because None cannot be compared
+    to an integer threshold.
     """
-    if min_severity is None:
+    if min_level is None:
         return records
-    min_level = SEVERITY_ORDER.get(min_severity, 0)
-    return [r for r in records if SEVERITY_ORDER.get(r.severity, 0) >= min_level]
+    return [
+        r for r in records
+        if r.severityLevel is not None and r.severityLevel >= min_level
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +280,8 @@ def get_alerts(
         logger.error("Unknown alerts provider at request time: %r", provider_id)
         raise HTTPException(status_code=502, detail=f"Unknown alerts provider: {provider_id!r}")
 
-    # --- Apply severity filter AFTER cache lookup (ADR-017) ---
-    filtered_records = _filter_by_severity(all_records, params.severity)
+    # --- Apply minLevel filter AFTER cache lookup (ADR-017, ADR-052) ---
+    filtered_records = _filter_by_min_level(all_records, params.minLevel)
 
     return AlertListResponse(
         data=AlertList(
