@@ -3,7 +3,7 @@
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — NWS /alerts/active?point=<lat>,<lon>
   2. Response parsing — wire-shape Pydantic models for _NwsAlertsActiveResponse
-  3. Translation to canonical AlertRecord (severity map + datetime conversion)
+  3. Translation to canonical AlertRecord (event-name severity tier + datetime conversion)
   4. Capability declaration — CAPABILITY symbol consumed at startup
   5. Error handling — provider errors translated to canonical taxonomy
 
@@ -78,7 +78,6 @@ CAPABILITY = ProviderCapability(
         "id",
         "headline",
         "description",
-        "severity",
         "urgency",
         "certainty",
         "event",
@@ -88,6 +87,9 @@ CAPABILITY = ProviderCapability(
         "areaDesc",
         "category",
         "source",
+        "severityLevel",
+        "severityLabel",
+        "alertSystem",
     ),
     geographic_coverage="us",  # US + territories + adjacent marine zones
     auth_required=(),
@@ -111,18 +113,6 @@ _rate_limiter = RateLimiter(
     max_calls=5,
     window_seconds=1,
 )
-
-# ---------------------------------------------------------------------------
-# Severity normalization map (canonical-data-model §4.3)
-# ---------------------------------------------------------------------------
-
-_NWS_SEVERITY_MAP: dict[str, str] = {
-    "Extreme": "warning",
-    "Severe": "watch",
-    "Moderate": "advisory",
-    "Minor": "advisory",
-    "Unknown": "advisory",
-}
 
 # ---------------------------------------------------------------------------
 # Wire-shape Pydantic models (security-baseline §3.5)
@@ -288,22 +278,38 @@ def _to_utc_iso8601(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_severity(nws_severity: str) -> str:
-    """Map NWS CAP severity to canonical {advisory, watch, warning}.
+def _normalize_severity(event: str) -> tuple[int, str]:
+    """Derive severity tier from the NWS event name suffix (ADR-052).
 
-    Unknown values default to 'advisory' (least severe canonical) per the §4.3
-    mapping table.  Logs at WARNING so a future NWS schema change surfaces in
-    operator logs without breaking the response.
+    NWS CAP severity field (Extreme/Severe/Moderate/Minor/Unknown) is unreliable
+    — the same tier can appear on events of very different severity.  The actual
+    severity for NWS alerts is encoded in the event name suffix per ADR-052.
+
+    Returns:
+        (severityLevel, severityLabel) tuple where severityLevel is 1–4 ordinal
+        and severityLabel is the human-readable label.
+
+    Tiers:
+        4 / "Warning"   — event name ends with " Warning"
+        3 / "Watch"     — event name ends with " Watch"
+        2 / "Advisory"  — event name ends with " Advisory"
+        1 / "Statement" — event name ends with " Statement" or no match
     """
-    canonical = _NWS_SEVERITY_MAP.get(nws_severity)
-    if canonical is None:
-        logger.warning(
-            "Unknown NWS CAP severity %r; defaulting to 'advisory'. "
-            "This may indicate a NWS schema change — check the severity mapping.",
-            nws_severity,
-        )
-        return "advisory"
-    return canonical
+    if event.endswith(" Warning"):
+        return (4, "Warning")
+    if event.endswith(" Watch"):
+        return (3, "Watch")
+    if event.endswith(" Advisory"):
+        return (2, "Advisory")
+    if event.endswith(" Statement"):
+        return (1, "Statement")
+    logger.warning(
+        "NWS event name %r does not end with a recognized severity suffix "
+        "(Warning/Watch/Advisory/Statement); defaulting to severityLevel=1 / Statement. "
+        "This may indicate a new NWS event type — check the severity derivation.",
+        event,
+    )
+    return (1, "Statement")
 
 
 # ---------------------------------------------------------------------------
@@ -316,16 +322,20 @@ def _to_canonical(props: _NwsAlertProperties) -> AlertRecord:
 
     description: NWS description field with instruction appended if present.
     Per canonical-data-model §4.3: description + "\n\n" + instruction (stripped).
+
+    Severity is derived from the event name suffix per ADR-052 (CAP severity
+    field is unreliable — see module docstring and ADR-052 for rationale).
     """
     description = props.description or ""
     if props.instruction:
         description = f"{description}\n\n{props.instruction}".strip()
 
+    severity_level, severity_label = _normalize_severity(props.event)
+
     return AlertRecord(
         id=props.id,
         headline=props.headline,
         description=description,
-        severity=_normalize_severity(props.severity),
         urgency=props.urgency,
         certainty=props.certainty,
         event=props.event,
@@ -335,6 +345,12 @@ def _to_canonical(props: _NwsAlertProperties) -> AlertRecord:
         areaDesc=props.areaDesc,
         category=props.category,
         source=PROVIDER_ID,
+        severityLevel=severity_level,
+        severityLabel=severity_label,
+        alertSystem="nws",
+        hazardType=None,
+        nativeName=None,
+        color=None,
     )
 
 
