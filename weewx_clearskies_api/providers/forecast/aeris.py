@@ -586,6 +586,13 @@ def _daynight_periods_to_daily(
     order: [day0, night0, day1, night1, ...]. We iterate by stepping 2 and
     using the day period for canonical daily values.
 
+    Aeris wire behaviour (confirmed from captured fixture):
+      - Day periods carry maxTempC/maxTempF; minTemp fields are null.
+      - Night periods carry minTempC/minTempF; maxTemp fields are null.
+    tempMin is therefore read from the immediately-following night period
+    (index i+1).  When the trailing night period is absent (last day in a
+    truncated response), tempMin is None.
+
     validDate: date portion of dateTimeISO BEFORE UTC conversion — the offset
     IS the station-local one Aeris applies via profile.tz lookup (brief call 22).
     sunrise/sunset: converted to UTC ISO-8601 Z via to_utc_iso8601_from_offset.
@@ -600,25 +607,32 @@ def _daynight_periods_to_daily(
             i += 1
             continue
 
+        # Night period immediately follows the day period in the paired list.
+        # minTemp lives on the night period; it is always null on the day period.
+        night_period: _AerisDayNightPeriod | None = (
+            periods[i + 1] if i + 1 < len(periods) else None
+        )
+
         # validDate: station-local date extracted from dateTimeISO before any conversion
         valid_date = day_period.dateTimeISO[:10]   # "YYYY-MM-DD"
 
-        # Unit-field selection per ADR-019 + brief lead-call 13
+        # Unit-field selection per ADR-019 + brief lead-call 13.
+        # maxTemp comes from the day period; minTemp from the night period.
         if target_unit == "US":
             temp_max = day_period.maxTempF
-            temp_min = day_period.minTempF
+            temp_min = night_period.minTempF if night_period is not None else None
             wind_speed_max = day_period.windSpeedMaxMPH
             wind_gust_max = day_period.windGustMaxMPH
             precip_amount = day_period.precipIN
         elif target_unit == "METRICWX":
             temp_max = day_period.maxTempC
-            temp_min = day_period.minTempC
+            temp_min = night_period.minTempC if night_period is not None else None
             wind_speed_max = _wind_speed_max_mps(day_period)
             wind_gust_max = _wind_gust_max_mps(day_period)
             precip_amount = day_period.precipMM
         else:  # METRIC
             temp_max = day_period.maxTempC
-            temp_min = day_period.minTempC
+            temp_min = night_period.minTempC if night_period is not None else None
             wind_speed_max = day_period.windSpeedMaxKPH
             wind_gust_max = day_period.windGustMaxKPH
             precip_amount = day_period.precipMM
