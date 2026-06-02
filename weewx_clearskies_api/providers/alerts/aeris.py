@@ -46,21 +46,29 @@ senderName disjunction (brief call 19, Q2 user decision 2026-05-09):
   Real-wire amendment 2026-05-09: details.emergency is a JSON boolean (False)
   when no emergency text is set; isinstance(..., str) check filters it out.
 
-Severity mapping (canonical-data-model §4.3 — amended 2026-05-09):
+Severity mapping (ADR-052 §Severity level mapping — amended 2026-06-01):
   details.priority is NOT a severity field — it's a NOAA hazard-map
   display-priority code (60=Wind Advisory, 96=Fire Weather Watch, etc.).
-  Severity is encoded as the SUFFIX on details.type:
+  Severity is encoded as the SUFFIX on details.type.
+  ADR-052 replaces the old string enum (advisory/watch/warning) with:
+    severityLevel: int 1–4 (4=highest)
+    severityLabel: native system label string (e.g. "Warning", "Amber", "Orange")
     US/CA (NWS VTEC): "XX.YY.Z" where Z is the action/severity code:
-      .W → "warning" (Warning)
-      .A → "watch" (Watch)
-      .Y → "advisory" (Advisory)
-      .S → "advisory" (Statement)
+      .W → level 4, label "Warning"
+      .A → level 3, label "Watch"
+      .Y → level 2, label "Advisory"
+      .S → level 1, label "Statement"
     Non-US (Aeris severity suffix):
-      .EX → "warning" (Extreme)
-      .SV → "watch" (Severe)
-      .MD → "advisory" (Moderate)
-      .MN → "advisory" (Minor)
-  Unknown suffix or no suffix → "advisory" with WARNING log.
+      .EX → level 4
+      .SV → level 3
+      .MD → level 2
+      .MN → level 1
+    severityLabel cross-mapped by dataSource:
+      meteoalarm: EX→"Red", SV→"Orange", MD→"Yellow", MN→"Green"
+      ukmet:      EX→"Red", SV→"Amber",  MD→"Yellow"
+      noaa/envca: extracted from event name (" Warning"/Watch/Advisory/Statement)
+      others:     Aeris suffix readable name (Extreme/Severe/Moderate/Minor)
+  Unknown suffix or no suffix → level None, label None with WARNING log.
 
 Real-wire amendment 2026-05-09 (3b-7 fixture-capture evidence):
   - details.urgency / details.certainty / details.category are NOT documented
@@ -134,10 +142,18 @@ CAPABILITY = ProviderCapability(
         # Aeris response fields (per Aeris docs + 3b-7 fixture capture).
         # PARTIAL-DOMAIN per L1 rule extension. category IS supplied (via the
         # details.cat wire field; canonical-data-model §4.3 amended).
+        # ADR-052 (2026-06-01): severity string replaced by severityLevel (int 1–4)
+        # + severityLabel (native display label). New fields alertSystem, hazardType,
+        # nativeName, color added.
         "id",
         "headline",
         "description",
-        "severity",
+        "severityLevel",
+        "severityLabel",
+        "alertSystem",
+        "hazardType",
+        "nativeName",
+        "color",
         "event",
         "effective",
         "expires",
@@ -147,7 +163,13 @@ CAPABILITY = ProviderCapability(
         # source is provider_id literal (canonical §3.6 field), not a fetched wire field.
         "source",
     ),
-    geographic_coverage="us-ca-eu",  # ADR-016 day-1 set table column (US + Canada + Europe)
+    # ADR-052 (2026-06-01): updated from "us-ca-eu" to reflect all documented regions.
+    # Aeris alerts covers 10+ regions per current Aeris alerts endpoint docs
+    # (GLOBAL-ALERT-SYSTEMS-RESEARCH.md §1b + live API verification 2026-06-01):
+    # US (NWS), Canada (Environment Canada), Europe (MeteoAlarm), UK (Met Office),
+    # Japan (JMA), Australia (BoM), India (IMD), Brazil (INMET),
+    # South Africa (SAWS), South Korea (KMA), Mexico (CONAGUA/SMN).
+    geographic_coverage="us-ca-eu-uk-jp-au-in-br-za-kr-mx",
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=_AERIS_CACHE_TTL,
     operator_notes=(
@@ -156,10 +178,15 @@ CAPABILITY = ProviderCapability(
         "(see docs/reference/api-docs/aeris.md §Authentication). "
         "Returns active alerts only per Aeris api-docs §Alerts. "
         "warn_location responses (off-grid lat/lon) return empty list. "
-        "Coverage per ADR-016 day-1 table: US + Canada + Europe (NWS + Environment "
-        "Canada + MeteoAlarm + UK Met redistributed). "
+        "Coverage: US (NWS/noaa_nws), Canada (Environment Canada/envca), "
+        "Europe (MeteoAlarm/meteoalarm), UK (Met Office/ukmet), Japan (JMA), "
+        "Australia (BoM), India (IMD), Brazil (INMET), South Africa (SAWS), "
+        "South Korea (KMA), Mexico (CONAGUA/SMN). "
         "urgency and certainty are not provided by Aeris (PARTIAL-DOMAIN); "
-        "always null on the canonical bundle for this provider."
+        "always null on the canonical bundle for this provider. "
+        "severityLabel is cross-mapped to the source system's native terminology "
+        "(e.g. 'Amber' for UK Met, 'Orange' for MeteoAlarm). "
+        "details.color is Aeris's own rendering hex color — NOT the national system's color."
     ),
 )
 
@@ -178,31 +205,76 @@ _rate_limiter = RateLimiter(
 )
 
 # ---------------------------------------------------------------------------
-# Severity dispatch tables (canonical-data-model §4.3, amended 2026-05-09)
+# Severity dispatch tables (ADR-052, amended from 2026-05-09 string enum
+# to integer levels 1–4)
 #
 # Severity is encoded as the SUFFIX on details.type, NOT in details.priority.
 # US/CA alerts use NWS VTEC format "XX.YY.Z" where Z is the action/severity
 # code; non-US alerts use Aeris's documented EX/SV/MD/MN suffix scheme.
-# Real fixture: "FW.A" (Fire Weather Watch) → suffix "A" → "watch".
-# api-docs example: "AW.TS.MD" (Moderate Thunderstorm) → suffix "MD" → "advisory".
+# Real fixture: "FW.A" (Fire Weather Watch) → suffix "A" → 3 (Watch).
+# api-docs example: "AW.TS.MD" (Moderate Thunderstorm) → suffix "MD" → 2.
+# ADR-052 §Severity level mapping: 4=highest, 1=lowest.
 # ---------------------------------------------------------------------------
 
-# US/Canadian alerts: NWS VTEC suffix codes
+# US/Canadian alerts: NWS VTEC suffix codes → integer severity level (ADR-052)
 # Reference: https://www.weather.gov/vtec/
-_VTEC_SUFFIX_TO_SEVERITY: dict[str, str] = {
-    "W": "warning",    # Warning
-    "A": "watch",      # Watch
-    "Y": "advisory",   # Advisory
-    "S": "advisory",   # Statement
+_VTEC_SUFFIX_TO_LEVEL: dict[str, int] = {
+    "W": 4,   # Warning — highest
+    "A": 3,   # Watch
+    "Y": 2,   # Advisory
+    "S": 1,   # Statement — lowest
 }
 
-# Non-US alerts: Aeris severity suffix codes
+# VTEC suffix → native label for severityLabel
+_VTEC_SUFFIX_TO_LABEL: dict[str, str] = {
+    "W": "Warning",
+    "A": "Watch",
+    "Y": "Advisory",
+    "S": "Statement",
+}
+
+# Non-US alerts: Aeris severity suffix codes → integer severity level (ADR-052)
 # Reference: https://www.xweather.com/docs/weather-api/endpoints/alerts
-_AERIS_SUFFIX_TO_SEVERITY: dict[str, str] = {
-    "EX": "warning",   # Extreme
-    "SV": "watch",     # Severe
-    "MD": "advisory",  # Moderate
-    "MN": "advisory",  # Minor
+_AERIS_SUFFIX_TO_LEVEL: dict[str, int] = {
+    "EX": 4,  # Extreme — highest
+    "SV": 3,  # Severe
+    "MD": 2,  # Moderate
+    "MN": 1,  # Minor — lowest
+}
+
+# ---------------------------------------------------------------------------
+# Cross-mapping: (dataSource, suffix) → native severity label (ADR-052 §6)
+#
+# Based on the cross-mapping table in
+# docs/reference/GLOBAL-ALERT-SYSTEMS-RESEARCH.md §6 and live API verification
+# 2026-06-01. Only the fully-documented or live-API-confirmed mappings are here;
+# undocumented sources (JMA, BoM, IMD, INMET, SAWS, KMA, SMN) fall through to
+# the Aeris suffix label as a readable fallback.
+# ---------------------------------------------------------------------------
+
+_DATASOURCE_SUFFIX_TO_LABEL: dict[tuple[str, str], str] = {
+    # MeteoAlarm — 4 awareness color levels (EU pan-European)
+    ("meteoalarm", "EX"): "Red",
+    ("meteoalarm", "SV"): "Orange",
+    ("meteoalarm", "MD"): "Yellow",
+    ("meteoalarm", "MN"): "Green",
+    # UK Met Office — 3 warning color levels (no Green)
+    ("ukmet", "EX"): "Red",
+    ("ukmet", "SV"): "Amber",
+    ("ukmet", "MD"): "Yellow",
+    # Environment Canada (bilingual; use English tier names matching NWS convention)
+    ("envca", "W"): "Warning",
+    ("envca", "A"): "Watch",
+    ("envca", "Y"): "Advisory",
+    ("envca", "S"): "Special Weather Statement",
+}
+
+# Aeris suffix → readable fallback label (used when dataSource has no entry above)
+_AERIS_SUFFIX_FALLBACK_LABEL: dict[str, str] = {
+    "EX": "Extreme",
+    "SV": "Severe",
+    "MD": "Moderate",
+    "MN": "Minor",
 }
 
 # ---------------------------------------------------------------------------
@@ -252,16 +324,33 @@ class _AerisAlertPlace(BaseModel):
     country: str | None = None
 
 
+class _AerisLocalLanguage(BaseModel):
+    """One entry in the localLanguages array (ADR-052 §nativeName)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    language: str | None = None   # ISO 639 two-letter code (e.g. "fr", "en")
+    name: str | None = None       # native-language alert name (e.g. "Vigilance jaune orages")
+    body: str | None = None       # native-language description
+
+
 class _AerisAlertRecord(BaseModel):
     """One alert from response[]."""
 
     model_config = ConfigDict(extra="ignore")
 
     id: str
+    # dataSource: source system identifier (ADR-052 §alertSystem)
+    # e.g. "noaa_nws", "meteoalarm", "ukmet", "envca"
+    # Located at the top level of each advisory object per Aeris wire format.
+    dataSource: str | None = None  # noqa: N815 — matches Aeris camelCase wire field
     active: bool | None = None
     details: _AerisAlertDetails
     timestamps: _AerisAlertTimestamps
     place: _AerisAlertPlace | None = None
+    # localLanguages: native-language names (ADR-052 §nativeName, international alerts only)
+    # noqa: N815 — matches Aeris camelCase wire field
+    localLanguages: list[_AerisLocalLanguage] | None = None  # noqa: N815
 
 
 class _AerisEnvelope(BaseModel):
@@ -380,56 +469,137 @@ def _parse_aeris_envelope_raw(response: Any) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Severity normalization (canonical-data-model §4.3, amended 2026-05-09)
+# Severity normalization (ADR-052 §Severity level mapping, amended 2026-06-01)
 # ---------------------------------------------------------------------------
 
 
-def _parse_severity_from_type(type_code: str | None) -> str:
-    """Parse the severity suffix from Aeris details.type and map to canonical enum.
+def _parse_severity_suffix(type_code: str | None) -> str:
+    """Extract the severity/action suffix from Aeris details.type.
 
     Aeris details.type is a dotted code (e.g. "FW.A", "AW.TS.MD"). The LAST
-    segment is the severity/action suffix:
-
-      - US/Canadian alerts use NWS VTEC: W=Warning, A=Watch, Y=Advisory, S=Statement
-      - Non-US alerts use Aeris: EX=Extreme, SV=Severe, MD=Moderate, MN=Minor
-
-    Try VTEC first (one-letter), then Aeris severity (two-letter). Unknown
-    suffix or no suffix → 'advisory' (least-severe canonical) with WARNING log
-    to surface schema drift to operator.
+    segment is the severity/action suffix.
 
     Args:
         type_code: Aeris details.type string (e.g. "FW.A") or None.
 
     Returns:
-        Canonical severity enum: "warning" | "watch" | "advisory".
+        The suffix string (e.g. "A", "MD"), or "" if not present.
     """
     if not type_code:
+        return ""
+    parts = type_code.split(".")
+    return parts[-1] if parts else ""
+
+
+def _parse_severity_level(type_code: str | None) -> int | None:
+    """Map the Aeris details.type suffix to an ADR-052 severity level integer (1–4).
+
+    Aeris details.type is a dotted code (e.g. "FW.A", "AW.TS.MD"). The LAST
+    segment is the severity/action suffix:
+
+      - US/Canadian alerts use NWS VTEC: W→4, A→3, Y→2, S→1
+      - Non-US alerts use Aeris: EX→4, SV→3, MD→2, MN→1
+
+    Try VTEC first (one-letter), then Aeris severity (two-letter). Unknown
+    suffix or no suffix → None with WARNING log to surface schema drift.
+
+    Args:
+        type_code: Aeris details.type string (e.g. "FW.A") or None.
+
+    Returns:
+        Severity level 1–4, or None on unknown/absent suffix.
+    """
+    suffix = _parse_severity_suffix(type_code)
+
+    if not suffix:
         logger.warning(
-            "Aeris alert has null/empty details.type; defaulting severity to 'advisory'. "
+            "Aeris alert has null/empty details.type; severityLevel will be None. "
             "This may indicate a schema change — check the severity dispatch."
         )
-        return "advisory"
-
-    parts = type_code.split(".")
-    suffix = parts[-1] if parts else ""
+        return None
 
     # Try VTEC (single-letter, US/Canadian) first
-    if suffix in _VTEC_SUFFIX_TO_SEVERITY:
-        return _VTEC_SUFFIX_TO_SEVERITY[suffix]
+    if suffix in _VTEC_SUFFIX_TO_LEVEL:
+        return _VTEC_SUFFIX_TO_LEVEL[suffix]
 
     # Try Aeris severity (two-letter, non-US)
-    if suffix in _AERIS_SUFFIX_TO_SEVERITY:
-        return _AERIS_SUFFIX_TO_SEVERITY[suffix]
+    if suffix in _AERIS_SUFFIX_TO_LEVEL:
+        return _AERIS_SUFFIX_TO_LEVEL[suffix]
 
-    # Unknown suffix → advisory + WARNING log
+    # Unknown suffix → None + WARNING log
     logger.warning(
         "Unknown Aeris details.type suffix %r (full type=%r); "
-        "defaulting severity to 'advisory'. This may indicate a schema change — "
+        "severityLevel will be None. This may indicate a schema change — "
         "check VTEC and Aeris suffix dispatch tables.",
         suffix,
         type_code,
     )
-    return "advisory"
+    return None
+
+
+def _parse_severity_label(
+    type_code: str | None,
+    data_source: str | None,
+    event_name: str | None,
+) -> str | None:
+    """Derive the native severity label string for display (ADR-052 §severityLabel).
+
+    Strategy (in priority order):
+    1. US/CA (dataSource contains "noaa" or "envca"): extract tier from event
+       name (" Warning" / " Watch" / " Advisory" / " Statement" suffix) or fall
+       back to VTEC suffix label. Environment Canada shares NWS tiers.
+    2. Documented international source (meteoalarm, ukmet): use
+       _DATASOURCE_SUFFIX_TO_LABEL keyed by (dataSource, suffix).
+    3. Unknown/undocumented source: use Aeris suffix readable name from
+       _AERIS_SUFFIX_FALLBACK_LABEL (e.g. "Severe", "Moderate").
+    4. No suffix: return None.
+
+    Args:
+        type_code: Aeris details.type string (e.g. "FW.A") or None.
+        data_source: Aeris top-level dataSource field (e.g. "noaa_nws") or None.
+        event_name: Aeris details.name human-readable string (e.g. "FIRE WEATHER WATCH")
+            or None. Used for US/CA tier extraction.
+
+    Returns:
+        Native severity label string for display, or None.
+    """
+    suffix = _parse_severity_suffix(type_code)
+    if not suffix:
+        return None
+
+    ds = (data_source or "").lower()
+
+    # 1. US/CA: extract tier from event name where possible
+    if "noaa" in ds or ds == "envca":
+        if event_name:
+            name_upper = event_name.upper()
+            if name_upper.endswith(" WARNING"):
+                return "Warning"
+            if name_upper.endswith(" WATCH"):
+                return "Watch"
+            if name_upper.endswith(" ADVISORY"):
+                return "Advisory"
+            if name_upper.endswith(" STATEMENT"):
+                return "Statement"
+        # Fallback to VTEC suffix label when event name doesn't have a clear suffix
+        # (covers edge cases; real Aeris names always contain the tier)
+        vtec_label = _VTEC_SUFFIX_TO_LABEL.get(suffix)
+        if vtec_label:
+            return vtec_label
+
+    # 2. Documented international source with cross-mapping table entry
+    mapped = _DATASOURCE_SUFFIX_TO_LABEL.get((ds, suffix))
+    if mapped:
+        return mapped
+
+    # 3. Aeris suffix readable fallback for undocumented sources
+    fallback = _AERIS_SUFFIX_FALLBACK_LABEL.get(suffix)
+    if fallback:
+        return fallback
+
+    # 4. VTEC suffix as final fallback (handles Statement/Advisory for envca
+    #    and any new undocumented suffix that shares VTEC naming)
+    return _VTEC_SUFFIX_TO_LABEL.get(suffix)
 
 
 # ---------------------------------------------------------------------------
@@ -440,11 +610,16 @@ def _parse_severity_from_type(type_code: str | None) -> str:
 def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
     """Map one Aeris alert record to a canonical AlertRecord.
 
-    Field mapping per canonical-data-model §4.3 (amended 2026-05-09):
+    Field mapping per canonical-data-model §4.3 + ADR-052 (amended 2026-06-01):
       id = id (top-level)
       headline = details.name
       description = details.body (passthrough, no append — brief call 13)
-      severity = _parse_severity_from_type(details.type) — VTEC or Aeris suffix dispatch
+      severityLevel = _parse_severity_level(details.type) → int 1–4 or None (ADR-052)
+      severityLabel = _parse_severity_label(details.type, dataSource, details.name) (ADR-052)
+      alertSystem = dataSource (ADR-052 §alertSystem)
+      hazardType = details.cat (ADR-052 §hazardType; same source as category)
+      nativeName = localLanguages[0].name if present (ADR-052 §nativeName)
+      color = details.color hex string (ADR-052 §color; Aeris rendering color, not national)
       urgency = None (PARTIAL-DOMAIN — Aeris does not provide)
       certainty = None (PARTIAL-DOMAIN — Aeris does not provide)
       event = details.name (human-readable; details.type is the structured code)
@@ -452,7 +627,7 @@ def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
       expires = timestamps.expiresISO via to_utc_iso8601_from_offset (call 14)
       senderName = details.emergency (string only) ⇢ place.name ⇢ None (call 19, Q2)
       areaDesc = place.name (passthrough)
-      category = details.cat (real wire field name, NOT details.category)
+      category = details.cat (real wire uses 'cat', not 'category' — §4.3 amended)
       source = "aeris" (provider_id literal)
     """
     # Effective timestamp: use ISO form for offset-aware UTC conversion
@@ -493,11 +668,33 @@ def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
     if record.place and record.place.name:
         area_desc = record.place.name
 
+    # ADR-052: nativeName = localLanguages[0].name when array is present
+    native_name: str | None = None
+    if record.localLanguages:
+        first_lang = record.localLanguages[0]
+        if first_lang.name and first_lang.name.strip():
+            native_name = first_lang.name.strip()
+
     return AlertRecord(
         id=record.id,
         headline=record.details.name or "",
         description=record.details.body or "",
-        severity=_parse_severity_from_type(record.details.type),
+        # ADR-052: integer severity level (1–4) replaces old string severity enum
+        severityLevel=_parse_severity_level(record.details.type),
+        # ADR-052: native severity label for display (cross-mapped per dataSource)
+        severityLabel=_parse_severity_label(
+            record.details.type,
+            record.dataSource,
+            record.details.name,
+        ),
+        # ADR-052: source system identifier
+        alertSystem=record.dataSource,
+        # ADR-052: hazard type for icon selection (same source as category)
+        hazardType=record.details.cat,
+        # ADR-052: native-language alert name from first localLanguages entry
+        nativeName=native_name,
+        # ADR-052: Aeris rendering hex color (not the national system's color)
+        color=record.details.color,
         urgency=None,   # PARTIAL-DOMAIN — Aeris does not provide (canonical §4.3 amended 2026-05-09)
         certainty=None, # PARTIAL-DOMAIN — Aeris does not provide (canonical §4.3 amended 2026-05-09)
         event=record.details.name or "",
