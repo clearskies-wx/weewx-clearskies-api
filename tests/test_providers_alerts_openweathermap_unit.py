@@ -1,24 +1,34 @@
-"""Unit tests for the OpenWeatherMap alerts provider (3b round 8).
+"""Unit tests for the OpenWeatherMap alerts provider (ADR-052 passthrough, updated 2026-06-01).
 
-Covers per the task-3b-8 brief §Test plan (unit tests section):
+Covers per the task-3b-8 brief §Test plan (unit tests section) as amended by ADR-052:
 
   Wire-shape Pydantic validation:
   - alerts_paid.json fixture loads cleanly against _OWMAlertEntry / _OWMOneCallAlertsResponse.
-  - Extra fields (tags) ignored silently (extra="ignore").
+  - Extra fields (tags) NOT dropped — tags are now mapped to hazardType (ADR-052).
   - Missing required event field → ValidationError → ProviderProtocolError.
   - Missing required start field → ValidationError → ProviderProtocolError.
 
-  Severity-from-event-keyword mapping (canonical-data-model §4.3, lead-call 12):
-  - Table-driven: warning > watch > advisory/statement > default.
-  - "Tornado Warning" → "warning".
-  - "Severe Thunderstorm Watch" → "watch".
-  - "Wind Advisory" → "advisory".
-  - "Special Weather Statement" → "advisory".
-  - "Heat Watch" → "watch".
-  - "Coastal Flood Warning" → "warning".
-  - "Unknown Mystery Hazard" → "advisory" (default; NO log emitted).
-  - "tornado warning" (lower-case) → "warning" (case-insensitive).
-  - "Severe Weather Warning" → "warning" (warning beats advisory priority).
+  ADR-052 passthrough mode:
+  - severityLevel = None (OWM strips structured severity from originating agency data).
+  - severityLabel = None (passthrough — no severity to label).
+  - nativeName = None (OWM event field is already English).
+  - color = None (OWM does not supply color codes).
+  - hazardType from tags[0] when tags present.
+  - hazardType = None when tags absent or empty.
+  - alertSystem parsed from sender_name:
+      "NWS ..." → "nws"
+      "Met Office ..." → "ukmet"
+      "Météo-France ..." → "meteofrance"
+      Unknown → None
+
+  alertSystem derivation — _owm_alert_system_from_sender:
+  - "NWS Seattle WA" → "nws".
+  - "Met Office UK" → "ukmet".
+  - "Météo-France" → "meteofrance".
+  - "Meteo-France Nord-Pas-de-Calais" → "meteofrance".
+  - "Bureau of Meteorology" → None (unknown sender).
+  - None sender → None.
+  - Empty string sender → None.
 
   Datetime conversion (lead-call 14):
   - epoch_to_utc_iso8601: epoch UTC → ISO Z string.
@@ -39,9 +49,6 @@ Covers per the task-3b-8 brief §Test plan (unit tests section):
   - certainty always None on canonical record.
   - areaDesc always None on canonical record.
   - category always None on canonical record.
-
-  tags field:
-  - Wire tags present → dropped silently (canonical AlertRecord has no tag-bearing field).
 
   Cache hit/miss:
   - Cache miss → outbound HTTP call → records stored.
@@ -76,8 +83,10 @@ Covers per the task-3b-8 brief §Test plan (unit tests section):
   Capability registry:
   - CAPABILITY.provider_id = "openweathermap", domain = "alerts".
   - CAPABILITY.auth_required includes "appid".
-  - CAPABILITY.supplied_canonical_fields includes expected 8 fields.
+  - CAPABILITY.supplied_canonical_fields includes expected fields (hazardType, alertSystem, NOT severity).
   - CAPABILITY.supplied_canonical_fields excludes urgency/certainty/areaDesc/category (PARTIAL-DOMAIN).
+  - CAPABILITY.supplied_canonical_fields excludes severityLevel, severityLabel, nativeName, color
+    (ADR-052 passthrough: OWM strips structured severity).
   - CAPABILITY.geographic_coverage = "global".
   - CAPABILITY.default_poll_interval_seconds = 300.
   - wire_providers([CAPABILITY]) → registry has openweathermap alerts entry.
@@ -85,7 +94,7 @@ Covers per the task-3b-8 brief §Test plan (unit tests section):
 No DB, no live network. respx mocks outbound httpx calls.
 Wire-shape rule: fixtures loaded from tests/fixtures/providers/openweathermap/alerts_*.json
 (synthetic-from-api-docs-example per brief L3 rule).
-ADR references: ADR-006, ADR-016, ADR-017, ADR-038.
+ADR references: ADR-006, ADR-016, ADR-017, ADR-038, ADR-052.
 """
 
 from __future__ import annotations
@@ -151,128 +160,194 @@ _TEST_APPID = "TEST_APPID_12345"
 
 
 # ===========================================================================
-# 1. Severity-from-event-keyword mapping (lead-call 12)
+# 1. ADR-052 passthrough mode — severityLevel/severityLabel/nativeName/color
 # ===========================================================================
 
 
-class TestOwmSeverityFromEvent:
-    """_owm_severity_from_event derives canonical severity from event keyword.
+class TestOwmPassthroughSeverityFields:
+    """ADR-052 passthrough: OWM strips structured severity — all None on canonical record.
 
-    canonical-data-model §4.3 OWM column: severity derived via case-insensitive
-    substring match in priority order: warning > watch > advisory/statement > default.
-    Unknown events default to "advisory" with NO WARNING log (lead-call 12:
-    OWM event strings are natural-language agency labels, not schema codes).
+    OWM does not preserve structured severity metadata from the originating
+    national agency. The dashboard renders OWM alerts with generic/neutral treatment.
     """
 
-    def test_tornado_warning_maps_to_warning(self) -> None:
-        """`Tornado Warning` → 'warning' (contains 'warning' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def _make_canonical_record(self, tags: list[str] | None = None) -> Any:
+        """Make a canonical AlertRecord from a minimal OWM alert entry."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
+            _owm_alert_to_canonical,
+            _OWMAlertEntry,
         )
-        assert _owm_severity_from_event("Tornado Warning") == "warning"
+        entry_data: dict[str, Any] = {
+            "sender_name": "NWS Seattle WA",
+            "event": "Wind Advisory",
+            "start": 1714485600,
+            "end": 1714521600,
+            "description": "Advisory text.",
+        }
+        if tags is not None:
+            entry_data["tags"] = tags
+        entry = _OWMAlertEntry.model_validate(entry_data)
+        return _owm_alert_to_canonical(entry)
 
-    def test_severe_thunderstorm_watch_maps_to_watch(self) -> None:
-        """`Severe Thunderstorm Watch` → 'watch' (contains 'watch' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Severe Thunderstorm Watch") == "watch"
-
-    def test_wind_advisory_maps_to_advisory(self) -> None:
-        """`Wind Advisory` → 'advisory' (contains 'advisory' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Wind Advisory") == "advisory"
-
-    def test_special_weather_statement_maps_to_advisory(self) -> None:
-        """`Special Weather Statement` → 'advisory' (contains 'statement' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Special Weather Statement") == "advisory"
-
-    def test_heat_watch_maps_to_watch(self) -> None:
-        """`Heat Watch` → 'watch' (contains 'watch' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Heat Watch") == "watch"
-
-    def test_coastal_flood_warning_maps_to_warning(self) -> None:
-        """`Coastal Flood Warning` → 'warning' (contains 'warning' keyword)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Coastal Flood Warning") == "warning"
-
-    def test_unknown_event_defaults_to_advisory(self) -> None:
-        """`Unknown Mystery Hazard` → 'advisory' (no keyword match → default)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        assert _owm_severity_from_event("Unknown Mystery Hazard") == "advisory"
-
-    def test_unknown_event_does_not_emit_warning_log(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Unknown event → 'advisory' default; NO WARNING log (lead-call 12: OWM events
-        are natural-language agency labels, not schema codes — noise suppressed).
-        """
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
-        )
-        with caplog.at_level(
-            logging.WARNING,
-            logger="weewx_clearskies_api.providers.alerts.openweathermap",
-        ):
-            _owm_severity_from_event("Unknown Mystery Hazard")
-        assert len(caplog.records) == 0, (
-            "Unknown OWM event must NOT emit WARNING log (lead-call 12: not schema drift)"
+    def test_severity_level_is_none_passthrough(self) -> None:
+        """severityLevel = None (ADR-052 passthrough — OWM strips structured severity)."""
+        record = self._make_canonical_record()
+        assert record.severityLevel is None, (
+            f"Expected severityLevel=None (ADR-052 passthrough), got {record.severityLevel!r}"
         )
 
-    def test_lowercase_tornado_warning_maps_to_warning(self) -> None:
-        """Case-insensitive: `tornado warning` (lower-case) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def test_severity_label_is_none_passthrough(self) -> None:
+        """severityLabel = None (ADR-052 passthrough — no severity to label)."""
+        record = self._make_canonical_record()
+        assert record.severityLabel is None, (
+            f"Expected severityLabel=None (ADR-052 passthrough), got {record.severityLabel!r}"
         )
-        assert _owm_severity_from_event("tornado warning") == "warning"
 
-    def test_warning_beats_advisory_in_priority_order(self) -> None:
-        """Priority overlap: `Severe Weather Warning` → 'warning' (warning beats advisory)."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def test_native_name_is_none_passthrough(self) -> None:
+        """nativeName = None (OWM event field is already English; no native-language original)."""
+        record = self._make_canonical_record()
+        assert record.nativeName is None, (
+            f"Expected nativeName=None, got {record.nativeName!r}"
         )
-        # "Severe Weather Warning" contains both "warning" and no other matches,
-        # but the priority ordering ensures "warning" wins over the default.
-        assert _owm_severity_from_event("Severe Weather Warning") == "warning"
 
-    def test_watch_and_advisory_combined_warning_wins(self) -> None:
-        """Priority overlap: event with 'Warning' in name → 'warning' beats 'watch'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def test_color_is_none_passthrough(self) -> None:
+        """color = None (OWM does not supply color codes)."""
+        record = self._make_canonical_record()
+        assert record.color is None, (
+            f"Expected color=None, got {record.color!r}"
         )
-        # If a hypothetical event string had "Warning Watch" in its name,
-        # warning must take priority per the brief priority order.
-        assert _owm_severity_from_event("Warning Watch Test") == "warning"
 
-    def test_real_fixture_first_entry_wind_advisory_yields_advisory(self) -> None:
-        """Real fixture entry 1 'Wind Advisory' → severity 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def test_hazard_type_from_tags_first_element(self) -> None:
+        """hazardType = tags[0] when tags array is present and non-empty."""
+        record = self._make_canonical_record(tags=["Wind"])
+        assert record.hazardType == "Wind", (
+            f"Expected hazardType='Wind' from tags[0], got {record.hazardType!r}"
         )
-        assert _owm_severity_from_event("Wind Advisory") == "advisory"
 
-    def test_real_fixture_second_entry_tornado_warning_yields_warning(self) -> None:
-        """Real fixture entry 2 'Tornado Warning' → severity 'warning'."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _owm_severity_from_event,  # noqa: PLC0415
+    def test_hazard_type_none_when_tags_absent(self) -> None:
+        """hazardType = None when tags array is absent from wire entry."""
+        record = self._make_canonical_record(tags=None)
+        assert record.hazardType is None, (
+            f"Expected hazardType=None when tags absent, got {record.hazardType!r}"
         )
-        assert _owm_severity_from_event("Tornado Warning") == "warning"
+
+    def test_hazard_type_none_when_tags_empty(self) -> None:
+        """hazardType = None when tags array is present but empty."""
+        record = self._make_canonical_record(tags=[])
+        assert record.hazardType is None, (
+            f"Expected hazardType=None when tags=[], got {record.hazardType!r}"
+        )
+
+    def test_hazard_type_uses_first_tag_only(self) -> None:
+        """hazardType = tags[0] when multiple tags present (only first used)."""
+        record = self._make_canonical_record(tags=["Thunderstorm", "Hail", "Wind"])
+        assert record.hazardType == "Thunderstorm", (
+            f"Expected hazardType='Thunderstorm' (first tag), got {record.hazardType!r}"
+        )
 
 
 # ===========================================================================
-# 2. Datetime conversion (lead-call 14)
+# 2. alertSystem derivation — _owm_alert_system_from_sender
+# ===========================================================================
+
+
+class TestOwmAlertSystemFromSender:
+    """_owm_alert_system_from_sender parses alertSystem from OWM sender_name."""
+
+    def test_nws_sender_name_maps_to_nws(self) -> None:
+        """'NWS Seattle WA' → 'nws' (contains 'NWS')."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("NWS Seattle WA") == "nws"
+
+    def test_nws_portland_maps_to_nws(self) -> None:
+        """'NWS Portland OR' → 'nws'."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("NWS Portland OR") == "nws"
+
+    def test_met_office_maps_to_ukmet(self) -> None:
+        """'Met Office' → 'ukmet'."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("Met Office") == "ukmet"
+
+    def test_met_office_uk_maps_to_ukmet(self) -> None:
+        """'Met Office UK Amber Warning' → 'ukmet' (substring match)."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("Met Office UK Amber Warning") == "ukmet"
+
+    def test_meteo_france_unicode_maps_to_meteofrance(self) -> None:
+        """'Météo-France' (accented) → 'meteofrance'."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("Météo-France") == "meteofrance"
+
+    def test_meteo_france_ascii_maps_to_meteofrance(self) -> None:
+        """'Meteo-France Nord-Pas-de-Calais' (ASCII fallback) → 'meteofrance'."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("Meteo-France Nord-Pas-de-Calais") == "meteofrance"
+
+    def test_unknown_sender_returns_none(self) -> None:
+        """Unknown sender (e.g. BoM) → None (passthrough mode per ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("Bureau of Meteorology") is None
+
+    def test_none_sender_returns_none(self) -> None:
+        """None sender_name → None."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender(None) is None
+
+    def test_empty_string_sender_returns_none(self) -> None:
+        """Empty string sender_name → None."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _owm_alert_system_from_sender,  # noqa: PLC0415
+        )
+        assert _owm_alert_system_from_sender("") is None
+
+    def test_alert_system_set_on_canonical_record_for_nws_sender(self) -> None:
+        """Canonical record has alertSystem='nws' when sender contains 'NWS'."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
+            _owm_alert_to_canonical,
+            _OWMAlertEntry,
+        )
+        entry = _OWMAlertEntry.model_validate({
+            "sender_name": "NWS Seattle WA",
+            "event": "Wind Advisory",
+            "start": 1714485600,
+        })
+        record = _owm_alert_to_canonical(entry)
+        assert record.alertSystem == "nws"
+
+    def test_alert_system_none_on_canonical_record_for_unknown_sender(self) -> None:
+        """Canonical record has alertSystem=None for unknown sender."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
+            _owm_alert_to_canonical,
+            _OWMAlertEntry,
+        )
+        entry = _OWMAlertEntry.model_validate({
+            "sender_name": "Bureau of Meteorology",
+            "event": "Severe Thunderstorm Warning",
+            "start": 1714485600,
+        })
+        record = _owm_alert_to_canonical(entry)
+        assert record.alertSystem is None
+
+
+# ===========================================================================
+# 3. Datetime conversion (lead-call 14)
 # ===========================================================================
 
 
@@ -350,7 +425,7 @@ class TestDatetimeConversion:
 
 
 # ===========================================================================
-# 3. ID synthesis (lead-call 13)
+# 4. ID synthesis (lead-call 13)
 # ===========================================================================
 
 
@@ -419,7 +494,7 @@ class TestIdSynthesis:
 
 
 # ===========================================================================
-# 4. Description passthrough (no instruction-append)
+# 5. Description passthrough (no instruction-append)
 # ===========================================================================
 
 
@@ -480,7 +555,7 @@ class TestDescriptionPassthrough:
 
 
 # ===========================================================================
-# 5. PARTIAL-DOMAIN fields (lead-call 16)
+# 6. PARTIAL-DOMAIN fields (lead-call 16)
 # ===========================================================================
 
 
@@ -561,57 +636,6 @@ class TestPartialDomainFields:
         assert record.senderName == "NWS Test", (
             f"Expected senderName='NWS Test', got {record.senderName!r}"
         )
-
-
-# ===========================================================================
-# 6. Tags field dropped silently
-# ===========================================================================
-
-
-class TestTagsFieldDroppedSilently:
-    """Wire tags field present → dropped silently; no tag-bearing field on canonical record."""
-
-    def test_tags_field_in_wire_does_not_appear_on_canonical_record(self) -> None:
-        """Wire tags=['Wind'] → dropped; AlertRecord has no tags field."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
-            _owm_alert_to_canonical,
-            _OWMAlertEntry,
-        )
-        # Wire entry WITH tags (as in real OWM response per api-docs L209)
-        entry_data = {
-            "sender_name": "NWS Seattle WA",
-            "event": "Wind Advisory",
-            "start": 1714485600,
-            "end": 1714521600,
-            "description": "Winds 20-30 mph.",
-            "tags": ["Wind"],  # Present in wire; must be dropped
-        }
-        # Should load cleanly (extra="ignore")
-        entry = _OWMAlertEntry.model_validate(entry_data)
-        record = _owm_alert_to_canonical(entry)
-        # Assert canonical AlertRecord has no tags field
-        assert not hasattr(record, "tags"), (
-            "Canonical AlertRecord must not have a 'tags' attribute (tags dropped per §3.6)"
-        )
-        # Assert record's fields don't include anything tag-like
-        from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
-        alert_fields = set(AlertRecord.model_fields.keys())
-        assert "tags" not in alert_fields, (
-            "AlertRecord Pydantic model must not have a 'tags' field"
-        )
-
-    def test_real_fixture_with_tags_loads_without_error(self) -> None:
-        """Real fixture entry with tags=["Wind"] loads cleanly (extra="ignore")."""
-        from weewx_clearskies_api.providers.alerts.openweathermap import (
-            _OWMAlertEntry,  # noqa: PLC0415
-        )
-        fixture = _load_fixture("alerts_paid.json")
-        first_raw = fixture["alerts"][0]
-        # Confirm the fixture has tags
-        assert "tags" in first_raw, "Real fixture must have tags field for this test"
-        # Should not raise
-        entry = _OWMAlertEntry.model_validate(first_raw)
-        assert entry.event == "Wind Advisory"
 
 
 # ===========================================================================
@@ -707,6 +731,54 @@ class TestWireShapePydantic:
         })
         assert entry.event == "Wind Advisory"
 
+    def test_tags_field_accepted_on_wire_entry(self) -> None:
+        """tags array in wire entry loads cleanly into _OWMAlertEntry."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
+        entry_data = {
+            "sender_name": "NWS Seattle WA",
+            "event": "Wind Advisory",
+            "start": 1714485600,
+            "end": 1714521600,
+            "description": "Winds 20-30 mph.",
+            "tags": ["Wind"],
+        }
+        entry = _OWMAlertEntry.model_validate(entry_data)
+        assert entry.event == "Wind Advisory"
+        assert entry.tags == ["Wind"]
+
+    def test_tags_field_maps_to_hazard_type_on_canonical_record(self) -> None:
+        """Wire tags=['Wind'] → canonical record hazardType='Wind' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (  # noqa: PLC0415
+            _owm_alert_to_canonical,
+            _OWMAlertEntry,
+        )
+        entry_data = {
+            "sender_name": "NWS Seattle WA",
+            "event": "Wind Advisory",
+            "start": 1714485600,
+            "end": 1714521600,
+            "description": "Winds 20-30 mph.",
+            "tags": ["Wind"],
+        }
+        entry = _OWMAlertEntry.model_validate(entry_data)
+        record = _owm_alert_to_canonical(entry)
+        assert record.hazardType == "Wind", (
+            f"Expected hazardType='Wind' from tags[0], got {record.hazardType!r}"
+        )
+
+    def test_real_fixture_with_tags_loads_without_error(self) -> None:
+        """Real fixture entry with tags=["Wind"] loads cleanly."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import (
+            _OWMAlertEntry,  # noqa: PLC0415
+        )
+        fixture = _load_fixture("alerts_paid.json")
+        first_raw = fixture["alerts"][0]
+        assert "tags" in first_raw, "Real fixture must have tags field for this test"
+        entry = _OWMAlertEntry.model_validate(first_raw)
+        assert entry.event == "Wind Advisory"
+
     def test_sender_name_none_is_accepted(self) -> None:
         """sender_name=None is valid (optional field)."""
         from weewx_clearskies_api.providers.alerts.openweathermap import (
@@ -793,6 +865,10 @@ class TestFetchCacheMissAndHit:
         assert len(records) == 1
         assert records[0].source == "openweathermap"
         assert records[0].event == "Wind Advisory"
+        assert records[0].severityLevel is None
+        assert records[0].severityLabel is None
+        assert records[0].alertSystem == "nws"
+        assert records[0].hazardType == "Wind"
 
     def test_cache_hit_returns_records_without_outbound_call(self) -> None:
         """Cache hit: no HTTP call made; cached records returned."""
@@ -858,7 +934,8 @@ class TestFetchCacheMissAndHit:
         assert records1[0].id == records2[0].id
         assert records1[0].source == records2[0].source
         assert records1[0].event == records2[0].event
-        assert records1[0].severity == records2[0].severity
+        assert records1[0].severityLevel == records2[0].severityLevel  # both None
+        assert records1[0].alertSystem == records2[0].alertSystem
 
 
 # ===========================================================================
@@ -1164,8 +1241,8 @@ class TestEmptyAlertsResponse:
             f"Empty alerts[] must return empty list (not error), got {records!r}"
         )
 
-    def test_populated_fixture_returns_two_records(self) -> None:
-        """Populated fixture with 2 alerts → 2 canonical AlertRecord objects."""
+    def test_populated_fixture_returns_two_records_with_passthrough_severity(self) -> None:
+        """Populated fixture with 2 alerts → 2 canonical AlertRecord objects, severityLevel=None."""
         _reset_provider_state()
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         alerts_data = _load_fixture("alerts_paid.json")
@@ -1179,12 +1256,21 @@ class TestEmptyAlertsResponse:
         assert len(records) == 2, (
             f"Expected 2 records from populated fixture, got {len(records)}"
         )
-        # First entry is Wind Advisory → advisory
-        assert records[0].severity == "advisory"
+        # ADR-052 passthrough: severityLevel and severityLabel are None for all OWM records
+        for record in records:
+            assert record.severityLevel is None, (
+                f"ADR-052 passthrough: severityLevel must be None, got {record.severityLevel!r}"
+            )
+            assert record.severityLabel is None, (
+                f"ADR-052 passthrough: severityLabel must be None, got {record.severityLabel!r}"
+            )
+        # First entry is Wind Advisory
         assert records[0].event == "Wind Advisory"
-        # Second entry is Tornado Warning → warning
-        assert records[1].severity == "warning"
+        # Second entry is Tornado Warning
         assert records[1].event == "Tornado Warning"
+        # alertSystem parsed from sender_name ("NWS ...") → "nws"
+        assert records[0].alertSystem == "nws"
+        assert records[1].alertSystem == "nws"
 
 
 # ===========================================================================
@@ -1249,15 +1335,36 @@ class TestCapabilityRegistry:
             "CAPABILITY.auth_required must include 'appid'"
         )
 
-    def test_capability_supplied_canonical_fields_includes_core_fields(self) -> None:
-        """CAPABILITY.supplied_canonical_fields includes the 8 OWM-supplied fields."""
+    def test_capability_supplied_fields_includes_core_fields(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes the OWM-supplied fields."""
         from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
         for field in (
-            "id", "headline", "description", "severity", "event",
+            "id", "headline", "description", "event",
             "effective", "expires", "senderName", "source",
+            "hazardType", "alertSystem",
         ):
             assert field in CAPABILITY.supplied_canonical_fields, (
                 f"CAPABILITY.supplied_canonical_fields missing {field!r}"
+            )
+
+    def test_capability_does_not_include_old_severity_string(self) -> None:
+        """CAPABILITY.supplied_canonical_fields does NOT include old 'severity' string field."""
+        from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
+        assert "severity" not in CAPABILITY.supplied_canonical_fields, (
+            "Old 'severity' string field must NOT be in CAPABILITY (replaced by ADR-052 passthrough)"
+        )
+
+    def test_capability_excludes_adr052_passthrough_fields(self) -> None:
+        """CAPABILITY excludes severityLevel, severityLabel, nativeName, color (ADR-052 passthrough).
+
+        OWM strips structured severity from the originating agency — these fields
+        are NOT in CAPABILITY because OWM cannot supply them on any tier.
+        """
+        from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
+        for passthrough_field in ("severityLevel", "severityLabel", "nativeName", "color"):
+            assert passthrough_field not in CAPABILITY.supplied_canonical_fields, (
+                f"ADR-052 passthrough: {passthrough_field!r} must NOT be in CAPABILITY "
+                "(OWM strips structured severity data)"
             )
 
     def test_capability_partial_domain_excludes_four_fields(self) -> None:

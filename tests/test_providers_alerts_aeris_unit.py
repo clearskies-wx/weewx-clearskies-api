@@ -1,6 +1,6 @@
-"""Unit tests for the Aeris alerts provider (3b round 7).
+"""Unit tests for the Aeris alerts provider (ADR-052, updated 2026-06-01).
 
-Covers per the task-3b-7 brief §Test plan (unit tests section):
+Covers per the task-3b-7 brief §Test plan (unit tests section) as amended by ADR-052:
 
   Wire-shape Pydantic:
   - Real fixture (alerts.json) loads cleanly against _AerisAlertRecord / _AerisEnvelope.
@@ -11,11 +11,23 @@ Covers per the task-3b-7 brief §Test plan (unit tests section):
   - All fields in real fixture validate; urgency/certainty/category are absent
     from real free-tier wire (PARTIAL-DOMAIN call 16 confirmed).
 
-  Severity normalization (canonical-data-model §4.3 amended 2026-05-09):
-  - VTEC suffix dispatch: .W→warning, .A→watch, .Y→advisory, .S→advisory.
-  - Aeris suffix dispatch (non-US): .EX→warning, .SV→watch, .MD/.MN→advisory.
-  - Unknown suffix (e.g. real fixture "FW.A" → "watch") and no-suffix → "advisory" + WARNING log.
-  - None / empty type code → "advisory" + WARNING log.
+  Severity normalization (ADR-052, amended 2026-06-01):
+  - VTEC suffix dispatch: .W→4/"Warning", .A→3/"Watch", .Y→2/"Advisory", .S→1/"Statement".
+  - Aeris suffix dispatch (non-US): .EX→4, .SV→3, .MD→2, .MN→1.
+  - MeteoAlarm .MD → severityLevel=2, severityLabel="Yellow".
+  - VTEC .W for US/CA source → severityLevel=4, severityLabel="Warning".
+  - Unknown suffix → severityLevel=None + WARNING log.
+  - None / empty type code → severityLevel=None + WARNING log.
+  - _parse_severity_suffix extracts the last dotted segment.
+  - _parse_severity_level maps suffix to integer level (1–4 or None).
+  - _parse_severity_label cross-maps per dataSource.
+
+  ADR-052 new fields — _to_canonical:
+  - alertSystem = dataSource from wire record.
+  - hazardType = details.cat (same source as category).
+  - nativeName = localLanguages[0].name when present.
+  - color = details.color hex string.
+  - Real fixture: alertSystem="noaa_nws", hazardType="fire", nativeName present, color present.
 
   Datetime conversion:
   - Offset-aware ISO string → UTC Z via to_utc_iso8601_from_offset.
@@ -62,7 +74,10 @@ Covers per the task-3b-7 brief §Test plan (unit tests section):
   Capability registry:
   - CAPABILITY.provider_id = "aeris", domain = "alerts".
   - CAPABILITY.auth_required includes "client_id" and "client_secret".
-  - CAPABILITY.supplied_canonical_fields includes expected fields.
+  - CAPABILITY.supplied_canonical_fields includes severityLevel, severityLabel,
+    alertSystem, hazardType, nativeName, color.
+  - CAPABILITY.supplied_canonical_fields does NOT include old "severity" string field.
+  - CAPABILITY.geographic_coverage includes global coverage (us-ca-eu-uk-jp-au-in-br-za-kr-mx).
   - wire_providers([aeris.CAPABILITY]) → registry has aeris alerts entry.
 
 No DB, no live network. respx mocks outbound httpx calls.
@@ -76,7 +91,7 @@ Wire-shape findings from real capture (see alerts.md sidecar) — RESOLVED via 2
   - details.urgency/certainty are not Aeris response fields; PARTIAL-DOMAIN — always None.
   - category reads from details.cat (real wire field name), not details.category.
 
-ADR references: ADR-006, ADR-016, ADR-017, ADR-018, ADR-038.
+ADR references: ADR-006, ADR-016, ADR-017, ADR-018, ADR-038, ADR-052.
 """
 
 from __future__ import annotations
@@ -143,157 +158,205 @@ _TEST_CLIENT_SECRET = "TEST_CLIENT_SECRET"
 
 
 # ===========================================================================
-# 1. Severity normalization — _parse_severity_from_type (amended 2026-05-09)
+# 1. Severity dispatch — _parse_severity_suffix / _parse_severity_level / _parse_severity_label
+#    (ADR-052, amended 2026-06-01: integer levels + cross-mapped labels)
 # ===========================================================================
 
 
-class TestAerisSeverityFromType:
-    """_parse_severity_from_type parses details.type suffix to canonical severity enum.
+class TestAerisSeverityDispatch:
+    """ADR-052 severity dispatch: integer levels 1–4 and cross-mapped native labels.
 
-    canonical-data-model §4.3 amendment 2026-05-09: severity is encoded in the
-    details.type suffix (VTEC for US/CA, EX/SV/MD/MN for non-US), not the
-    details.priority field which is a NOAA hazard-map display-priority code.
+    Severity is encoded as the SUFFIX on details.type (not details.priority).
+    US/CA alerts use NWS VTEC: W→4, A→3, Y→2, S→1.
+    Non-US alerts use Aeris suffix: EX→4, SV→3, MD→2, MN→1.
+    Labels are cross-mapped per dataSource:
+      meteoalarm: EX→"Red", SV→"Orange", MD→"Yellow", MN→"Green"
+      ukmet:      EX→"Red", SV→"Amber",  MD→"Yellow"
+      noaa/envca: extracted from event name suffix
+      others:     Aeris fallback (Extreme/Severe/Moderate/Minor)
     """
 
-    # --- US/Canadian VTEC suffixes ---
+    # --- _parse_severity_suffix ---
 
-    def test_vtec_warning_suffix_maps_to_warning(self) -> None:
-        """`TO.W` (Tornado Warning, VTEC `.W`) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("TO.W") == "warning"
+    def test_suffix_of_fw_a_is_a(self) -> None:
+        """'FW.A' last segment → 'A'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_suffix  # noqa: PLC0415
+        assert _parse_severity_suffix("FW.A") == "A"
 
-    def test_vtec_watch_suffix_maps_to_watch(self) -> None:
-        """`FW.A` (Fire Weather Watch, VTEC `.A`) → 'watch'. Real fixture case."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("FW.A") == "watch"
+    def test_suffix_of_aw_ts_md_is_md(self) -> None:
+        """'AW.TS.MD' last segment → 'MD'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_suffix  # noqa: PLC0415
+        assert _parse_severity_suffix("AW.TS.MD") == "MD"
 
-    def test_vtec_advisory_suffix_maps_to_advisory(self) -> None:
-        """`WI.Y` (Wind Advisory, VTEC `.Y`) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("WI.Y") == "advisory"
+    def test_suffix_of_to_w_is_w(self) -> None:
+        """'TO.W' last segment → 'W'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_suffix  # noqa: PLC0415
+        assert _parse_severity_suffix("TO.W") == "W"
 
-    def test_vtec_statement_suffix_maps_to_advisory(self) -> None:
-        """`SV.S` (Severe Weather Statement, VTEC `.S`) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("SV.S") == "advisory"
+    def test_suffix_of_none_is_empty(self) -> None:
+        """None type code → empty string."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_suffix  # noqa: PLC0415
+        assert _parse_severity_suffix(None) == ""
 
-    # --- Non-US Aeris severity suffixes ---
+    def test_suffix_of_empty_string_is_empty(self) -> None:
+        """Empty string type code → empty string."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_suffix  # noqa: PLC0415
+        assert _parse_severity_suffix("") == ""
 
-    def test_aeris_extreme_suffix_maps_to_warning(self) -> None:
-        """`AW.TS.EX` (Extreme thunderstorm) → 'warning'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("AW.TS.EX") == "warning"
+    # --- _parse_severity_level: VTEC suffixes ---
 
-    def test_aeris_severe_suffix_maps_to_watch(self) -> None:
-        """`AW.TS.SV` (Severe thunderstorm) → 'watch'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("AW.TS.SV") == "watch"
+    def test_vtec_w_suffix_maps_to_level_4(self) -> None:
+        """`TO.W` (Tornado Warning, VTEC `.W`) → level 4."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("TO.W") == 4
 
-    def test_aeris_moderate_suffix_maps_to_advisory(self) -> None:
-        """`AW.TS.MD` (Moderate thunderstorm — api-docs example) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("AW.TS.MD") == "advisory"
+    def test_vtec_a_suffix_maps_to_level_3(self) -> None:
+        """`FW.A` (Fire Weather Watch, VTEC `.A`) → level 3. Real fixture case."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("FW.A") == 3
 
-    def test_aeris_minor_suffix_maps_to_advisory(self) -> None:
-        """`AW.TS.MN` (Minor thunderstorm) → 'advisory'."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("AW.TS.MN") == "advisory"
+    def test_vtec_y_suffix_maps_to_level_2(self) -> None:
+        """`WI.Y` (Wind Advisory, VTEC `.Y`) → level 2."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("WI.Y") == 2
 
-    # --- Dispatch-table coverage ---
+    def test_vtec_s_suffix_maps_to_level_1(self) -> None:
+        """`SV.S` (Severe Weather Statement, VTEC `.S`) → level 1."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("SV.S") == 1
 
-    def test_vtec_dispatch_table_covers_all_four_codes(self) -> None:
-        """_VTEC_SUFFIX_TO_SEVERITY has W, A, Y, S keys (NWS VTEC action codes)."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _VTEC_SUFFIX_TO_SEVERITY,  # noqa: PLC0415
-        )
+    # --- _parse_severity_level: Aeris non-US suffixes ---
+
+    def test_aeris_ex_suffix_maps_to_level_4(self) -> None:
+        """`AW.TS.EX` (Extreme thunderstorm) → level 4."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("AW.TS.EX") == 4
+
+    def test_aeris_sv_suffix_maps_to_level_3(self) -> None:
+        """`AW.TS.SV` (Severe thunderstorm) → level 3."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("AW.TS.SV") == 3
+
+    def test_aeris_md_suffix_maps_to_level_2(self) -> None:
+        """`AW.TS.MD` (Moderate thunderstorm — api-docs example) → level 2."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("AW.TS.MD") == 2
+
+    def test_aeris_mn_suffix_maps_to_level_1(self) -> None:
+        """`AW.TS.MN` (Minor thunderstorm) → level 1."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("AW.TS.MN") == 1
+
+    # --- _parse_severity_level: dispatch table coverage ---
+
+    def test_vtec_suffix_to_level_dict_covers_all_four_codes(self) -> None:
+        """_VTEC_SUFFIX_TO_LEVEL has W, A, Y, S keys (NWS VTEC action codes)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _VTEC_SUFFIX_TO_LEVEL  # noqa: PLC0415
         for suffix in ("W", "A", "Y", "S"):
-            assert suffix in _VTEC_SUFFIX_TO_SEVERITY, (
-                f"_VTEC_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
+            assert suffix in _VTEC_SUFFIX_TO_LEVEL, (
+                f"_VTEC_SUFFIX_TO_LEVEL missing suffix {suffix!r}"
             )
 
-    def test_aeris_dispatch_table_covers_all_four_codes(self) -> None:
-        """_AERIS_SUFFIX_TO_SEVERITY has EX, SV, MD, MN keys (Aeris non-US severity codes)."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _AERIS_SUFFIX_TO_SEVERITY,  # noqa: PLC0415
-        )
+    def test_aeris_suffix_to_level_dict_covers_all_four_codes(self) -> None:
+        """_AERIS_SUFFIX_TO_LEVEL has EX, SV, MD, MN keys (Aeris non-US severity codes)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _AERIS_SUFFIX_TO_LEVEL  # noqa: PLC0415
         for suffix in ("EX", "SV", "MD", "MN"):
-            assert suffix in _AERIS_SUFFIX_TO_SEVERITY, (
-                f"_AERIS_SUFFIX_TO_SEVERITY missing suffix {suffix!r}"
+            assert suffix in _AERIS_SUFFIX_TO_LEVEL, (
+                f"_AERIS_SUFFIX_TO_LEVEL missing suffix {suffix!r}"
             )
 
-    # --- Unknown / empty / fallback ---
+    # --- _parse_severity_level: unknown/empty fallback ---
 
-    def test_unknown_suffix_defaults_to_advisory(self) -> None:
-        """Unknown suffix → 'advisory' default."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("XX.YY.ZZ") == "advisory"
+    def test_unknown_suffix_returns_none(self) -> None:
+        """Unknown suffix → None (not a default)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("XX.YY.ZZ") is None
 
-    def test_no_suffix_defaults_to_advisory(self) -> None:
-        """type code with no dot (e.g. 'TOR') → suffix='TOR', not in dispatch tables → advisory."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("TOR") == "advisory"
+    def test_none_type_returns_none(self) -> None:
+        """None type code → None."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level(None) is None
+
+    def test_empty_type_returns_none(self) -> None:
+        """Empty string type code → None."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
+        assert _parse_severity_level("") is None
 
     def test_unknown_suffix_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
         """Unknown suffix emits WARNING log to surface schema drift to operator."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
-            _parse_severity_from_type("XX.YY.ZZ")
+            _parse_severity_level("XX.YY.ZZ")
         assert any("ZZ" in record.message for record in caplog.records), (
             "Expected WARNING log mentioning unknown suffix"
         )
 
-    def test_none_type_defaults_to_advisory(self) -> None:
-        """None type → 'advisory' default with WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type(None) == "advisory"
-
-    def test_empty_type_defaults_to_advisory(self) -> None:
-        """Empty string type → 'advisory' default with WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
-        assert _parse_severity_from_type("") == "advisory"
-
     def test_none_type_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        """None/empty type emits WARNING log."""
-        from weewx_clearskies_api.providers.alerts.aeris import (
-            _parse_severity_from_type,  # noqa: PLC0415
-        )
+        """None type code emits WARNING log."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_level  # noqa: PLC0415
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.aeris"):
-            _parse_severity_from_type(None)
-        assert any("null" in record.message.lower() or "empty" in record.message.lower()
-                   for record in caplog.records), (
-            "Expected WARNING log for null/empty type"
+            _parse_severity_level(None)
+        assert any(
+            "null" in record.message.lower() or "empty" in record.message.lower()
+            for record in caplog.records
+        ), "Expected WARNING log for null/empty type"
+
+    # --- _parse_severity_label: cross-mapping ---
+
+    def test_meteoalarm_md_yields_label_yellow(self) -> None:
+        """MeteoAlarm .MD → severityLevel=2, severityLabel='Yellow' (ADR-052 §6)."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _parse_severity_label,
+            _parse_severity_level,
         )
+        assert _parse_severity_level("AW.TS.MD") == 2
+        assert _parse_severity_label("AW.TS.MD", "meteoalarm", None) == "Yellow"
 
-    # --- Real-fixture integration ---
+    def test_meteoalarm_ex_yields_label_red(self) -> None:
+        """MeteoAlarm .EX → label 'Red'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_label  # noqa: PLC0415
+        assert _parse_severity_label("AW.TS.EX", "meteoalarm", None) == "Red"
 
-    def test_real_fixture_type_FW_A_yields_watch(self) -> None:
-        """Real fixture 'FW.A' (Fire Weather Watch) → severity 'watch'."""
+    def test_meteoalarm_sv_yields_label_orange(self) -> None:
+        """MeteoAlarm .SV → label 'Orange'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_label  # noqa: PLC0415
+        assert _parse_severity_label("AW.TS.SV", "meteoalarm", None) == "Orange"
+
+    def test_meteoalarm_mn_yields_label_green(self) -> None:
+        """MeteoAlarm .MN → label 'Green'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_label  # noqa: PLC0415
+        assert _parse_severity_label("AW.TS.MN", "meteoalarm", None) == "Green"
+
+    def test_ukmet_sv_yields_label_amber(self) -> None:
+        """UK Met Office .SV → label 'Amber' (not 'Orange')."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_label  # noqa: PLC0415
+        assert _parse_severity_label("AW.TS.SV", "ukmet", None) == "Amber"
+
+    def test_ukmet_ex_yields_label_red(self) -> None:
+        """UK Met Office .EX → label 'Red'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _parse_severity_label  # noqa: PLC0415
+        assert _parse_severity_label("AW.TS.EX", "ukmet", None) == "Red"
+
+    def test_vtec_w_for_noaa_nws_source_yields_level_4_warning_label(self) -> None:
+        """VTEC .W for noaa_nws dataSource → severityLevel=4, severityLabel='Warning'."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _parse_severity_label,
+            _parse_severity_level,
+        )
+        assert _parse_severity_level("TO.W") == 4
+        assert _parse_severity_label("TO.W", "noaa_nws", "TORNADO WARNING") == "Warning"
+
+    def test_vtec_a_for_noaa_nws_fire_weather_watch_yields_watch_label(self) -> None:
+        """VTEC .A for noaa_nws 'FIRE WEATHER WATCH' → severityLevel=3, label='Watch'."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _parse_severity_label,
+            _parse_severity_level,
+        )
+        assert _parse_severity_level("FW.A") == 3
+        assert _parse_severity_label("FW.A", "noaa_nws", "FIRE WEATHER WATCH") == "Watch"
+
+    def test_real_fixture_type_FW_A_yields_level_3_watch(self) -> None:
+        """Real fixture 'FW.A' (Fire Weather Watch) → severityLevel=3, label='Watch'."""
         from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
             _AerisAlertRecord,
             _to_canonical,
@@ -302,13 +365,210 @@ class TestAerisSeverityFromType:
         first_raw = fixture["response"][0]
         record = _AerisAlertRecord.model_validate(first_raw)
         result = _to_canonical(record)
-        assert result.severity == "watch", (
-            f"Real fixture FW.A should yield severity='watch', got {result.severity!r}"
+        assert result.severityLevel == 3, (
+            f"Real fixture FW.A should yield severityLevel=3, got {result.severityLevel!r}"
+        )
+        assert result.severityLabel == "Watch", (
+            f"Real fixture FW.A should yield severityLabel='Watch', got {result.severityLabel!r}"
         )
 
 
 # ===========================================================================
-# 2. Datetime conversion
+# 2. ADR-052 new fields — alertSystem, hazardType, nativeName, color
+# ===========================================================================
+
+
+class TestAerisAdr052Fields:
+    """ADR-052 new fields populated from wire data on _to_canonical."""
+
+    def _make_record(self, **overrides: Any) -> Any:
+        """Build a minimal _AerisAlertRecord with known-good defaults."""
+        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord  # noqa: PLC0415
+        base: dict[str, Any] = {
+            "id": "test-alert-001",
+            "dataSource": "noaa_nws",
+            "details": {
+                "type": "WI.Y",
+                "name": "Wind Advisory",
+                "priority": 2,
+                "body": "Test body.",
+                "cat": "wind",
+                "color": "AAAAAA",
+            },
+            "timestamps": {
+                "issuedISO": "2026-05-09T10:00:00-05:00",
+                "expiresISO": "2026-05-09T22:00:00-05:00",
+            },
+            "place": {"name": "king", "state": "wa", "country": "us"},
+        }
+        base.update(overrides)
+        return _AerisAlertRecord.model_validate(base)
+
+    def test_alert_system_from_data_source(self) -> None:
+        """alertSystem = dataSource (top-level wire field)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record(dataSource="noaa_nws")
+        result = _to_canonical(record)
+        assert result.alertSystem == "noaa_nws"
+
+    def test_alert_system_none_when_data_source_absent(self) -> None:
+        """alertSystem = None when dataSource absent from wire record."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record(dataSource=None)
+        result = _to_canonical(record)
+        assert result.alertSystem is None
+
+    def test_alert_system_meteoalarm_passthrough(self) -> None:
+        """alertSystem = 'meteoalarm' when dataSource is 'meteoalarm'."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record(dataSource="meteoalarm")
+        result = _to_canonical(record)
+        assert result.alertSystem == "meteoalarm"
+
+    def test_hazard_type_from_details_cat(self) -> None:
+        """hazardType = details.cat (same field as category)."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record()
+        result = _to_canonical(record)
+        # Our base record has cat="wind"
+        assert result.hazardType == "wind"
+
+    def test_hazard_type_fire_from_real_fixture(self) -> None:
+        """Real fixture details.cat='fire' → hazardType='fire'."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
+        fixture = _load_fixture("alerts.json")
+        record = _AerisAlertRecord.model_validate(fixture["response"][0])
+        result = _to_canonical(record)
+        assert result.hazardType == "fire", (
+            f"Real fixture details.cat='fire' should yield hazardType='fire', got {result.hazardType!r}"
+        )
+
+    def test_hazard_type_none_when_cat_absent(self) -> None:
+        """hazardType = None when details.cat is absent."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        base = {
+            "id": "test-no-cat",
+            "dataSource": "noaa_nws",
+            "details": {
+                "type": "WI.Y",
+                "name": "Wind Advisory",
+                "body": "Test.",
+                # cat absent intentionally
+            },
+            "timestamps": {
+                "issuedISO": "2026-05-09T10:00:00-05:00",
+                "expiresISO": None,
+            },
+        }
+        from weewx_clearskies_api.providers.alerts.aeris import _AerisAlertRecord  # noqa: PLC0415
+        record = _AerisAlertRecord.model_validate(base)
+        result = _to_canonical(record)
+        assert result.hazardType is None
+
+    def test_native_name_from_local_languages_first_entry(self) -> None:
+        """nativeName = localLanguages[0].name when array present."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
+        record_data: dict[str, Any] = {
+            "id": "test-lang-001",
+            "dataSource": "meteoalarm",
+            "details": {
+                "type": "AW.TS.MD",
+                "name": "Thunderstorm Warning",
+                "body": "Thunderstorms expected.",
+            },
+            "timestamps": {
+                "issuedISO": "2026-05-09T10:00:00+01:00",
+                "expiresISO": None,
+            },
+            "localLanguages": [
+                {
+                    "language": "fr",
+                    "name": "Vigilance jaune orages",
+                    "body": "Des orages sont attendus.",
+                }
+            ],
+        }
+        record = _AerisAlertRecord.model_validate(record_data)
+        result = _to_canonical(record)
+        assert result.nativeName == "Vigilance jaune orages", (
+            f"Expected nativeName='Vigilance jaune orages', got {result.nativeName!r}"
+        )
+
+    def test_native_name_none_when_local_languages_absent(self) -> None:
+        """nativeName = None when localLanguages is absent."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record()  # no localLanguages in base
+        result = _to_canonical(record)
+        assert result.nativeName is None
+
+    def test_native_name_from_real_fixture_first_local_language(self) -> None:
+        """Real fixture has localLanguages[0].name → nativeName set."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
+        fixture = _load_fixture("alerts.json")
+        record = _AerisAlertRecord.model_validate(fixture["response"][0])
+        result = _to_canonical(record)
+        # Real fixture localLanguages[0].name is present
+        assert result.nativeName is not None, (
+            "Real fixture has localLanguages; nativeName must not be None"
+        )
+        assert isinstance(result.nativeName, str) and len(result.nativeName) > 0
+
+    def test_color_from_details_color(self) -> None:
+        """color = details.color hex string."""
+        from weewx_clearskies_api.providers.alerts.aeris import _to_canonical  # noqa: PLC0415
+        record = self._make_record()  # base has color="AAAAAA"
+        result = _to_canonical(record)
+        assert result.color == "AAAAAA"
+
+    def test_color_from_real_fixture_ffdead(self) -> None:
+        """Real fixture details.color='FFDEAD' → color='FFDEAD'."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
+        fixture = _load_fixture("alerts.json")
+        record = _AerisAlertRecord.model_validate(fixture["response"][0])
+        result = _to_canonical(record)
+        assert result.color == "FFDEAD", (
+            f"Real fixture details.color='FFDEAD', got {result.color!r}"
+        )
+
+    def test_color_none_when_color_absent(self) -> None:
+        """color = None when details.color is absent."""
+        from weewx_clearskies_api.providers.alerts.aeris import (  # noqa: PLC0415
+            _AerisAlertRecord,
+            _to_canonical,
+        )
+        record_data: dict[str, Any] = {
+            "id": "test-no-color",
+            "dataSource": "noaa_nws",
+            "details": {
+                "type": "WI.Y",
+                "name": "Wind Advisory",
+                "body": "Test.",
+                # color absent intentionally
+            },
+            "timestamps": {
+                "issuedISO": "2026-05-09T10:00:00-05:00",
+                "expiresISO": None,
+            },
+        }
+        record = _AerisAlertRecord.model_validate(record_data)
+        result = _to_canonical(record)
+        assert result.color is None
+
+
+# ===========================================================================
+# 3. Datetime conversion
 # ===========================================================================
 
 
@@ -393,7 +653,7 @@ class TestAerisDatetimeConversion:
 
 
 # ===========================================================================
-# 3. senderName disjunction (brief call 19, Q2)
+# 4. senderName disjunction (brief call 19, Q2)
 # ===========================================================================
 
 
@@ -519,7 +779,7 @@ class TestAerisSenderNameDisjunction:
 
 
 # ===========================================================================
-# 4. Description passthrough (brief call 13)
+# 5. Description passthrough (brief call 13)
 # ===========================================================================
 
 
@@ -576,7 +836,7 @@ class TestAerisDescriptionPassthrough:
 
 
 # ===========================================================================
-# 5. urgency / certainty / category passthrough (call 16, PARTIAL-DOMAIN)
+# 6. urgency / certainty / category passthrough (call 16, PARTIAL-DOMAIN)
 # ===========================================================================
 
 
@@ -708,7 +968,7 @@ class TestAerisFieldPassthrough:
 
 
 # ===========================================================================
-# 6. Wire-shape Pydantic validation
+# 7. Wire-shape Pydantic validation
 # ===========================================================================
 
 
@@ -881,7 +1141,7 @@ class TestAerisWireShapePydantic:
 
 
 # ===========================================================================
-# 7. Cache hit/miss — fetch() with respx-mocked HTTP
+# 8. Cache hit/miss — fetch() with respx-mocked HTTP
 # ===========================================================================
 
 
@@ -936,6 +1196,7 @@ class TestFetchCacheMissAndHit:
         assert len(records) == 1
         assert records[0].source == "aeris"
         assert records[0].event == "Wind Advisory"  # event = details.name (amended §4.3)
+        assert records[0].alertSystem == "noaa_nws"
 
     def test_cache_hit_returns_records_without_outbound_call(self) -> None:
         """Cache hit: no HTTP call made; cached records returned."""
@@ -1014,10 +1275,12 @@ class TestFetchCacheMissAndHit:
         assert records1[0].id == records2[0].id
         assert records1[0].source == records2[0].source
         assert records1[0].event == records2[0].event
+        assert records1[0].severityLevel == records2[0].severityLevel
+        assert records1[0].alertSystem == records2[0].alertSystem
 
 
 # ===========================================================================
-# 8. Credentials missing → KeyInvalid (brief call 8)
+# 9. Credentials missing → KeyInvalid (brief call 8)
 # ===========================================================================
 
 
@@ -1082,7 +1345,7 @@ class TestFetchMissingCredentials:
 
 
 # ===========================================================================
-# 9. HTTP error paths
+# 10. HTTP error paths
 # ===========================================================================
 
 
@@ -1174,7 +1437,7 @@ class TestFetchHttpErrorPaths:
 
 
 # ===========================================================================
-# 10. Aeris envelope error paths
+# 11. Aeris envelope error paths
 # ===========================================================================
 
 
@@ -1263,7 +1526,7 @@ class TestFetchEnvelopeErrorPaths:
 
 
 # ===========================================================================
-# 11. Capability registry
+# 12. Capability registry
 # ===========================================================================
 
 
@@ -1290,10 +1553,64 @@ class TestCapabilityRegistry:
             "CAPABILITY.auth_required must include 'client_secret'"
         )
 
-    def test_capability_supplied_canonical_fields_includes_core_fields(self) -> None:
-        """CAPABILITY.supplied_canonical_fields includes id, headline, severity, etc."""
+    def test_capability_supplied_fields_includes_severity_level(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'severityLevel' (ADR-052)."""
         from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
-        for field in ("id", "headline", "description", "severity", "event",
+        assert "severityLevel" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: severityLevel must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_includes_severity_label(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'severityLabel' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "severityLabel" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: severityLabel must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_includes_alert_system(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'alertSystem' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "alertSystem" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: alertSystem must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_includes_hazard_type(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'hazardType' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "hazardType" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: hazardType must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_includes_native_name(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'nativeName' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "nativeName" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: nativeName must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_includes_color(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes 'color' (ADR-052)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "color" in CAPABILITY.supplied_canonical_fields, (
+            "ADR-052: color must be in CAPABILITY.supplied_canonical_fields"
+        )
+
+    def test_capability_supplied_fields_does_not_include_old_severity_string(self) -> None:
+        """CAPABILITY.supplied_canonical_fields does NOT include old 'severity' string field.
+
+        ADR-052 replaced the string 'severity' field with integer 'severityLevel' +
+        string 'severityLabel'. The old field name must not appear.
+        """
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        assert "severity" not in CAPABILITY.supplied_canonical_fields, (
+            "Old 'severity' string field must NOT be in CAPABILITY (replaced by ADR-052 with "
+            "severityLevel + severityLabel)"
+        )
+
+    def test_capability_supplied_canonical_fields_includes_core_fields(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes id, headline, event, source."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        for field in ("id", "headline", "description", "event",
                       "effective", "expires", "senderName", "areaDesc", "source"):
             assert field in CAPABILITY.supplied_canonical_fields, (
                 f"CAPABILITY.supplied_canonical_fields missing {field!r}"
@@ -1317,6 +1634,19 @@ class TestCapabilityRegistry:
             "category MUST be in CAPABILITY — Aeris supplies it via details.cat (canonical §4.3 amended)"
         )
 
+    def test_capability_geographic_coverage_includes_global_regions(self) -> None:
+        """CAPABILITY.geographic_coverage covers global regions (ADR-052 updated from us-ca-eu)."""
+        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
+        # ADR-052 updated coverage to reflect all documented Aeris regions
+        coverage = CAPABILITY.geographic_coverage
+        assert "us" in coverage, "Coverage must include US"
+        assert "eu" in coverage, "Coverage must include EU (MeteoAlarm)"
+        assert "uk" in coverage, "Coverage must include UK (Met Office)"
+        # The exact string is "us-ca-eu-uk-jp-au-in-br-za-kr-mx"
+        assert coverage == "us-ca-eu-uk-jp-au-in-br-za-kr-mx", (
+            f"Expected 'us-ca-eu-uk-jp-au-in-br-za-kr-mx', got {coverage!r}"
+        )
+
     def test_wire_providers_registers_aeris_alerts_capability(self) -> None:
         """wire_providers([aeris.CAPABILITY]) → registry contains aeris alerts entry."""
         _reset_provider_state()
@@ -1332,11 +1662,6 @@ class TestCapabilityRegistry:
             f"Expected 1 aeris alerts entry in registry, found {len(aeris_entries)}"
         )
 
-    def test_capability_geographic_coverage_is_us_ca_eu(self) -> None:
-        """CAPABILITY.geographic_coverage = 'us-ca-eu' per ADR-016 day-1 table."""
-        from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
-        assert CAPABILITY.geographic_coverage == "us-ca-eu"
-
     def test_capability_default_poll_interval_is_300_seconds(self) -> None:
         """CAPABILITY.default_poll_interval_seconds = 300 per ADR-016 + ADR-017."""
         from weewx_clearskies_api.providers.alerts.aeris import CAPABILITY  # noqa: PLC0415
@@ -1344,7 +1669,7 @@ class TestCapabilityRegistry:
 
 
 # ===========================================================================
-# 12. Cache key construction
+# 13. Cache key construction
 # ===========================================================================
 
 
