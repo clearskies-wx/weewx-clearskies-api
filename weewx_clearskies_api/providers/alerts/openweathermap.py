@@ -51,10 +51,13 @@ PARTIAL-DOMAIN per L1 rule (3b-7 lesson):
   (any tier). They populate as None on canonical AlertRecord unconditionally.
   These are NOT in CAPABILITY.supplied_canonical_fields.
 
-Passthrough mode per ADR-052:
+Passthrough mode per ADR-052 (updated operator directive 2026-06-02):
   OWM strips structured severity metadata from the originating agency data.
-  severityLevel, severityLabel, nativeName, and color are set to None.
-  The dashboard renders OWM alerts with generic/neutral treatment.
+  nativeName and color are set to None (no data available on any tier).
+  severityLevel defaults to 2 ("Alert"-equivalent) and severityLabel to "Alert":
+  if something is an alert at all, it deserves advisory-level visual treatment
+  rather than neutral/gray. Level 2 avoids overstating (not extreme/severe) while
+  giving it proper visibility.
   hazardType is derived from the wire `tags` array (first element, if present).
   alertSystem is parsed from sender_name for known agency IDs ("nws", "ukmet",
   "meteofrance"); unknown senders resolve to None.
@@ -110,9 +113,9 @@ CAPABILITY = ProviderCapability(
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
     supplied_canonical_fields=(
-        # ADR-052 passthrough provider: severity fields (severityLevel, severityLabel,
-        # nativeName, color) are NOT in CAPABILITY — OWM strips structured severity
-        # from originating agency data.
+        # ADR-052 / operator directive 2026-06-02: severityLevel and severityLabel ARE
+        # now supplied — defaulting to 2 / "Alert" because any OWM alert deserves
+        # advisory-level treatment. nativeName and color remain absent (OWM has no data).
         # PARTIAL-DOMAIN per L1 rule: urgency, certainty, areaDesc, category are NOT
         # in CAPABILITY — OWM categorically does not supply these on any tier.
         "id",
@@ -122,8 +125,10 @@ CAPABILITY = ProviderCapability(
         "effective",
         "expires",
         "senderName",
-        "hazardType",   # derived from wire tags[0] when present
-        "alertSystem",  # parsed from sender_name for known agency IDs
+        "hazardType",      # derived from wire tags[0] when present
+        "alertSystem",     # parsed from sender_name for known agency IDs
+        "severityLevel",   # always 2 (operator directive: alerts deserve visibility)
+        "severityLabel",   # always "Alert"
         # source is provider_id literal (canonical §3.6 field), not a fetched wire field.
         "source",
     ),
@@ -136,10 +141,11 @@ CAPABILITY = ProviderCapability(
         "gracefully returns empty alert list (Q1 user decision 2026-05-10; "
         "mirror of 3b-5 forecast/owm Q1 pattern). Coverage global per ADR-016 "
         "day-1 table ('Global government alerts'). "
-        "Passthrough provider per ADR-052: OWM strips structured severity metadata "
-        "from the originating agency; severityLevel, severityLabel, nativeName, and "
-        "color are always null. Dashboard renders OWM alerts with generic/neutral "
-        "treatment (neutral glass, generic icon, role='status'). "
+        "Passthrough provider per ADR-052 (updated operator directive 2026-06-02): "
+        "OWM strips structured severity metadata from the originating agency; "
+        "severityLevel defaults to 2 and severityLabel to 'Alert' — any OWM alert "
+        "deserves advisory-level visibility, not neutral/gray treatment. "
+        "nativeName and color are always null (no OWM data available). "
         "urgency, certainty, areaDesc, and category are not provided by OWM on any "
         "tier (PARTIAL-DOMAIN per canonical §4.3 OWM column); always null."
     ),
@@ -325,9 +331,9 @@ def _owm_alert_to_canonical(entry: _OWMAlertEntry) -> AlertRecord:
       areaDesc      = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
       category      = None (PARTIAL-DOMAIN — OWM does not provide on any tier)
       source        = "openweathermap" (provider_id literal)
-      --- ADR-052 passthrough fields ---
-      severityLevel = None (OWM strips structured severity from agency data)
-      severityLabel = None (passthrough — no severity to label)
+      --- ADR-052 passthrough fields (updated operator directive 2026-06-02) ---
+      severityLevel = 2 (default: alerts deserve advisory-level visibility, not null/gray)
+      severityLabel = "Alert" (matches level 2 advisory-equivalent label)
       nativeName    = None (OWM event field is already English; no native-language original)
       color         = None (OWM does not supply color codes)
       hazardType    = tags[0] if tags non-empty, else None
@@ -369,9 +375,10 @@ def _owm_alert_to_canonical(entry: _OWMAlertEntry) -> AlertRecord:
         areaDesc=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
         category=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
         source=PROVIDER_ID,
-        # ADR-052 passthrough fields
-        severityLevel=None,   # OWM strips structured severity from agency data
-        severityLabel=None,   # passthrough — no severity to label
+        # ADR-052 / operator directive 2026-06-02: default to level 2 / "Alert"
+        # so OWM alerts receive advisory-level visual treatment rather than neutral/gray.
+        severityLevel=2,          # alerts deserve visibility — level 2 (advisory-equivalent)
+        severityLabel="Alert",    # matches level 2 label
         nativeName=None,      # OWM event field is already English
         color=None,           # OWM does not supply color codes
         hazardType=hazard_type,

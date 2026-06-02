@@ -8,9 +8,9 @@ Covers per the task-3b-8 brief §Test plan (unit tests section) as amended by AD
   - Missing required event field → ValidationError → ProviderProtocolError.
   - Missing required start field → ValidationError → ProviderProtocolError.
 
-  ADR-052 passthrough mode:
-  - severityLevel = None (OWM strips structured severity from originating agency data).
-  - severityLabel = None (passthrough — no severity to label).
+  ADR-052 / operator directive 2026-06-02:
+  - severityLevel = 2 (default: alerts deserve advisory-level visibility, not null/gray).
+  - severityLabel = "Alert" (matches level 2 advisory-equivalent label).
   - nativeName = None (OWM event field is already English).
   - color = None (OWM does not supply color codes).
   - hazardType from tags[0] when tags present.
@@ -83,10 +83,10 @@ Covers per the task-3b-8 brief §Test plan (unit tests section) as amended by AD
   Capability registry:
   - CAPABILITY.provider_id = "openweathermap", domain = "alerts".
   - CAPABILITY.auth_required includes "appid".
-  - CAPABILITY.supplied_canonical_fields includes expected fields (hazardType, alertSystem, NOT severity).
+  - CAPABILITY.supplied_canonical_fields includes expected fields (hazardType, alertSystem,
+    severityLevel, severityLabel).
   - CAPABILITY.supplied_canonical_fields excludes urgency/certainty/areaDesc/category (PARTIAL-DOMAIN).
-  - CAPABILITY.supplied_canonical_fields excludes severityLevel, severityLabel, nativeName, color
-    (ADR-052 passthrough: OWM strips structured severity).
+  - CAPABILITY.supplied_canonical_fields excludes nativeName, color (ADR-052: no OWM data).
   - CAPABILITY.geographic_coverage = "global".
   - CAPABILITY.default_poll_interval_seconds = 300.
   - wire_providers([CAPABILITY]) → registry has openweathermap alerts entry.
@@ -165,10 +165,12 @@ _TEST_APPID = "TEST_APPID_12345"
 
 
 class TestOwmPassthroughSeverityFields:
-    """ADR-052 passthrough: OWM strips structured severity — all None on canonical record.
+    """ADR-052 / operator directive 2026-06-02: OWM alerts default to severityLevel=2.
 
-    OWM does not preserve structured severity metadata from the originating
-    national agency. The dashboard renders OWM alerts with generic/neutral treatment.
+    OWM strips structured severity metadata from the originating national agency.
+    Rather than leaving these null (which gives alerts neutral/gray treatment),
+    severityLevel defaults to 2 and severityLabel to "Alert" so every OWM alert
+    receives advisory-level visual treatment. nativeName and color remain None.
     """
 
     def _make_canonical_record(self, tags: list[str] | None = None) -> Any:
@@ -189,18 +191,18 @@ class TestOwmPassthroughSeverityFields:
         entry = _OWMAlertEntry.model_validate(entry_data)
         return _owm_alert_to_canonical(entry)
 
-    def test_severity_level_is_none_passthrough(self) -> None:
-        """severityLevel = None (ADR-052 passthrough — OWM strips structured severity)."""
+    def test_severity_level_is_2_default(self) -> None:
+        """severityLevel = 2 (operator directive 2026-06-02: alerts deserve visibility)."""
         record = self._make_canonical_record()
-        assert record.severityLevel is None, (
-            f"Expected severityLevel=None (ADR-052 passthrough), got {record.severityLevel!r}"
+        assert record.severityLevel == 2, (
+            f"Expected severityLevel=2 (advisory-equivalent default), got {record.severityLevel!r}"
         )
 
-    def test_severity_label_is_none_passthrough(self) -> None:
-        """severityLabel = None (ADR-052 passthrough — no severity to label)."""
+    def test_severity_label_is_alert_default(self) -> None:
+        """severityLabel = 'Alert' (matches level 2 advisory-equivalent label)."""
         record = self._make_canonical_record()
-        assert record.severityLabel is None, (
-            f"Expected severityLabel=None (ADR-052 passthrough), got {record.severityLabel!r}"
+        assert record.severityLabel == "Alert", (
+            f"Expected severityLabel='Alert', got {record.severityLabel!r}"
         )
 
     def test_native_name_is_none_passthrough(self) -> None:
@@ -865,8 +867,8 @@ class TestFetchCacheMissAndHit:
         assert len(records) == 1
         assert records[0].source == "openweathermap"
         assert records[0].event == "Wind Advisory"
-        assert records[0].severityLevel is None
-        assert records[0].severityLabel is None
+        assert records[0].severityLevel == 2
+        assert records[0].severityLabel == "Alert"
         assert records[0].alertSystem == "nws"
         assert records[0].hazardType == "Wind"
 
@@ -934,7 +936,7 @@ class TestFetchCacheMissAndHit:
         assert records1[0].id == records2[0].id
         assert records1[0].source == records2[0].source
         assert records1[0].event == records2[0].event
-        assert records1[0].severityLevel == records2[0].severityLevel  # both None
+        assert records1[0].severityLevel == records2[0].severityLevel  # both 2
         assert records1[0].alertSystem == records2[0].alertSystem
 
 
@@ -1241,8 +1243,8 @@ class TestEmptyAlertsResponse:
             f"Empty alerts[] must return empty list (not error), got {records!r}"
         )
 
-    def test_populated_fixture_returns_two_records_with_passthrough_severity(self) -> None:
-        """Populated fixture with 2 alerts → 2 canonical AlertRecord objects, severityLevel=None."""
+    def test_populated_fixture_returns_two_records_with_default_severity(self) -> None:
+        """Populated fixture with 2 alerts → 2 canonical AlertRecord objects, severityLevel=2."""
         _reset_provider_state()
         from weewx_clearskies_api.providers.alerts import openweathermap  # noqa: PLC0415
         alerts_data = _load_fixture("alerts_paid.json")
@@ -1256,13 +1258,13 @@ class TestEmptyAlertsResponse:
         assert len(records) == 2, (
             f"Expected 2 records from populated fixture, got {len(records)}"
         )
-        # ADR-052 passthrough: severityLevel and severityLabel are None for all OWM records
+        # Operator directive 2026-06-02: severityLevel=2, severityLabel="Alert" for all OWM records
         for record in records:
-            assert record.severityLevel is None, (
-                f"ADR-052 passthrough: severityLevel must be None, got {record.severityLevel!r}"
+            assert record.severityLevel == 2, (
+                f"OWM default: severityLevel must be 2, got {record.severityLevel!r}"
             )
-            assert record.severityLabel is None, (
-                f"ADR-052 passthrough: severityLabel must be None, got {record.severityLabel!r}"
+            assert record.severityLabel == "Alert", (
+                f"OWM default: severityLabel must be 'Alert', got {record.severityLabel!r}"
             )
         # First entry is Wind Advisory
         assert records[0].event == "Wind Advisory"
@@ -1354,17 +1356,32 @@ class TestCapabilityRegistry:
             "Old 'severity' string field must NOT be in CAPABILITY (replaced by ADR-052 passthrough)"
         )
 
-    def test_capability_excludes_adr052_passthrough_fields(self) -> None:
-        """CAPABILITY excludes severityLevel, severityLabel, nativeName, color (ADR-052 passthrough).
+    def test_capability_includes_severity_level_and_label(self) -> None:
+        """CAPABILITY includes severityLevel and severityLabel (operator directive 2026-06-02).
 
-        OWM strips structured severity from the originating agency — these fields
-        are NOT in CAPABILITY because OWM cannot supply them on any tier.
+        OWM alerts default to severityLevel=2 / severityLabel='Alert' so they
+        receive advisory-level visual treatment rather than neutral/gray.
+        These fields are now supplied by this provider.
         """
         from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
-        for passthrough_field in ("severityLevel", "severityLabel", "nativeName", "color"):
-            assert passthrough_field not in CAPABILITY.supplied_canonical_fields, (
-                f"ADR-052 passthrough: {passthrough_field!r} must NOT be in CAPABILITY "
-                "(OWM strips structured severity data)"
+        assert "severityLevel" in CAPABILITY.supplied_canonical_fields, (
+            "severityLevel must be in CAPABILITY (defaults to 2 per operator directive)"
+        )
+        assert "severityLabel" in CAPABILITY.supplied_canonical_fields, (
+            "severityLabel must be in CAPABILITY (defaults to 'Alert' per operator directive)"
+        )
+
+    def test_capability_excludes_native_name_and_color(self) -> None:
+        """CAPABILITY excludes nativeName and color (ADR-052: OWM has no data for these).
+
+        nativeName: OWM event field is already English, no native-language original.
+        color: OWM does not supply color codes on any tier.
+        """
+        from weewx_clearskies_api.providers.alerts.openweathermap import CAPABILITY  # noqa: PLC0415
+        for absent_field in ("nativeName", "color"):
+            assert absent_field not in CAPABILITY.supplied_canonical_fields, (
+                f"ADR-052: {absent_field!r} must NOT be in CAPABILITY "
+                "(OWM has no data for this field)"
             )
 
     def test_capability_partial_domain_excludes_four_fields(self) -> None:
