@@ -12,11 +12,17 @@ Per security-baseline §3.5: query params validated via Pydantic with
 weatherText is always null in API responses per ADR-041; the BFF enrichment
 pipeline populates it before serving the dashboard.
 
+cloudcover fill (Task 2a): when the archive row has cloudcover=null, the
+/current endpoint attempts to fill it from the configured forecast provider's
+fetch_current_conditions() call (300 s cache, almost always a hit).  Errors
+are swallowed — cloudcover stays null rather than crashing the endpoint.
+
 ruff: noqa: N815  (canonical field names are weewx camelCase per ADR-010)
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -27,23 +33,161 @@ from sqlalchemy.orm import Session
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import ArchiveQueryParams
-
-# Alias kept for backwards-compatibility with tests that import ArchiveParams
-# from this module (test_archive_params.py).  The class is defined in
-# models/params.py and re-exported here under the original name.
-ArchiveParams = ArchiveQueryParams
 from weewx_clearskies_api.models.responses import (
     ArchiveResponse,
+    Observation,
     ObservationResponse,
 )
+from weewx_clearskies_api.providers._common.capability import get_provider_registry
+from weewx_clearskies_api.providers._common.dispatch import get_provider_module
 from weewx_clearskies_api.services.archive import (
     decode_cursor,
     get_archive,
     get_current,
 )
-from weewx_clearskies_api.services.units import get_units_block
+from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.units import get_target_unit, get_units_block
+
+# Alias kept for backwards-compatibility with tests that import ArchiveParams
+# from this module (test_archive_params.py).  The class is defined in
+# models/params.py and re-exported here under the original name.
+ArchiveParams = ArchiveQueryParams
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# cloudcover fill helper
+#
+# When the archive row has cloudcover=null (no cloud sensor on the station),
+# the BFF needs a value to render sky conditions at night.  We fill it from
+# whatever forecast provider is configured, using that provider's cached
+# fetch_current_conditions() result (300 s TTL, almost always a cache hit).
+#
+# This is provider-agnostic: the code dispatches to whichever provider is
+# registered for the "forecast" domain, never hard-coding a provider name.
+#
+# Credential state is read from endpoints/forecast.py module-level variables,
+# which are populated at startup by wire_forecast_settings().  Importing them
+# at call time (inside the function) avoids a circular-import at module load.
+#
+# Errors are swallowed: cloudcover stays null rather than crashing /current.
+# ---------------------------------------------------------------------------
+
+
+def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
+    """Return observation with cloudcover filled from the forecast provider.
+
+    Calls fetch_current_conditions() on the configured forecast provider.
+    On any error (provider unavailable, station not wired, no provider
+    configured) returns the observation unchanged.
+
+    Args:
+        observation: The archive observation (cloudcover is None).
+
+    Returns:
+        observation unchanged if fill is not possible, or a new Observation
+        instance with cloudcover set from ProviderConditions.cloudCover.
+    """
+    provider_id: str = "unknown"
+    try:
+        provider_registry = get_provider_registry()
+        forecast_providers = [p for p in provider_registry if p.domain == "forecast"]
+        if not forecast_providers:
+            return observation
+
+        provider_id = forecast_providers[0].provider_id
+
+        try:
+            station = get_station_info()
+        except RuntimeError:
+            logger.debug(
+                "Station metadata not available; skipping cloudcover fill"
+            )
+            return observation
+
+        try:
+            target_unit = get_target_unit()
+        except RuntimeError:
+            logger.debug(
+                "Target unit not available; skipping cloudcover fill"
+            )
+            return observation
+
+        try:
+            provider_module = get_provider_module(domain="forecast", provider_id=provider_id)
+        except KeyError:
+            logger.warning(
+                "Unknown forecast provider %r; skipping cloudcover fill",
+                provider_id,
+            )
+            return observation
+
+        # Import credential state from endpoints/forecast.py at call time to
+        # avoid a circular import at module load.  The wire_forecast_settings()
+        # function in that module populates these variables at startup.
+        import weewx_clearskies_api.endpoints.forecast as _forecast_ep  # noqa: PLC0415
+
+        if provider_id == "openmeteo":
+            provider_conditions = provider_module.fetch_current_conditions(
+                lat=station.latitude,
+                lon=station.longitude,
+                target_unit=target_unit,
+                timezone=station.timezone,
+            )
+        elif provider_id == "nws":
+            provider_conditions = provider_module.fetch_current_conditions(
+                lat=station.latitude,
+                lon=station.longitude,
+                target_unit=target_unit,
+                user_agent_contact=_forecast_ep._nws_user_agent_contact,
+            )
+        elif provider_id == "aeris":
+            provider_conditions = provider_module.fetch_current_conditions(
+                lat=station.latitude,
+                lon=station.longitude,
+                target_unit=target_unit,
+                client_id=_forecast_ep._aeris_client_id,
+                client_secret=_forecast_ep._aeris_client_secret,
+            )
+        elif provider_id == "openweathermap":
+            provider_conditions = provider_module.fetch_current_conditions(
+                lat=station.latitude,
+                lon=station.longitude,
+                target_unit=target_unit,
+                appid=_forecast_ep._openweathermap_appid,
+            )
+        elif provider_id == "wunderground":
+            provider_conditions = provider_module.fetch_current_conditions(
+                lat=station.latitude,
+                lon=station.longitude,
+                target_unit=target_unit,
+                api_key=_forecast_ep._wunderground_api_key,
+                pws_station_id=_forecast_ep._wunderground_pws_station_id,
+            )
+        else:
+            logger.debug(
+                "No fetch_current_conditions dispatch for provider %r; "
+                "skipping cloudcover fill",
+                provider_id,
+            )
+            return observation
+
+        if provider_conditions is not None and provider_conditions.cloudCover is not None:
+            return observation.model_copy(
+                update={"cloudcover": provider_conditions.cloudCover}
+            )
+
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "cloudcover fill from provider %r failed; leaving cloudcover null",
+            provider_id,
+            exc_info=True,
+        )
+
+    return observation
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +253,12 @@ def get_current_endpoint(
     units = get_units_block()
 
     observation = get_current(db, registry)
+
+    # Fill cloudcover from the forecast provider cache when the archive row
+    # has no cloud sensor data.  Almost always a cache hit (<1 ms); errors
+    # are swallowed so /current never crashes due to a provider outage.
+    if observation is not None and observation.cloudcover is None:
+        observation = _fill_cloudcover_from_provider(observation)
 
     return ObservationResponse(
         data=observation,
