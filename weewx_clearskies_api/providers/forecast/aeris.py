@@ -110,7 +110,7 @@ AERIS_OBSERVATIONS_PATH = "/observations"
 DEFAULT_FORECAST_TTL_SECONDS = 1800   # 30 min per ADR-017
 DEFAULT_CONDITIONS_TTL_SECONDS = 300  # 5 min per brief
 HOURLY_LIMIT = 240                     # 10 days × 24h, well above 384h ForecastQueryParams cap
-DAYNIGHT_LIMIT = 14                    # 7 days × 2 (paired day/night)
+DAYNIGHT_LIMIT = 16                    # 8 days × 2 so day 7 always has its night pair
 
 _API_VERSION = "0.1.0"
 
@@ -292,6 +292,8 @@ class _AerisDayNightPeriod(BaseModel):
     windGustMaxKPH: float | None = None
     windGustMaxMPH: float | None = None
     windGustMaxMPS: float | None = None   # may be absent; fall back to KPH÷3.6 per lead-call 13
+    # Wind direction
+    windDirDEG: float | None = None
     # Precipitation
     precipMM: float | None = None
     precipIN: float | None = None
@@ -650,6 +652,10 @@ def _daynight_periods_to_daily(
                 day_period.sunsetISO, provider_id=PROVIDER_ID, domain=DOMAIN
             )
 
+        extras: dict[str, Any] = {}
+        if day_period.windDirDEG is not None:
+            extras["windDir"] = day_period.windDirDEG
+
         points.append(
             DailyForecastPoint(
                 validDate=valid_date,
@@ -666,6 +672,7 @@ def _daynight_periods_to_daily(
                 weatherText=day_period.weather,
                 narrative=None,   # Aeris paid-tier `text` field deferred to future round (call 20)
                 source=PROVIDER_ID,
+                extras=extras,
             )
         )
         # Skip both day and night periods (or just this day if no night follows)
