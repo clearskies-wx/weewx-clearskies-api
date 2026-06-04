@@ -532,6 +532,41 @@ class PositionsResponse(BaseModel):
     data: PositionsSnapshot
 
 
+class SeeingForecastPointResponse(BaseModel):
+    """One 3-hour forecast step from the 7Timer ASTRO product."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    validTime: datetime          # UTC timestamp
+    seeingIndex: int             # 1-8
+    transparencyIndex: int       # 1-8
+    cloudCoverOctet: int         # 1-9
+    liftedIndex: int             # atmospheric stability
+    windSpeedClass: int          # 1-8
+    windDirection: str           # N/NE/E/SE/S/SW/W/NW
+    temp2mC: int                 # Celsius
+    humidityClass: int           # -4 to 16
+    precType: str                # none/rain/snow/frzr/icep
+
+
+class SeeingForecastData(BaseModel):
+    """The 7Timer seeing forecast bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    initTime: str                        # ISO-8601, 7Timer model initialization time
+    points: list[SeeingForecastPointResponse]
+
+
+class SeeingForecastResponse(BaseModel):
+    """SeeingForecastResponse envelope (GET /almanac/seeing-forecast)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    data: SeeingForecastData
+    generatedAt: str             # ISO-8601
+
+
 # ---------------------------------------------------------------------------
 # Station
 # ---------------------------------------------------------------------------

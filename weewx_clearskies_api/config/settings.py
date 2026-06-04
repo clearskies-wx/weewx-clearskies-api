@@ -531,6 +531,8 @@ class CacheWarmerSettings:
     meteor_showers_interval_seconds: int
     #: How often to re-warm the earthquake faults endpoint (seconds).  Default 21600 (6 h).
     faults_interval_seconds: int
+    #: How often to re-warm the seeing forecast endpoint (seconds).  Default 10800 (3 h).
+    seeing_interval_seconds: int
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_enabled = str(section.get("enabled", "true")).strip().lower()
@@ -543,6 +545,7 @@ class CacheWarmerSettings:
         self.eclipses_interval_seconds = int(section.get("eclipses_interval_seconds", 86400))
         self.meteor_showers_interval_seconds = int(section.get("meteor_showers_interval_seconds", 86400))
         self.faults_interval_seconds = int(section.get("faults_interval_seconds", 21600))
+        self.seeing_interval_seconds = int(section.get("seeing_interval_seconds", 10800))
 
     def validate(self) -> None:
         """Raise ValueError on non-positive intervals."""
@@ -562,6 +565,8 @@ class CacheWarmerSettings:
             raise ValueError("[cache_warmer] meteor_showers_interval_seconds must be >= 1")
         if self.faults_interval_seconds < 1:
             raise ValueError("[cache_warmer] faults_interval_seconds must be >= 1")
+        if self.seeing_interval_seconds < 1:
+            raise ValueError("[cache_warmer] seeing_interval_seconds must be >= 1")
 
 
 class EarthquakesSettings:

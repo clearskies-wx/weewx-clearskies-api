@@ -88,11 +88,13 @@ class BackgroundCacheWarmer:
         registry: object,
         settings: object,  # CacheWarmerSettings — avoid circular import
         station_meta: dict,
+        seeing_settings: object | None = None,  # SeeingSettings — optional, avoids circular import
     ) -> None:
         self._engine = engine
         self._registry = registry
         self._settings = settings
         self._station = station_meta
+        self._seeing_settings = seeing_settings
         self._stop_event = threading.Event()
 
     # ------------------------------------------------------------------
@@ -115,6 +117,7 @@ class BackgroundCacheWarmer:
         self._warm_eclipses()
         self._warm_meteor_showers()
         self._warm_faults()
+        self._warm_seeing_forecast()
         logger.info("Cache warmer: initial warm complete")
 
     def start(self) -> None:
@@ -140,6 +143,7 @@ class BackgroundCacheWarmer:
         last_eclipses: float = _NEVER
         last_meteor_showers: float = _NEVER
         last_faults: float = _NEVER
+        last_seeing: float = _NEVER
 
         while not self._stop_event.is_set():
             now = time.monotonic()
@@ -173,6 +177,10 @@ class BackgroundCacheWarmer:
             if last_faults == _NEVER or (now - last_faults) >= self._settings.faults_interval_seconds:
                 self._warm_faults()
                 last_faults = time.monotonic()
+
+            if last_seeing == _NEVER or (now - last_seeing) >= self._settings.seeing_interval_seconds:
+                self._warm_seeing_forecast()
+                last_seeing = time.monotonic()
 
             # Sleep in small ticks so stop() is responsive.
             self._stop_event.wait(timeout=_SLEEP_TICK_SECONDS)
@@ -405,3 +413,49 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: faults refreshed (radius %.1f km)", _default_radius_km)
         except Exception:
             logger.warning("Cache warmer: faults warm failed", exc_info=True)
+
+    def _warm_seeing_forecast(self) -> None:
+        """Warm GET /almanac/seeing-forecast from 7Timer."""
+        if self._seeing_settings is None or self._seeing_settings.provider is None:
+            return  # Seeing provider disabled or not wired
+
+        try:
+            from datetime import timedelta
+
+            from weewx_clearskies_api.providers.seeing.seven_timer import SevenTimerProvider
+
+            lat = self._station["lat"]
+            lon = self._station["lon"]
+
+            with SevenTimerProvider(
+                base_url=self._seeing_settings.base_url,
+                timeout_seconds=self._seeing_settings.timeout_seconds,
+            ) as provider:
+                points = provider.fetch_forecast(lat, lon)
+
+            if not points:
+                logger.info("Seeing forecast returned no data; skipping cache update")
+                return
+
+            # Derive init_time from the first point's valid_time minus 3 h.
+            # 7Timer timepoints start at +3 h; the first point's valid_time - 3 h
+            # gives the model initialization time.
+            first_valid = points[0].valid_time
+            init_time = first_valid - timedelta(hours=3)
+            init_time_str = init_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Serialize as a plain dict for cache storage
+            # (compatible with both MemoryCache and RedisCache backends).
+            payload = {
+                "init_time": init_time_str,
+                "points": [p.model_dump(mode="json") for p in points],
+            }
+            cache = get_cache()
+            cache.set(
+                "warmer:seeing-forecast",
+                payload,
+                self._settings.seeing_interval_seconds,
+            )
+            logger.info("Cache warmer: seeing forecast refreshed (%d points)", len(points))
+        except Exception:
+            logger.warning("Cache warmer: seeing forecast warm failed", exc_info=True)
