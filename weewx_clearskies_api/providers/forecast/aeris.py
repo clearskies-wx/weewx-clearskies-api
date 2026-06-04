@@ -107,6 +107,7 @@ DOMAIN = "forecast"
 AERIS_BASE_URL = "https://data.api.xweather.com"
 AERIS_FORECASTS_PATH = "/forecasts"
 AERIS_OBSERVATIONS_PATH = "/observations"
+AERIS_CONVECTIVE_PATH = "/convective/outlook"
 DEFAULT_FORECAST_TTL_SECONDS = 1800   # 30 min per ADR-017
 DEFAULT_CONDITIONS_TTL_SECONDS = 300  # 5 min per brief
 HOURLY_LIMIT = 240                     # 10 days × 24h, well above 384h ForecastQueryParams cap
@@ -154,6 +155,10 @@ CAPABILITY = ProviderCapability(
         "humidityMin",
         "visibilityMax",
         "snowAmount",
+        "thunderRisk",
+        "tornadoRisk",
+        "hailRisk",
+        "windRisk",
         # ForecastDiscussion — max-surface; populated only on paid-tier responses
         # where summary field is detected at runtime (Q2 user decision 2026-05-08).
         # Free-tier returns bundle.discussion=null.  Auditor note: this is a
@@ -390,6 +395,33 @@ class _AerisCurrentResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     ob: _AerisCurrentOb
+
+
+class _AerisConvectiveRisk(BaseModel):
+    """Wire shape of the risk block from /convective/outlook/{lat},{lon}."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str | None = None       # "general", "tornado", "hail", "wind"
+    name: str | None = None
+    code: float | None = None     # numeric risk level
+
+
+class _AerisConvectiveDetails(BaseModel):
+    """Wire shape of the details block from /convective/outlook/{lat},{lon}."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    day: int | None = None        # 1-8
+    risk: _AerisConvectiveRisk | None = None
+
+
+class _AerisConvectiveItem(BaseModel):
+    """Wire shape of one item from the /convective/outlook response list."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    details: _AerisConvectiveDetails | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +973,80 @@ def _fetch_daynight(
     return validated, raw_first
 
 
+def _fetch_convective_outlook(
+    client: ProviderHTTPClient,
+    lat: float,
+    lon: float,
+    client_id: str,
+    client_secret: str,
+) -> dict[int, dict[str, float]]:
+    """Fetch Aeris convective outlook and return {day: {risk_type: risk_code}}.
+
+    Calls GET /convective/outlook/{lat},{lon} and maps the response items to a
+    dict keyed by forecast day number (1-8), where each value is a dict of
+    risk type ("general", "tornado", "hail", "wind") to numeric risk code.
+
+    Returns empty dict on any failure (non-US stations, network error, etc.)
+    since convective outlook is optional supplementary data.  The broad
+    except Exception guard is intentional here — this call must never cause
+    the main forecast fetch to fail.
+
+    Args:
+        client: Module-level ProviderHTTPClient singleton.
+        lat: Station latitude, rounded to 4 decimal places in the URL.
+        lon: Station longitude, rounded to 4 decimal places in the URL.
+        client_id: Aeris client_id credential.
+        client_secret: Aeris client_secret credential.
+
+    Returns:
+        {day_number: {"general": code, "tornado": code, ...}} or {} on failure.
+    """
+    location = f"{round(lat, 4)},{round(lon, 4)}"
+    url = f"{AERIS_BASE_URL}{AERIS_CONVECTIVE_PATH}/{location}"
+    params = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    try:
+        _rate_limiter.acquire()
+        response = client.get(url, params=params)
+    except Exception:
+        logger.debug(
+            "Aeris convective outlook fetch failed (non-fatal; supplementary data)",
+            exc_info=True,
+        )
+        return {}
+
+    try:
+        raw = response.json()
+    except Exception:
+        logger.debug("Aeris convective outlook: could not parse JSON response (non-fatal)")
+        return {}
+
+    if not raw.get("success") or not raw.get("response"):
+        return {}
+
+    result: dict[int, dict[str, float]] = {}
+    for item_data in raw["response"]:
+        try:
+            item = _AerisConvectiveItem.model_validate(item_data)
+        except Exception:
+            continue
+        if (
+            item.details
+            and item.details.day
+            and item.details.risk
+            and item.details.risk.type
+            and item.details.risk.code is not None
+        ):
+            day = item.details.day
+            if day not in result:
+                result[day] = {}
+            result[day][item.details.risk.type] = item.details.risk.code
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Envelope parsing helpers
 # ---------------------------------------------------------------------------
@@ -1130,6 +1236,26 @@ def fetch(
         target_unit=target_unit,
         daynight_raw=daynight_raw,
     )
+
+    # Overlay convective outlook risk data onto daily points (US-only; returns
+    # empty dict for non-US stations or on any failure — non-fatal supplementary data).
+    convective = _fetch_convective_outlook(client, lat, lon, client_id, client_secret)
+    if convective:
+        for i, day_point in enumerate(bundle.daily):
+            day_num = i + 1  # Day 1 = first forecast day
+            risks = convective.get(day_num)
+            if risks:
+                updates: dict[str, float] = {}
+                if "general" in risks:
+                    updates["thunderRisk"] = risks["general"]
+                if "tornado" in risks:
+                    updates["tornadoRisk"] = risks["tornado"]
+                if "hail" in risks:
+                    updates["hailRisk"] = risks["hail"]
+                if "wind" in risks:
+                    updates["windRisk"] = risks["wind"]
+                if updates:
+                    bundle.daily[i] = day_point.model_copy(update=updates)
 
     get_cache().set(
         cache_key,
