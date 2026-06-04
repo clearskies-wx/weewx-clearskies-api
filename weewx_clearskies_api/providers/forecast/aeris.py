@@ -148,6 +148,12 @@ CAPABILITY = ProviderCapability(
         "uvIndexMax",
         "weatherCode",
         "weatherText",
+        "dewpointMax",
+        "dewpointMin",
+        "humidityMax",
+        "humidityMin",
+        "visibilityMax",
+        "snowAmount",
         # ForecastDiscussion — max-surface; populated only on paid-tier responses
         # where summary field is detected at runtime (Q2 user decision 2026-05-08).
         # Free-tier returns bundle.discussion=null.  Auditor note: this is a
@@ -303,6 +309,21 @@ class _AerisDayNightPeriod(BaseModel):
     sunsetISO: str | None = None
     # UV index
     uvi: float | None = None
+    # Dewpoint extremes — both unit systems
+    maxDewpointF: float | None = Field(default=None)
+    maxDewpointC: float | None = Field(default=None)
+    minDewpointF: float | None = Field(default=None)
+    minDewpointC: float | None = Field(default=None)
+    # Humidity
+    humidity: float | None = Field(default=None)
+    maxHumidity: float | None = Field(default=None)
+    minHumidity: float | None = Field(default=None)
+    # Visibility — both unit systems
+    visibilityMI: float | None = Field(default=None)
+    visibilityKM: float | None = Field(default=None)
+    # Snow accumulation — both unit systems
+    snowIN: float | None = Field(default=None)
+    snowCM: float | None = Field(default=None)
     # Weather codes
     weatherPrimaryCoded: str | None = None
     weather: str | None = None
@@ -626,18 +647,30 @@ def _daynight_periods_to_daily(
             wind_speed_max = day_period.windSpeedMaxMPH
             wind_gust_max = day_period.windGustMaxMPH
             precip_amount = day_period.precipIN
+            dewpoint_max = day_period.maxDewpointF
+            dewpoint_min = day_period.minDewpointF
+            visibility_max = day_period.visibilityMI
+            snow_amount = day_period.snowIN
         elif target_unit == "METRICWX":
             temp_max = day_period.maxTempC
             temp_min = night_period.minTempC if night_period is not None else None
             wind_speed_max = _wind_speed_max_mps(day_period)
             wind_gust_max = _wind_gust_max_mps(day_period)
             precip_amount = day_period.precipMM
+            dewpoint_max = day_period.maxDewpointC
+            dewpoint_min = day_period.minDewpointC
+            visibility_max = day_period.visibilityKM
+            snow_amount = day_period.snowCM
         else:  # METRIC
             temp_max = day_period.maxTempC
             temp_min = night_period.minTempC if night_period is not None else None
             wind_speed_max = day_period.windSpeedMaxKPH
             wind_gust_max = day_period.windGustMaxKPH
             precip_amount = day_period.precipMM
+            dewpoint_max = day_period.maxDewpointC
+            dewpoint_min = day_period.minDewpointC
+            visibility_max = day_period.visibilityKM
+            snow_amount = day_period.snowCM
 
         # Sunrise/sunset: convert from local ISO-with-offset to UTC Z
         sunrise_utc: str | None = None
@@ -671,6 +704,12 @@ def _daynight_periods_to_daily(
                 weatherCode=day_period.weatherPrimaryCoded,
                 weatherText=day_period.weather,
                 narrative=None,   # Aeris paid-tier `text` field deferred to future round (call 20)
+                dewpointMax=dewpoint_max,
+                dewpointMin=dewpoint_min,
+                humidityMax=day_period.maxHumidity,
+                humidityMin=day_period.minHumidity,
+                visibilityMax=visibility_max,
+                snowAmount=snow_amount,
                 source=PROVIDER_ID,
                 extras=extras,
             )
