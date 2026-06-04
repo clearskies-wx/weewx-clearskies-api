@@ -708,6 +708,17 @@ class DailyForecastPoint(BaseModel):
     weatherCode: str | None = None           # WMO code as string
     weatherText: str | None = None
     narrative: str | None = None             # per-day summary (NWS/some Aeris plans; null here)
+    dewpointMax: float | None = None
+    dewpointMin: float | None = None
+    humidityMax: float | None = None
+    humidityMin: float | None = None
+    visibilityMax: float | None = None
+    visibilityMin: float | None = None
+    snowAmount: float | None = None
+    thunderRisk: float | None = None
+    tornadoRisk: float | None = None
+    hailRisk: float | None = None
+    windRisk: float | None = None
     source: str
     extras: dict[str, Any] = {}
 
