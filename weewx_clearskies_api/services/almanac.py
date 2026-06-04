@@ -868,13 +868,15 @@ def compute_moon_phases(
 # ---------------------------------------------------------------------------
 
 # DE421 planet body names (verified against the loaded segments).
-# Jupiter and Saturn lack individual body segments — use barycenter bodies.
+# Jupiter, Saturn, Uranus, Neptune lack individual body segments — use barycenters.
 _PLANET_KEYS: tuple[tuple[str, str], ...] = (
     ("Mercury", "mercury"),
     ("Venus", "venus"),
     ("Mars", "mars"),
     ("Jupiter", "jupiter barycenter"),
     ("Saturn", "saturn barycenter"),
+    ("Uranus", "uranus barycenter"),
+    ("Neptune", "neptune barycenter"),
 )
 
 # Traditional full-moon names by calendar month.
@@ -921,15 +923,16 @@ def compute_planets(
 ) -> dict:
     """Compute evening/morning/allNight planet visibility for a given date.
 
-    For each of Mercury, Venus, Mars, Jupiter, Saturn:
-      - Computes apparent magnitude at local noon (used only for the naked-eye
-        threshold filter; not returned in the result).
+    For each of Mercury through Neptune:
+      - Computes apparent magnitude at local noon (returned in the result).
       - Computes rise/set times within the station-local day window.
       - Computes altitude (degrees) and compass direction at the midpoint of
         the planet's visible window (or at 9 pm for evening, 5 am for morning,
         local midnight for all-night).
       - Classifies visibility period relative to sunset/sunrise.
-      - Filters out planets with magnitude >= 6.0 (naked-eye threshold).
+      - Computes transit time (meridian crossing), RA/Dec, and elongation from Sun.
+      - All 7 planets are always included; no magnitude cutoff is applied so that
+        telescope-visible planets (Uranus, Neptune) are returned for the BFF.
 
     Args:
         date_val: Station-local calendar date.
@@ -938,7 +941,9 @@ def compute_planets(
 
     Returns:
         dict with keys "evening", "morning", "allNight" — each a list of
-        {"name", "altitude", "direction", "rise", "set", "constellation"} dicts.
+        {"name", "altitude", "direction", "rise", "set", "constellation",
+         "magnitude", "transitTime", "rightAscension", "declination",
+         "elongation"} dicts.
     """
     try:
         from skyfield.magnitudelib import planetary_magnitude
@@ -948,11 +953,11 @@ def compute_planets(
     ts, eph = get_ts_eph()
     location = wgs84.latlon(lat, lon, elevation_m=alt_m)  # type: ignore[call-arg]
     earth = eph["earth"]  # type: ignore[index]
+    sun = eph["sun"]  # type: ignore[index]
 
     t0, t1 = _station_local_window(ts, date_val, station_tz)
 
     # --- Get sun set/rise for night classification ---
-    sun = eph["sun"]  # type: ignore[index]
     f_sun = almanac.risings_and_settings(eph, sun, location)  # type: ignore[arg-type]
     times_sun, events_sun = almanac.find_discrete(t0, t1, f_sun)  # type: ignore[arg-type]
 
@@ -971,8 +976,11 @@ def compute_planets(
     # Midnight TT (midpoint of the window) for classification boundary.
     midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
 
-    # Noon time for magnitude computation (naked-eye threshold filter only).
+    # Noon time for magnitude/RA/Dec/elongation computation.
     t_noon = ts.utc(date_val.year, date_val.month, date_val.day, 12, 0, 0)  # type: ignore[call-arg]
+
+    # Pre-compute the Sun's apparent position at noon for elongation calculations.
+    sun_apparent_noon = earth.at(t_noon).observe(sun).apparent()  # type: ignore[attr-defined]
 
     # Reference times for altitude/direction computation:
     #   Evening planets — 9 pm local (21:00).
@@ -989,18 +997,45 @@ def compute_planets(
     for display_name, eph_key in _PLANET_KEYS:
         planet = eph[eph_key]  # type: ignore[index]
 
-        # --- Apparent magnitude at local noon (naked-eye threshold filter) ---
+        # --- Apparent magnitude at local noon ---
         magnitude: float | None = None
         if planetary_magnitude is not None:
             try:
                 obs_noon = (earth + location).at(t_noon).observe(planet).apparent()  # type: ignore[attr-defined]
-                magnitude = round(float(planetary_magnitude(obs_noon)), 2)
+                magnitude = round(float(planetary_magnitude(obs_noon)), 1)
             except Exception:
+                logger.warning("magnitude computation failed for %s", display_name, exc_info=True)
                 magnitude = None
 
-        # Skip planets too dim to see with the naked eye.
-        if magnitude is not None and magnitude >= 6.0:
-            continue
+        # --- RA / Dec at local noon ---
+        ra_deg: float | None = None
+        dec_deg: float | None = None
+        try:
+            planet_apparent_noon = earth.at(t_noon).observe(planet).apparent()  # type: ignore[attr-defined]
+            ra_obj, dec_obj, _dist = planet_apparent_noon.radec()  # type: ignore[attr-defined]
+            ra_deg = round(float(ra_obj.degrees), 4)  # type: ignore[attr-defined]
+            dec_deg = round(float(dec_obj.degrees), 4)  # type: ignore[attr-defined]
+        except Exception:
+            logger.warning("RA/Dec computation failed for %s", display_name, exc_info=True)
+
+        # --- Elongation from Sun at local noon ---
+        elongation_deg: float | None = None
+        try:
+            planet_apparent_noon2 = earth.at(t_noon).observe(planet).apparent()  # type: ignore[attr-defined]
+            sep = planet_apparent_noon2.separation_from(sun_apparent_noon)  # type: ignore[attr-defined]
+            elongation_deg = round(float(sep.degrees), 2)  # type: ignore[attr-defined]
+        except Exception:
+            logger.warning("elongation computation failed for %s", display_name, exc_info=True)
+
+        # --- Transit time (meridian crossing) within the station-local day window ---
+        transit_time_iso: str | None = None
+        try:
+            f_transit = almanac.meridian_transits(eph, planet, location)  # type: ignore[arg-type]
+            t_transits, _ = almanac.find_discrete(t0, t1, f_transit)  # type: ignore[arg-type]
+            if len(t_transits) > 0:
+                transit_time_iso = _to_utc_z(t_transits[0])
+        except Exception:
+            logger.warning("transit computation failed for %s", display_name, exc_info=True)
 
         # --- Rise/set within the station-local day window ---
         f_planet = almanac.risings_and_settings(eph, planet, location)  # type: ignore[arg-type]
@@ -1071,6 +1106,11 @@ def compute_planets(
             "rise": planet_rise_iso,
             "set": planet_set_iso,
             "constellation": None,
+            "magnitude": magnitude,
+            "transitTime": transit_time_iso,
+            "rightAscension": ra_deg,
+            "declination": dec_deg,
+            "elongation": elongation_deg,
         }
         target_list.append(entry)
 

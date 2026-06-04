@@ -437,6 +437,11 @@ class PlanetEntry(BaseModel):
     rise: str | None = None
     set: str | None = None
     constellation: str | None = None
+    magnitude: float | None = None          # Visual magnitude (lower = brighter)
+    transitTime: str | None = None          # ISO-8601 UTC when planet crosses meridian
+    rightAscension: float | None = None     # RA in degrees (0-360)
+    declination: float | None = None        # Dec in degrees (-90 to +90)
+    elongation: float | None = None         # Angular distance from Sun in degrees
 
 
 class PlanetVisibility(BaseModel):

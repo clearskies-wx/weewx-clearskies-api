@@ -442,6 +442,11 @@ def get_planets(
                         rise=p["rise"],
                         set=p["set"],
                         constellation=p["constellation"],
+                        magnitude=p.get("magnitude"),
+                        transitTime=p.get("transitTime"),
+                        rightAscension=p.get("rightAscension"),
+                        declination=p.get("declination"),
+                        elongation=p.get("elongation"),
                     )
                     for p in raw_list
                 ]
@@ -470,6 +475,11 @@ def get_planets(
                 rise=p["rise"],
                 set=p["set"],
                 constellation=p["constellation"],
+                magnitude=p.get("magnitude"),
+                transitTime=p.get("transitTime"),
+                rightAscension=p.get("rightAscension"),
+                declination=p.get("declination"),
+                elongation=p.get("elongation"),
             )
             for p in raw_list
         ]
