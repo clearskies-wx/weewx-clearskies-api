@@ -633,6 +633,39 @@ class EarthquakesSettings:
             )
 
 
+class SeeingSettings:
+    """[seeing] section settings.
+
+    Provider id for astronomical seeing forecasts.  7Timer is keyless —
+    no API key or env vars needed.  Set provider to None (or omit [seeing])
+    to disable the seeing endpoint entirely.
+    """
+
+    #: Provider id: "7timer" (default) or None to disable.
+    provider: str | None
+    #: 7Timer ASTRO API base URL.
+    base_url: str
+    #: HTTP request timeout in seconds.
+    timeout_seconds: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "7timer")).strip()
+        self.provider = raw_provider if raw_provider else None
+        self.base_url = str(
+            section.get("base_url", "http://www.7timer.info/bin/api.pl")
+        ).strip()
+        self.timeout_seconds = int(section.get("timeout_seconds", "10"))
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id."""
+        valid_providers = {"7timer"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[seeing] provider {self.provider!r} not in {valid_providers}. "
+                "Valid: '7timer'."
+            )
+
+
 class RadarSettings:
     """[radar] section settings (3b-14; extended 3b-15 with 2 keyed providers;
     extended 3b-16 with iframe provider).
@@ -965,6 +998,7 @@ class Settings:
     aqi: AQISettings
     aqi_history: AQIHistorySettings
     earthquakes: EarthquakesSettings
+    seeing: SeeingSettings
     radar: RadarSettings
     forecast: ForecastSettings
     tls: TlsSettings
@@ -989,6 +1023,7 @@ class Settings:
         aqi: AQISettings | None = None,
         aqi_history: AQIHistorySettings | None = None,
         earthquakes: EarthquakesSettings | None = None,
+        seeing: SeeingSettings | None = None,
         radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
@@ -1013,6 +1048,7 @@ class Settings:
         self.aqi = aqi if aqi is not None else AQISettings({})
         self.aqi_history = aqi_history if aqi_history is not None else AQIHistorySettings({})
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
+        self.seeing = seeing if seeing is not None else SeeingSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
         self.tls = tls if tls is not None else TlsSettings({})
@@ -1031,6 +1067,7 @@ class Settings:
         self.alerts.validate()
         self.aqi.validate()
         self.earthquakes.validate()
+        self.seeing.validate()
         self.radar.validate()
         self.forecast.validate()
         self.tls.validate()
@@ -1136,6 +1173,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
     aqi_history_cfg = AQIHistorySettings(dict(cfg.get("aqi.history", {})))
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
+    seeing_cfg = SeeingSettings(dict(cfg.get("seeing", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
@@ -1159,6 +1197,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         aqi=aqi_cfg,
         aqi_history=aqi_history_cfg,
         earthquakes=earthquakes_cfg,
+        seeing=seeing_cfg,
         radar=radar_cfg,
         forecast=forecast_cfg,
         tls=tls_cfg,
