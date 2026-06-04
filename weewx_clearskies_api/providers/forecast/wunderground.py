@@ -93,7 +93,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import (
     DailyForecastPoint,
@@ -151,6 +151,9 @@ CAPABILITY = ProviderCapability(
         "weatherCode",
         "weatherText",
         "narrative",
+        "humidityMax",
+        "snowAmount",
+        "thunderRisk",
         # NB: HourlyForecastPoint fields NOT supplied — Wunderground PWS API
         # has no hourly forecast on any tier (canonical §4.1.2 column = all "—";
         # api-docs §Known issues confirms PWS tier has no hourly endpoint).
@@ -206,6 +209,7 @@ class _WUDaypart(BaseModel):
     snowRange: list[str | None] | None = None
     temperature: list[int | None] | None = None
     uvIndex: list[int | None] | None = None            # UV index (daytime slot)
+    thunderIndex: list[float | None] = Field(default_factory=list)  # thunderstorm risk 0-5 scale
     windDirection: list[int | None] | None = None
     windDirectionCardinal: list[str | None] | None = None
     windPhrase: list[str | None] | None = None
@@ -469,12 +473,17 @@ def _wu_to_daily_point(
     # --- narrative (top-level narrative[i], NOT daypart.narrative) ---
     narrative: str | None = _safe_get(wire.narrative, day_idx)
 
+    # --- snowAmount (top-level qpfSnow[i]; already in target_unit's unit) ---
+    snow_amount: float | None = _safe_get(wire.qpfSnow, day_idx)
+
     # --- Daypart-derived fields (all from Day period = 2*i index) ---
     precip_prob: int | None = None
     wind_speed_max: int | None = None
     uv_index_max: int | None = None
     weather_code: str | None = None
     weather_text: str | None = None
+    humidity_max: int | None = None
+    thunder_risk: float | None = None
 
     if daypart is not None:
         precip_prob = _safe_get(daypart.precipChance, dp_idx)
@@ -486,6 +495,12 @@ def _wu_to_daily_point(
             weather_code = str(icon_code)
 
         weather_text = _safe_get(daypart.wxPhraseShort, dp_idx)
+
+        # Humidity from daypart (Day period)
+        humidity_max = _safe_get(daypart.relativeHumidity, dp_idx)
+
+        # Thunder risk from daypart (Day period; 0-5 scale)
+        thunder_risk = _safe_get(daypart.thunderIndex, dp_idx)
 
     return DailyForecastPoint(
         validDate=valid_date,
@@ -501,6 +516,9 @@ def _wu_to_daily_point(
         weatherCode=weather_code,
         weatherText=weather_text,
         narrative=narrative,
+        humidityMax=humidity_max,
+        snowAmount=snow_amount,
+        thunderRisk=thunder_risk,
         source=PROVIDER_ID,
     )
 
