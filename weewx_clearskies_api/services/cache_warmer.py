@@ -51,7 +51,7 @@ import dataclasses
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 from sqlalchemy import Engine
@@ -239,24 +239,47 @@ class BackgroundCacheWarmer:
             logger.warning("Cache warmer: almanac warm failed", exc_info=True)
 
     def _warm_almanac_snapshot(self) -> None:
-        """Warm GET /almanac (daily snapshot for today)."""
+        """Warm GET /almanac (daily snapshot for today and tomorrow).
+
+        Uses station-local date so the cache key matches the endpoint's default
+        (which also uses station-local date).  Near UTC midnight the UTC date
+        and station-local date can diverge, causing a cache miss.
+
+        Tomorrow is pre-warmed so the dashboard's date-switching feature gets a
+        cache hit when the user pages forward to the next day.
+        """
         try:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
             from weewx_clearskies_api.services.almanac import compute_almanac
 
             cache = get_cache()
-            today = datetime.now(timezone.utc).date()
+            station_tz = self._station["station_tz"]
+            try:
+                zi = ZoneInfo(station_tz)
+                today = datetime.now(tz=zi).date()
+            except (ZoneInfoNotFoundError, KeyError):
+                today = datetime.now(timezone.utc).date()
+            tomorrow = today + timedelta(days=1)
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]
-            station_tz = self._station["station_tz"]
 
-            day = compute_almanac(today, lat, lon, alt_m, station_tz=station_tz)
+            day_today = compute_almanac(today, lat, lon, alt_m, station_tz=station_tz)
             cache.set(
                 f"warmer:almanac:snapshot:{today.isoformat()}",
-                dataclasses.asdict(day),
+                dataclasses.asdict(day_today),
                 self._settings.almanac_interval_seconds,
             )
-            logger.info("Cache warmer: almanac snapshot refreshed for %s", today)
+
+            # Warm tomorrow so dashboard date-switching gets a cache hit.
+            day_tomorrow = compute_almanac(tomorrow, lat, lon, alt_m, station_tz=station_tz)
+            cache.set(
+                f"warmer:almanac:snapshot:{tomorrow.isoformat()}",
+                dataclasses.asdict(day_tomorrow),
+                self._settings.almanac_interval_seconds,
+            )
+            logger.info("Cache warmer: almanac snapshot refreshed for %s and %s", today, tomorrow)
         except Exception:
             logger.warning("Cache warmer: almanac snapshot warm failed", exc_info=True)
 
