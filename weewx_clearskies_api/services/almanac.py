@@ -33,6 +33,7 @@ with ±22.5° width.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import stat
 import urllib.error
@@ -725,6 +726,48 @@ def compute_current_sun_altitude(lat: float, lon: float, alt_m: float) -> float 
     return round(float(alt_obj.degrees), 4)  # type: ignore[attr-defined]
 
 
+def compute_current_positions(lat: float, lon: float, alt_m: float) -> dict:  # type: ignore[type-arg]
+    """Return current sun and moon positions (azimuth, altitude) at this instant."""
+    ts, eph = get_ts_eph()
+    location = wgs84.latlon(lat, lon, elevation_m=alt_m)  # type: ignore[call-arg]
+    earth = eph["earth"]  # type: ignore[index]
+    observer = earth + location  # type: ignore[operator]
+    t_now = ts.now()  # type: ignore[attr-defined]
+
+    # Sun
+    sun = eph["sun"]  # type: ignore[index]
+    sun_app = observer.at(t_now).observe(sun).apparent()
+    sun_alt, sun_az, _ = sun_app.altaz()
+
+    # Moon
+    moon = eph["moon"]  # type: ignore[index]
+    moon_app = observer.at(t_now).observe(moon).apparent()
+    moon_alt, moon_az, _ = moon_app.altaz()
+
+    # Moon phase + illumination (same formula as _compute_moon_for_date)
+    sun_ecl = observer.at(t_now).observe(sun).apparent().ecliptic_latlon()
+    moon_ecl = observer.at(t_now).observe(moon).apparent().ecliptic_latlon()
+    phase_angle = (moon_ecl[1].degrees - sun_ecl[1].degrees) % 360
+    illumination = round(100 * (1 - math.cos(math.radians(phase_angle))) / 2, 1)
+    # 8-bin phase name
+    phase_names = ["new", "waxing-crescent", "first-quarter", "waxing-gibbous",
+                   "full", "waning-gibbous", "last-quarter", "waning-crescent"]
+    phase_name = phase_names[int((phase_angle + 22.5) % 360 / 45)]
+
+    return {
+        "sun": {
+            "azimuth": round(float(sun_az.degrees), 2),
+            "altitude": round(float(sun_alt.degrees), 2),
+        },
+        "moon": {
+            "azimuth": round(float(moon_az.degrees), 2),
+            "altitude": round(float(moon_alt.degrees), 2),
+            "illuminationPercent": illumination,
+            "phaseName": phase_name,
+        },
+    }
+
+
 def compute_sun_times_year(
     year: int,
     lat: float,
@@ -897,8 +940,6 @@ def compute_planets(
         dict with keys "evening", "morning", "allNight" — each a list of
         {"name", "altitude", "direction", "rise", "set", "constellation"} dicts.
     """
-    import math
-
     try:
         from skyfield.magnitudelib import planetary_magnitude
     except ImportError:

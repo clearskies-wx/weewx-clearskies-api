@@ -41,11 +41,15 @@ from weewx_clearskies_api.models.responses import (
     MoonPhaseCalendar,
     MoonPhaseDay,
     MoonPhaseResponse,
+    MoonPosition,
     MoonSnapshot,
     PlanetEntry,
     PlanetResponse,
     PlanetVisibility,
+    PositionsResponse,
+    PositionsSnapshot,
     SpecialMoonEntry,
+    SunPosition,
     SunSnapshot,
     SunTimesDay,
     SunTimesResponse,
@@ -613,3 +617,14 @@ def get_meteor_showers(
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )
+
+
+@router.get("/almanac/positions", summary="Current sun and moon positions", tags=["Almanac"])
+def get_positions() -> PositionsResponse:
+    """Real-time sun and moon azimuth/altitude. No caching — computed at request time."""
+    info = get_station_info()
+    positions = almanac_svc.compute_current_positions(info.latitude, info.longitude, info.altitude)
+    return PositionsResponse(data=PositionsSnapshot(
+        sun=SunPosition(**positions["sun"]),
+        moon=MoonPosition(**positions["moon"]),
+    ))

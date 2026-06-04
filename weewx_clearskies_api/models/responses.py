@@ -503,6 +503,35 @@ class MeteorShowerResponse(BaseModel):
     generatedAt: str
 
 
+class SunPosition(BaseModel):
+    """Current sun azimuth and altitude (GET /almanac/positions)."""
+
+    azimuth: float
+    altitude: float
+
+
+class MoonPosition(BaseModel):
+    """Current moon azimuth, altitude, illumination, and phase (GET /almanac/positions)."""
+
+    azimuth: float
+    altitude: float
+    illuminationPercent: float
+    phaseName: str
+
+
+class PositionsSnapshot(BaseModel):
+    """Real-time sun and moon positions snapshot."""
+
+    sun: SunPosition
+    moon: MoonPosition
+
+
+class PositionsResponse(BaseModel):
+    """PositionsResponse envelope (GET /almanac/positions)."""
+
+    data: PositionsSnapshot
+
+
 # ---------------------------------------------------------------------------
 # Station
 # ---------------------------------------------------------------------------
