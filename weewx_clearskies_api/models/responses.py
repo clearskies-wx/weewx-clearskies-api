@@ -170,6 +170,8 @@ class ProviderConditions(BaseModel):
     humidity: float | None = None
     windSpeed: float | None = None
     windDir: float | None = None
+    snow: float | None = None
+    snowRate: float | None = None
     source: str
 
 
