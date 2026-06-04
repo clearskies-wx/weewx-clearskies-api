@@ -127,6 +127,18 @@ DEFAULT_CONDITIONS_TTL_SECONDS = 300  # 5 min per brief
 
 _API_VERSION = "0.1.0"
 
+# Mapping from Wunderground thunderCategory string values to canonical
+# thunderRisk numeric scale (0-5).  Used as fallback when thunderIndex is None.
+# Source: api-docs/wunderground.md §Daypart fields.
+_THUNDER_CATEGORY_TO_RISK: dict[str, float] = {
+    "No Thunder": 0.0,
+    "Thunder Possible": 1.0,
+    "Thunder Expected": 2.0,
+    "Severe Thunderstorms Possible": 3.0,
+    "Severe Thunderstorms Expected": 4.0,
+    "High Risk of Severe Thunderstorms": 5.0,
+}
+
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4, brief lead-call 18)
 # L1 PARTIAL-DOMAIN extension (3b-6 NEW): CAPABILITY enumerates ONLY
@@ -210,6 +222,7 @@ class _WUDaypart(BaseModel):
     temperature: list[int | None] | None = None
     uvIndex: list[int | None] | None = None            # UV index (daytime slot)
     thunderIndex: list[float | None] = Field(default_factory=list)  # thunderstorm risk 0-5 scale
+    thunderCategory: list[str | None] = Field(default_factory=list)  # thunderstorm category string
     windDirection: list[int | None] | None = None
     windDirectionCardinal: list[str | None] | None = None
     windPhrase: list[str | None] | None = None
@@ -499,8 +512,14 @@ def _wu_to_daily_point(
         # Humidity from daypart (Day period)
         humidity_max = _safe_get(daypart.relativeHumidity, dp_idx)
 
-        # Thunder risk from daypart (Day period; 0-5 scale)
+        # Thunder risk from daypart (Day period; 0-5 scale).
+        # Primary source: thunderIndex (numeric).  Fallback: derive from
+        # thunderCategory string when thunderIndex slot is None.
         thunder_risk = _safe_get(daypart.thunderIndex, dp_idx)
+        if thunder_risk is None:
+            thunder_cat = _safe_get(daypart.thunderCategory, dp_idx)
+            if thunder_cat:
+                thunder_risk = _THUNDER_CATEGORY_TO_RISK.get(thunder_cat)
 
     return DailyForecastPoint(
         validDate=valid_date,
