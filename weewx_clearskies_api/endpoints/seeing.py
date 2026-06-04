@@ -22,7 +22,7 @@ router structure, but no param model is needed for a parameterless endpoint.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -160,7 +160,6 @@ def get_seeing_forecast() -> SeeingForecastResponse:
     # This is a best-effort reconstruction; the provider strips init_time from SeeingForecastPoint.
     # The first point's valid_time - 3 h gives the 7Timer model initialization time.
     if points:
-        from datetime import timedelta
         first_valid = points[0].validTime
         init_dt = first_valid - timedelta(hours=3)
         init_time_str = utc_isoformat(init_dt)

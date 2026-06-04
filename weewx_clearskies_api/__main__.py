@@ -78,6 +78,7 @@ from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
+from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
 from weewx_clearskies_api.providers._common.cache import ConfigError as CacheConfigError
@@ -616,6 +617,7 @@ def main() -> None:
             registry=registry,
             settings=settings.cache_warmer,
             station_meta=_station_meta,
+            seeing_settings=settings.seeing,
         )
         _warmer.initial_warm()
         _warmer.start()
@@ -656,6 +658,9 @@ def main() -> None:
     # no-op. Aeris + OWM: extracts credentials from settings.forecast per 3b-5 Q2
     # provider-scoped decision (same env vars as forecast/alerts/AQI).
     wire_radar_settings(settings)
+
+    # Step 6o½: Pass settings to seeing endpoint (keyless — no credentials).
+    wire_seeing_settings(settings)
 
     # Step 6p: Wire branding settings (ADR-022, Gap #10).
     wire_branding_settings(settings.branding)
