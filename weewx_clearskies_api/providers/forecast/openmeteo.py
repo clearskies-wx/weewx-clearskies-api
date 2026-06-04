@@ -132,6 +132,11 @@ CAPABILITY = ProviderCapability(
         "sunrise",
         "sunset",
         "uvIndexMax",
+        "humidityMax",
+        "humidityMin",
+        "visibilityMax",
+        "visibilityMin",
+        "snowAmount",
         # NB: discussion fields NOT supplied by Open-Meteo
     ),
     geographic_coverage="global",
@@ -259,6 +264,11 @@ _DAILY_VARS = (
     "sunset",
     "uv_index_max",
     "weather_code",
+    "relative_humidity_2m_max",
+    "relative_humidity_2m_min",
+    "visibility_max",
+    "visibility_min",
+    "snowfall_sum",
 )
 
 # ---------------------------------------------------------------------------
@@ -314,6 +324,11 @@ class _OpenMeteoDailyBlock(BaseModel):
     sunset: list[str | None] = Field(default_factory=list)
     uv_index_max: list[float | None] = Field(default_factory=list)
     weather_code: list[int | None] = Field(default_factory=list)
+    relative_humidity_2m_max: list[float | None] = Field(default_factory=list)
+    relative_humidity_2m_min: list[float | None] = Field(default_factory=list)
+    visibility_max: list[float | None] = Field(default_factory=list)
+    visibility_min: list[float | None] = Field(default_factory=list)
+    snowfall_sum: list[float | None] = Field(default_factory=list)
 
 
 class _OpenMeteoCurrentBlock(BaseModel):
@@ -572,6 +587,11 @@ def _zip_daily(
                 uvIndexMax=_get_at(daily.uv_index_max, i),
                 weatherCode=code_str,
                 weatherText=weather_text,
+                humidityMax=_get_at(daily.relative_humidity_2m_max, i),
+                humidityMin=_get_at(daily.relative_humidity_2m_min, i),
+                visibilityMax=_get_at(daily.visibility_max, i),
+                visibilityMin=_get_at(daily.visibility_min, i),
+                snowAmount=_get_at(daily.snowfall_sum, i),
                 narrative=None,   # Open-Meteo supplies no per-day narrative
                 source=PROVIDER_ID,
             )
