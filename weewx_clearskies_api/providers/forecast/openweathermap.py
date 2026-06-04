@@ -150,6 +150,8 @@ CAPABILITY = ProviderCapability(
         "weatherCode",
         "weatherText",
         "narrative",
+        "humidityMax",
+        "snowAmount",
         # ForecastDiscussion fields NOT supplied — canonical §4.1.4 OWM column = all "—".
         # Bundle ships discussion=None unconditionally (brief lead-call 33).
     ),
@@ -727,6 +729,8 @@ def _owm_to_daily_point(
         weatherCode=weather_code,
         weatherText=weather_text,
         narrative=narrative,
+        humidityMax=day.humidity,
+        snowAmount=day.snow,
         source=PROVIDER_ID,
     )
 
