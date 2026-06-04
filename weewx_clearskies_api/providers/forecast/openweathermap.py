@@ -312,6 +312,7 @@ class _OWMCurrentBlock(BaseModel):
     clouds: float | None = None       # 0-100 percent cloud cover
     visibility: float | None = None
     uvi: float | None = None
+    snow: dict[str, float] | None = None   # {"1h": <mm>} — same shape as hourly snow
 
 
 class _OWMOneCallResponse(BaseModel):
@@ -1122,6 +1123,10 @@ def fetch_current_conditions(
     wind_speed = _convert_owm_units(cur.wind_speed, field_kind="wind_speed", target_unit=target_unit)
     wind_gust = _convert_owm_units(cur.wind_gust, field_kind="wind_gust", target_unit=target_unit)
 
+    # snow.1h: same dict shape as hourly {"1h": <mm>}; absent when no snow.
+    # snowRate is not supplied by OWM current conditions.
+    snow_mm = cur.snow.get("1h") if cur.snow else None
+
     conditions = ProviderConditions(
         weatherText=weather_text,
         weatherCode=weather_code,
@@ -1132,6 +1137,7 @@ def fetch_current_conditions(
         humidity=cur.humidity,
         windSpeed=wind_speed,
         windDir=cur.wind_deg,
+        snow=snow_mm,
         source=PROVIDER_ID,
     )
 

@@ -12,10 +12,11 @@ Per security-baseline §3.5: query params validated via Pydantic with
 weatherText is always null in API responses per ADR-041; the BFF enrichment
 pipeline populates it before serving the dashboard.
 
-cloudcover fill (Task 2a): when the archive row has cloudcover=null, the
-/current endpoint attempts to fill it from the configured forecast provider's
-fetch_current_conditions() call (300 s cache, almost always a hit).  Errors
-are swallowed — cloudcover stays null rather than crashing the endpoint.
+provider blending (Tasks 2a, A8): when the archive row has cloudcover=null,
+snow=null, or snowRate=null, the /current endpoint attempts to fill those
+fields from the configured forecast provider's fetch_current_conditions()
+call (300 s cache, almost always a hit).  Errors are swallowed — fields
+stay null rather than crashing the endpoint.
 
 ruff: noqa: N815  (canonical field names are weewx camelCase per ADR-010)
 """
@@ -59,11 +60,11 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# cloudcover fill helper
+# Provider conditions blending helper
 #
-# When the archive row has cloudcover=null (no cloud sensor on the station),
-# the BFF needs a value to render sky conditions at night.  We fill it from
-# whatever forecast provider is configured, using that provider's cached
+# When the archive row has cloudcover=null (no cloud sensor), snow=null, or
+# snowRate=null (no snow hardware), /current fills those fields from whatever
+# forecast provider is configured, using that provider's cached
 # fetch_current_conditions() result (300 s TTL, almost always a cache hit).
 #
 # This is provider-agnostic: the code dispatches to whichever provider is
@@ -73,23 +74,32 @@ router = APIRouter()
 # which are populated at startup by wire_forecast_settings().  Importing them
 # at call time (inside the function) avoids a circular-import at module load.
 #
-# Errors are swallowed: cloudcover stays null rather than crashing /current.
+# All updates are collected into a single dict so one provider call feeds
+# cloudcover, snow, and snowRate blending together.
+#
+# Errors are swallowed: affected fields stay null rather than crashing /current.
 # ---------------------------------------------------------------------------
 
 
 def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
-    """Return observation with cloudcover filled from the forecast provider.
+    """Return observation with provider-supplied fields blended in.
 
-    Calls fetch_current_conditions() on the configured forecast provider.
+    Calls fetch_current_conditions() on the configured forecast provider and
+    blends cloudcover, snow, and snowRate into the observation when those
+    fields are None (no hardware on the station) and the provider supplies them.
+
+    One provider call per invocation; all updates applied via a single
+    model_copy(update=...) at the end so no field is missed.
+
     On any error (provider unavailable, station not wired, no provider
     configured) returns the observation unchanged.
 
     Args:
-        observation: The archive observation (cloudcover is None).
+        observation: The archive observation.
 
     Returns:
         observation unchanged if fill is not possible, or a new Observation
-        instance with cloudcover set from ProviderConditions.cloudCover.
+        instance with cloudcover/snow/snowRate set from ProviderConditions.
     """
     provider_id: str = "unknown"
     try:
@@ -175,14 +185,20 @@ def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
             )
             return observation
 
-        if provider_conditions is not None and provider_conditions.cloudCover is not None:
-            return observation.model_copy(
-                update={"cloudcover": provider_conditions.cloudCover}
-            )
+        if provider_conditions is not None:
+            updates: dict[str, object] = {}
+            if observation.cloudcover is None and provider_conditions.cloudCover is not None:
+                updates["cloudcover"] = provider_conditions.cloudCover
+            if observation.snow is None and provider_conditions.snow is not None:
+                updates["snow"] = provider_conditions.snow
+            if observation.snowRate is None and provider_conditions.snowRate is not None:
+                updates["snowRate"] = provider_conditions.snowRate
+            if updates:
+                return observation.model_copy(update=updates)
 
     except Exception:  # noqa: BLE001
         logger.warning(
-            "cloudcover fill from provider %r failed; leaving cloudcover null",
+            "Provider conditions fill from provider %r failed; leaving fields null",
             provider_id,
             exc_info=True,
         )
@@ -254,10 +270,15 @@ def get_current_endpoint(
 
     observation = get_current(db, registry)
 
-    # Fill cloudcover from the forecast provider cache when the archive row
-    # has no cloud sensor data.  Almost always a cache hit (<1 ms); errors
-    # are swallowed so /current never crashes due to a provider outage.
-    if observation is not None and observation.cloudcover is None:
+    # Blend cloudcover, snow, and snowRate from the forecast provider cache
+    # when the archive row lacks the hardware to supply those fields.
+    # Almost always a cache hit (<1 ms); errors are swallowed so /current
+    # never crashes due to a provider outage.
+    if observation is not None and (
+        observation.cloudcover is None
+        or observation.snow is None
+        or observation.snowRate is None
+    ):
         observation = _fill_cloudcover_from_provider(observation)
 
     return ObservationResponse(
