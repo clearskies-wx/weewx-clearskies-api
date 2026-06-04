@@ -72,7 +72,7 @@ Wunderground credentials: wired via wire_wunderground_credentials() (called from
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 import pydantic
@@ -81,6 +81,7 @@ from fastapi.exceptions import RequestValidationError
 
 from weewx_clearskies_api.models.params import ForecastQueryParams
 from weewx_clearskies_api.models.responses import (
+    DailyForecastPoint,
     ForecastBundle,
     ForecastResponse,
     utc_isoformat,
@@ -92,6 +93,54 @@ from weewx_clearskies_api.services.units import get_target_unit, get_units_block
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Sunrise/sunset injection — computed locally via Skyfield, not from providers
+# ---------------------------------------------------------------------------
+
+
+def _inject_sunrise_sunset(
+    daily: list[DailyForecastPoint],
+    lat: float,
+    lon: float,
+    alt_m: float,
+    station_tz: str,
+) -> None:
+    """Populate sunrise/sunset on each DailyForecastPoint using the almanac.
+
+    Sunrise/sunset are astronomical facts independent of the forecast provider.
+    The almanac service computes them from Skyfield for the station's location.
+    """
+    if not daily:
+        return
+
+    try:
+        from weewx_clearskies_api.services.almanac import (  # noqa: PLC0415
+            _compute_sun_for_date,
+            get_ts_eph,
+        )
+        from skyfield.api import wgs84  # noqa: PLC0415
+
+        ts, eph = get_ts_eph()
+        location = wgs84.latlon(lat, lon, elevation_m=alt_m)
+    except Exception:
+        logger.debug("Almanac unavailable for sunrise/sunset injection", exc_info=True)
+        return
+
+    for point in daily:
+        if point.sunrise is not None and point.sunset is not None:
+            continue
+        try:
+            d = date.fromisoformat(point.validDate)
+            sun_info = _compute_sun_for_date(ts, eph, d, location, station_tz=station_tz)
+            if point.sunrise is None:
+                point.sunrise = sun_info.rise
+            if point.sunset is None:
+                point.sunset = sun_info.set
+        except Exception:
+            logger.debug("Sunrise/sunset calc failed for %s", point.validDate, exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Module-level NWS UA contact wiring (populated at startup)
@@ -383,6 +432,15 @@ def get_forecast(
             status_code=502,
             detail=f"Unknown forecast provider: {provider_id!r}",
         )
+
+    # --- Inject locally-computed sunrise/sunset into daily points ---
+    _inject_sunrise_sunset(
+        bundle.daily,
+        lat=station.latitude,
+        lon=station.longitude,
+        alt_m=station.altitude,
+        station_tz=station.timezone,
+    )
 
     # --- Apply hours / days slice AFTER cache lookup (ADR-017, slice-after-cache) ---
     # Truncate from the head (first N points); Open-Meteo returns chronological order.

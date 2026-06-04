@@ -144,8 +144,6 @@ CAPABILITY = ProviderCapability(
         "precipProbabilityMax",
         "windSpeedMax",
         "windGustMax",
-        "sunrise",
-        "sunset",
         "uvIndexMax",
         "weatherCode",
         "weatherText",
@@ -165,7 +163,7 @@ CAPABILITY = ProviderCapability(
         # capability-vs-runtime-fidelity trade-off accepted by the user at brief Q2.
         "headline",
         "body",
-        # NB: narrative NOT supplied by Aeris v0.1 (brief lead-call 20)
+        "narrative",
     ),
     geographic_coverage="global",   # Trust Aeris's authoritative answer per lead-call 17
     auth_required=("client_id", "client_secret"),
@@ -735,7 +733,7 @@ def _daynight_periods_to_daily(
                 uvIndexMax=day_period.uvi,
                 weatherCode=day_period.weatherPrimaryCoded,
                 weatherText=day_period.weather,
-                narrative=None,   # Aeris paid-tier `text` field deferred to future round (call 20)
+                narrative=day_period.weatherPrimary,
                 dewpointMax=dewpoint_max,
                 dewpointMin=dewpoint_min,
                 humidityMax=day_period.maxHumidity,
