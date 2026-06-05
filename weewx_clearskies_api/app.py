@@ -59,6 +59,7 @@ from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
 from weewx_clearskies_api.endpoints.station import router as station_router
+from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
 from weewx_clearskies_api.endpoints.wind_rose import router as wind_rose_router
 from weewx_clearskies_api.errors import register_error_handlers
 from weewx_clearskies_api.metrics import current_endpoint
@@ -184,6 +185,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(seeing_router, prefix="/api/v1")
         # Wind rose: 16-direction × 7-Beaufort chart data.
         app.include_router(wind_rose_router, prefix="/api/v1")
+        # Custom SQL query: operator-defined series from charts.conf.
+        app.include_router(custom_query_router, prefix="/api/v1")
 
         # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
         app.include_router(setup_router)

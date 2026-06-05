@@ -60,6 +60,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from sqlalchemy.orm import Session as _SqlAlchemySession
 
 from weewx_clearskies_api.app import create_app
 from weewx_clearskies_api.config.settings import Settings, find_config_file, load_settings
@@ -70,7 +71,7 @@ from weewx_clearskies_api.db.health import wire_db_health_probe
 from weewx_clearskies_api.db.probe import run_write_probe
 from weewx_clearskies_api.db.reflection import SchemaReflector
 from weewx_clearskies_api.db.registry import wire_registry
-from weewx_clearskies_api.db.session import wire_engine
+from weewx_clearskies_api.db.session import get_engine, wire_engine
 from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
 from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
 from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire_social_settings
@@ -91,6 +92,7 @@ from weewx_clearskies_api.services.charts_config import (
     prune_charts_config,
     wire_charts_config,
 )
+from weewx_clearskies_api.services.custom_query import validate_custom_queries
 from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
 from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
@@ -546,6 +548,12 @@ def main() -> None:
         len(pruned_charts_config.groups),
         sum(len(g.charts) for g in pruned_charts_config.groups),
     )
+
+    # Validate custom SQL queries from charts config.  Uses a temporary session
+    # so EXPLAIN runs against the live schema; closed immediately after startup.
+    # Invalid queries are WARNING + skipped (non-fatal per spec).
+    with _SqlAlchemySession(get_engine()) as _startup_db:
+        validate_custom_queries(_startup_db)
 
     # Step 6b: Load weewx.conf (shared ConfigObj cache for units + station).
     # Fatal if missing — required by both units and station metadata loaders.
