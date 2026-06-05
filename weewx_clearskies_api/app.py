@@ -42,14 +42,14 @@ from fastapi.responses import JSONResponse
 
 from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.endpoints.alerts import router as alerts_router
-from weewx_clearskies_api.endpoints.seeing import router as seeing_router
-from weewx_clearskies_api.endpoints.branding import router as branding_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
-from weewx_clearskies_api.endpoints.climatology import router as climatology_router
 from weewx_clearskies_api.endpoints.aqi import router as aqi_router
+from weewx_clearskies_api.endpoints.branding import router as branding_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
+from weewx_clearskies_api.endpoints.climatology import router as climatology_router
 from weewx_clearskies_api.endpoints.content import router as content_router
+from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
 from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
@@ -57,10 +57,9 @@ from weewx_clearskies_api.endpoints.pages import router as pages_router
 from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
+from weewx_clearskies_api.endpoints.seeing import router as seeing_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
 from weewx_clearskies_api.endpoints.station import router as station_router
-from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
-from weewx_clearskies_api.endpoints.wind_rose import router as wind_rose_router
 from weewx_clearskies_api.errors import register_error_handlers
 from weewx_clearskies_api.metrics import current_endpoint
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
@@ -183,8 +182,6 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(climatology_router, prefix="/api/v1")
         # Seeing forecast: 7Timer 72-hour astronomical seeing forecast.
         app.include_router(seeing_router, prefix="/api/v1")
-        # Wind rose: 16-direction × 7-Beaufort chart data.
-        app.include_router(wind_rose_router, prefix="/api/v1")
         # Custom SQL query: operator-defined series from charts.conf.
         app.include_router(custom_query_router, prefix="/api/v1")
 
