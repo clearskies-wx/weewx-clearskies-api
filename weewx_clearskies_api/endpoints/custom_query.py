@@ -103,7 +103,7 @@ def _get_custom_query_params(request: Request) -> CustomQueryParams:
 
 
 # ---------------------------------------------------------------------------
-# Date parsing helpers (same logic as endpoints/wind_rose.py)
+# Date parsing helpers (ISO 8601 date string → epoch)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_WINDOW_HOURS = 24
