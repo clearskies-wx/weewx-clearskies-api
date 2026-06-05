@@ -820,6 +820,7 @@ class ChartGroupConfigResponse(BaseModel):
     forceFullYear: bool = False
     startAtBeginningOfMonth: bool = False
     pageContent: str | None = None
+    generate: str | None = None
     charts: list[ChartConfigResponse] = []
 
 

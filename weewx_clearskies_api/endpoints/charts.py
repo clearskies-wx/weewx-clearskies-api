@@ -115,6 +115,7 @@ def _group_to_response(g: ChartGroupConfig) -> ChartGroupConfigResponse:
         forceFullYear=g.force_full_year,
         startAtBeginningOfMonth=g.start_at_beginning_of_month,
         pageContent=g.page_content,
+        generate=g.generate,
         charts=[_chart_to_response(c) for c in g.charts],
     )
 

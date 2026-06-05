@@ -134,15 +134,10 @@ def _parse_global_defaults(cfg: configobj.ConfigObj) -> dict[str, Any]:
         tooltip_date_format.
     """
     raw_type = cfg.get("type", "line")
-    # Strip inline comments (ConfigObj keeps inline comments in the value
-    # when interpolation=False and the comment char is '#').
-    # e.g. "90000 # Last 25 hours" → "90000"
-    def _strip_comment(s: str) -> str:
-        return s.split("#")[0].strip() if isinstance(s, str) else s
 
     return {
         "aggregate_type": cfg.get("aggregate_type") or None,
-        "time_length": _to_int_or_str(_strip_comment(cfg.get("time_length", ""))),
+        "time_length": _to_int_or_str(_strip_comment(cfg.get("time_length", "")) or ""),
         "type": str(raw_type).strip() if raw_type else "line",
         "colors": _split_csv(cfg.get("colors")),
         "tooltip_date_format": cfg.get("tooltip_date_format") or None,
@@ -229,7 +224,9 @@ def _parse_series(series_id: str, section: configobj.Section) -> SeriesConfig:
         y_axis_min=_to_float_or_none(_sget("yAxis_min")),
         y_axis_max=_to_float_or_none(_sget("yAxis_max")),
         y_axis_label=_sget("yAxis_label"),
-        y_axis_tick_interval=_to_float_or_none(_sget("yAxis_tickinterval")),
+        y_axis_tick_interval=_to_float_or_none(
+            _sget("yAxis_tickInterval") or _sget("yAxis_tickinterval")
+        ),
         line_width=line_width,
         connect_nulls=connect_nulls,
         visible=visible,
@@ -382,7 +379,8 @@ def _parse_group(
         aggregate_type=ag_type,
         force_full_year=force_full_year,
         start_at_beginning_of_month=start_at_beginning_of_month,
-        page_content=_sget("page_content"),
+        page_content=section.get("page_content") or None,
+        generate=_sget("generate"),
         charts=charts,
     )
 
@@ -660,6 +658,7 @@ def prune_charts_config(
                 force_full_year=group.force_full_year,
                 start_at_beginning_of_month=group.start_at_beginning_of_month,
                 page_content=group.page_content,
+                generate=group.generate,
                 charts=pruned_charts,
             )
         )

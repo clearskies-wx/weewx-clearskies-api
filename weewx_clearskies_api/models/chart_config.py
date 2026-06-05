@@ -166,6 +166,8 @@ class ChartGroupConfig:
     force_full_year: bool = False
     start_at_beginning_of_month: bool = False
     page_content: str | None = None            # HTML/Markdown above chart group
+    # Belchertown report generation cadence ("daily" / None); no-op in Clear Skies Phase 1.
+    generate: str | None = None
 
     # Child charts (populated by parser)
     charts: list[ChartConfig] = field(default_factory=list)
