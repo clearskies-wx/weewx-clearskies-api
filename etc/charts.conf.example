@@ -231,7 +231,7 @@ tooltip_date_format = "LLL"
     enable_monthly_breakdown = true
 
     # Update this list at the start of each new year.
-    available_years = 2025, 2024, 2023, 2022
+    available_years = 2026, 2025, 2024, 2023, 2022
 
     type = spline
     time_length = month

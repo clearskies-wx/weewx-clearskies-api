@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
-from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.models.chart_config import (
     ChartConfig,
     ChartGroupConfig,
@@ -145,8 +144,7 @@ def get_chart_groups_endpoint() -> ChartGroupResponse:
     startup.  Series unavailable in the archive were already pruned at startup;
     groups with no surviving series do not appear in this response.
     """
-    registry = get_registry()
-    groups = get_chart_groups(registry)
+    groups = get_chart_groups()
 
     response_groups = [
         ChartGroup(

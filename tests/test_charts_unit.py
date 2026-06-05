@@ -159,7 +159,7 @@ class TestBuiltInChartGroupConstants:
         """Exactly 4 built-in groups: homepage, monthly, ANNUAL, averageclimate."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         group_ids = {g.group_id for g in groups}
         assert group_ids == {"homepage", "monthly", "ANNUAL", "averageclimate"}, (
             f"Expected 4 built-in group IDs, got {group_ids!r}"
@@ -169,7 +169,7 @@ class TestBuiltInChartGroupConstants:
         """homepage group default members match charts.conf.default."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         homepage = next(g for g in groups if g.group_id == "homepage")
         assert set(homepage.members) == _DEFAULT_HOMEPAGE_MEMBERS, (
             f"homepage default members mismatch. "
@@ -181,7 +181,7 @@ class TestBuiltInChartGroupConstants:
         """homepage default_range is '1d' (first rolling_ranges entry)."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         homepage = next(g for g in groups if g.group_id == "homepage")
         assert homepage.default_range == "1d", (
             f"homepage default_range must be '1d', got {homepage.default_range!r}"
@@ -191,7 +191,7 @@ class TestBuiltInChartGroupConstants:
         """monthly default_range is None (has its own month-dropdown selector)."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         monthly = next(g for g in groups if g.group_id == "monthly")
         assert monthly.default_range is None, (
             f"monthly default_range must be None, got {monthly.default_range!r}"
@@ -201,7 +201,7 @@ class TestBuiltInChartGroupConstants:
         """ANNUAL default_range is None (year dropdown)."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         annual = next(g for g in groups if g.group_id == "ANNUAL")
         assert annual.default_range is None
 
@@ -209,7 +209,7 @@ class TestBuiltInChartGroupConstants:
         """All 4 built-in groups have built_in=True."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         for group in groups:
             assert group.built_in is True, (
                 f"Group {group.group_id!r} built_in must be True"
@@ -219,7 +219,7 @@ class TestBuiltInChartGroupConstants:
         """monthly group default members: outTemp, rain, windSpeed, barometer."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         monthly = next(g for g in groups if g.group_id == "monthly")
         assert set(monthly.members) == _DEFAULT_MONTHLY_MEMBERS, (
             f"monthly members mismatch: {set(monthly.members)} vs {_DEFAULT_MONTHLY_MEMBERS}"
@@ -229,7 +229,7 @@ class TestBuiltInChartGroupConstants:
         """ANNUAL group default members: outTemp, rain."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
-        groups = get_chart_groups(self._full_registry())
+        groups = get_chart_groups()
         annual = next(g for g in groups if g.group_id == "ANNUAL")
         assert set(annual.members) == _DEFAULT_ANNUAL_MEMBERS
 
@@ -268,7 +268,7 @@ class TestChartGroupSelfPrune:
         ]
         registry = _make_registry_with_mapped(mapped)
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
         assert homepage is not None, "homepage group must be present when it has members"
@@ -291,7 +291,7 @@ class TestChartGroupSelfPrune:
         ]
         registry = _make_registry_with_mapped(mapped)
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
         assert homepage is not None
@@ -307,7 +307,7 @@ class TestChartGroupSelfPrune:
 
         registry = _make_registry_with_mapped([])  # No columns mapped
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
         assert groups == [], (
             f"All groups must self-hide when mapped set is empty, got {groups!r}"
         )
@@ -319,7 +319,7 @@ class TestChartGroupSelfPrune:
         # UV is in homepage but NOT in monthly/ANNUAL/averageclimate
         registry = _make_registry_with_mapped(["UV"])
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
 
         group_ids = {g.group_id for g in groups}
         assert "monthly" not in group_ids, (
@@ -339,7 +339,7 @@ class TestChartGroupSelfPrune:
         # Map only fields that are NOT in homepage's member list
         registry = _make_registry_with_mapped(["inTemp", "inHumidity"])
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
         assert homepage is None, (
@@ -356,7 +356,7 @@ class TestChartGroupSelfPrune:
         )
         registry = _make_registry_with_mapped(all_needed)
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
         group_ids = {g.group_id for g in groups}
         assert group_ids == {"homepage", "monthly", "ANNUAL", "averageclimate"}, (
             f"Expected all 4 groups, got {group_ids!r}"
@@ -369,7 +369,7 @@ class TestChartGroupSelfPrune:
         mapped = ["outTemp", "rain", "barometer"]
         registry = _make_registry_with_mapped(mapped)
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
 
         for group in groups:
             for member in group.members:
@@ -384,7 +384,7 @@ class TestChartGroupSelfPrune:
 
         registry = _make_registry_with_mapped(["outTemp", "rain"])
         self._wire_pruned_config(registry)
-        groups = get_chart_groups(registry)
+        groups = get_chart_groups()
         for group in groups:
             assert isinstance(group, ChartGroupEntry), (
                 f"Expected ChartGroupEntry, got {type(group).__name__}"

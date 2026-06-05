@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from weewx_clearskies_api.db.reflection import ColumnRegistry
-
 
 @dataclass
 class ChartGroupEntry:
@@ -29,7 +27,7 @@ class ChartGroupEntry:
 # ---------------------------------------------------------------------------
 
 
-def get_chart_groups(registry: ColumnRegistry) -> list[ChartGroupEntry]:
+def get_chart_groups() -> list[ChartGroupEntry]:
     """Return chart groups derived from the operator-configured charts.conf.
 
     Groups are built from the pruned ChartsConfig that was loaded and wired at
@@ -39,11 +37,6 @@ def get_chart_groups(registry: ColumnRegistry) -> list[ChartGroupEntry]:
     If the charts config was not wired before this call (startup
     misconfiguration), get_charts_config() raises RuntimeError and the
     exception propagates — it is not caught here.
-
-    Args:
-        registry: The ColumnRegistry from startup schema reflection.
-            Accepted for API compatibility; not used directly because
-            pruning already ran at startup.
 
     Returns:
         List of ChartGroupEntry objects, one per surviving group.
