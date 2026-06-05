@@ -192,25 +192,43 @@ def _query_avg_rainfall(
     """Return {month_number: avg_monthly_total_rain} for months 1-12.
 
     Two-level aggregation:
-      Inner: GROUP BY year_month_bucket → SUM(rain) as monthly_total
+      Inner: GROUP BY year+month → SUM(rain) as monthly_total
       Outer: GROUP BY month_number → AVG(monthly_total)
-    """
-    ym_bucket = _year_month_sql(dialect_name)
-    month_from_ym = _month_num_from_ym_bucket(dialect_name)
 
-    sql = text(
-        f"SELECT {month_from_ym} AS mnum, "
-        f"       AVG(monthly_total) AS avg_rain "
-        f"FROM ("
-        f"  SELECT {ym_bucket} AS ym_bucket, "
-        f"         SUM({db_col}) AS monthly_total "
-        f"  FROM archive "
-        f"  WHERE {db_col} IS NOT NULL "
-        f"  GROUP BY ym_bucket"
-        f") sub "
-        f"GROUP BY mnum "
-        f"ORDER BY mnum ASC"
-    )
+    MySQL/MariaDB uses YEAR()/MONTH() directly to avoid DATE_FORMAT percent-
+    escaping issues with SQLAlchemy text() and pymysql's pyformat paramstyle.
+    """
+    if dialect_name == "sqlite":
+        ym_bucket = _year_month_sql(dialect_name)
+        month_from_ym = _month_num_from_ym_bucket(dialect_name)
+        sql = text(
+            f"SELECT {month_from_ym} AS mnum, "
+            f"       AVG(monthly_total) AS avg_rain "
+            f"FROM ("
+            f"  SELECT {ym_bucket} AS ym_bucket, "
+            f"         SUM({db_col}) AS monthly_total "
+            f"  FROM archive "
+            f"  WHERE {db_col} IS NOT NULL "
+            f"  GROUP BY ym_bucket"
+            f") sub "
+            f"GROUP BY mnum "
+            f"ORDER BY mnum ASC"
+        )
+    else:
+        sql = text(
+            f"SELECT mo AS mnum, "
+            f"       AVG(monthly_total) AS avg_rain "
+            f"FROM ("
+            f"  SELECT YEAR(FROM_UNIXTIME(dateTime)) AS yr, "
+            f"         MONTH(FROM_UNIXTIME(dateTime)) AS mo, "
+            f"         SUM({db_col}) AS monthly_total "
+            f"  FROM archive "
+            f"  WHERE {db_col} IS NOT NULL "
+            f"  GROUP BY yr, mo"
+            f") sub "
+            f"GROUP BY mnum "
+            f"ORDER BY mnum ASC"
+        )
     rows = db.execute(sql).fetchall()
     result: dict[int, float | None] = {}
     for row in rows:
