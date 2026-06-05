@@ -20,6 +20,7 @@ from typing import Any
 
 import configobj  # type: ignore[import-untyped]
 
+from weewx_clearskies_api.db.reflection import ColumnRegistry
 from weewx_clearskies_api.models.chart_config import (
     ChartConfig,
     ChartGroupConfig,
@@ -487,3 +488,187 @@ def load_charts_config(config_path: Path | None = None) -> ChartsConfig:
 
     logger.debug("Charts configuration loaded from %s", path)
     return _parse_configobj(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Self-hide pruning
+# ---------------------------------------------------------------------------
+
+# Belchertown virtual series that don't map 1-to-1 to a DB column.
+# Key: series_id used in graphs.conf; Value: the underlying DB column to
+# check availability for.  "rainTotal" is the cumulative-rain series — it
+# is derived at render time from the "rain" column, so it should only be
+# pruned when "rain" itself is not available.
+_VIRTUAL_SERIES_MAP: dict[str, str] = {
+    "rainTotal": "rain",
+}
+
+
+def prune_charts_config(
+    config: ChartsConfig, registry: ColumnRegistry
+) -> ChartsConfig:
+    """Return a new ChartsConfig with unavailable series/charts/groups removed.
+
+    A series is kept when ANY of these conditions holds:
+
+    * ``use_custom_sql`` is True — the series fetches its own data; it does
+      not depend on a weewx archive column at all.
+    * The effective observation type (``series.observation_type`` if set,
+      otherwise ``series.series_id``) is in the set of canonical names
+      reported by the registry.
+    * The series_id is ``"windRose"`` AND both ``"windSpeed"`` and
+      ``"windDir"`` are in the registry — windRose consumes both columns.
+    * ``range_type`` is not None AND ``range_type`` is in the registry — this
+      covers weather-range / radial chart series.
+    * The series_id is listed in ``_VIRTUAL_SERIES_MAP`` and its mapped
+      underlying column is in the registry (e.g. "rainTotal" → "rain").
+
+    Charts with no surviving series are dropped.  Groups with no surviving
+    charts are dropped.  The input ``config`` is never mutated.
+
+    Args:
+        config: The full operator-loaded ChartsConfig.
+        registry: The ColumnRegistry built from schema reflection at startup.
+
+    Returns:
+        A new ChartsConfig containing only the series/charts/groups that have
+        at least one available data source.
+    """
+    # Build the set of available canonical names (same pattern as charts.py).
+    available: set[str] = {
+        info.canonical_name
+        for info in registry.stock.values()
+        if info.canonical_name is not None
+    }
+
+    pruned_groups: list[ChartGroupConfig] = []
+
+    for group in config.groups:
+        pruned_charts: list[ChartConfig] = []
+
+        for chart in group.charts:
+            surviving_series: list[SeriesConfig] = []
+
+            for series in chart.series:
+                # 1. Custom SQL series are never pruned.
+                if series.use_custom_sql:
+                    surviving_series.append(series)
+                    continue
+
+                # 2. Effective observation type — explicit override wins.
+                effective = series.observation_type or series.series_id
+
+                # 3. Wind rose: check both underlying columns explicitly.
+                if series.series_id == "windRose":
+                    if "windSpeed" in available and "windDir" in available:
+                        surviving_series.append(series)
+                    else:
+                        logger.debug(
+                            "Pruned series %s from chart %s"
+                            " (windRose requires windSpeed + windDir,"
+                            " one or both missing)",
+                            series.series_id,
+                            chart.chart_id,
+                        )
+                    continue
+
+                # 4. Weather range / radial series — check range_type column.
+                if series.range_type is not None:
+                    if series.range_type in available:
+                        surviving_series.append(series)
+                    else:
+                        logger.debug(
+                            "Pruned series %s from chart %s"
+                            " (range_type %r not available)",
+                            series.series_id,
+                            chart.chart_id,
+                            series.range_type,
+                        )
+                    continue
+
+                # 5. Direct availability check.
+                if effective in available:
+                    surviving_series.append(series)
+                    continue
+
+                # 6. Virtual series alias (e.g. "rainTotal" → "rain").
+                underlying = _VIRTUAL_SERIES_MAP.get(series.series_id)
+                if underlying is not None and underlying in available:
+                    surviving_series.append(series)
+                    continue
+
+                # Not available — prune.
+                logger.debug(
+                    "Pruned series %s from chart %s"
+                    " (observation type %r not available)",
+                    series.series_id,
+                    chart.chart_id,
+                    effective,
+                )
+
+            if not surviving_series:
+                logger.debug(
+                    "Pruned chart %s from group %s (no available series)",
+                    chart.chart_id,
+                    group.group_id,
+                )
+                continue
+
+            # Build a new ChartConfig with only the surviving series.
+            pruned_charts.append(
+                ChartConfig(
+                    chart_id=chart.chart_id,
+                    title=chart.title,
+                    type=chart.type,
+                    connect_nulls=chart.connect_nulls,
+                    y_axis_min=chart.y_axis_min,
+                    aggregate_type=chart.aggregate_type,
+                    aggregate_interval=chart.aggregate_interval,
+                    x_axis_groupby=chart.x_axis_groupby,
+                    x_axis_categories=list(chart.x_axis_categories),
+                    force_full_year=chart.force_full_year,
+                    series=surviving_series,
+                )
+            )
+
+        if not pruned_charts:
+            logger.debug(
+                "Pruned group %s (no available charts)",
+                group.group_id,
+            )
+            continue
+
+        # Build a new ChartGroupConfig with only the surviving charts.
+        pruned_groups.append(
+            ChartGroupConfig(
+                group_id=group.group_id,
+                title=group.title,
+                show_button=group.show_button,
+                button_text=group.button_text,
+                type=group.type,
+                enable_date_ranges=group.enable_date_ranges,
+                rolling_ranges=list(group.rolling_ranges),
+                available_years=list(group.available_years),
+                enable_monthly_breakdown=group.enable_monthly_breakdown,
+                time_length=group.time_length,
+                timespan_start=group.timespan_start,
+                timespan_stop=group.timespan_stop,
+                tooltip_date_format=group.tooltip_date_format,
+                gapsize=group.gapsize,
+                aggregate_interval=group.aggregate_interval,
+                aggregate_type=group.aggregate_type,
+                force_full_year=group.force_full_year,
+                start_at_beginning_of_month=group.start_at_beginning_of_month,
+                page_content=group.page_content,
+                charts=pruned_charts,
+            )
+        )
+
+    return ChartsConfig(
+        aggregate_type=config.aggregate_type,
+        time_length=config.time_length,
+        type=config.type,
+        colors=list(config.colors),
+        tooltip_date_format=config.tooltip_date_format,
+        groups=pruned_groups,
+    )
