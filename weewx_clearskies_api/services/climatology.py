@@ -106,8 +106,8 @@ def _month_num_from_ym_bucket(dialect_name: str) -> str:
     if dialect_name == "sqlite":
         # ym_bucket is 'YYYY-MM'; CAST(substr(...,6,2) AS INTEGER) → month number.
         return "CAST(SUBSTR(ym_bucket, 6, 2) AS INTEGER)"
-    # MariaDB/MySQL: ym_bucket is a 'YYYY-MM' string via DATE_FORMAT.
-    return "CAST(SUBSTR(ym_bucket, 6, 2) AS INTEGER)"
+    # MariaDB/MySQL: CAST(... AS INTEGER) is not valid; use CAST(... AS SIGNED).
+    return "CAST(SUBSTR(ym_bucket, 6, 2) AS SIGNED)"
 
 
 # ---------------------------------------------------------------------------
