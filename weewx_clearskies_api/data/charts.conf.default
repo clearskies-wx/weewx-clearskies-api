@@ -1,0 +1,231 @@
+# charts.conf.default — Built-in default chart configuration for Clear Skies API
+#
+# This file is bundled with the weewx-clearskies-api package and is used when
+# no operator-defined charts.conf exists on the system.  Operators can override
+# every setting here by placing a charts.conf in one of these locations:
+#
+#   /etc/weewx-clearskies/charts.conf       (system-wide)
+#   ~/.config/weewx-clearskies/charts.conf  (per-user)
+#
+# Or by setting the CLEARSKIES_CHARTS_CONFIG environment variable to a full
+# path to a charts.conf file.
+#
+# Format: ConfigObj / INI with 3-level nesting:
+#   [group]          — one tab/page of charts
+#   [[chart]]        — one chart panel within the group
+#   [[[series]]]     — one data series within the chart
+#
+# See the Belchertown graphs.conf documentation for all available keys.
+###############################################################################
+
+# Global defaults — apply when a group/chart/series does not set its own value.
+aggregate_type = None
+time_length = 90000
+type = line
+colors = "#7cb5ec, #b2df8a, #f7a35c, #8c6bb1, #dd3497, #e4d354, #268bd2, #f45b5b, #6a3d9a, #33a02c"
+tooltip_date_format = "LLL"
+
+###############################################################################
+# homepage — Last 24 hours (rolling window)
+###############################################################################
+[homepage]
+    title = "Last 24 Hours"
+    show_button = true
+    button_text = "Last 24 Hours"
+    enable_date_ranges = true
+    rolling_ranges = 1d, 3d, 7d, 30d, 90d
+    time_length = 86400
+    tooltip_date_format = "LLL"
+    gapsize = 300
+
+    [[chart1]]
+        title = Temperature
+        connectNulls = true
+        [[[outTemp]]]
+            zIndex = 1
+            name = Temperature
+        [[[dewpoint]]]
+            color = purple
+
+    [[chart2]]
+        title = Wind Speed and Direction
+        yAxis_min = 0
+        [[[windDir]]]
+            zIndex = 1
+            yAxis = 1
+            yAxis_max = 360
+            lineWidth = 0
+        [[[windGust]]]
+            connectNulls = true
+        [[[windSpeed]]]
+            connectNulls = true
+            zIndex = 2
+
+    [[chart3]]
+        title = Rain
+        connectNulls = true
+        type = line
+        [[[rainRate]]]
+            yAxis = 1
+            visible = true
+            color = "#28a745"
+            opacity = 1
+            aggregate_type = max
+        [[[rain]]]
+            name = Rain Total
+            visible = true
+            color = "#007bff"
+            opacity = 1
+            aggregate_type = sum
+
+    [[chart4]]
+        title = Barometer
+        type = spline
+        connectNulls = true
+        [[[barometer]]]
+            color = "#BECC00"
+
+    [[solarRadGraph]]
+        title = Solar Radiation and UV Index
+        connectNulls = true
+        [[[radiation]]]
+            name = Solar Radiation
+            zIndex = 1
+            color = "#ffc83f"
+        [[[UV]]]
+            yAxis = 1
+            yAxis_min = 0
+            yAxis_max = 14
+            color = "#90ed7d"
+            yAxis_label = "UV"
+            name = UV Index
+            zIndex = 2
+
+    [[homeLightningInfo]]
+        title = Lightning
+        [[[lightning_strike_count]]]
+            yAxis = 0
+            yAxis_min = 1
+            yAxis_label = "Number of Strikes"
+            stacking = normal
+            color = "orange"
+            lineWidth = 0
+            aggregate_type = sum
+
+###############################################################################
+# monthly — Monthly observations (calendar month)
+###############################################################################
+[monthly]
+    title = "Monthly Observations"
+    button_text = "Monthly"
+    show_button = true
+    enable_date_ranges = true
+    available_years = 2025, 2024, 2023, 2022
+    enable_monthly_breakdown = true
+    type = spline
+    time_length = month
+    tooltip_date_format = "dddd LL"
+    aggregate_type = max
+    aggregate_interval = 86400
+    gapsize = 86400
+
+    [[chart1]]
+        title = Temperature
+        [[[outTemp]]]
+            zIndex = 1
+            name = Max Temperature
+            color = red
+
+    [[chart2]]
+        title = Wind Speed
+        [[[windSpeed]]]
+            zIndex = 1
+            name = Wind Speed
+
+    [[chart3]]
+        title = Rain
+        aggregate_type = sum
+        type = line
+        [[[rain]]]
+            name = Rain Total
+
+    [[chart4]]
+        title = Barometer
+        aggregate_type = avg
+        [[[barometer]]]
+            color = "#BECC00"
+
+###############################################################################
+# ANNUAL — Full-year observations
+###############################################################################
+[ANNUAL]
+    force_full_year = true
+    title = "Annual Observations"
+    show_button = true
+    button_text = "Yearly"
+    enable_date_ranges = true
+    type = spline
+    time_length = year
+    available_years = 2025, 2024, 2023, 2022
+    tooltip_date_format = "dddd LL"
+    aggregate_type = max
+    gapsize = 86400
+    start_at_beginning_of_month = true
+
+    [[chart1]]
+        title = Temperature
+        force_full_year = true
+        aggregate_interval = 86400
+        [[[outTemp]]]
+            zIndex = 1
+            name = Max Temperature
+            color = red
+
+    [[chart2]]
+        title = Rain
+        aggregate_interval = 86400
+        aggregate_type = sum
+        force_full_year = true
+        type = line
+        [[[rain]]]
+            name = Rain Total
+
+###############################################################################
+# averageclimate — Climatological averages by month
+###############################################################################
+[averageclimate]
+    title = "Average Climate by Month"
+    show_button = true
+    button_text = "Average Climate"
+    type = spline
+    time_length = all
+    tooltip_date_format = "dddd LL"
+    aggregate_interval = 86400
+    gapsize = 86400
+    start_at_beginning_of_month = true
+
+    [[avgclimatetotal]]
+        title = "Average Climatological Values by Month"
+        type = spline
+        aggregate_interval = 86400
+        xAxis_groupby = month
+        xAxis_categories = 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+        [[[outTemp]]]
+            aggregate_type = avg
+            average_type = max
+            zIndex = 2
+            name = Average High Temperature
+            color = red
+        [[[outTemp_min]]]
+            name = Average Low Temperature
+            observation_type = outTemp
+            aggregate_type = avg
+            average_type = min
+            zIndex = 2
+        [[[rain]]]
+            aggregate_type = sum
+            name = Rain Total
+            type = column
+            yAxis = 1
+            zIndex = 0
+            color = "#268bd2"
