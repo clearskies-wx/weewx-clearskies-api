@@ -115,6 +115,7 @@ class BackgroundCacheWarmer:
         self._warm_climatology()
         self._warm_planets()
         self._warm_eclipses()
+        self._warm_solar_eclipses()
         self._warm_meteor_showers()
         self._warm_faults()
         self._warm_seeing_forecast()
@@ -168,6 +169,7 @@ class BackgroundCacheWarmer:
 
             if last_eclipses == _NEVER or (now - last_eclipses) >= self._settings.eclipses_interval_seconds:
                 self._warm_eclipses()
+                self._warm_solar_eclipses()
                 last_eclipses = time.monotonic()
 
             if last_meteor_showers == _NEVER or (now - last_meteor_showers) >= self._settings.meteor_showers_interval_seconds:
@@ -366,6 +368,39 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: eclipses refreshed (from %s)", today.isoformat())
         except Exception:
             logger.warning("Cache warmer: eclipses warm failed", exc_info=True)
+
+    def _warm_solar_eclipses(self) -> None:
+        """Warm GET /almanac/eclipses/solar from AstronomyAPI.com."""
+        try:
+            from datetime import date, timedelta
+
+            from weewx_clearskies_api.config.settings import get_settings
+            from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
+
+            almanac_settings = get_settings().almanac
+            app_id = almanac_settings.astronomyapi_app_id
+            app_secret = almanac_settings.astronomyapi_app_secret
+            if not app_id or not app_secret:
+                return  # No credentials configured — skip
+
+            cache = get_cache()
+            today = date.today()
+            to_date = today + timedelta(days=365)
+            lat = self._station["lat"]
+            lon = self._station["lon"]
+            alt_m = self._station["alt_m"]
+
+            with AstronomyApiClient(app_id, app_secret) as client:
+                solar_data = client.get_solar_eclipses(lat, lon, alt_m, today, to_date)
+
+            cache.set(
+                f"warmer:almanac:solar-eclipses:{today.isoformat()}",
+                solar_data,
+                self._settings.eclipses_interval_seconds,
+            )
+            logger.info("Cache warmer: solar eclipses refreshed (%d events)", len(solar_data))
+        except Exception:
+            logger.warning("Cache warmer: solar eclipses warm failed", exc_info=True)
 
     def _warm_meteor_showers(self) -> None:
         """Warm GET /almanac/meteor-showers for the rolling 1-year window from today."""
