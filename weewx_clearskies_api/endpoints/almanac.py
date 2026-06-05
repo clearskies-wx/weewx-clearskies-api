@@ -574,6 +574,15 @@ def get_eclipses(
                 api_eclipses = client.get_lunar_eclipses(lat, lon, alt, from_date, to_date)
             for ae in api_eclipses:
                 contact_map[ae["date"]] = ae
+                # AstronomyAPI peak date is local TZ; Skyfield is UTC.
+                # Index ±1 day to handle timezone-induced date offset.
+                from datetime import timedelta as _td
+                try:
+                    d = date.fromisoformat(ae["date"])
+                    contact_map[(d - _td(days=1)).isoformat()] = ae
+                    contact_map[(d + _td(days=1)).isoformat()] = ae
+                except (ValueError, KeyError):
+                    pass
     except Exception:
         logger.warning("AstronomyAPI.com lunar eclipse enrichment failed", exc_info=True)
 
