@@ -1284,6 +1284,7 @@ def compute_meteor_showers(
     station_tz: str = "UTC",
     from_date: date | None = None,
     to_date: date | None = None,
+    catalog: list | None = None,
 ) -> list[dict]:
     """Compute moon data for all major meteor showers in a rolling date window.
 
@@ -1297,6 +1298,10 @@ def compute_meteor_showers(
         station_tz: IANA timezone identifier.
         from_date: Start of the window (inclusive). Defaults to today.
         to_date: End of the window (inclusive). Defaults to today + 365 days.
+        catalog: Optional pre-loaded list of MeteorShowerData instances.
+            When None, load_catalog() is called to load from the JSON file
+            (or fall back to the embedded list). Pass a pre-loaded catalog
+            from the cache warmer to avoid re-reading disk on every request.
 
     Returns:
         List of shower dicts, filtered to peak dates on or after from_date,
@@ -1306,7 +1311,10 @@ def compute_meteor_showers(
 
     from skyfield.api import Star
 
-    from weewx_clearskies_api.data.meteor_showers import METEOR_SHOWERS
+    from weewx_clearskies_api.data.meteor_showers import load_catalog
+
+    if catalog is None:
+        catalog = load_catalog()
 
     ts, eph = get_ts_eph()
     location = wgs84.latlon(lat, lon, elevation_m=alt_m)  # type: ignore[call-arg]
@@ -1322,7 +1330,7 @@ def compute_meteor_showers(
     years_to_search = range(start.year, end.year + 1)
 
     for year in years_to_search:
-        for shower in METEOR_SHOWERS:
+        for shower in catalog:
             # --- Peak date for this year ---
             try:
                 peak_date = date(year, shower.peak_month, shower.peak_day)

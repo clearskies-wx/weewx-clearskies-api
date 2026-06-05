@@ -305,6 +305,9 @@ class AlmanacSettings:
 
     #: Directory where de421.bsp is cached (or pre-placed for offline installs).
     ephemeris_directory: str
+    #: Path to a JSON meteor shower catalog.  Default ships with the package.
+    #: Override to use a custom catalog (e.g. /etc/weewx-clearskies/meteor_showers.json).
+    meteor_showers_catalog: str
     #: AstronomyAPI.com app_id from env var WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID.
     #: Optional: eclipse contact times work when configured, almanac works without.
     astronomyapi_app_id: str | None
@@ -316,6 +319,12 @@ class AlmanacSettings:
             section.get(
                 "ephemeris_directory",
                 "/var/cache/weewx-clearskies/skyfield/",
+            )
+        )
+        self.meteor_showers_catalog = str(
+            section.get(
+                "meteor_showers_catalog",
+                "/etc/weewx-clearskies/meteor_showers.json",
             )
         )
 
