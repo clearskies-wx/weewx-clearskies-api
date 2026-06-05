@@ -491,6 +491,12 @@ class MeteorShowerEntry(BaseModel):
     moonIlluminationPercent: float
     moonPhase: str
     parentBody: str
+    activeStart: str | None = None    # ISO date: peakDate - duration_days/2
+    activeEnd: str | None = None      # ISO date: peakDate + duration_days/2
+    description: str | None = None    # from JSON catalog
+    viewingQuality: str | None = None  # "Excellent"|"Good"|"Fair"|"Poor"|"Not Visible"
+    velocityKms: float | None = None  # from JSON catalog
+    image: str | None = None          # filename from JSON catalog
 
 
 class MeteorShowerList(BaseModel):

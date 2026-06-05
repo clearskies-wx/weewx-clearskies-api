@@ -1370,6 +1370,22 @@ def compute_meteor_showers(
             moon_illum_pct = round(max(0.0, min(100.0, illum)), 1)
             moon_phase = _phase_name_from_angle(phase_angle)
 
+            # --- Active window ---
+            active_start = (peak_date - timedelta(days=shower.duration_days // 2)).isoformat()
+            active_end = (peak_date + timedelta(days=shower.duration_days // 2)).isoformat()
+
+            # --- Viewing quality (ADR-053) ---
+            if radiant_alt < 0:
+                viewing_quality = "Not Visible"
+            elif radiant_alt > 40 and moon_illum_pct < 25:
+                viewing_quality = "Excellent"
+            elif radiant_alt > 20 and moon_illum_pct < 50:
+                viewing_quality = "Good"
+            elif radiant_alt <= 10 or (moon_illum_pct > 75 and radiant_alt <= 30):
+                viewing_quality = "Poor"
+            else:
+                viewing_quality = "Fair"
+
             results.append({
                 "name": shower.name,
                 "peakDate": peak_date.isoformat(),
@@ -1378,6 +1394,12 @@ def compute_meteor_showers(
                 "moonIlluminationPercent": moon_illum_pct,
                 "moonPhase": moon_phase,
                 "parentBody": shower.parent_body,
+                "activeStart": active_start,
+                "activeEnd": active_end,
+                "description": shower.description if shower.description else None,
+                "velocityKms": shower.velocity_kms if shower.velocity_kms > 0 else None,
+                "image": shower.image if shower.image else None,
+                "viewingQuality": viewing_quality,
             })
 
     # Sort by peak date (soonest first).
