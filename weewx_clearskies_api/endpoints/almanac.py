@@ -697,13 +697,15 @@ def get_solar_eclipses(
                 peak = (raw_ct or {}).get("peak") if isinstance(raw_ct, dict) else None
                 peak_alt = peak["altitude"] if isinstance(peak, dict) else None
 
-                if peak_alt is None or peak_alt <= 0 or obs == 0:
+                # obs is 0-1 fractional from AstronomyAPI, convert to %
+                obs_pct = obs * 100
+                if peak_alt is None or peak_alt <= 0 or obs_pct == 0:
                     visibility = "Not Visible"
                 elif total_start is not None:
                     visibility = "Fully Visible"
-                elif obs >= 75:
+                elif obs_pct >= 75:
                     visibility = "Mostly Visible"
-                elif obs >= 10:
+                elif obs_pct >= 10:
                     visibility = "Partially Visible"
                 else:
                     visibility = "Barely Visible"
