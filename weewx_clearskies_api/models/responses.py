@@ -459,11 +459,22 @@ class PlanetResponse(BaseModel):
     generatedAt: str
 
 
+class EclipseContactPoint(BaseModel):
+    """One contact time with local altitude."""
+
+    date: str       # ISO-8601 UTC
+    altitude: float  # degrees above horizon
+
+
 class LunarEclipseEntry(BaseModel):
-    """One lunar eclipse."""
+    """One lunar eclipse with optional AstronomyAPI.com enrichment."""
 
     date: str
     type: str  # "penumbral" | "partial" | "total"
+    contactTimes: dict[str, EclipseContactPoint | None] | None = None
+    obscuration: float | None = None
+    # "Visible All Night"|"Mostly Visible"|"Low in Sky"|"Barely Visible"|"Not Visible"
+    visibility: str | None = None
 
 
 class LunarEclipseList(BaseModel):
@@ -478,6 +489,32 @@ class EclipseResponse(BaseModel):
     """EclipseResponse envelope (GET /almanac/eclipses)."""
 
     data: LunarEclipseList
+    generatedAt: str
+
+
+class SolarEclipseEntry(BaseModel):
+    """One solar eclipse with optional AstronomyAPI.com enrichment."""
+
+    date: str
+    type: str  # "total" | "annular" | "partial"
+    contactTimes: dict[str, EclipseContactPoint | None] | None = None
+    obscuration: float | None = None
+    # "Fully Visible"|"Mostly Visible"|"Partially Visible"|"Barely Visible"|"Not Visible"
+    visibility: str | None = None
+
+
+class SolarEclipseList(BaseModel):
+    """List of solar eclipses."""
+
+    from_date: str
+    to_date: str
+    eclipses: list[SolarEclipseEntry]
+
+
+class SolarEclipseResponse(BaseModel):
+    """Envelope for GET /almanac/eclipses/solar."""
+
+    data: SolarEclipseList
     generatedAt: str
 
 

@@ -30,6 +30,7 @@ from weewx_clearskies_api.models.params import (
 from weewx_clearskies_api.models.responses import (
     AlmanacResponse,
     AlmanacSnapshot,
+    EclipseContactPoint,
     EclipseResponse,
     LunarEclipseEntry,
     LunarEclipseList,
@@ -48,6 +49,9 @@ from weewx_clearskies_api.models.responses import (
     PlanetVisibility,
     PositionsResponse,
     PositionsSnapshot,
+    SolarEclipseEntry,
+    SolarEclipseList,
+    SolarEclipseResponse,
     SpecialMoonEntry,
     SunPosition,
     SunSnapshot,
@@ -495,6 +499,12 @@ def get_planets(
 
 
 @router.get("/almanac/eclipses", summary="Lunar eclipses", tags=["Almanac"])
+@router.get(
+    "/almanac/eclipses/lunar",
+    summary="Lunar eclipses",
+    tags=["Almanac"],
+    include_in_schema=False,
+)
 def get_eclipses(
     params: Annotated[EclipsesQueryParams, Depends(_get_eclipses_params)],
 ) -> EclipseResponse:
@@ -504,6 +514,11 @@ def get_eclipses(
     Optional ?from=YYYY-MM-DD and ?to=YYYY-MM-DD override the window.
     Uses skyfield.eclipselib; returns an empty list if unavailable.
     Types: penumbral, partial, total.
+
+    Enriched with AstronomyAPI.com contact times and local visibility
+    when WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID and
+    WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET are configured.
+    /almanac/eclipses/lunar is an alias (backward-compat preserved).
     """
     from datetime import timedelta
 
@@ -521,7 +536,13 @@ def get_eclipses(
             if cached is not None:
                 logger.debug("eclipses cache hit: from=%s", today.isoformat())
                 eclipses = [
-                    LunarEclipseEntry(date=e["date"], type=e["type"])
+                    LunarEclipseEntry(
+                        date=e["date"],
+                        type=e["type"],
+                        contactTimes=None,
+                        obscuration=None,
+                        visibility=None,
+                    )
                     for e in cached
                 ]
                 return EclipseResponse(
@@ -536,16 +557,160 @@ def get_eclipses(
             logger.debug("eclipses cache miss or error: from=%s", today.isoformat(), exc_info=True)
 
     eclipses_raw = almanac_svc.compute_lunar_eclipses(from_date=from_date, to_date=to_date)
-    eclipses = [
-        LunarEclipseEntry(date=e["date"], type=e["type"])
-        for e in eclipses_raw
-    ]
+
+    # Try AstronomyAPI.com enrichment — contact times + local visibility.
+    contact_map: dict[str, dict] = {}
+    try:
+        from weewx_clearskies_api.config.settings import get_settings
+        almanac_settings = get_settings().almanac
+        if almanac_settings.astronomyapi_app_id and almanac_settings.astronomyapi_app_secret:
+            from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
+            lat, lon, alt = _station_location()
+            with AstronomyApiClient(
+                almanac_settings.astronomyapi_app_id,
+                almanac_settings.astronomyapi_app_secret,
+            ) as client:
+                api_eclipses = client.get_lunar_eclipses(lat, lon, alt, from_date, to_date)
+            for ae in api_eclipses:
+                contact_map[ae["date"]] = ae
+    except Exception:
+        logger.warning("AstronomyAPI.com lunar eclipse enrichment failed", exc_info=True)
+
+    eclipses: list[LunarEclipseEntry] = []
+    for e in eclipses_raw:
+        api_data = contact_map.get(e["date"])
+        contact_times_raw = None
+        obscuration = None
+        visibility = None
+        if api_data:
+            raw_ct = api_data.get("contactTimes")
+            if isinstance(raw_ct, dict):
+                contact_times_raw = {
+                    k: EclipseContactPoint(date=v["date"], altitude=v["altitude"])
+                    if isinstance(v, dict) and "date" in v and "altitude" in v
+                    else None
+                    for k, v in raw_ct.items()
+                }
+            obscuration = api_data.get("obscuration")
+            # Compute visibility per ADR-053.
+            peak = (api_data.get("contactTimes") or {}).get("peak")
+            peak_alt = peak["altitude"] if isinstance(peak, dict) else None
+            if peak_alt is None or peak_alt <= 0:
+                visibility = "Not Visible"
+            elif peak_alt <= 5:
+                visibility = "Barely Visible"
+            elif peak_alt <= 15:
+                visibility = "Low in Sky"
+            else:
+                all_above = all(
+                    (ct or {}).get("altitude", -1) > 0
+                    for ct in (api_data.get("contactTimes") or {}).values()
+                    if ct is not None
+                )
+                visibility = "Visible All Night" if all_above else "Mostly Visible"
+        eclipses.append(LunarEclipseEntry(
+            date=e["date"],
+            type=e["type"],
+            contactTimes=contact_times_raw,
+            obscuration=obscuration,
+            visibility=visibility,
+        ))
 
     return EclipseResponse(
         data=LunarEclipseList(
             from_date=from_date.isoformat(),
             to_date=to_date.isoformat(),
             eclipses=eclipses,
+        ),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+    )
+
+
+@router.get("/almanac/eclipses/solar", summary="Solar eclipses", tags=["Almanac"])
+def get_solar_eclipses(
+    params: Annotated[EclipsesQueryParams, Depends(_get_eclipses_params)],
+) -> SolarEclipseResponse:
+    """Solar eclipse dates, types, contact times, and local visibility.
+
+    Default: today through today + 365 days.
+    Optional ?from=YYYY-MM-DD and ?to=YYYY-MM-DD override the window.
+    Powered exclusively by AstronomyAPI.com (Skyfield cannot compute solar
+    eclipses).  Returns an empty list when credentials are not configured.
+    Types: total, annular, partial.
+    """
+    from datetime import timedelta
+
+    today = _today_in_station_tz()
+    from_date = params.from_ if params.from_ is not None else today
+    to_date = params.to if params.to is not None else (today + timedelta(days=365))
+
+    solar_eclipses: list[SolarEclipseEntry] = []
+
+    try:
+        from weewx_clearskies_api.config.settings import get_settings
+        almanac_settings = get_settings().almanac
+        if almanac_settings.astronomyapi_app_id and almanac_settings.astronomyapi_app_secret:
+            from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
+            lat, lon, alt = _station_location()
+            with AstronomyApiClient(
+                almanac_settings.astronomyapi_app_id,
+                almanac_settings.astronomyapi_app_secret,
+            ) as client:
+                api_eclipses = client.get_solar_eclipses(lat, lon, alt, from_date, to_date)
+
+            for ae in api_eclipses:
+                # Normalise type: "total_solar_eclipse" → "total", etc.
+                raw_type = ae.get("type", "")
+                normalised_type = (
+                    raw_type
+                    .replace("_solar_eclipse", "")
+                    .replace("_lunar_eclipse", "")
+                )
+
+                raw_ct = ae.get("contactTimes")
+                contact_times_raw: dict[str, EclipseContactPoint | None] | None = None
+                if isinstance(raw_ct, dict):
+                    contact_times_raw = {
+                        k: EclipseContactPoint(date=v["date"], altitude=v["altitude"])
+                        if isinstance(v, dict) and "date" in v and "altitude" in v
+                        else None
+                        for k, v in raw_ct.items()
+                    }
+
+                obscuration = ae.get("obscuration")
+                obs = obscuration or 0
+
+                # Compute solar visibility per ADR-053.
+                total_start = (raw_ct or {}).get("totalStart") if isinstance(raw_ct, dict) else None
+                peak = (raw_ct or {}).get("peak") if isinstance(raw_ct, dict) else None
+                peak_alt = peak["altitude"] if isinstance(peak, dict) else None
+
+                if peak_alt is None or peak_alt <= 0 or obs == 0:
+                    visibility = "Not Visible"
+                elif total_start is not None:
+                    visibility = "Fully Visible"
+                elif obs >= 75:
+                    visibility = "Mostly Visible"
+                elif obs >= 10:
+                    visibility = "Partially Visible"
+                else:
+                    visibility = "Barely Visible"
+
+                solar_eclipses.append(SolarEclipseEntry(
+                    date=ae["date"],
+                    type=normalised_type,
+                    contactTimes=contact_times_raw,
+                    obscuration=obscuration,
+                    visibility=visibility,
+                ))
+    except Exception:
+        logger.warning("AstronomyAPI.com solar eclipse fetch failed", exc_info=True)
+
+    return SolarEclipseResponse(
+        data=SolarEclipseList(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            eclipses=solar_eclipses,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )
