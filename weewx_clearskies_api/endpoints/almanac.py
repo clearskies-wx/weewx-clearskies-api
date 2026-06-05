@@ -561,14 +561,15 @@ def get_eclipses(
     # Try AstronomyAPI.com enrichment — contact times + local visibility.
     contact_map: dict[str, dict] = {}
     try:
-        from weewx_clearskies_api.config.settings import get_settings
-        almanac_settings = get_settings().almanac
-        if almanac_settings.astronomyapi_app_id and almanac_settings.astronomyapi_app_secret:
+        import os
+        app_id = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID", "").strip()
+        app_secret = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET", "").strip()
+        if app_id and app_secret:
             from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
             lat, lon, alt = _station_location()
             with AstronomyApiClient(
-                almanac_settings.astronomyapi_app_id,
-                almanac_settings.astronomyapi_app_secret,
+                app_id,
+                app_secret,
             ) as client:
                 api_eclipses = client.get_lunar_eclipses(lat, lon, alt, from_date, to_date)
             for ae in api_eclipses:
@@ -647,14 +648,15 @@ def get_solar_eclipses(
     solar_eclipses: list[SolarEclipseEntry] = []
 
     try:
-        from weewx_clearskies_api.config.settings import get_settings
-        almanac_settings = get_settings().almanac
-        if almanac_settings.astronomyapi_app_id and almanac_settings.astronomyapi_app_secret:
+        import os
+        app_id = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID", "").strip()
+        app_secret = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET", "").strip()
+        if app_id and app_secret:
             from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
             lat, lon, alt = _station_location()
             with AstronomyApiClient(
-                almanac_settings.astronomyapi_app_id,
-                almanac_settings.astronomyapi_app_secret,
+                app_id,
+                app_secret,
             ) as client:
                 api_eclipses = client.get_solar_eclipses(lat, lon, alt, from_date, to_date)
 

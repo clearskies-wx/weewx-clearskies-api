@@ -374,12 +374,12 @@ class BackgroundCacheWarmer:
         try:
             from datetime import date, timedelta
 
-            from weewx_clearskies_api.config.settings import get_settings
+            import os
+
             from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
 
-            almanac_settings = get_settings().almanac
-            app_id = almanac_settings.astronomyapi_app_id
-            app_secret = almanac_settings.astronomyapi_app_secret
+            app_id = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID", "").strip()
+            app_secret = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET", "").strip()
             if not app_id or not app_secret:
                 return  # No credentials configured — skip
 
