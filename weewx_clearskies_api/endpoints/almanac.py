@@ -524,7 +524,8 @@ def get_eclipses(
 
     today = _today_in_station_tz()
     from_date = params.from_ if params.from_ is not None else today
-    to_date = params.to if params.to is not None else (today + timedelta(days=365))
+    # 10-year window — dashboard does progressive fill (2yr then backfill).
+    to_date = params.to if params.to is not None else (today + timedelta(days=3652))
 
     # Cache-check-first guard (ADR-045).  The warmer pre-computes the default
     # rolling window; use the cached result when no override params were given.
@@ -652,8 +653,8 @@ def get_solar_eclipses(
 
     today = _today_in_station_tz()
     from_date = params.from_ if params.from_ is not None else today
-    # Solar eclipses are rare per location — default to 4-year window.
-    to_date = params.to if params.to is not None else (today + timedelta(days=1461))
+    # 10-year window — dashboard does progressive fill (2yr then backfill).
+    to_date = params.to if params.to is not None else (today + timedelta(days=3652))
 
     solar_eclipses: list[SolarEclipseEntry] = []
 

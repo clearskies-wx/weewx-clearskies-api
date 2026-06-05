@@ -357,7 +357,7 @@ class BackgroundCacheWarmer:
 
             cache = get_cache()
             today = date.today()
-            to_date = today + timedelta(days=365)
+            to_date = today + timedelta(days=3652)
 
             eclipses_data = compute_lunar_eclipses(from_date=today, to_date=to_date)
             cache.set(
@@ -385,7 +385,7 @@ class BackgroundCacheWarmer:
 
             cache = get_cache()
             today = date.today()
-            to_date = today + timedelta(days=1461)
+            to_date = today + timedelta(days=3652)
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]
