@@ -11,12 +11,23 @@ SQL note: column identifiers come exclusively from the _CLIM_DB_COLS constant
 value bindings use SQLAlchemy named parameters.  No user-controlled data is
 interpolated into query text.
 
+For the generalized get_climatology_by_fields() path: caller-supplied field
+names are validated against the ColumnRegistry before any SQL is composed.
+Only names that appear in the registry (a curated allowlist of known weewx
+archive column names) reach the SQL string. This prevents SQL injection while
+allowing backtick-quoted identifier interpolation for column names, which
+cannot be bound as SQL parameters.
+
 ruff: noqa: N815  (canonical fields use weewx camelCase per ADR-010)
 """
+# ruff: noqa: S608  (SQL f-strings are safe here — all column names come from
+#                    hard-coded constants or registry-validated allowlists;
+#                    no user input reaches the SQL string)
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -311,3 +322,236 @@ def get_monthly_climatology(db: Session, registry: ColumnRegistry) -> dict:
             logger.exception("climatology: failed to query rainfall averages")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Generalized query helpers (accept any validated column name)
+#
+# Security model: column names are validated against ColumnRegistry before
+# reaching these functions. Only names present in the registry (a curated
+# allowlist of known weewx archive column names) are passed here. Column
+# identifiers cannot be bound as SQL parameters, so post-validation
+# interpolation is used. Backtick-quoting handles reserved words per
+# coding.md §1 (e.g. `interval` is a MariaDB reserved word).
+# ---------------------------------------------------------------------------
+
+
+_VALID_AGG_TYPES = frozenset({"avg_max", "avg_min", "avg", "avg_monthly_total", "sum"})
+
+
+def _query_avg_of_daily_agg(
+    db: Session,
+    column: str,      # validated against ColumnRegistry — not user-supplied verbatim
+    daily_agg: str,   # "MAX" or "MIN" — caller-controlled constant, not user input
+    dialect_name: str,
+) -> dict[int, float | None]:
+    """Average of daily MAX or MIN for any validated column.
+
+    Generalises _query_avg_temp_highs_lows for a single aggregation side.
+
+    Two-level aggregation:
+      Inner: GROUP BY day_bucket → daily_agg(column) AS daily_val
+      Outer: GROUP BY month_number → AVG(daily_val)
+
+    Column name is validated against ColumnRegistry before use — only known
+    weewx column names reach the SQL string.
+    """
+    day_bucket = _day_bucket_sql(dialect_name)
+    month_from_day = _month_num_from_day_bucket(dialect_name)
+
+    sql = text(
+        f"SELECT {month_from_day} AS mnum, "
+        f"       AVG(daily_val) AS avg_val "
+        f"FROM ("
+        f"  SELECT {day_bucket} AS day_bucket, "
+        f"         {daily_agg}(`{column}`) AS daily_val "
+        f"  FROM archive "
+        f"  WHERE `{column}` IS NOT NULL "
+        f"  GROUP BY day_bucket"
+        f") sub "
+        f"GROUP BY mnum "
+        f"ORDER BY mnum ASC"
+    )
+    rows = db.execute(sql).fetchall()
+    result: dict[int, float | None] = {}
+    for row in rows:
+        mnum = int(row[0])
+        avg_val = float(row[1]) if row[1] is not None else None
+        result[mnum] = avg_val
+    return result
+
+
+def _query_straight_avg(
+    db: Session,
+    column: str,      # validated against ColumnRegistry — not user-supplied verbatim
+    dialect_name: str,
+) -> dict[int, float | None]:
+    """Straight monthly average for any validated column.
+
+    Generalises _query_avg_dewpoint.
+
+    Column name is validated against ColumnRegistry before use — only known
+    weewx column names reach the SQL string.
+    """
+    month_num = _month_number_sql(dialect_name)
+
+    sql = text(
+        f"SELECT {month_num} AS mnum, "
+        f"       AVG(`{column}`) AS avg_val "
+        f"FROM archive "
+        f"WHERE `{column}` IS NOT NULL "
+        f"GROUP BY mnum "
+        f"ORDER BY mnum ASC"
+    )
+    rows = db.execute(sql).fetchall()
+    result: dict[int, float | None] = {}
+    for row in rows:
+        mnum = int(row[0])
+        avg_val = float(row[1]) if row[1] is not None else None
+        result[mnum] = avg_val
+    return result
+
+
+def _query_avg_of_monthly_total(
+    db: Session,
+    column: str,      # validated against ColumnRegistry — not user-supplied verbatim
+    dialect_name: str,
+) -> dict[int, float | None]:
+    """Average of monthly totals for any validated column.
+
+    Generalises _query_avg_rainfall.
+
+    Column name is validated against ColumnRegistry before use — only known
+    weewx column names reach the SQL string.
+    """
+    if dialect_name == "sqlite":
+        ym_bucket = _year_month_sql(dialect_name)
+        month_from_ym = _month_num_from_ym_bucket(dialect_name)
+        sql = text(
+            f"SELECT {month_from_ym} AS mnum, "
+            f"       AVG(monthly_total) AS avg_val "
+            f"FROM ("
+            f"  SELECT {ym_bucket} AS ym_bucket, "
+            f"         SUM(`{column}`) AS monthly_total "
+            f"  FROM archive "
+            f"  WHERE `{column}` IS NOT NULL "
+            f"  GROUP BY ym_bucket"
+            f") sub "
+            f"GROUP BY mnum "
+            f"ORDER BY mnum ASC"
+        )
+    else:
+        sql = text(
+            f"SELECT mo AS mnum, "
+            f"       AVG(monthly_total) AS avg_val "
+            f"FROM ("
+            f"  SELECT YEAR(FROM_UNIXTIME(dateTime)) AS yr, "
+            f"         MONTH(FROM_UNIXTIME(dateTime)) AS mo, "
+            f"         SUM(`{column}`) AS monthly_total "
+            f"  FROM archive "
+            f"  WHERE `{column}` IS NOT NULL "
+            f"  GROUP BY yr, mo"
+            f") sub "
+            f"GROUP BY mnum "
+            f"ORDER BY mnum ASC"
+        )
+    rows = db.execute(sql).fetchall()
+    result: dict[int, float | None] = {}
+    for row in rows:
+        mnum = int(row[0])
+        avg_val = float(row[1]) if row[1] is not None else None
+        result[mnum] = avg_val
+    return result
+
+
+def _query_monthly_sum(
+    db: Session,
+    column: str,      # validated against ColumnRegistry — not user-supplied verbatim
+    dialect_name: str,
+) -> dict[int, float | None]:
+    """Straight monthly sum for any validated column.
+
+    Column name is validated against ColumnRegistry before use — only known
+    weewx column names reach the SQL string.
+    """
+    month_num = _month_number_sql(dialect_name)
+
+    sql = text(
+        f"SELECT {month_num} AS mnum, "
+        f"       SUM(`{column}`) AS sum_val "
+        f"FROM archive "
+        f"WHERE `{column}` IS NOT NULL "
+        f"GROUP BY mnum "
+        f"ORDER BY mnum ASC"
+    )
+    rows = db.execute(sql).fetchall()
+    result: dict[int, float | None] = {}
+    for row in rows:
+        mnum = int(row[0])
+        sum_val = float(row[1]) if row[1] is not None else None
+        result[mnum] = sum_val
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Generalized public service function
+# ---------------------------------------------------------------------------
+
+
+def get_climatology_by_fields(
+    db: Session,
+    registry: ColumnRegistry,
+    fields: list[str],
+    agg: str,
+) -> dict[str, Any]:
+    """Compute monthly climatology for arbitrary fields with specified aggregation.
+
+    Args:
+        db: SQLAlchemy session.
+        registry: Column registry for field validation (allowlist).
+        fields: List of canonical field names to aggregate.
+        agg: Aggregation type — one of avg_max, avg_min, avg, avg_monthly_total, sum.
+
+    Returns:
+        Dict with 'months' (12-element name list) and 'results' (field → 12-element list).
+
+    Fields absent from the registry are skipped with a warning (self-hide rule).
+    Unknown agg values are rejected by the endpoint before this function is called.
+    """
+    mapped_fields = set(registry.stock.keys())
+    dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
+
+    results: dict[str, list[float | None]] = {}
+
+    for field in fields:
+        if field not in mapped_fields:
+            logger.warning(
+                "climatology: field %r not in registry — skipping", field
+            )
+            continue
+
+        # Column name validated against registry allowlist above.
+        # Only known weewx archive column names reach the SQL helpers.
+        try:
+            if agg == "avg_max":
+                by_month = _query_avg_of_daily_agg(db, field, "MAX", dialect_name)
+                results[field] = _to_12_list(by_month)
+            elif agg == "avg_min":
+                by_month = _query_avg_of_daily_agg(db, field, "MIN", dialect_name)
+                results[field] = _to_12_list(by_month)
+            elif agg == "avg":
+                by_month = _query_straight_avg(db, field, dialect_name)
+                results[field] = _to_12_list(by_month)
+            elif agg == "avg_monthly_total":
+                by_month = _query_avg_of_monthly_total(db, field, dialect_name)
+                results[field] = _to_12_list(by_month)
+            elif agg == "sum":
+                by_month = _query_monthly_sum(db, field, dialect_name)
+                results[field] = _to_12_list(by_month)
+            # No else branch: agg is validated at the endpoint layer before this call.
+        except Exception:
+            logger.exception(
+                "climatology: failed to query field=%r agg=%r", field, agg
+            )
+
+    return {"months": _MONTH_NAMES, "results": results}
