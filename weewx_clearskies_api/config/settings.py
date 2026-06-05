@@ -305,6 +305,11 @@ class AlmanacSettings:
 
     #: Directory where de421.bsp is cached (or pre-placed for offline installs).
     ephemeris_directory: str
+    #: AstronomyAPI.com app_id from env var WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID.
+    #: Optional: eclipse contact times work when configured, almanac works without.
+    astronomyapi_app_id: str | None
+    #: AstronomyAPI.com app_secret from env var WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET.
+    astronomyapi_app_secret: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.ephemeris_directory = str(
@@ -313,6 +318,14 @@ class AlmanacSettings:
                 "/var/cache/weewx-clearskies/skyfield/",
             )
         )
+
+        # AstronomyAPI.com credentials — env vars only, per ADR-027.
+        # Optional: eclipse contact times work when configured, almanac works without them.
+        raw_astro_id = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID", "").strip()
+        self.astronomyapi_app_id = raw_astro_id if raw_astro_id else None
+
+        raw_astro_secret = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET", "").strip()
+        self.astronomyapi_app_secret = raw_astro_secret if raw_astro_secret else None
 
 
 class ContentSettings:
