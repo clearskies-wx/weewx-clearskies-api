@@ -385,7 +385,7 @@ class BackgroundCacheWarmer:
 
             cache = get_cache()
             today = date.today()
-            to_date = today + timedelta(days=365)
+            to_date = today + timedelta(days=1461)
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]

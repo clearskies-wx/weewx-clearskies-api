@@ -652,7 +652,8 @@ def get_solar_eclipses(
 
     today = _today_in_station_tz()
     from_date = params.from_ if params.from_ is not None else today
-    to_date = params.to if params.to is not None else (today + timedelta(days=365))
+    # Solar eclipses are rare per location — default to 4-year window.
+    to_date = params.to if params.to is not None else (today + timedelta(days=1461))
 
     solar_eclipses: list[SolarEclipseEntry] = []
 
