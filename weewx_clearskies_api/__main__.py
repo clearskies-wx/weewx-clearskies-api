@@ -86,6 +86,11 @@ from weewx_clearskies_api.providers._common.cache import wire_cache_from_env
 from weewx_clearskies_api.providers._common.capability import ProviderCapability, wire_providers
 from weewx_clearskies_api.providers._common.dispatch import get_provider_module
 from weewx_clearskies_api.services.almanac import wire_ephemeris_directory
+from weewx_clearskies_api.services.charts_config import (
+    load_charts_config,
+    prune_charts_config,
+    wire_charts_config,
+)
 from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
 from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
@@ -528,6 +533,19 @@ def main() -> None:
 
     # Wire the column registry for DI use in endpoints.
     wire_registry(registry)
+
+    # Step 6e: Load charts configuration (non-fatal — falls back to built-in defaults).
+    charts_config_path = (
+        Path(settings.charts.config_path) if settings.charts.config_path else None
+    )
+    raw_charts_config = load_charts_config(charts_config_path)
+    pruned_charts_config = prune_charts_config(raw_charts_config, registry)
+    wire_charts_config(pruned_charts_config)
+    logger.info(
+        "Charts config loaded: %d groups, %d charts",
+        len(pruned_charts_config.groups),
+        sum(len(g.charts) for g in pruned_charts_config.groups),
+    )
 
     # Step 6b: Load weewx.conf (shared ConfigObj cache for units + station).
     # Fatal if missing — required by both units and station metadata loaders.

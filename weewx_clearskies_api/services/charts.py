@@ -83,36 +83,65 @@ _BUILTIN_GROUPS: Final[tuple[ChartGroupEntry, ...]] = (
 
 
 def get_chart_groups(registry: ColumnRegistry) -> list[ChartGroupEntry]:
-    """Return built-in chart groups with members pruned against the registry.
+    """Return chart groups derived from the loaded charts config.
 
-    Groups with zero members after pruning are omitted (self-hide rule).
+    When the charts config has been wired at startup, groups are derived from
+    the pruned ChartsConfig (all members are already available — pruning already
+    ran at startup).  Falls back to _BUILTIN_GROUPS with self-hide logic when
+    the charts config has not been wired yet (backwards compatibility during
+    transition / in tests that don't wire the config).
 
     Args:
         registry: The ColumnRegistry from startup schema reflection.
 
     Returns:
-        List of ChartGroupEntry objects with pruned members.
+        List of ChartGroupEntry objects.
     """
-    # Build the set of mapped canonical names from stock columns.
-    mapped: set[str] = {
-        info.canonical_name
-        for info in registry.stock.values()
-        if info.canonical_name is not None
-    }
+    try:
+        from weewx_clearskies_api.services.charts_config import get_charts_config  # noqa: PLC0415
 
-    result: list[ChartGroupEntry] = []
-    for group in _BUILTIN_GROUPS:
-        pruned = [m for m in group.members if m in mapped]
-        if not pruned:
-            continue  # self-hide
-        result.append(
+        config = get_charts_config()
+    except RuntimeError:
+        # Charts config not wired — fall back to legacy built-in groups.
+        mapped: set[str] = {
+            info.canonical_name
+            for info in registry.stock.values()
+            if info.canonical_name is not None
+        }
+        result: list[ChartGroupEntry] = []
+        for group in _BUILTIN_GROUPS:
+            pruned = [m for m in group.members if m in mapped]
+            if not pruned:
+                continue  # self-hide
+            result.append(
+                ChartGroupEntry(
+                    group_id=group.group_id,
+                    name=group.name,
+                    built_in=group.built_in,
+                    members=pruned,
+                    default_range=group.default_range,
+                )
+            )
+        return result
+
+    # Derive from the pruned charts config (pruning already ran at startup).
+    derived: list[ChartGroupEntry] = []
+    for cfg_group in config.groups:
+        cfg_members: list[str] = []
+        for cfg_chart in cfg_group.charts:
+            for cfg_series in cfg_chart.series:
+                effective = cfg_series.observation_type or cfg_series.series_id
+                if effective not in cfg_members:
+                    cfg_members.append(effective)
+        if not cfg_members:
+            continue
+        derived.append(
             ChartGroupEntry(
-                group_id=group.group_id,
-                name=group.name,
-                built_in=group.built_in,
-                members=pruned,
-                default_range=group.default_range,
+                group_id=cfg_group.group_id,
+                name=cfg_group.title or cfg_group.group_id,
+                built_in=True,
+                members=cfg_members,
+                default_range=cfg_group.rolling_ranges[0] if cfg_group.rolling_ranges else None,
             )
         )
-
-    return result
+    return derived

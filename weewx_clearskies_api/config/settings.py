@@ -1007,6 +1007,16 @@ class ConditionsSettings:
             )
 
 
+class ChartsSettings:
+    """[charts] section settings — controls chart configuration loading."""
+
+    config_path: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw = section.get("config_path", "").strip()
+        self.config_path = raw if raw else None
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -1033,6 +1043,7 @@ class Settings:
     social: SocialSettings
     conditions: ConditionsSettings
     cache_warmer: CacheWarmerSettings
+    charts: ChartsSettings
 
     def __init__(
         self,
@@ -1058,6 +1069,7 @@ class Settings:
         social: SocialSettings | None = None,
         conditions: ConditionsSettings | None = None,
         cache_warmer: CacheWarmerSettings | None = None,
+        charts: ChartsSettings | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -1083,6 +1095,7 @@ class Settings:
         self.social = social if social is not None else SocialSettings({})
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
+        self.charts = charts if charts is not None else ChartsSettings({})
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -1208,6 +1221,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     social_cfg = SocialSettings(dict(cfg.get("social", {})))
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
+    charts_cfg = ChartsSettings(dict(cfg.get("charts", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -1232,6 +1246,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         social=social_cfg,
         conditions=conditions_cfg,
         cache_warmer=cache_warmer_cfg,
+        charts=charts_cfg,
     )
     settings.validate()
 

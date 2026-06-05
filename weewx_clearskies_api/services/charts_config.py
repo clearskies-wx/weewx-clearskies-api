@@ -672,3 +672,30 @@ def prune_charts_config(
         tooltip_date_format=config.tooltip_date_format,
         groups=pruned_groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# Global singleton (wire at startup, access from endpoints)
+# ---------------------------------------------------------------------------
+
+_charts_config: ChartsConfig | None = None
+
+
+def wire_charts_config(config: ChartsConfig) -> None:
+    """Store the loaded (and pruned) charts config as a global singleton.
+
+    Called once from __main__.py after load + prune.
+    """
+    global _charts_config  # noqa: PLW0603
+    _charts_config = config
+
+
+def get_charts_config() -> ChartsConfig:
+    """Return the loaded charts config.
+
+    Raises:
+        RuntimeError: If called before wire_charts_config().
+    """
+    if _charts_config is None:
+        raise RuntimeError("Charts config not loaded — call wire_charts_config() first")
+    return _charts_config

@@ -746,6 +746,102 @@ class ChartGroupResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Charts Config (GET /charts/config)
+# ---------------------------------------------------------------------------
+
+
+class SeriesConfigResponse(BaseModel):
+    """One data series configuration."""
+
+    seriesId: str
+    observationType: str | None = None
+    name: str | None = None
+    color: str | None = None
+    type: str | None = None
+    zIndex: int | None = None
+    yAxis: int | None = None
+    yAxisMin: float | None = None
+    yAxisMax: float | None = None
+    yAxisLabel: str | None = None
+    yAxisTickInterval: float | None = None
+    lineWidth: int | None = None
+    connectNulls: bool | None = None
+    visible: bool | None = None
+    opacity: float | None = None
+    stacking: str | None = None
+    aggregateType: str | None = None
+    averageType: str | None = None
+    markerEnabled: bool | None = None
+    markerRadius: int | None = None
+    beaufortColors: dict[int, str] = {}
+    rangeType: str | None = None
+    areaDisplay: int | None = None
+    useCustomSql: bool = False
+    customSqlQuery: str | None = None
+    xColumn: str | None = None
+    yColumn: str | None = None
+
+
+class ChartConfigResponse(BaseModel):
+    """One chart configuration."""
+
+    chartId: str
+    title: str | None = None
+    type: str | None = None
+    connectNulls: bool | None = None
+    yAxisMin: float | None = None
+    aggregateType: str | None = None
+    aggregateInterval: int | None = None
+    xAxisGroupby: str | None = None
+    xAxisCategories: list[str] = []
+    forceFullYear: bool | None = None
+    series: list[SeriesConfigResponse] = []
+
+
+class ChartGroupConfigResponse(BaseModel):
+    """One chart group (tab) configuration."""
+
+    groupId: str
+    title: str | None = None
+    showButton: bool = True
+    buttonText: str | None = None
+    type: str | None = None
+    enableDateRanges: bool = False
+    rollingRanges: list[str] = []
+    availableYears: list[int] = []
+    enableMonthlyBreakdown: bool = False
+    timeLength: int | str | None = None
+    timespanStart: int | None = None
+    timespanStop: int | None = None
+    tooltipDateFormat: str | None = None
+    gapsize: int | None = None
+    aggregateInterval: int | None = None
+    aggregateType: str | None = None
+    forceFullYear: bool = False
+    startAtBeginningOfMonth: bool = False
+    pageContent: str | None = None
+    charts: list[ChartConfigResponse] = []
+
+
+class ChartsConfigData(BaseModel):
+    """Full charts configuration."""
+
+    aggregateType: str | None = None
+    timeLength: int | str | None = None
+    type: str = "line"
+    colors: list[str] = []
+    tooltipDateFormat: str | None = None
+    groups: list[ChartGroupConfigResponse] = []
+
+
+class ChartsConfigResponse(BaseModel):
+    """GET /charts/config envelope."""
+
+    data: ChartsConfigData
+    generatedAt: str
+
+
+# ---------------------------------------------------------------------------
 # Content (markdown passthrough)
 # ---------------------------------------------------------------------------
 
