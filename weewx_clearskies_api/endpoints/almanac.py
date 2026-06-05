@@ -769,6 +769,12 @@ def get_meteor_showers(
                         moonIlluminationPercent=s["moonIlluminationPercent"],
                         moonPhase=s["moonPhase"],
                         parentBody=s["parentBody"],
+                        activeStart=s.get("activeStart"),
+                        activeEnd=s.get("activeEnd"),
+                        description=s.get("description"),
+                        viewingQuality=s.get("viewingQuality"),
+                        velocityKms=s.get("velocityKms"),
+                        image=s.get("image"),
                     )
                     for s in cached
                 ]
@@ -795,6 +801,12 @@ def get_meteor_showers(
             moonIlluminationPercent=s["moonIlluminationPercent"],
             moonPhase=s["moonPhase"],
             parentBody=s["parentBody"],
+            activeStart=s.get("activeStart"),
+            activeEnd=s.get("activeEnd"),
+            description=s.get("description"),
+            viewingQuality=s.get("viewingQuality"),
+            velocityKms=s.get("velocityKms"),
+            image=s.get("image"),
         )
         for s in showers_raw
     ]
