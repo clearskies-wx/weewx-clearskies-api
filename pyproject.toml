@@ -69,6 +69,7 @@ dev = [
 
 [project.scripts]
 weewx-clearskies-api = "weewx_clearskies_api.__main__:main"
+clearskies-migrate-charts = "weewx_clearskies_api.tools.migrate_charts:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["weewx_clearskies_api"]
