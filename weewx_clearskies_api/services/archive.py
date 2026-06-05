@@ -632,15 +632,13 @@ def _fetch_day_aggregates(
 
     for field_name in fields:
         agg_col = agg_override or DAY_AGGREGATOR.get(field_name, "avg")
-        if agg_col is None:
-            continue
         # Table name is archive_day_<stock_field_name> — trusted constant.
         table_name = f"archive_day_{field_name}"
         agg_col_name = _DAY_AGG_TO_COL.get(agg_col, "avg")
 
         sql = text(
-            f"SELECT dateTime, {agg_col_name} AS val "
-            f"FROM {table_name} "
+            f"SELECT dateTime, `{agg_col_name}` AS val "
+            f"FROM `{table_name}` "
             f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
             f"ORDER BY dateTime ASC "
             f"LIMIT :lim OFFSET :off"
