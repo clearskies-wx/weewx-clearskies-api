@@ -1,10 +1,11 @@
-"""Charts endpoint (3a-2).
+"""Charts endpoints.
 
 GET /charts/groups — chart-group structure per ADR-024.
 GET /charts/config — full operator chart configuration.
 
-Returns built-in groups with members pruned against the ColumnRegistry.
-Groups with zero members after pruning are omitted (self-hide).
+Groups are derived from the operator-configured charts.conf loaded at startup.
+Groups whose series are all unavailable in the archive are pruned at startup
+and therefore never appear in these responses.
 No query params.
 """
 
@@ -138,10 +139,11 @@ def _config_to_response(config: ChartsConfig) -> ChartsConfigData:
 
 @router.get("/charts/groups", summary="Chart-group structure", tags=["Charts"])
 def get_chart_groups_endpoint() -> ChartGroupResponse:
-    """Return built-in chart groups with members pruned against the ColumnRegistry.
+    """Return operator-configured chart groups from charts.conf.
 
-    Custom chart groups are empty in 3a-2 (Phase 4 config UI).
-    Groups with zero members after pruning self-hide (parallel to /records).
+    Groups and their member series are derived from the charts.conf loaded at
+    startup.  Series unavailable in the archive were already pruned at startup;
+    groups with no surviving series do not appear in this response.
     """
     registry = get_registry()
     groups = get_chart_groups(registry)

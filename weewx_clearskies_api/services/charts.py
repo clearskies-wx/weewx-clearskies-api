@@ -1,23 +1,16 @@
-"""Charts service — built-in chart groups per ADR-024 + brief call #5 (3a-2).
+"""Charts service — operator-configured chart groups per ADR-024.
 
-The 4 built-in groups and their default member sets are baked as constants.
-At request time, members are intersected with the ColumnRegistry's mapped set
-to prune fields the operator's archive doesn't have.  Groups with zero members
-after pruning are omitted from the response (parallel to /records self-hide).
-
-Custom chart groups are out of scope for 3a-2 (Phase 4 config UI).
+Groups are derived entirely from the operator's charts.conf (loaded and pruned
+at startup via charts_config.py).  If the config has not been wired before the
+first request, get_charts_config() raises RuntimeError — that is a startup
+misconfiguration and is intentionally allowed to propagate.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
 
 from weewx_clearskies_api.db.reflection import ColumnRegistry
-
-# ---------------------------------------------------------------------------
-# Built-in group definitions (per lead-confirmed brief call #5)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -31,98 +24,33 @@ class ChartGroupEntry:
     default_range: str | None  # e.g. "1d", or None for groups with own selector
 
 
-_BUILTIN_GROUPS: Final[tuple[ChartGroupEntry, ...]] = (
-    ChartGroupEntry(
-        group_id="homepage",
-        name="Homepage",
-        built_in=True,
-        members=[
-            "outTemp",
-            "dewpoint",
-            "outHumidity",
-            "windSpeed",
-            "windGust",
-            "windDir",
-            "barometer",
-            "rain",
-            "rainRate",
-            "radiation",
-            "UV",
-            "lightning_strike_count",
-            "pollutantPM25",
-        ],
-        default_range="1d",
-    ),
-    ChartGroupEntry(
-        group_id="monthly",
-        name="Monthly",
-        built_in=True,
-        members=["outTemp", "rain", "windSpeed", "barometer"],
-        default_range=None,
-    ),
-    ChartGroupEntry(
-        group_id="ANNUAL",
-        name="Annual",
-        built_in=True,
-        members=["outTemp", "rain"],
-        default_range=None,
-    ),
-    ChartGroupEntry(
-        group_id="averageclimate",
-        name="Average climate",
-        built_in=True,
-        members=["outTemp", "rain"],
-        default_range=None,
-    ),
-)
-
-
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
 
 
 def get_chart_groups(registry: ColumnRegistry) -> list[ChartGroupEntry]:
-    """Return chart groups derived from the loaded charts config.
+    """Return chart groups derived from the operator-configured charts.conf.
 
-    When the charts config has been wired at startup, groups are derived from
-    the pruned ChartsConfig (all members are already available — pruning already
-    ran at startup).  Falls back to _BUILTIN_GROUPS with self-hide logic when
-    the charts config has not been wired yet (backwards compatibility during
-    transition / in tests that don't wire the config).
+    Groups are built from the pruned ChartsConfig that was loaded and wired at
+    startup.  Pruning already ran at startup, so all surviving series are
+    guaranteed to have a corresponding archive column.
+
+    If the charts config was not wired before this call (startup
+    misconfiguration), get_charts_config() raises RuntimeError and the
+    exception propagates — it is not caught here.
 
     Args:
         registry: The ColumnRegistry from startup schema reflection.
+            Accepted for API compatibility; not used directly because
+            pruning already ran at startup.
 
     Returns:
-        List of ChartGroupEntry objects.
+        List of ChartGroupEntry objects, one per surviving group.
     """
-    try:
-        from weewx_clearskies_api.services.charts_config import get_charts_config  # noqa: PLC0415
+    from weewx_clearskies_api.services.charts_config import get_charts_config  # noqa: PLC0415
 
-        config = get_charts_config()
-    except RuntimeError:
-        # Charts config not wired — fall back to legacy built-in groups.
-        mapped: set[str] = {
-            info.canonical_name
-            for info in registry.stock.values()
-            if info.canonical_name is not None
-        }
-        result: list[ChartGroupEntry] = []
-        for group in _BUILTIN_GROUPS:
-            pruned = [m for m in group.members if m in mapped]
-            if not pruned:
-                continue  # self-hide
-            result.append(
-                ChartGroupEntry(
-                    group_id=group.group_id,
-                    name=group.name,
-                    built_in=group.built_in,
-                    members=pruned,
-                    default_range=group.default_range,
-                )
-            )
-        return result
+    config = get_charts_config()
 
     # Derive from the pruned charts config (pruning already ran at startup).
     derived: list[ChartGroupEntry] = []

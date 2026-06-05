@@ -1,0 +1,252 @@
+# charts.conf.example — Clear Skies chart configuration example
+#
+# Copy to one of the following locations and edit as needed:
+#
+#   /etc/weewx-clearskies/charts.conf       (system-wide, recommended)
+#   ~/.config/weewx-clearskies/charts.conf  (per-user)
+#
+# Or point directly to this file with the environment variable:
+#   CLEARSKIES_CHARTS_CONFIG=/path/to/charts.conf
+#
+# The API searches those locations in order at startup.  If no file is found
+# the built-in defaults (weewx_clearskies_api/data/charts.conf.default) are
+# used automatically — you only need this file when you want to customise the
+# groups, charts, or series that appear on the dashboard.
+#
+# FORMAT
+# ------
+# ConfigObj / INI with three levels of nesting:
+#
+#   [group]          — one tab / page of charts on the dashboard
+#   [[chart]]        — one chart panel within the group
+#   [[[series]]]     — one data series (line, column, etc.) within the chart
+#
+# This is the same format used by the Belchertown skin's graphs.conf, so
+# operators already familiar with that file will feel at home here.
+#
+# OBSERVATION TYPES
+# -----------------
+# The section name for a series is the weewx observation type (e.g. outTemp,
+# windSpeed, rain).  Any column present in your weewx archive table can be
+# charted.  Series whose observation type is not in your archive are silently
+# pruned at startup — groups with no surviving series are hidden from the
+# dashboard automatically.
+#
+# SECRETS
+# -------
+# This file must not contain passwords, API keys, or other secrets.
+# Secrets belong in /etc/weewx-clearskies/secrets.env (mode 0600).
+#
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Global defaults
+# ---------------------------------------------------------------------------
+# These values apply to every group/chart/series unless overridden locally.
+# Inline comments are stripped by the parser; they are safe to use here.
+
+# Default data-reduction function.  None means raw archive values are returned
+# without aggregation.  Other common values: avg, max, min, sum.
+aggregate_type = None
+
+# Default time window in seconds.  90000 = 25 hours (enough to always include
+# a full 24-hour rolling period regardless of archive interval boundaries).
+time_length = 90000
+
+# Default chart type.  One of: line, spline, area, areaspline, column, bar.
+type = line
+
+# Default colour palette — ten hex colours applied in order to each series
+# within a chart.  Wrap long lists across lines by ending each line with a
+# backslash, or keep them on one line as shown here.
+colors = "#7cb5ec, #b2df8a, #f7a35c, #8c6bb1, #dd3497, #e4d354, #268bd2, #f45b5b, #6a3d9a, #33a02c"
+
+# Tooltip date format string (Moment.js tokens).
+# "LLL" → locale-aware long date + time (e.g. "June 5, 2026 3:42 PM").
+tooltip_date_format = "LLL"
+
+
+###############################################################################
+# [homepage] — Rolling time-range group
+#
+# Displays charts for a selectable rolling window (last 24 h, 3 d, 7 d, etc.).
+# The dashboard renders a range-picker that lets visitors switch between the
+# values listed in rolling_ranges.  time_length sets the initial / default
+# window in seconds.
+#
+# Operator customisation tips:
+#   • Add or remove entries in rolling_ranges to change which windows appear.
+#   • Add charts for any observation type in your archive (outHumidity,
+#     barometer, radiation, UV, lightning_strike_count, etc.).
+#   • Remove charts for sensors you don't have — the API will also prune them
+#     automatically, but explicit removal keeps this file tidy.
+#   • gapsize should match your weewx archive_interval (seconds).
+###############################################################################
+
+[homepage]
+    title = "Last 24 Hours"
+    show_button = true
+    button_text = "Last 24 Hours"
+
+    # Enable the rolling date-range picker on the dashboard.
+    enable_date_ranges = true
+
+    # Available rolling windows the visitor can choose.  Values use a number +
+    # unit suffix: d = days, h = hours, w = weeks.  The first entry is the
+    # default shown on page load.
+    rolling_ranges = 1d, 3d, 7d, 30d, 90d
+
+    # Default window (seconds).  86400 = 24 hours.
+    time_length = 86400
+
+    tooltip_date_format = "LLL"
+
+    # Gap threshold in seconds.  Data gaps wider than this value are rendered
+    # as a break in the line rather than a straight connector.  Match your
+    # weewx archive_interval (typically 300 = 5 minutes).
+    gapsize = 300
+
+    # ------------------------------------------------------------------
+    # Temperature chart
+    # ------------------------------------------------------------------
+    [[chart1]]
+        title = Temperature
+        connectNulls = true
+
+        [[[outTemp]]]
+            zIndex = 1
+            name = Temperature
+
+        [[[dewpoint]]]
+            color = purple
+
+    # ------------------------------------------------------------------
+    # Wind speed and direction chart
+    #
+    # windDir is plotted on a secondary Y-axis (yAxis = 1) capped at 360
+    # degrees.  lineWidth = 0 renders it as dots rather than a line so it
+    # does not visually dominate the speed series.
+    # ------------------------------------------------------------------
+    [[chart2]]
+        title = Wind Speed and Direction
+        yAxis_min = 0
+
+        [[[windDir]]]
+            zIndex = 1
+            yAxis = 1
+            yAxis_max = 360
+            lineWidth = 0
+
+        [[[windGust]]]
+            connectNulls = true
+
+        [[[windSpeed]]]
+            connectNulls = true
+            zIndex = 2
+
+
+###############################################################################
+# [averageclimate] — Climatological averages grouped by calendar month
+#
+# Groups all available data by month and plots long-term averages.  The X-axis
+# shows Jan–Dec regardless of the current date; each data point is the average
+# of all archive records for that calendar month.
+#
+# Key options for this group type:
+#   xAxis_groupby = month   — instructs the API to aggregate by calendar month
+#   xAxis_categories        — explicit month labels for the X-axis
+#   average_type = max/min  — which daily statistic feeds the monthly average
+#   time_length = all       — include the entire archive history
+#
+# Operator customisation tips:
+#   • Add a dewpoint series with average_type = avg for dew-point climatology.
+#   • Add a rain series (type = column, aggregate_type = sum) for monthly
+#     rainfall climatology.
+#   • The series name "outTemp_min" is an alias only; set observation_type =
+#     outTemp so the API reads the same column with a different aggregate.
+###############################################################################
+
+[averageclimate]
+    title = "Average Climate by Month"
+    show_button = true
+    button_text = "Average Climate"
+    type = spline
+    time_length = all
+    tooltip_date_format = "dddd LL"
+    aggregate_interval = 86400      # 1 day — daily aggregates feed the monthly means
+    gapsize = 86400
+    start_at_beginning_of_month = true
+
+    [[avgclimatetotal]]
+        title = "Average Climatological Values by Month"
+        type = spline
+        aggregate_interval = 86400
+        xAxis_groupby = month
+        xAxis_categories = 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+
+        # Average daily high temperature for each month.
+        [[[outTemp]]]
+            aggregate_type = avg
+            average_type = max
+            zIndex = 2
+            name = Average High Temperature
+            color = red
+
+        # Average daily low temperature for each month.
+        # observation_type = outTemp means this series reads the same column
+        # as the series above but uses average_type = min.
+        [[[outTemp_min]]]
+            name = Average Low Temperature
+            observation_type = outTemp
+            aggregate_type = avg
+            average_type = min
+            zIndex = 2
+
+
+###############################################################################
+# [monthly] — Monthly observations with year/month dropdown selectors
+#
+# Shows one calendar month at a time.  The dashboard renders year and month
+# drop-down selectors populated from available_years.
+#
+# Key options for this group type:
+#   enable_monthly_breakdown = true  — activates the month drop-down
+#   available_years                  — years shown in the year drop-down;
+#                                      keep this list current each January
+#   time_length = month              — keyword meaning "one calendar month"
+#   aggregate_interval = 86400       — one point per day
+#   aggregate_type = max             — daily maximum for temperature series
+#
+# Operator customisation tips:
+#   • Update available_years each January to add the new year.
+#   • Add a rain chart using aggregate_type = sum to show monthly rainfall.
+#   • Add a barometer chart using aggregate_type = avg for pressure trends.
+###############################################################################
+
+[monthly]
+    title = "Monthly Observations"
+    button_text = "Monthly"
+    show_button = true
+    enable_date_ranges = true
+    enable_monthly_breakdown = true
+
+    # Update this list at the start of each new year.
+    available_years = 2025, 2024, 2023, 2022
+
+    type = spline
+    time_length = month
+    tooltip_date_format = "dddd LL"
+    aggregate_type = max
+    aggregate_interval = 86400      # 1 day — one data point per day
+    gapsize = 86400
+
+    # ------------------------------------------------------------------
+    # Daily maximum temperature for the selected month
+    # ------------------------------------------------------------------
+    [[chart1]]
+        title = Temperature
+
+        [[[outTemp]]]
+            zIndex = 1
+            name = Max Temperature
+            color = red
