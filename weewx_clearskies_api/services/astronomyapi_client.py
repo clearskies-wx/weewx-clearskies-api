@@ -242,6 +242,7 @@ class AstronomyApiClient:
             "from_date": from_date.strftime("%Y-%m-%d"),
             "to_date": to_date.strftime("%Y-%m-%d"),
             "time": "00:00:00",
+            "output": "rows",
         }
 
         try:
@@ -299,10 +300,8 @@ class AstronomyApiClient:
     ) -> list[dict]:  # type: ignore[type-arg]
         """Parse the AstronomyAPI Events JSON response.
 
-        Actual API structure (verified 2026-06-04):
-            {"data": {"table": {"rows": [{"entry": {...}, "cells": [{...}, ...]}]}}}
-
-        Each cell IS an event (type + eventHighlights + extraInfo directly).
+        Expected structure (output=rows):
+            {"data": {"rows": [{"body": {...}, "events": [{...}, ...]}]}}
 
         Skips individual events that fail to parse rather than aborting the
         whole response.
@@ -317,10 +316,10 @@ class AstronomyApiClient:
             List of parsed eclipse dicts.
         """
         try:
-            rows = payload["data"]["table"]["rows"]
+            rows = payload["data"]["rows"]
         except (KeyError, TypeError):
             logger.warning(
-                "AstronomyAPI response missing data.table.rows (body=%s, from=%s, to=%s)",
+                "AstronomyAPI response missing data.rows (body=%s, from=%s, to=%s)",
                 body,
                 from_date,
                 to_date,
@@ -329,7 +328,7 @@ class AstronomyApiClient:
 
         if not isinstance(rows, list):
             logger.warning(
-                "AstronomyAPI data.table.rows is not a list (body=%s, from=%s, to=%s)",
+                "AstronomyAPI data.rows is not a list (body=%s, from=%s, to=%s)",
                 body,
                 from_date,
                 to_date,
@@ -338,11 +337,11 @@ class AstronomyApiClient:
 
         results: list[dict] = []  # type: ignore[type-arg]
         for row in rows:
-            cells = row.get("cells") if isinstance(row, dict) else None
-            if not isinstance(cells, list):
+            events = row.get("events") if isinstance(row, dict) else None
+            if not isinstance(events, list):
                 continue
-            for cell in cells:
-                parsed = self._parse_event(cell, contact_fields, body, from_date, to_date)
+            for event in events:
+                parsed = self._parse_event(event, contact_fields, body, from_date, to_date)
                 if parsed is not None:
                     results.append(parsed)
 
