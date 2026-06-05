@@ -49,6 +49,7 @@ def _as_utc(v: datetime | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 _ARCHIVE_INTERVAL_CHOICES = frozenset({"raw", "hour", "day"})
+_ARCHIVE_AGG_CHOICES = frozenset({"min", "max", "avg", "sum", "count"})
 
 
 class ArchiveQueryParams(BaseModel):
@@ -60,6 +61,7 @@ class ArchiveQueryParams(BaseModel):
     to: datetime | None = None
     interval: str = "raw"
     fields: str | None = None
+    agg: str | None = None
     limit: int = Field(default=1000, ge=1, le=10000)
     cursor: str | None = None
     page: int | None = Field(default=None, ge=1)
@@ -76,6 +78,15 @@ class ArchiveQueryParams(BaseModel):
         if v not in _ARCHIVE_INTERVAL_CHOICES:
             raise ValueError(
                 f"interval must be one of {sorted(_ARCHIVE_INTERVAL_CHOICES)}"
+            )
+        return v
+
+    @field_validator("agg")
+    @classmethod
+    def validate_agg(cls, v: str | None) -> str | None:
+        if v is not None and v not in _ARCHIVE_AGG_CHOICES:
+            raise ValueError(
+                f"agg must be one of {sorted(_ARCHIVE_AGG_CHOICES)}"
             )
         return v
 

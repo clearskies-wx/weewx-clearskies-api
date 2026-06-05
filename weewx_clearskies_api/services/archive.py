@@ -56,6 +56,16 @@ _DAY_AGG_TO_COL: dict[str, str] = {
     "max": "max",
     "min": "min",
     "sum": "sum",
+    "count": "count",
+}
+
+# SQL aggregate function name for each allowed agg value (used by _fetch_hourly).
+_AGG_TO_SQL_FUNC: dict[str, str] = {
+    "avg": "AVG",
+    "max": "MAX",
+    "min": "MIN",
+    "sum": "SUM",
+    "count": "COUNT",
 }
 
 # Canonical field → which archive_day_* column to read.
@@ -313,8 +323,15 @@ def get_archive(
     limit: int,
     cursor: str | None,
     page: int | None,
+    agg: str | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
-    """Query the archive and return (records, page_info)."""
+    """Query the archive and return (records, page_info).
+
+    agg: optional aggregation override for interval=day and interval=hour.
+    Allowed values: "min", "max", "avg", "sum", "count".  None means use the
+    per-field default from DAY_AGGREGATOR (day) or AVG (hour).
+    For interval=raw, agg is silently ignored.
+    """
     now = datetime.now(tz=UTC)
     effective_to = to_dt if to_dt is not None else now
     effective_from = from_dt if from_dt is not None else (now - timedelta(hours=24))
@@ -331,11 +348,19 @@ def get_archive(
         from_epoch = after_dt_epoch + 1
 
     if interval == "raw":
-        return _fetch_raw(db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields)
+        return _fetch_raw(
+            db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields
+        )
     if interval == "hour":
-        return _fetch_hourly(db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields)
+        return _fetch_hourly(
+            db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields,
+            agg=agg,
+        )
     if interval == "day":
-        return _fetch_daily(db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields)
+        return _fetch_daily(
+            db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields,
+            agg=agg,
+        )
     raise ValueError(f"Unknown interval: {interval!r}")
 
 
@@ -418,6 +443,7 @@ def _fetch_hourly(
     page: int | None,
     cursor: str | None,
     fields: list[str] | None,
+    agg: str | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     dialect = _HourDialect(db.bind.dialect.name)  # type: ignore[union-attr]
     bucket_expr = dialect.hour_bucket_expr()  # trusted dialect constant
@@ -438,8 +464,12 @@ def _fetch_hourly(
             and registry.stock[c].canonical_name in field_set
         ]
 
+    # Resolve SQL aggregate function: use agg override when provided, else AVG.
+    # _AGG_TO_SQL_FUNC values are trusted constants, not user input.
+    sql_func = _AGG_TO_SQL_FUNC.get(agg, "AVG") if agg is not None else "AVG"
+
     # Trusted column identifiers — sourced from schema reflection, not user input.
-    agg_parts = ", ".join(f"AVG({col}) AS {col}" for col in stock_cols)
+    agg_parts = ", ".join(f"{sql_func}({col}) AS {col}" for col in stock_cols)
     if agg_parts:
         agg_parts = ", " + agg_parts
 
@@ -510,11 +540,14 @@ def _fetch_daily(
     page: int | None,
     cursor: str | None,
     fields: list[str] | None,
+    agg: str | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     """Read from archive_day_* summary tables.
 
     Each canonical field gets its value from the appropriate column in the
     field's own summary table.
+
+    agg: when provided, overrides the per-field default from DAY_AGGREGATOR.
     """
     all_stock_keys = [k for k in registry.stock if k not in _META_COLS]
     if fields is not None:
@@ -526,7 +559,7 @@ def _fetch_daily(
     aggregable = [f for f in target_fields if f in DAY_AGGREGATOR]
 
     day_rows = _fetch_day_aggregates(
-        db, aggregable, from_epoch, to_epoch, limit, offset
+        db, aggregable, from_epoch, to_epoch, limit, offset, agg_override=agg
     )
 
     records: list[ArchiveRecord] = []
@@ -580,12 +613,16 @@ def _fetch_day_aggregates(
     to_epoch: int,
     limit: int,
     offset: int,
+    agg_override: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch per-day aggregated rows from archive_day_* tables.
 
     Returns list of dicts keyed by canonical field name + "dateTime".
     Table names (archive_day_<field>) are constructed from trusted stock field
     names, not user input.
+
+    agg_override: when provided, all fields use this aggregation column instead
+    of the per-field default from DAY_AGGREGATOR.
     """
     # Collect rows keyed by dateTime bucket.
     day_data: dict[int, dict[str, Any]] = {}
@@ -594,7 +631,7 @@ def _fetch_day_aggregates(
     primary_table_found = False
 
     for field_name in fields:
-        agg_col = DAY_AGGREGATOR.get(field_name)
+        agg_col = agg_override or DAY_AGGREGATOR.get(field_name, "avg")
         if agg_col is None:
             continue
         # Table name is archive_day_<stock_field_name> — trusted constant.

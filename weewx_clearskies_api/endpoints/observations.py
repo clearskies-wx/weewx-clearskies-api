@@ -348,6 +348,7 @@ def get_archive_endpoint(
             limit=params.limit,
             cursor=params.cursor,
             page=params.page,
+            agg=params.agg,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
