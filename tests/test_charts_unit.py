@@ -3,19 +3,34 @@
 Covers per the 3a-2 brief:
   - Self-prune: homepage members shrink when ColumnRegistry lacks
     lightning_strike_count + pollutantPM25.
-  - All groups self-hide when mapped set is empty → groups=[].
+  - All groups self-hide when mapped set is empty -> groups=[].
   - Built-in group constants: 4 groups with correct IDs, names, members.
   - Group with zero members after prune is omitted.
 
 ADR references: ADR-024 (built-in chart groups and self-hide rule).
+
+Note (T3.4): _BUILTIN_GROUPS was removed from services/charts.py in T3.4.
+  - TestBuiltInChartGroupConstants now verifies the same invariants via the
+    config-driven path: load built-in defaults, wire them, call get_chart_groups().
+  - TestChartGroupSelfPrune wires a synthetic ChartsConfig representing the
+    original four groups (including the optional lightning/PM2.5 members) so
+    the prune behaviour under test is fully exercised.
 """
 
 from __future__ import annotations
 
+import pytest
+
 from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
+from weewx_clearskies_api.models.chart_config import (
+    ChartConfig,
+    ChartGroupConfig,
+    ChartsConfig,
+    SeriesConfig,
+)
 
 # ---------------------------------------------------------------------------
-# Helper
+# Helper: registry builder
 # ---------------------------------------------------------------------------
 
 
@@ -30,7 +45,12 @@ def _make_registry_with_mapped(mapped_canonical_names: list[str]) -> ColumnRegis
 
 
 # ---------------------------------------------------------------------------
-# Built-in group constants
+# Helper: synthetic ChartsConfig with four legacy-equivalent groups
+#
+# These member lists mirror the original _BUILTIN_GROUPS constant so that the
+# TestChartGroupSelfPrune tests remain meaningful.  The config-driven defaults
+# (charts.conf.default) use a slightly different set; tests that need the
+# real defaults use _load_builtin_default() instead.
 # ---------------------------------------------------------------------------
 
 _HOMEPAGE_DEFAULTS = [
@@ -43,86 +63,175 @@ _ANNUAL_DEFAULTS = ["outTemp", "rain"]
 _AVGCLIMATE_DEFAULTS = ["outTemp", "rain"]
 
 
+def _build_synthetic_charts_config() -> ChartsConfig:
+    """Build a ChartsConfig whose groups cover the four legacy member sets.
+
+    Each group gets one chart, and each member gets its own single-series
+    chart entry so that prune_charts_config() can drop individual members.
+    """
+
+    def _group(group_id: str, members: list[str]) -> ChartGroupConfig:
+        charts = [
+            ChartConfig(
+                chart_id=f"{group_id}_{m}",
+                series=[SeriesConfig(series_id=m)],
+            )
+            for m in members
+        ]
+        rolling = ["1d"] if group_id == "homepage" else []
+        return ChartGroupConfig(
+            group_id=group_id,
+            charts=charts,
+            rolling_ranges=rolling,
+        )
+
+    return ChartsConfig(
+        groups=[
+            _group("homepage", _HOMEPAGE_DEFAULTS),
+            _group("monthly", _MONTHLY_DEFAULTS),
+            _group("ANNUAL", _ANNUAL_DEFAULTS),
+            _group("averageclimate", _AVGCLIMATE_DEFAULTS),
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixture: reset the charts-config singleton after each test
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_charts_config_singleton():
+    """Ensure the global charts-config singleton is cleared after every test.
+
+    wire_charts_config() sets a module-level variable.  Without teardown,
+    one test's wired config leaks into the next.
+    """
+    from weewx_clearskies_api.services import charts_config as _cc_module
+
+    yield
+    _cc_module._charts_config = None  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Built-in group constants (config-driven path)
+# ---------------------------------------------------------------------------
+
+# Members the charts.conf.default homepage group defines.
+_DEFAULT_HOMEPAGE_MEMBERS = {
+    "outTemp", "dewpoint", "windDir", "windGust", "windSpeed",
+    "rainRate", "rain", "barometer", "radiation", "UV",
+    "lightning_strike_count",
+}
+_DEFAULT_MONTHLY_MEMBERS = {"outTemp", "windSpeed", "rain", "barometer"}
+_DEFAULT_ANNUAL_MEMBERS = {"outTemp", "rain"}
+
+
 class TestBuiltInChartGroupConstants:
-    """_BUILTIN_GROUPS constant in services/charts.py matches the brief spec."""
+    """Built-in defaults (charts.conf.default) produce the expected 4 groups.
+
+    Previously these tests imported _BUILTIN_GROUPS directly.  T3.4 removed
+    that constant; the equivalent invariants now hold over the config-driven
+    path: load the built-in default config, wire it, and call get_chart_groups()
+    with a full registry so no groups are pruned away.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _wire_builtin_defaults(self):
+        """Wire the built-in default config so get_chart_groups() can be called."""
+        from weewx_clearskies_api.services.charts_config import (
+            _load_builtin_default,
+            wire_charts_config,
+        )
+
+        wire_charts_config(_load_builtin_default())
+
+    def _full_registry(self) -> ColumnRegistry:
+        """Registry that contains every member across all four default groups."""
+        all_members = list(
+            _DEFAULT_HOMEPAGE_MEMBERS
+            | _DEFAULT_MONTHLY_MEMBERS
+            | _DEFAULT_ANNUAL_MEMBERS
+        )
+        return _make_registry_with_mapped(all_members)
 
     def test_four_built_in_groups_defined(self) -> None:
         """Exactly 4 built-in groups: homepage, monthly, ANNUAL, averageclimate."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        group_ids = {g.group_id for g in _BUILTIN_GROUPS}
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        group_ids = {g.group_id for g in groups}
         assert group_ids == {"homepage", "monthly", "ANNUAL", "averageclimate"}, (
             f"Expected 4 built-in group IDs, got {group_ids!r}"
         )
 
     def test_homepage_group_has_correct_default_members(self) -> None:
-        """homepage group default members match brief spec."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        homepage = next(g for g in _BUILTIN_GROUPS if g.group_id == "homepage")
-        assert set(homepage.members) == set(_HOMEPAGE_DEFAULTS), (
+        """homepage group default members match charts.conf.default."""
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        homepage = next(g for g in groups if g.group_id == "homepage")
+        assert set(homepage.members) == _DEFAULT_HOMEPAGE_MEMBERS, (
             f"homepage default members mismatch. "
-            f"Extra: {set(homepage.members) - set(_HOMEPAGE_DEFAULTS)}. "
-            f"Missing: {set(_HOMEPAGE_DEFAULTS) - set(homepage.members)}."
+            f"Extra: {set(homepage.members) - _DEFAULT_HOMEPAGE_MEMBERS}. "
+            f"Missing: {_DEFAULT_HOMEPAGE_MEMBERS - set(homepage.members)}."
         )
 
     def test_homepage_default_range_is_1d(self) -> None:
-        """homepage default_range is '1d'."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        homepage = next(g for g in _BUILTIN_GROUPS if g.group_id == "homepage")
+        """homepage default_range is '1d' (first rolling_ranges entry)."""
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        homepage = next(g for g in groups if g.group_id == "homepage")
         assert homepage.default_range == "1d", (
             f"homepage default_range must be '1d', got {homepage.default_range!r}"
         )
 
     def test_monthly_default_range_is_none(self) -> None:
         """monthly default_range is None (has its own month-dropdown selector)."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        monthly = next(g for g in _BUILTIN_GROUPS if g.group_id == "monthly")
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        monthly = next(g for g in groups if g.group_id == "monthly")
         assert monthly.default_range is None, (
             f"monthly default_range must be None, got {monthly.default_range!r}"
         )
 
     def test_annual_default_range_is_none(self) -> None:
         """ANNUAL default_range is None (year dropdown)."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        annual = next(g for g in _BUILTIN_GROUPS if g.group_id == "ANNUAL")
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        annual = next(g for g in groups if g.group_id == "ANNUAL")
         assert annual.default_range is None
 
     def test_all_built_in_groups_have_built_in_true(self) -> None:
         """All 4 built-in groups have built_in=True."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        for group in _BUILTIN_GROUPS:
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        for group in groups:
             assert group.built_in is True, (
                 f"Group {group.group_id!r} built_in must be True"
             )
 
     def test_monthly_default_members_match_brief(self) -> None:
         """monthly group default members: outTemp, rain, windSpeed, barometer."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        monthly = next(g for g in _BUILTIN_GROUPS if g.group_id == "monthly")
-        assert set(monthly.members) == set(_MONTHLY_DEFAULTS), (
-            f"monthly members mismatch: {set(monthly.members)} vs {set(_MONTHLY_DEFAULTS)}"
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        monthly = next(g for g in groups if g.group_id == "monthly")
+        assert set(monthly.members) == _DEFAULT_MONTHLY_MEMBERS, (
+            f"monthly members mismatch: {set(monthly.members)} vs {_DEFAULT_MONTHLY_MEMBERS}"
         )
 
     def test_annual_default_members_match_brief(self) -> None:
         """ANNUAL group default members: outTemp, rain."""
-        from weewx_clearskies_api.services.charts import (
-            _BUILTIN_GROUPS,  # type: ignore[attr-defined]
-        )
-        annual = next(g for g in _BUILTIN_GROUPS if g.group_id == "ANNUAL")
-        assert set(annual.members) == set(_ANNUAL_DEFAULTS)
+        from weewx_clearskies_api.services.charts import get_chart_groups
+
+        groups = get_chart_groups(self._full_registry())
+        annual = next(g for g in groups if g.group_id == "ANNUAL")
+        assert set(annual.members) == _DEFAULT_ANNUAL_MEMBERS
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +240,22 @@ class TestBuiltInChartGroupConstants:
 
 
 class TestChartGroupSelfPrune:
-    """get_chart_groups prunes members against the mapped registry set."""
+    """get_chart_groups prunes members against the mapped registry set.
+
+    Each test wires a synthetic ChartsConfig (pre-pruned against the test
+    registry) to simulate the startup-time wire_charts_config() call.
+    """
+
+    def _wire_pruned_config(self, registry: ColumnRegistry) -> None:
+        """Build synthetic config, prune it against registry, and wire it."""
+        from weewx_clearskies_api.services.charts_config import (
+            prune_charts_config,
+            wire_charts_config,
+        )
+
+        raw = _build_synthetic_charts_config()
+        pruned = prune_charts_config(raw, registry)
+        wire_charts_config(pruned)
 
     def test_homepage_members_exclude_missing_lightning_and_pm25(self) -> None:
         """homepage.members drops lightning_strike_count + pollutantPM25 when not mapped."""
@@ -143,6 +267,7 @@ class TestChartGroupSelfPrune:
             if m not in {"lightning_strike_count", "pollutantPM25"}
         ]
         registry = _make_registry_with_mapped(mapped)
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
@@ -165,6 +290,7 @@ class TestChartGroupSelfPrune:
             if m not in {"lightning_strike_count", "pollutantPM25"}
         ]
         registry = _make_registry_with_mapped(mapped)
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
@@ -176,10 +302,11 @@ class TestChartGroupSelfPrune:
             )
 
     def test_empty_mapped_set_hides_all_groups(self) -> None:
-        """When mapped set is empty, all groups self-hide → groups=[]."""
+        """When mapped set is empty, all groups self-hide -> groups=[]."""
         from weewx_clearskies_api.services.charts import get_chart_groups
 
         registry = _make_registry_with_mapped([])  # No columns mapped
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
         assert groups == [], (
             f"All groups must self-hide when mapped set is empty, got {groups!r}"
@@ -191,6 +318,7 @@ class TestChartGroupSelfPrune:
 
         # UV is in homepage but NOT in monthly/ANNUAL/averageclimate
         registry = _make_registry_with_mapped(["UV"])
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
 
         group_ids = {g.group_id for g in groups}
@@ -210,6 +338,7 @@ class TestChartGroupSelfPrune:
 
         # Map only fields that are NOT in homepage's member list
         registry = _make_registry_with_mapped(["inTemp", "inHumidity"])
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
 
         homepage = next((g for g in groups if g.group_id == "homepage"), None)
@@ -226,6 +355,7 @@ class TestChartGroupSelfPrune:
             set(_ANNUAL_DEFAULTS) | set(_AVGCLIMATE_DEFAULTS)
         )
         registry = _make_registry_with_mapped(all_needed)
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
         group_ids = {g.group_id for g in groups}
         assert group_ids == {"homepage", "monthly", "ANNUAL", "averageclimate"}, (
@@ -238,6 +368,7 @@ class TestChartGroupSelfPrune:
 
         mapped = ["outTemp", "rain", "barometer"]
         registry = _make_registry_with_mapped(mapped)
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
 
         for group in groups:
@@ -252,6 +383,7 @@ class TestChartGroupSelfPrune:
         from weewx_clearskies_api.services.charts import ChartGroupEntry, get_chart_groups
 
         registry = _make_registry_with_mapped(["outTemp", "rain"])
+        self._wire_pruned_config(registry)
         groups = get_chart_groups(registry)
         for group in groups:
             assert isinstance(group, ChartGroupEntry), (
