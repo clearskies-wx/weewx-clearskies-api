@@ -4,7 +4,7 @@ Fetches 72-hour seeing forecasts from the free 7Timer ASTRO product.
 No API key or registration required.
 
 Endpoint:
-    GET http://www.7timer.info/bin/api.pl?lon={lon}&lat={lat}&product=astro&output=json
+    GET https://www.7timer.info/bin/astro.php?lon={lon}&lat={lat}&product=astro&output=json
 
 7Timer returns a 72-hour forecast in 3-hour intervals (timepoints 3, 6, ..., 72).
 All index fields use -9999 to indicate undefined/unavailable data; entries with
@@ -79,7 +79,7 @@ class SevenTimerProvider:
 
     Usage:
         provider = SevenTimerProvider(
-            base_url="http://www.7timer.info/bin/api.pl",
+            base_url="https://www.7timer.info/bin/astro.php",
             timeout_seconds=10,
         )
         points = provider.fetch_forecast(lat=47.6, lon=-122.3)
@@ -93,7 +93,10 @@ class SevenTimerProvider:
     def __init__(self, base_url: str, timeout_seconds: int) -> None:
         self._base_url = base_url
         self._timeout_seconds = timeout_seconds
-        self._client = httpx.Client(timeout=httpx.Timeout(float(timeout_seconds)))
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(float(timeout_seconds)),
+            follow_redirects=True,
+        )
 
     # ------------------------------------------------------------------
     # Public API

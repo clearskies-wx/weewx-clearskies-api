@@ -679,7 +679,7 @@ class SeeingSettings:
         raw_provider = str(section.get("provider", "7timer")).strip()
         self.provider = raw_provider if raw_provider else None
         self.base_url = str(
-            section.get("base_url", "http://www.7timer.info/bin/api.pl")
+            section.get("base_url", "https://www.7timer.info/bin/astro.php")
         ).strip()
         self.timeout_seconds = int(section.get("timeout_seconds", "10"))
 

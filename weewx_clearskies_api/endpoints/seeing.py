@@ -47,7 +47,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 _seeing_provider: str | None = None
-_seeing_base_url: str = "http://www.7timer.info/bin/api.pl"
+_seeing_base_url: str = "https://www.7timer.info/bin/astro.php"
 _seeing_timeout_seconds: int = 10
 
 
@@ -62,8 +62,8 @@ def wire_seeing_settings(settings: object) -> None:
     seeing_section = getattr(settings, "seeing", None)
     if seeing_section is not None:
         _seeing_provider = getattr(seeing_section, "provider", None)
-        raw_base_url = getattr(seeing_section, "base_url", "http://www.7timer.info/bin/api.pl")
-        _seeing_base_url = raw_base_url if raw_base_url else "http://www.7timer.info/bin/api.pl"
+        raw_base_url = getattr(seeing_section, "base_url", "https://www.7timer.info/bin/astro.php")
+        _seeing_base_url = raw_base_url if raw_base_url else "https://www.7timer.info/bin/astro.php"
         _seeing_timeout_seconds = int(getattr(seeing_section, "timeout_seconds", 10))
 
 
