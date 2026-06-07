@@ -322,10 +322,15 @@ def get_archive_endpoint(
     parsed_field_names: list[str] | None = None
     if params.fields is not None:
         names = [f.strip() for f in params.fields.split(",") if f.strip()]
+        # Accept any column the archive table actually has — stock (with its
+        # canonical name from STOCK_COLUMN_MAP) or unmapped extension columns
+        # (identity-mapped: canonical_name == db_name per reflection.py T-A1).
         mapped_names = {
             info.canonical_name
             for info in registry.stock.values()
-            if info.canonical_name is not None
+        } | {
+            info.canonical_name
+            for info in registry.unmapped.values()
         }
         unknown = [n for n in names if n not in mapped_names]
         if unknown:

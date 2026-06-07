@@ -138,6 +138,9 @@ DAY_AGGREGATOR: dict[str, str] = {
     "referenceVoltage": "avg",
     "supplyVoltage": "avg",
 
+    # Extension fields — auto-mapped from operator's weewx extensions.
+    "aqi": "avg",                 # AQI index — daily average (AirVisual, etc.)
+
     # Newly first-class fields (added per user directive 2026-05-06).
     # Judgment calls flagged in closeout report for lead review.
     "cloudcover": "avg",          # percent — average

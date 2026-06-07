@@ -11,8 +11,10 @@ parts:
      difference that is documented in the mapping table below.
 
   b) Unmapped non-stock columns — discovered columns that are not in the
-     stock table.  Surfaced for task-3's operator-mapping UI.  Not yet
-     mapped; invisible to endpoints until the operator maps them.
+     stock table.  Auto-mapped using the DB column name as the canonical
+     name (identity mapping) so every archive column is immediately
+     queryable via /archive.  Task 3's operator-mapping UI can later
+     assign a different canonical name.
 
 Re-introspection (operator-triggered via the config UI in task 3) calls
 refresh().  At v0.1 task 2, refresh() simply re-runs reflect().
@@ -173,8 +175,10 @@ class ColumnInfo:
 
     #: Verbatim column name as it appears in the DB schema.
     db_name: str
-    #: Canonical API field name (from STOCK_COLUMN_MAP), or None for unmapped.
-    canonical_name: str | None
+    #: Canonical API field name.  For stock columns this comes from
+    #: STOCK_COLUMN_MAP; for unmapped (extension) columns the DB column name
+    #: is used as-is (identity mapping) so every archive column is queryable.
+    canonical_name: str
     #: True for columns in STOCK_COLUMN_MAP; False for operator-custom columns.
     is_stock: bool
 
@@ -192,8 +196,9 @@ class ColumnRegistry:
 
     #: Stock columns: db_name → ColumnInfo (canonical_name set, is_stock=True).
     stock: dict[str, ColumnInfo] = field(default_factory=dict)
-    #: Non-stock / unmapped columns: db_name → ColumnInfo (canonical_name=None,
-    #: is_stock=False).  Operator must map these via the config UI (task 3).
+    #: Non-stock / unmapped columns: db_name → ColumnInfo (is_stock=False).
+    #: canonical_name is set to db_name (identity mapping) so every archive
+    #: column is immediately queryable via /archive without operator action.
     unmapped: dict[str, ColumnInfo] = field(default_factory=dict)
 
     def all_columns(self) -> list[ColumnInfo]:
@@ -201,9 +206,11 @@ class ColumnRegistry:
         return list(self.stock.values()) + list(self.unmapped.values())
 
     def get_canonical(self, db_name: str) -> str | None:
-        """Return the canonical name for a DB column, or None if unmapped."""
+        """Return the canonical name for a DB column, or None if not reflected."""
         if db_name in self.stock:
             return self.stock[db_name].canonical_name
+        if db_name in self.unmapped:
+            return self.unmapped[db_name].canonical_name
         return None
 
 
@@ -224,13 +231,17 @@ def _build_registry(columns: list[str]) -> ColumnRegistry:
                 is_stock=True,
             )
         else:
+            # Identity mapping: use the DB column name as the canonical name so
+            # extension columns (e.g. aqi, aqi_level) are immediately queryable
+            # via /archive without operator action.  Task 3's mapping UI can
+            # later replace this with a user-chosen canonical name.
             registry.unmapped[col] = ColumnInfo(
                 db_name=col,
-                canonical_name=None,
+                canonical_name=col,
                 is_stock=False,
             )
-            logger.warning(
-                "Non-stock archive column found — not yet mapped to a canonical field. "
+            logger.info(
+                "Non-stock archive column found — auto-mapped to its DB column name. "
                 "Task 3 / Phase 4 will expose this column in the operator mapping UI.",
                 extra={"column": col},
             )
