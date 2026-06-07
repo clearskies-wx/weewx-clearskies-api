@@ -584,7 +584,15 @@ def _fetch_custom_interval(
 
     all_query_cols = stock_cols + unmapped_cols
 
-    agg_parts = ", ".join(f"AVG({col}) AS {col}" for col in all_query_cols)
+    # Per-field aggregation matching DAY_AGGREGATOR: avg for temp/pressure,
+    # max for windSpeed/radiation/rainRate, sum for rain/ET, min for windchill.
+    def _sql_agg(col: str) -> str:
+        agg = DAY_AGGREGATOR.get(col, "avg").upper()
+        if agg == "AVG":
+            return f"AVG({col}) AS {col}"
+        return f"{agg}({col}) AS {col}"
+
+    agg_parts = ", ".join(_sql_agg(col) for col in all_query_cols)
     if agg_parts:
         agg_parts = ", " + agg_parts
 
