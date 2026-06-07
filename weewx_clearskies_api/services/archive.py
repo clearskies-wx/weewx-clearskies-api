@@ -50,9 +50,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # archive_day_* aggregator column name for each category.
-# weewx archive_day cols: min, mintime, max, maxtime, sum, count, wsum, sumtime, avg
+# weewx archive_day cols: min, mintime, max, maxtime, sum, count, wsum, sumtime
+# Note: there is NO "avg" column — average is computed as wsum/sumtime.
 _DAY_AGG_TO_COL: dict[str, str] = {
-    "avg": "avg",
     "max": "max",
     "min": "min",
     "sum": "sum",
@@ -650,12 +650,16 @@ def _fetch_day_aggregates(
 
     for field_name in fields:
         agg_col = agg_override or DAY_AGGREGATOR.get(field_name, "avg")
-        # Table name is archive_day_<stock_field_name> — trusted constant.
         table_name = f"archive_day_{field_name}"
-        agg_col_name = _DAY_AGG_TO_COL.get(agg_col, "avg")
+
+        if agg_col == "avg":
+            val_expr = "wsum / NULLIF(sumtime, 0)"
+        else:
+            col_name = _DAY_AGG_TO_COL.get(agg_col, "sum")
+            val_expr = f"`{col_name}`"
 
         sql = text(
-            f"SELECT dateTime, `{agg_col_name}` AS val "
+            f"SELECT dateTime, {val_expr} AS val "
             f"FROM `{table_name}` "
             f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
             f"ORDER BY dateTime ASC "
