@@ -780,6 +780,10 @@ class SeriesConfigResponse(BaseModel):
     customSqlQuery: str | None = None
     xColumn: str | None = None
     yColumn: str | None = None
+    yAxisSoftMin: float | None = None
+    yAxisSoftMax: float | None = None
+    borderWidth: int | None = None
+    numberFormat: dict[str, Any] | None = None
 
 
 class ChartConfigResponse(BaseModel):

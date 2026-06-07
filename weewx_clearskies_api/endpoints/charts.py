@@ -75,6 +75,10 @@ def _series_to_response(s: SeriesConfig) -> SeriesConfigResponse:
         customSqlQuery=s.custom_sql_query,
         xColumn=s.x_column,
         yColumn=s.y_column,
+        yAxisSoftMin=s.y_axis_soft_min,
+        yAxisSoftMax=s.y_axis_soft_max,
+        borderWidth=s.border_width,
+        numberFormat=s.number_format,
     )
 
 
