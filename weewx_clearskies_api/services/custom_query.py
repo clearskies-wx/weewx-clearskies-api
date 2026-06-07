@@ -16,6 +16,7 @@ The module exposes two public callables:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from dataclasses import dataclass
@@ -280,9 +281,15 @@ def execute_custom_query(
     dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
 
     if dialect_name == "mysql":
-        # Best-effort timeout — MariaDB only.  Does not prevent connection-level
-        # enforcement from the read-only grant, but limits long-running SELECTs.
-        db.execute(text(f"SET SESSION max_execution_time = {_MARIADB_TIMEOUT_MS}"))  # noqa: S608
+        # Best-effort timeout — limits long-running SELECTs.
+        # MariaDB uses max_statement_time (seconds); MySQL uses max_execution_time (ms).
+        # Try MariaDB syntax first, fall back to MySQL.
+        timeout_s = _MARIADB_TIMEOUT_MS // 1000
+        try:
+            db.execute(text(f"SET SESSION max_statement_time = {timeout_s}"))  # noqa: S608
+        except Exception:  # noqa: BLE001
+            with contextlib.suppress(Exception):
+                db.execute(text(f"SET SESSION max_execution_time = {_MARIADB_TIMEOUT_MS}"))  # noqa: S608
 
     rows = db.execute(text(validated.sql), params).fetchall()
 
