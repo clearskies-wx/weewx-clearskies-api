@@ -53,6 +53,66 @@ _GROUP_UNSUPPORTED: frozenset[str] = frozenset(
 _SERIES_KEY_RENAMES: dict[str, str] = {}
 
 # ---------------------------------------------------------------------------
+# Injection maps — default axis labels, number formats, and observation aliases
+# ---------------------------------------------------------------------------
+
+# Subsection names that are metadata/config, not real observation series.
+# These are skipped when injecting axis labels, number formats, and aliases.
+_SKIP_SERIES: frozenset[str] = frozenset({"marker", "states", "numberFormat"})
+
+# Maps observation type → default yAxis_label for US-unit deployments.
+# Only injected when the series does not already carry a yAxis_label.
+_DEFAULT_AXIS_LABELS: dict[str, str] = {
+    "outTemp": "Temperature (°F)",
+    "dewpoint": "Temperature (°F)",
+    "windchill": "Temperature (°F)",
+    "heatindex": "Temperature (°F)",
+    "inTemp": "Temperature (°F)",
+    "windSpeed": "Wind Speed (mph)",
+    "windGust": "Wind Speed (mph)",
+    "windDir": "Wind Direction (°)",
+    "barometer": "Barometer (inHg)",
+    "pressure": "Barometer (inHg)",
+    "altimeter": "Barometer (inHg)",
+    "rainRate": "Rain Rate (in/hr)",
+    "rain": "Rain (in)",
+    "rainTotal": "Rain (in)",
+    "radiation": "Solar Radiation (W/m²)",
+    "maxSolarRad": "Solar Radiation (W/m²)",
+    "UV": "UV Index",
+    "lightning_strike_count": "Number of Strikes",
+    "lightning_distance": "Distance (miles)",
+    "outHumidity": "Humidity (%)",
+    "inHumidity": "Humidity (%)",
+    "aqi": "AQI",
+}
+
+# Maps observation type → number of decimal places for the tooltip/label.
+# Only injected when the series does not already have a [[[[numberFormat]]]] subsection.
+_DEFAULT_NUMBER_FORMATS: dict[str, int] = {
+    "outTemp": 1,
+    "dewpoint": 1,
+    "windchill": 1,
+    "heatindex": 1,
+    "barometer": 3,
+    "rain": 2,
+    "rainRate": 2,
+    "rainTotal": 2,
+    "windSpeed": 1,
+    "windGust": 1,
+    "UV": 1,
+    "radiation": 0,
+    "lightning_strike_count": 0,
+    "lightning_distance": 1,
+}
+
+# Maps series section name → canonical DB column name.
+# Injected as observation_type when the series does not already have one.
+_OBSERVATION_ALIASES: dict[str, str] = {
+    "rainTotal": "rain",
+}
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -137,6 +197,139 @@ def _walk_section(  # noqa: C901  — intentionally comprehensive section walker
 
 
 # ---------------------------------------------------------------------------
+# Injection helpers
+# ---------------------------------------------------------------------------
+
+
+def _inject_default_axis_labels(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Inject yAxis_label defaults for series that lack one.
+
+    Walks groups → charts → series (3 levels).  For each chart, tracks which
+    yAxis indices (0 = left, 1 = right) already have a label committed by any
+    series.  For the FIRST series on each axis that still needs a label, looks
+    up the observation type in _DEFAULT_AXIS_LABELS and injects it.
+
+    Series named in _SKIP_SERIES (marker, states, numberFormat) are skipped.
+    Series that already carry yAxis_label are never overwritten.
+    """
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            # Track which axis indices already have a label within this chart.
+            axes_labeled: set[int] = set()
+            # First pass: record axes that already have a label.
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+                if series.get("yAxis_label"):
+                    axis_idx = int(series.get("yAxis", "0") or "0")
+                    axes_labeled.add(axis_idx)
+            # Second pass: inject labels for axes that still need one.
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+                axis_idx = int(series.get("yAxis", "0") or "0")
+                if axis_idx in axes_labeled:
+                    continue  # This axis already has a label — skip.
+                obs_type = series.get("observation_type", series_id)
+                label = _DEFAULT_AXIS_LABELS.get(obs_type)
+                if label:
+                    series["yAxis_label"] = label
+                    axes_labeled.add(axis_idx)
+                    if verbose:
+                        log.append(
+                            f"[INJECT] yAxis_label={label!r} on"
+                            f" [{group_id}][{chart_id}][{series_id}]"
+                        )
+
+
+def _inject_number_format_defaults(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Inject a [[[[numberFormat]]]] subsection for series that lack one.
+
+    Only injects when the observation type appears in _DEFAULT_NUMBER_FORMATS
+    and the series does not already carry a numberFormat subsection.
+    Series named in _SKIP_SERIES are skipped.
+    """
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+                # Skip if a numberFormat subsection already exists.
+                if "numberFormat" in series.sections:
+                    continue
+                obs_type = series.get("observation_type", series_id)
+                decimals = _DEFAULT_NUMBER_FORMATS.get(obs_type)
+                if decimals is not None:
+                    series["numberFormat"] = {}
+                    series["numberFormat"]["decimals"] = str(decimals)
+                    if verbose:
+                        log.append(
+                            f"[INJECT] numberFormat.decimals={decimals} on"
+                            f" [{group_id}][{chart_id}][{series_id}]"
+                        )
+
+
+def _inject_observation_aliases(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Inject observation_type for series whose section name is a known alias.
+
+    If a series section name matches a key in _OBSERVATION_ALIASES and the
+    series does NOT already have observation_type set, the canonical DB column
+    name is injected so the dashboard archive fetch uses the correct column.
+    Series named in _SKIP_SERIES are skipped.
+    """
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+                # Only inject when series name is an alias and obs_type not yet set.
+                if series_id in _OBSERVATION_ALIASES and not series.get("observation_type"):
+                    db_col = _OBSERVATION_ALIASES[series_id]
+                    series["observation_type"] = db_col
+                    if verbose:
+                        log.append(
+                            f"[INJECT] observation_type={db_col!r} on"
+                            f" [{group_id}][{chart_id}][{series_id}]"
+                        )
+
+
+# ---------------------------------------------------------------------------
 # Statistics collector
 # ---------------------------------------------------------------------------
 
@@ -205,6 +398,18 @@ def migrate(
     # (Windows-edited files often have a BOM that ConfigObj rejects).
     source_lines = source_path.read_text(encoding="utf-8-sig", errors="replace").splitlines()
 
+    # ---- T0.4: Strip stale comments injected by previous migration runs ----
+    # Running the tool multiple times accumulates "# UNSUPPORTED:" and "# NOTE:"
+    # lines in the operator's graphs.conf (because they appear in the output and
+    # the operator may copy that output back).  Filter them before parsing so
+    # they don't compound on every run.
+    source_lines = [
+        line
+        for line in source_lines
+        if not line.lstrip().startswith("# UNSUPPORTED:")
+        and not line.lstrip().startswith("# NOTE:")
+    ]
+
     # Load with interpolation disabled (same as the Clear Skies parser).
     cfg = configobj.ConfigObj(infile=source_lines, interpolation=False)
 
@@ -228,6 +433,24 @@ def migrate(
         if verbose:
             log.append(f"[GROUP] [{group_id}]")
         _walk_section(group, depth=1, verbose=verbose, log=log, unsupported_keys=unsupported_keys)
+
+    # ---- Inject default axis labels for common observation types ----
+    # Belchertown derives axis labels automatically from weewx's label system.
+    # Clear Skies doesn't have that — the migration tool injects sensible defaults
+    # so operators don't get unlabeled axes.
+    _inject_default_axis_labels(cfg, verbose, log)
+
+    # ---- Inject default numberFormat subsections ----
+    # Belchertown inherits decimal precision from weewx's unit system at runtime.
+    # Clear Skies needs explicit decimals in each series so the tooltip formatter
+    # knows how many decimal places to show.
+    _inject_number_format_defaults(cfg, verbose, log)
+
+    # ---- Inject observation_type for known series-name aliases ----
+    # Some series use a display name (e.g., "rainTotal") that differs from the
+    # actual database column ("rain").  Inject observation_type so the archive
+    # fetch uses the correct column.
+    _inject_observation_aliases(cfg, verbose, log)
 
     # ---- Render to string with header ----
     header_lines = _build_header(source_path)
