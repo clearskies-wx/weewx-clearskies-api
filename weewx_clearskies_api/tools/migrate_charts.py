@@ -482,6 +482,45 @@ def _inject_axis_defaults(
                             )
 
 
+def _inject_cumulative_aggregate(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Promote the rainTotal series aggregate_type to sumcumulative.
+
+    Walk groups → charts → series.  For each series (skip _SKIP_SERIES):
+
+    * series_name.lower() == 'raintotal' → aggregate_type = sumcumulative
+
+    Idempotent: if aggregate_type is already sumcumulative, no change is made.
+    Series in _SKIP_SERIES are skipped.
+    """
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+
+                if (
+                    series_id.lower() == "raintotal"
+                    and series.get("aggregate_type") != "sumcumulative"
+                ):
+                    series["aggregate_type"] = "sumcumulative"
+                    if verbose:
+                        log.append(
+                            f"[INJECT] aggregate_type=sumcumulative (rainTotal) on"
+                            f" [{group_id}][{chart_id}][{series_id}]"
+                        )
+
+
 # ---------------------------------------------------------------------------
 # Statistics collector
 # ---------------------------------------------------------------------------
@@ -615,6 +654,11 @@ def migrate(
     # Barometer needs yAxisTickDecimals=2 for proper inHg formatting.
     # Rain/rainRate/rainTotal need yAxisMin=0 (can't be negative).
     _inject_axis_defaults(cfg, verbose, log)
+
+    # ---- Promote rainTotal series to sumcumulative aggregate ----
+    # Belchertown computes a running daily total for rainTotal at render time.
+    # Clear Skies requires the aggregate_type to be explicit in charts.conf.
+    _inject_cumulative_aggregate(cfg, verbose, log)
 
     # ---- Render to string with header ----
     header_lines = _build_header(source_path)

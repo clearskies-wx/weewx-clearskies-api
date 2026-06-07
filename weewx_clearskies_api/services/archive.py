@@ -589,14 +589,17 @@ def _fetch_custom_interval(
     # Per-field aggregation from operator config (agg_map).
     # Default AVG matches Belchertown's rolling-range default (line 3543).
     # Operator overrides per series: e.g., rain→sum, rainRate→max.
-    _VALID_AGG = frozenset({"AVG", "MAX", "MIN", "SUM", "COUNT"})
+    _VALID_AGG = frozenset({"AVG", "MAX", "MIN", "SUM", "COUNT", "SUMCUMULATIVE"})
     resolved_map = agg_map or {}
 
     def _sql_agg(col: str) -> str:
         func = resolved_map.get(col, "avg").upper()
         if func not in _VALID_AGG:
             func = "AVG"
-        return f"{func}({col}) AS {col}"
+        # SUMCUMULATIVE uses SQL SUM per bucket; the running-total step happens
+        # in Python post-processing after all rows are fetched.
+        sql_func = "SUM" if func == "SUMCUMULATIVE" else func
+        return f"{sql_func}({col}) AS {col}"
 
     agg_parts = ", ".join(_sql_agg(col) for col in all_query_cols)
     if agg_parts:
@@ -624,6 +627,23 @@ def _fetch_custom_interval(
     rows = rows[:limit]
 
     records = [_row_to_archive_record(r, registry) for r in rows]
+
+    # Accumulate per-bucket sums into a running total for SUMCUMULATIVE fields.
+    # ArchiveRecord is Pydantic with extra="allow" and NOT frozen, so setattr works.
+    # Null values are preserved as-is (gaps in data); the running total carries
+    # forward from the last non-null bucket so the line stays continuous.
+    cumulative_fields = {
+        field for field, func in resolved_map.items()
+        if func.upper() == "SUMCUMULATIVE"
+    }
+    if cumulative_fields:
+        running_totals: dict[str, float] = {f: 0.0 for f in cumulative_fields}
+        for rec in records:
+            for field in cumulative_fields:
+                val = getattr(rec, field, None)
+                if val is not None:
+                    running_totals[field] += float(val)
+                    setattr(rec, field, round(running_totals[field], 2))
 
     next_cursor: str | None = None
     if has_more and rows:

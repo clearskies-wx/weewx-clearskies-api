@@ -76,7 +76,7 @@ tooltip_date_format = "LLL"
             visible = true
             color = "#007bff"
             opacity = 1
-            aggregate_type = sum
+            aggregate_type = sumcumulative
 
     [[chart4]]
         title = Barometer
