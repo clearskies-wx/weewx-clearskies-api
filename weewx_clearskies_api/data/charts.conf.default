@@ -16,6 +16,40 @@
 #   [[[series]]]     — one data series within the chart
 #
 # See the Belchertown graphs.conf documentation for all available keys.
+#
+# SPECIAL SERIES TYPES
+# The following series names trigger automatic rendering behavior when used as
+# the series identifier (the [[[name]]] key).  No additional config is required
+# beyond the name itself:
+#
+#   [[[windRose]]]
+#     Renders as a custom SVG polar wind rose: 16 compass directions x 7 Beaufort
+#     speed bands.  The dashboard makes a separate raw (unaggregated) archive fetch
+#     for windSpeed and windDir, then bins client-side using the BFF-injected
+#     'beaufort' field.  Always renders as a polar chart.  Default Beaufort colors
+#     can be overridden with beauford0 through beauford6 keys.
+#
+#   [[[weatherRange]]]
+#     Renders as a Recharts arearange chart (when area_display = 1) or columnrange
+#     (default) with Belchertown's 15-band temperature color zones (blue for cold
+#     through red for hot).  Fetches daily min and max via dual archive calls.
+#     NOT polar by default — only polar when polar = true is explicitly set.
+#     Use range_type to specify the observation (default: outTemp).
+#
+#   [[[haysChart]]]
+#     Renders as a polar Recharts arearange chart — always polar (this is a
+#     circular 24-hour wind chart by design, emulating the Mount Washington
+#     Observatory style).  Queries windSpeed (max) and windGust (max).
+#     yAxis_softMax controls the radial scale ceiling.
+#
+# CUSTOM EXTENSION COLUMNS
+# Any column in the weewx archive table is queryable — including columns added
+# by third-party weewx extensions (e.g., aqi from an AirVisual extension).
+# Use the database column name as the observation_type.  No API changes needed.
+# Example:
+#   [[[aqiSeries]]]
+#       observation_type = aqi
+#       name = Air Quality Index
 ###############################################################################
 
 # Global defaults — apply when a group/chart/series does not set its own value.
@@ -71,6 +105,10 @@ tooltip_date_format = "LLL"
             color = "#28a745"
             opacity = 1
             aggregate_type = max
+        # aggregate_type = sumcumulative: applies SUM per proportional time bucket, then accumulates
+        # the results into a running total.  Each data point is the sum of all previous points.
+        # Used for cumulative rain display (equivalent to Belchertown's automatic rainTotal
+        # post-processing).  Works for any numeric observation, not just rain.
         [[[rain]]]
             name = Rain Total
             visible = true
