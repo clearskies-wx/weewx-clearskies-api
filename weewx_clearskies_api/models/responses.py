@@ -46,7 +46,7 @@ class Observation(BaseModel):
     ruff: noqa: N815  (weewx camelCase names per ADR-010)
     """
 
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     timestamp: str  # UTC ISO-8601 with Z
 

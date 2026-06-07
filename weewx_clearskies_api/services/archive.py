@@ -235,8 +235,10 @@ def _row_to_observation(row: Any, registry: ColumnRegistry) -> Observation:
             # Stock column — always first-class, regardless of which specific field.
             obs_fields[col_info.canonical_name] = val
         else:
-            # Non-stock (operator-custom) column → extras.
+            # Non-stock (operator-custom) column → both extras AND top-level.
+            # Top-level so charts/BFF can access as record.aqi, not record.extras.aqi.
             extras[db_col] = val
+            obs_fields[db_col] = val
 
     obs_fields["extras"] = extras
     return Observation(**obs_fields)
@@ -448,14 +450,15 @@ def _fetch_hourly(
     dialect = _HourDialect(db.bind.dialect.name)  # type: ignore[union-attr]
     bucket_expr = dialect.hour_bucket_expr()  # trusted dialect constant
 
-    # Build the SELECT list from trusted stock column names.
-    # Only include stock columns that map to first-class numeric observation fields
-    # to avoid AVG() on text columns.
+    # Build the SELECT list from trusted column names (stock + unmapped).
     stock_cols = [
         col for col in _stock_obs_columns(registry)
         if registry.stock.get(col) is not None
         and registry.stock[col].canonical_name in _FIRST_CLASS_FIELDS
     ]
+    # Include unmapped DB columns so operators can chart any column in their archive.
+    unmapped_cols = list(registry.unmapped.keys())
+
     if fields is not None:
         field_set = set(fields)
         stock_cols = [
@@ -463,13 +466,16 @@ def _fetch_hourly(
             if registry.stock.get(c) is not None
             and registry.stock[c].canonical_name in field_set
         ]
+        unmapped_cols = [c for c in unmapped_cols if c in field_set]
+
+    all_query_cols = stock_cols + unmapped_cols
 
     # Resolve SQL aggregate function: use agg override when provided, else AVG.
     # _AGG_TO_SQL_FUNC values are trusted constants, not user input.
     sql_func = _AGG_TO_SQL_FUNC.get(agg, "AVG") if agg is not None else "AVG"
 
     # Trusted column identifiers — sourced from schema reflection, not user input.
-    agg_parts = ", ".join(f"{sql_func}({col}) AS {col}" for col in stock_cols)
+    agg_parts = ", ".join(f"{sql_func}({col}) AS {col}" for col in all_query_cols)
     if agg_parts:
         agg_parts = ", " + agg_parts
 
@@ -550,13 +556,23 @@ def _fetch_daily(
     agg: when provided, overrides the per-field default from DAY_AGGREGATOR.
     """
     all_stock_keys = [k for k in registry.stock if k not in _META_COLS]
+    # Include unmapped columns that have day summary tables.
+    all_unmapped_keys = list(registry.unmapped.keys())
     if fields is not None:
-        target_fields = [f for f in fields if f in registry.stock]
+        target_fields = [
+            f for f in fields
+            if f in registry.stock or f in registry.unmapped
+        ]
     else:
-        target_fields = all_stock_keys
+        target_fields = all_stock_keys + all_unmapped_keys
 
     # Limit to fields that have a known day-aggregator and a day table.
-    aggregable = [f for f in target_fields if f in DAY_AGGREGATOR]
+    # Unmapped columns may also have day tables (weewx creates archive_day_<col>
+    # for every numeric column). Default aggregator for unmapped columns is AVG.
+    aggregable = [
+        f for f in target_fields
+        if f in DAY_AGGREGATOR or f in registry.unmapped
+    ]
 
     day_rows = _fetch_day_aggregates(
         db, aggregable, from_epoch, to_epoch, limit, offset, agg_override=agg
