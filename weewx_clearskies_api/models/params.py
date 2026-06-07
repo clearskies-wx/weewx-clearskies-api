@@ -60,9 +60,10 @@ class ArchiveQueryParams(BaseModel):
     from_: datetime | None = Field(default=None, alias="from")
     to: datetime | None = None
     interval: str = "raw"
+    aggregate_interval: int | None = Field(default=None, alias="aggregate_interval", ge=60, le=604800)
     fields: str | None = None
     agg: str | None = None
-    limit: int = Field(default=1000, ge=1, le=10000)
+    limit: int = Field(default=1000, ge=1, le=50000)
     cursor: str | None = None
     page: int | None = Field(default=None, ge=1)
 

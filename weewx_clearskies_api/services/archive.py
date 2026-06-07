@@ -328,6 +328,7 @@ def get_archive(
     cursor: str | None,
     page: int | None,
     agg: str | None = None,
+    aggregate_interval: int | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     """Query the archive and return (records, page_info).
 
@@ -335,6 +336,10 @@ def get_archive(
     Allowed values: "min", "max", "avg", "sum", "count".  None means use the
     per-field default from DAY_AGGREGATOR (day) or AVG (hour).
     For interval=raw, agg is silently ignored.
+
+    aggregate_interval: when provided (seconds), overrides interval and groups
+    records into buckets of this width using FLOOR(dateTime / N) * N.
+    Matches Belchertown's proportional scaling approach.
     """
     now = datetime.now(tz=UTC)
     effective_to = to_dt if to_dt is not None else now
@@ -351,6 +356,11 @@ def get_archive(
         after_dt_epoch = decode_cursor(cursor)
         from_epoch = after_dt_epoch + 1
 
+    if aggregate_interval is not None:
+        return _fetch_custom_interval(
+            db, registry, from_epoch, to_epoch, limit, offset, page, cursor,
+            fields, aggregate_interval,
+        )
     if interval == "raw":
         return _fetch_raw(
             db, registry, from_epoch, to_epoch, limit, offset, page, cursor, fields
@@ -520,6 +530,103 @@ def _fetch_hourly(
             f"  FROM archive "
             f"  WHERE dateTime >= :from_ts AND dateTime < :to_ts "
             f"  GROUP BY hour_bucket"
+            f") sub"
+        )
+        total_records = db.execute(
+            count_sql, {"from_ts": from_epoch, "to_ts": to_epoch}
+        ).scalar() or 0
+        total_pages = max(1, (total_records + limit - 1) // limit)
+
+    return records, PageInfo(
+        cursor=next_cursor, limit=limit, page=page,
+        totalPages=total_pages, totalRecords=total_records,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Custom-interval mode (proportional scaling à la Belchertown)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_custom_interval(
+    db: Session,
+    registry: ColumnRegistry,
+    from_epoch: int,
+    to_epoch: int,
+    limit: int,
+    offset: int,
+    page: int | None,
+    cursor: str | None,
+    fields: list[str] | None,
+    bucket_seconds: int,
+) -> tuple[list[ArchiveRecord], PageInfo]:
+    """Aggregate archive records into fixed-width time buckets.
+
+    Uses FLOOR(dateTime / bucket_seconds) * bucket_seconds as the bucket key.
+    This replicates Belchertown's proportional aggregate_interval scaling:
+    same number of data points regardless of time range.
+    """
+    stock_cols = [
+        col for col in _stock_obs_columns(registry)
+        if registry.stock.get(col) is not None
+        and registry.stock[col].canonical_name in _FIRST_CLASS_FIELDS
+    ]
+    unmapped_cols = list(registry.unmapped.keys())
+
+    if fields is not None:
+        field_set = set(fields)
+        stock_cols = [
+            c for c in stock_cols
+            if registry.stock.get(c) is not None
+            and registry.stock[c].canonical_name in field_set
+        ]
+        unmapped_cols = [c for c in unmapped_cols if c in field_set]
+
+    all_query_cols = stock_cols + unmapped_cols
+
+    agg_parts = ", ".join(f"AVG({col}) AS {col}" for col in all_query_cols)
+    if agg_parts:
+        agg_parts = ", " + agg_parts
+
+    bucket_expr = f"FLOOR(dateTime / {int(bucket_seconds)}) * {int(bucket_seconds)}"
+
+    sql = text(
+        f"SELECT {bucket_expr} AS bucket, "
+        f"MIN(dateTime) AS dateTime, "
+        f"MAX(usUnits) AS usUnits, "
+        f"{int(bucket_seconds) // 60} AS `interval`"
+        f"{agg_parts} "
+        f"FROM archive "
+        f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
+        f"GROUP BY bucket "
+        f"ORDER BY bucket ASC "
+        f"LIMIT :lim OFFSET :off"
+    )
+    rows = db.execute(
+        sql, {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit + 1, "off": offset}
+    ).fetchall()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    records = [_row_to_archive_record(r, registry) for r in rows]
+
+    next_cursor: str | None = None
+    if has_more and rows:
+        last_dt = dict(rows[-1]._mapping).get("dateTime")  # noqa: SLF001
+        if last_dt is not None:
+            next_cursor = encode_cursor(int(last_dt))
+
+    total_pages: int | None = None
+    total_records: int | None = None
+
+    if page is not None:
+        count_sql = text(
+            f"SELECT COUNT(*) FROM ("
+            f"  SELECT {bucket_expr} AS bucket "
+            f"  FROM archive "
+            f"  WHERE dateTime >= :from_ts AND dateTime < :to_ts "
+            f"  GROUP BY bucket"
             f") sub"
         )
         total_records = db.execute(
