@@ -28,21 +28,20 @@ from pathlib import Path
 import configobj
 
 # ---------------------------------------------------------------------------
-# Keys that are known-unsupported in Clear Skies (parser ignores them).
-# The tool emits a comment rather than silently dropping them.
+# Keys that are Belchertown-only and have no equivalent in Clear Skies.
+# The tool emits a # NOTE comment so the operator is aware.
 # ---------------------------------------------------------------------------
 
 # Keys that appear in Belchertown [group] sections but have no effect in
-# Clear Skies Phase 1.  They are preserved as # UNSUPPORTED comments.
+# Clear Skies.  They are annotated with # NOTE comments in the output.
 _GROUP_UNSUPPORTED: frozenset[str] = frozenset(
     {
         "generate",  # Belchertown report-cadence flag; no-op in Clear Skies
     }
 )
 
-# Keys that appear in [[[[states]]]] sub-subsections — the Clear Skies parser
-# skips these entirely.  We note them in the output for operator awareness.
-_STATES_UNSUPPORTED: frozenset[str] = frozenset({"states"})
+# Note: [[[[states]]]] subsections are now supported by the Clear Skies parser
+# and are passed through without annotation.
 
 # ---------------------------------------------------------------------------
 # Keys present in Belchertown series sections that need an INI-level rename.
@@ -65,9 +64,8 @@ def _build_header(source_path: Path) -> list[str]:
         f"# Source: {source_path}",
         "#",
         "# INI key names are identical between Belchertown and Clear Skies by design.",
-        "# Lines marked '# UNSUPPORTED:' were present in graphs.conf but are not",
-        "# recognised by the Clear Skies charts parser and have been commented out.",
-        "# Lines marked '# NOTE:' carry migration guidance for the operator.",
+        "# Lines marked '# NOTE:' carry migration guidance for the operator",
+        "# about Belchertown-only keys that have no equivalent in Clear Skies.",
         "#",
     ]
 
@@ -126,19 +124,11 @@ def _walk_section(  # noqa: C901  — intentionally comprehensive section walker
         if not isinstance(sub, configobj.Section):
             continue
 
-        # [[[[states]]]] subsections: annotate as unsupported
+        # [[[[states]]]] subsections are now supported by the Clear Skies parser
+        # and are passed through without annotation.
         if sub_id == "states":
-            msg = (
-                "# UNSUPPORTED: '[[[[states]]]]' is a Belchertown-only Highcharts hook;"
-                " the Clear Skies parser ignores it."
-            )
-            # Replace pre-existing comments to avoid duplication if ConfigObj
-            # already gathered related comment lines from earlier in the file.
-            section.comments[sub_id] = [msg]
-            unsupported_keys.append(f"{'[' * (depth + 1)}{sub_id}{']]]]'}")
             if verbose:
-                log.append(f"{indent}[NOTED] [[[[states]]]] section")
-            # Still recurse so the section body is preserved (operator reference)
+                log.append(f"{indent}[COPY]  [[[[states]]]] section")
             _walk_section(sub, depth + 1, verbose, log, unsupported_keys)
         else:
             _walk_section(sub, depth + 1, verbose, log, unsupported_keys)
