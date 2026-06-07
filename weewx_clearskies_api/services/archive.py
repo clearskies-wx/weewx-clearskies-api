@@ -277,8 +277,10 @@ class _HourDialect:
         """
         if self._name == "sqlite":
             return "strftime('%Y-%m-%d %H:00:00', datetime(dateTime, 'unixepoch'))"
-        # Double the % so SQLAlchemy's pyformat escaping produces single % on the wire.
-        return "FROM_UNIXTIME(dateTime, '%%Y-%%m-%%d %%H:00:00')"
+        # Single % — SQLAlchemy text() does NOT auto-escape % for pymysql.
+        # Double %% produces literal %Y (not a format specifier), collapsing
+        # GROUP BY to one row.
+        return "FROM_UNIXTIME(dateTime, '%Y-%m-%d %H:00:00')"
 
 
 # ---------------------------------------------------------------------------
