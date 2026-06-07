@@ -213,6 +213,54 @@ def _parse_series(series_id: str, section: configobj.Section) -> SeriesConfig:
     vis_raw = section.get("visible")
     visible: bool | None = _to_bool(vis_raw) if vis_raw is not None else None
 
+    # States sub-section ([[[[states]]]]) — Highcharts hover/inactive/select
+    states: dict | None = None
+    states_section = section.get("states")
+    if isinstance(states_section, configobj.Section):
+        states = dict(states_section)
+
+    # Number format sub-section ([[[[numberFormat]]]])
+    number_format: dict | None = None
+    nf_section = section.get("numberFormat")
+    if isinstance(nf_section, configobj.Section):
+        number_format = {}
+        if "decimals" in nf_section:
+            number_format["decimals"] = _to_int_or_none(nf_section["decimals"])
+        if "decimalPoint" in nf_section:
+            number_format["decimalPoint"] = str(nf_section["decimalPoint"])
+        if "thousandsSep" in nf_section:
+            number_format["thousandsSep"] = str(nf_section["thousandsSep"])
+
+    # Polar / connectEnds
+    polar_raw = section.get("polar")
+    polar: bool | None = _to_bool(polar_raw) if polar_raw is not None else None
+    ce_raw = section.get("connectEnds")
+    connect_ends: bool | None = _to_bool(ce_raw) if ce_raw is not None else None
+
+    # Mirrored value
+    mv_raw = section.get("mirrored_value")
+    mirrored_value: bool | None = _to_bool(mv_raw) if mv_raw is not None else None
+
+    # Colors enabled (gauge)
+    ce2_raw = section.get("colors_enabled")
+    colors_enabled: bool = _to_bool(ce2_raw) if ce2_raw is not None else False
+
+    # Gauge color zones (color1–color7 with position and label)
+    color_zones: list[dict] | None = None
+    for i in range(1, 8):
+        c = _sget(f"color{i}")
+        if c is not None:
+            if color_zones is None:
+                color_zones = []
+            zone: dict = {"color": c}
+            pos = _to_float_or_none(_sget(f"color{i}_position"))
+            if pos is not None:
+                zone["position"] = pos
+            label = _sget(f"color{i}_label")
+            if label is not None:
+                zone["label"] = label
+            color_zones.append(zone)
+
     return SeriesConfig(
         series_id=series_id,
         observation_type=_sget("observation_type"),
@@ -243,6 +291,24 @@ def _parse_series(series_id: str, section: configobj.Section) -> SeriesConfig:
         marker_enabled=marker_enabled,
         marker_radius=marker_radius,
         beaufort_colors=beaufort_colors,
+        y_axis_soft_min=_to_float_or_none(_sget("yAxis_softMin")),
+        y_axis_soft_max=_to_float_or_none(_sget("yAxis_softMax")),
+        y_axis_minor_ticks=(
+            _to_bool(section.get("yAxis_minorTicks"))
+            if section.get("yAxis_minorTicks") is not None
+            else None
+        ),
+        dash_style=_sget("dashStyle"),
+        fill_color=_sget("fillColor"),
+        fill_opacity=_to_float_or_none(_sget("fillOpacity")),
+        border_width=_to_int_or_none(_sget("borderWidth")),
+        mirrored_value=mirrored_value,
+        states=states,
+        number_format=number_format,
+        polar=polar,
+        connect_ends=connect_ends,
+        colors_enabled=colors_enabled,
+        color_zones=color_zones,
     )
 
 
@@ -284,6 +350,10 @@ def _parse_chart(chart_id: str, section: configobj.Section) -> ChartConfig:
             continue
         series.append(_parse_series(sub_id, sub))
 
+    # polar
+    polar_raw = section.get("polar")
+    polar: bool | None = _to_bool(polar_raw) if polar_raw is not None else None
+
     return ChartConfig(
         chart_id=chart_id,
         title=_sget("title"),
@@ -295,6 +365,8 @@ def _parse_chart(chart_id: str, section: configobj.Section) -> ChartConfig:
         x_axis_groupby=_sget("xAxis_groupby"),
         x_axis_categories=x_axis_categories,
         force_full_year=force_full_year,
+        subtitle=_sget("subtitle"),
+        polar=polar,
         series=series,
     )
 
@@ -381,6 +453,18 @@ def _parse_group(
         start_at_beginning_of_month=start_at_beginning_of_month,
         page_content=section.get("page_content") or None,
         generate=_sget("generate"),
+        legend=_sbool("legend", True),
+        exporting=_sbool("exporting", True),
+        credits=_sget("credits"),
+        credits_url=_sget("credits_url"),
+        credits_position=(
+            dict(section["credits_position"])
+            if isinstance(section.get("credits_position"), configobj.Section)
+            else None
+        ),
+        css_class=_sget("css_class"),
+        css_height=_sget("height"),
+        css_width=_sget("width"),
         charts=charts,
     )
 
@@ -532,12 +616,15 @@ def prune_charts_config(
         A new ChartsConfig containing only the series/charts/groups that have
         at least one available data source.
     """
-    # Build the set of available canonical names (same pattern as charts.py).
-    available: set[str] = {
-        info.canonical_name
-        for info in registry.stock.values()
-        if info.canonical_name is not None
-    }
+    # Build the set of available column names: stock canonical names + ALL
+    # unmapped DB column names.  Any column physically in the archive table
+    # should be chartable, even if it's not mapped to a canonical field.
+    available: set[str] = set()
+    for info in registry.stock.values():
+        if info.canonical_name is not None:
+            available.add(info.canonical_name)
+    for info in registry.unmapped.values():
+        available.add(info.db_name)
 
     pruned_groups: list[ChartGroupConfig] = []
 

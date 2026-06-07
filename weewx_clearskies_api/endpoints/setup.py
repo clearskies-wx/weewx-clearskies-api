@@ -399,6 +399,7 @@ class CurrentConfigResponse(BaseModel):
     branding: CurrentConfigBrandingSection = CurrentConfigBrandingSection()
     social: CurrentConfigSocialSection = CurrentConfigSocialSection()
     earthquakes: CurrentConfigEarthquakeSection = CurrentConfigEarthquakeSection()
+    column_mapping: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1213,6 +1214,16 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                 except (ValueError, TypeError):
                     pass
 
+    # --- Column mapping ---
+    col_mapping: dict[str, str] | None = None
+    if api_cfg is not None:
+        cm_section = api_cfg.get("column_mapping", {})
+        if isinstance(cm_section, dict) and cm_section:
+            col_mapping = {
+                str(k): str(v) for k, v in cm_section.items()
+                if v and k != "_excluded"
+            }
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -1220,6 +1231,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         branding=branding,
         social=social,
         earthquakes=earthquakes_config,
+        column_mapping=col_mapping,
     )
 
 

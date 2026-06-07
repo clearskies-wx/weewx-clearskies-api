@@ -87,6 +87,32 @@ class SeriesConfig:
     x_column: str | None = None
     y_column: str | None = None
 
+    # Soft axis limits (allow data to exceed)
+    y_axis_soft_min: float | None = None
+    y_axis_soft_max: float | None = None
+    y_axis_minor_ticks: bool | None = None
+
+    # Line/area styling
+    dash_style: str | None = None       # Highcharts: Solid, Dash, Dot, DashDot, LongDash, ShortDash
+    fill_color: str | None = None       # Separate fill color for area charts
+    fill_opacity: float | None = None
+    border_width: int | None = None     # Column/bar border width
+    mirrored_value: bool | None = None  # Show absolute values on bidirectional axis
+
+    # Hover/interaction states (from [[[[states]]]] sub-section)
+    states: dict | None = None
+
+    # Number formatting (from [[[[numberFormat]]]] sub-section)
+    number_format: dict | None = None
+
+    # Polar chart options
+    polar: bool | None = None
+    connect_ends: bool | None = None
+
+    # Gauge chart options (from color1–color7, color1_position, etc.)
+    colors_enabled: bool = False
+    color_zones: list[dict] | None = None
+
 
 # ---------------------------------------------------------------------------
 # ChartConfig — one chart within a group
@@ -118,6 +144,10 @@ class ChartConfig:
     x_axis_groupby: str | None = None       # e.g. "month"
     x_axis_categories: list[str] = field(default_factory=list)  # ['Jan', 'Feb', ...]
     force_full_year: bool | None = None
+
+    # Display extras
+    subtitle: str | None = None
+    polar: bool | None = None
 
     # Child series (populated by parser)
     series: list[SeriesConfig] = field(default_factory=list)
@@ -166,8 +196,18 @@ class ChartGroupConfig:
     force_full_year: bool = False
     start_at_beginning_of_month: bool = False
     page_content: str | None = None            # HTML/Markdown above chart group
-    # Belchertown report generation cadence ("daily" / None); no-op in Clear Skies Phase 1.
+    # Belchertown report generation cadence ("daily" / None); no-op in Clear Skies.
     generate: str | None = None
+
+    # Chart-level display controls
+    legend: bool = True
+    exporting: bool = True
+    credits: str | None = None
+    credits_url: str | None = None
+    credits_position: dict | None = None
+    css_class: str | None = None
+    css_height: str | None = None
+    css_width: str | None = None
 
     # Child charts (populated by parser)
     charts: list[ChartConfig] = field(default_factory=list)
