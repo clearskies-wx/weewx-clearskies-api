@@ -329,6 +329,7 @@ def get_archive(
     page: int | None,
     agg: str | None = None,
     aggregate_interval: int | None = None,
+    agg_map: dict[str, str] | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     """Query the archive and return (records, page_info).
 
@@ -359,7 +360,7 @@ def get_archive(
     if aggregate_interval is not None:
         return _fetch_custom_interval(
             db, registry, from_epoch, to_epoch, limit, offset, page, cursor,
-            fields, aggregate_interval,
+            fields, aggregate_interval, agg_map=agg_map,
         )
     if interval == "raw":
         return _fetch_raw(
@@ -559,6 +560,7 @@ def _fetch_custom_interval(
     cursor: str | None,
     fields: list[str] | None,
     bucket_seconds: int,
+    agg_map: dict[str, str] | None = None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
     """Aggregate archive records into fixed-width time buckets.
 
@@ -584,13 +586,17 @@ def _fetch_custom_interval(
 
     all_query_cols = stock_cols + unmapped_cols
 
-    # Per-field aggregation matching DAY_AGGREGATOR: avg for temp/pressure,
-    # max for windSpeed/radiation/rainRate, sum for rain/ET, min for windchill.
+    # Per-field aggregation from operator config (agg_map).
+    # Default AVG matches Belchertown's rolling-range default (line 3543).
+    # Operator overrides per series: e.g., rain→sum, rainRate→max.
+    _VALID_AGG = frozenset({"AVG", "MAX", "MIN", "SUM", "COUNT"})
+    resolved_map = agg_map or {}
+
     def _sql_agg(col: str) -> str:
-        agg = DAY_AGGREGATOR.get(col, "avg").upper()
-        if agg == "AVG":
-            return f"AVG({col}) AS {col}"
-        return f"{agg}({col}) AS {col}"
+        func = resolved_map.get(col, "avg").upper()
+        if func not in _VALID_AGG:
+            func = "AVG"
+        return f"{func}({col}) AS {col}"
 
     agg_parts = ", ".join(_sql_agg(col) for col in all_query_cols)
     if agg_parts:

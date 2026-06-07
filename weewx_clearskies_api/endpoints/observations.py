@@ -338,6 +338,14 @@ def get_archive_endpoint(
     units = get_units_block()
 
     try:
+        parsed_agg_map: dict[str, str] | None = None
+        if params.agg_map:
+            parsed_agg_map = {}
+            for pair in params.agg_map.split(","):
+                if ":" in pair:
+                    field, func = pair.split(":", 1)
+                    parsed_agg_map[field.strip()] = func.strip()
+
         records, page_info = get_archive(
             db=db,
             registry=registry,
@@ -350,6 +358,7 @@ def get_archive_endpoint(
             page=params.page,
             agg=params.agg,
             aggregate_interval=params.aggregate_interval,
+            agg_map=parsed_agg_map,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
