@@ -762,6 +762,7 @@ class SeriesConfigResponse(BaseModel):
     yAxis: int | None = None
     yAxisMin: float | None = None
     yAxisMax: float | None = None
+    yAxisTickDecimals: int | None = None
     yAxisLabel: str | None = None
     yAxisTickInterval: float | None = None
     lineWidth: int | None = None

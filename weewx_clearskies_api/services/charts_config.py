@@ -291,6 +291,7 @@ def _parse_series(series_id: str, section: configobj.Section) -> SeriesConfig:
         marker_enabled=marker_enabled,
         marker_radius=marker_radius,
         beaufort_colors=beaufort_colors,
+        y_axis_tick_decimals=_to_int_or_none(_sget("yAxisTickDecimals")),
         y_axis_soft_min=_to_float_or_none(_sget("yAxis_softMin")),
         y_axis_soft_max=_to_float_or_none(_sget("yAxis_softMax")),
         y_axis_minor_ticks=(

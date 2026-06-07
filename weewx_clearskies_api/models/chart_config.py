@@ -87,6 +87,9 @@ class SeriesConfig:
     x_column: str | None = None
     y_column: str | None = None
 
+    # Y-axis tick formatting: number of decimal places for axis tick labels
+    y_axis_tick_decimals: int | None = None
+
     # Soft axis limits (allow data to exceed)
     y_axis_soft_min: float | None = None
     y_axis_soft_max: float | None = None

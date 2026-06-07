@@ -329,6 +329,159 @@ def _inject_observation_aliases(
                         )
 
 
+def _inject_marker_defaults(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Inject markerEnabled (and markerRadius) defaults for all series.
+
+    Walk groups → charts → series.  For each series (skip _SKIP_SERIES):
+
+    * line / spline / area / areaspline  → markerEnabled = false
+    * scatter                            → markerEnabled = true, markerRadius = 2
+    * lineWidth = '0' on non-scatter     → promote to type = scatter,
+                                           markerEnabled = true, markerRadius = 3
+                                           (Belchertown's windDir-as-scatter trick)
+
+    Effective type is resolved by walking up: series → chart → 'line'.
+    All injections are idempotent (only inject when key absent).
+    Series in _SKIP_SERIES are skipped.
+    """
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            chart_type = chart.get("type", "line") or "line"
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+
+                # Determine effective type: series → chart → 'line'
+                effective_type = (series.get("type") or chart_type or "line").strip().lower()
+
+                # Check for the lineWidth=0 scatter trick (before scatter type check)
+                line_width_val = series.get("lineWidth")
+                if (
+                    line_width_val is not None
+                    and str(line_width_val).strip() == "0"
+                    and effective_type != "scatter"
+                ):
+                    # Promote to scatter — Belchertown's trick for rendering
+                    # windDir (and similar) as scatter points on a line chart.
+                    if "type" not in series:
+                        series["type"] = "scatter"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] type=scatter (lineWidth=0 promotion) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+                    if "markerEnabled" not in series:
+                        series["markerEnabled"] = "true"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] markerEnabled=true (lineWidth=0 promotion) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+                    if "markerRadius" not in series:
+                        series["markerRadius"] = "3"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] markerRadius=3 (lineWidth=0 promotion) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+                    continue
+
+                # Normal type dispatch
+                if effective_type == "scatter":
+                    if "markerEnabled" not in series:
+                        series["markerEnabled"] = "true"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] markerEnabled=true (scatter) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+                    if "markerRadius" not in series:
+                        series["markerRadius"] = "2"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] markerRadius=2 (scatter) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+                elif effective_type in ("line", "spline", "area", "areaspline"):
+                    if "markerEnabled" not in series:
+                        series["markerEnabled"] = "false"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] markerEnabled=false ({effective_type}) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+
+
+def _inject_axis_defaults(
+    cfg: configobj.ConfigObj, verbose: bool, log: list[str]
+) -> None:
+    """Inject special axis defaults for barometer and rain series.
+
+    Walk groups → charts → series.  For each series (skip _SKIP_SERIES):
+
+    * barometer / pressure / altimeter → yAxisTickDecimals = 2
+      (inHg values need 2 decimal places for legible Y-axis ticks)
+    * rain / rainRate / rainTotal      → yAxis_min = 0
+      (precipitation can't be negative)
+
+    The observation type is determined from:
+      1. The series.observation_type key (injected by _inject_observation_aliases)
+      2. The series section name (key)
+
+    All injections are idempotent (only inject when key absent).
+    Series in _SKIP_SERIES are skipped.
+    """
+    _BAROMETER_TYPES = frozenset({"barometer", "pressure", "altimeter"})
+    _RAIN_TYPES = frozenset({"rain", "rainRate", "rainTotal"})
+
+    for group_id in cfg.sections:
+        group = cfg[group_id]
+        if not isinstance(group, configobj.Section):
+            continue
+        for chart_id in group.sections:
+            chart = group[chart_id]
+            if not isinstance(chart, configobj.Section):
+                continue
+            for series_id in chart.sections:
+                if series_id in _SKIP_SERIES:
+                    continue
+                series = chart[series_id]
+                if not isinstance(series, configobj.Section):
+                    continue
+
+                # Observation type: explicit override wins, else section name
+                obs_type = series.get("observation_type") or series_id
+
+                if obs_type in _BAROMETER_TYPES:
+                    if "yAxisTickDecimals" not in series:
+                        series["yAxisTickDecimals"] = "2"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] yAxisTickDecimals=2 (barometer) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+
+                if obs_type in _RAIN_TYPES:
+                    if "yAxis_min" not in series:
+                        series["yAxis_min"] = "0"
+                        if verbose:
+                            log.append(
+                                f"[INJECT] yAxis_min=0 (rain) on"
+                                f" [{group_id}][{chart_id}][{series_id}]"
+                            )
+
+
 # ---------------------------------------------------------------------------
 # Statistics collector
 # ---------------------------------------------------------------------------
@@ -451,6 +604,17 @@ def migrate(
     # actual database column ("rain").  Inject observation_type so the archive
     # fetch uses the correct column.
     _inject_observation_aliases(cfg, verbose, log)
+
+    # ---- Inject markerEnabled defaults for all series ----
+    # Belchertown's Highcharts defaults hide markers on line/spline/area series
+    # but the Clear Skies dashboard needs explicit settings.  Also promotes
+    # lineWidth=0 series (the windDir scatter trick) to type=scatter.
+    _inject_marker_defaults(cfg, verbose, log)
+
+    # ---- Inject special axis defaults for barometer and rain ----
+    # Barometer needs yAxisTickDecimals=2 for proper inHg formatting.
+    # Rain/rainRate/rainTotal need yAxisMin=0 (can't be negative).
+    _inject_axis_defaults(cfg, verbose, log)
 
     # ---- Render to string with header ----
     header_lines = _build_header(source_path)

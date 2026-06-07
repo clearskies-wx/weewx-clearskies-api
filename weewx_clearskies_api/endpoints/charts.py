@@ -57,6 +57,7 @@ def _series_to_response(s: SeriesConfig) -> SeriesConfigResponse:
         yAxis=s.y_axis,
         yAxisMin=s.y_axis_min,
         yAxisMax=s.y_axis_max,
+        yAxisTickDecimals=s.y_axis_tick_decimals,
         yAxisLabel=s.y_axis_label,
         yAxisTickInterval=s.y_axis_tick_interval,
         lineWidth=s.line_width,
