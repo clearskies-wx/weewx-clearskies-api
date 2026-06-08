@@ -355,6 +355,9 @@ def _parse_chart(chart_id: str, section: configobj.Section) -> ChartConfig:
     polar_raw = section.get("polar")
     polar: bool | None = _to_bool(polar_raw) if polar_raw is not None else None
 
+    tl_chart_raw = _strip_comment(section.get("time_length"))
+    chart_time_length = _to_int_or_str(tl_chart_raw) if tl_chart_raw else None
+
     return ChartConfig(
         chart_id=chart_id,
         title=_sget("title"),
@@ -366,6 +369,7 @@ def _parse_chart(chart_id: str, section: configobj.Section) -> ChartConfig:
         x_axis_groupby=_sget("xAxis_groupby"),
         x_axis_categories=x_axis_categories,
         force_full_year=force_full_year,
+        time_length=chart_time_length,
         subtitle=_sget("subtitle"),
         polar=polar,
         series=series,
@@ -713,6 +717,7 @@ def prune_charts_config(
                     x_axis_groupby=chart.x_axis_groupby,
                     x_axis_categories=list(chart.x_axis_categories),
                     force_full_year=chart.force_full_year,
+                    time_length=chart.time_length,
                     series=surviving_series,
                 )
             )

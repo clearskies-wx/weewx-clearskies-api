@@ -95,6 +95,7 @@ def _chart_to_response(c: ChartConfig) -> ChartConfigResponse:
         xAxisGroupby=c.x_axis_groupby,
         xAxisCategories=list(c.x_axis_categories),
         forceFullYear=c.force_full_year,
+        timeLength=c.time_length,
         series=[_series_to_response(s) for s in c.series],
     )
 

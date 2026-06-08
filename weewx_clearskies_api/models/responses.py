@@ -800,6 +800,7 @@ class ChartConfigResponse(BaseModel):
     xAxisGroupby: str | None = None
     xAxisCategories: list[str] = []
     forceFullYear: bool | None = None
+    timeLength: int | str | None = None
     series: list[SeriesConfigResponse] = []
 
 

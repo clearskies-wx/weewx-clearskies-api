@@ -148,6 +148,9 @@ class ChartConfig:
     x_axis_categories: list[str] = field(default_factory=list)  # ['Jan', 'Feb', ...]
     force_full_year: bool | None = None
 
+    # Time settings (chart-level override of group time_length)
+    time_length: int | str | None = None
+
     # Display extras
     subtitle: str | None = None
     polar: bool | None = None
