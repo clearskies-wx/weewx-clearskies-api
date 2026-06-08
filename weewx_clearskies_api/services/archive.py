@@ -596,7 +596,7 @@ def _fetch_custom_interval(
     resolved_map = agg_map or {}
 
     def _sql_agg(col: str) -> str:
-        func = resolved_map.get(col, "avg").upper()
+        func = resolved_map.get(col, DAY_AGGREGATOR.get(col, "avg")).upper()
         if func not in _VALID_AGG:
             func = "AVG"
         # SUMCUMULATIVE uses SQL SUM per bucket; the running-total step happens
