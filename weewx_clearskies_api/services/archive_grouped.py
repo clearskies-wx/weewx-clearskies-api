@@ -49,13 +49,6 @@ logger = logging.getLogger(__name__)
 
 _VALID_GROUP_BY = frozenset({"month", "day", "hour", "year"})
 
-# Full-period sizes for force_full_period null-padding.
-_FULL_PERIOD_SIZE: dict[str, int] = {
-    "month": 12,
-    "hour": 24,
-    # day and year are variable — padded dynamically based on query results.
-}
-
 # ---------------------------------------------------------------------------
 # Dialect helpers — produce trusted SQL bucket expressions for each group_by.
 # All returned strings are dialect constants, not user input.
@@ -483,27 +476,6 @@ def _rows_to_dict(rows: Sequence[Any]) -> dict[int, float | None]:
 # ---------------------------------------------------------------------------
 # Label generation
 # ---------------------------------------------------------------------------
-
-
-def _make_labels(group_by: str, buckets: set[int]) -> list[str]:
-    """Produce the labels list for the given group_by dimension.
-
-    For fixed-size dimensions (month, hour) we return the full range regardless
-    of which buckets appear in the data — the caller passes force_full_period to
-    control this.
-
-    For variable dimensions (day, year) we return only the observed buckets,
-    sorted ascending, formatted as zero-padded strings.
-    """
-    if group_by == "month":
-        return [f"{m:02d}" for m in range(1, 13)]
-    if group_by == "hour":
-        return [f"{h:02d}" for h in range(0, 24)]
-    if group_by == "day":
-        return [f"{d:03d}" for d in sorted(buckets)]
-    if group_by == "year":
-        return [str(y) for y in sorted(buckets)]
-    raise ValueError(f"Unsupported group_by: {group_by!r}")
 
 
 def _make_labels_from_range(group_by: str, bucket_range: list[int]) -> list[str]:
