@@ -9,7 +9,6 @@ Warmed endpoints:
   - GET /records?period=ytd (unfiltered only)
   - GET /almanac/sun-times (current year, station location)
   - GET /almanac/moon-phases (current year, full-year, station location)
-  - GET /climatology/monthly
   - GET /almanac/planets (today's date, station location)
   - GET /almanac/eclipses (rolling 1-year window from today)
   - GET /almanac/meteor-showers (rolling 1-year window from today, station location)
@@ -19,7 +18,6 @@ Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
   warmer:almanac:sun-times:<year>        e.g. warmer:almanac:sun-times:2026
   warmer:almanac:moon-phases:<year>
-  warmer:climatology:monthly
   warmer:almanac:planets:<date>          e.g. warmer:almanac:planets:2026-05-27
   warmer:almanac:eclipses:<date>         e.g. warmer:almanac:eclipses:2026-05-27
   warmer:almanac:meteor-showers:<date>   e.g. warmer:almanac:meteor-showers:2026-05-27
@@ -112,7 +110,6 @@ class BackgroundCacheWarmer:
         self._warm_almanac()
         self._warm_almanac_snapshot()
         self._warm_moon_names()
-        self._warm_climatology()
         self._warm_planets()
         self._warm_eclipses()
         self._warm_solar_eclipses()
@@ -139,7 +136,6 @@ class BackgroundCacheWarmer:
         """Main loop: wake every _SLEEP_TICK_SECONDS, run overdue functions."""
         last_records: float = _NEVER
         last_almanac: float = _NEVER
-        last_climatology: float = _NEVER
         last_planets: float = _NEVER
         last_eclipses: float = _NEVER
         last_meteor_showers: float = _NEVER
@@ -158,10 +154,6 @@ class BackgroundCacheWarmer:
                 self._warm_almanac_snapshot()
                 self._warm_moon_names()
                 last_almanac = time.monotonic()
-
-            if last_climatology == _NEVER or (now - last_climatology) >= self._settings.climatology_interval_seconds:
-                self._warm_climatology()
-                last_climatology = time.monotonic()
 
             if last_planets == _NEVER or (now - last_planets) >= self._settings.planets_interval_seconds:
                 self._warm_planets()
@@ -309,23 +301,6 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: moon names refreshed for year %d", year)
         except Exception:
             logger.warning("Cache warmer: moon names warm failed", exc_info=True)
-
-    def _warm_climatology(self) -> None:
-        """Warm GET /climatology/monthly."""
-        try:
-            from weewx_clearskies_api.services.climatology import get_monthly_climatology
-
-            cache = get_cache()
-            with Session(self._engine) as db:
-                clim_data = get_monthly_climatology(db, self._registry)
-            cache.set(
-                "warmer:climatology:monthly",
-                clim_data,
-                self._settings.climatology_interval_seconds,
-            )
-            logger.info("Cache warmer: climatology refreshed")
-        except Exception:
-            logger.warning("Cache warmer: climatology warm failed", exc_info=True)
 
     def _warm_planets(self) -> None:
         """Warm GET /almanac/planets for today's date at the station location."""

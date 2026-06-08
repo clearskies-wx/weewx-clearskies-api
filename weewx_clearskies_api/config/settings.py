@@ -543,8 +543,6 @@ class CacheWarmerSettings:
     almanac_interval_seconds: int
     #: How often to re-warm the AQI history endpoint (seconds).  Default 1800 (30 min).
     aqi_history_interval_seconds: int
-    #: How often to re-warm the climatology endpoint (seconds).  Default 21600 (6 h).
-    climatology_interval_seconds: int
     #: How often to re-warm the planets endpoint (seconds).  Default 21600 (6 h).
     planets_interval_seconds: int
     #: How often to re-warm the eclipses endpoint (seconds).  Default 86400 (24 h).
@@ -562,7 +560,6 @@ class CacheWarmerSettings:
         self.records_interval_seconds = int(section.get("records_interval_seconds", 1800))
         self.almanac_interval_seconds = int(section.get("almanac_interval_seconds", 21600))
         self.aqi_history_interval_seconds = int(section.get("aqi_history_interval_seconds", 1800))
-        self.climatology_interval_seconds = int(section.get("climatology_interval_seconds", 21600))
         self.planets_interval_seconds = int(section.get("planets_interval_seconds", 21600))
         self.eclipses_interval_seconds = int(section.get("eclipses_interval_seconds", 86400))
         self.meteor_showers_interval_seconds = int(section.get("meteor_showers_interval_seconds", 86400))
@@ -577,8 +574,6 @@ class CacheWarmerSettings:
             raise ValueError("[cache_warmer] almanac_interval_seconds must be >= 1")
         if self.aqi_history_interval_seconds < 1:
             raise ValueError("[cache_warmer] aqi_history_interval_seconds must be >= 1")
-        if self.climatology_interval_seconds < 1:
-            raise ValueError("[cache_warmer] climatology_interval_seconds must be >= 1")
         if self.planets_interval_seconds < 1:
             raise ValueError("[cache_warmer] planets_interval_seconds must be >= 1")
         if self.eclipses_interval_seconds < 1:
