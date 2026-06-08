@@ -396,6 +396,20 @@ def _wire_providers_from_config(settings: Settings) -> None:
         else:
             declarations.append(module.CAPABILITY)
 
+    # Seeing provider (7Timer — keyless, no dispatch registry entry needed).
+    if settings.seeing.provider:
+        from weewx_clearskies_api.providers.seeing.seven_timer import (
+            CAPABILITY as SEEING_CAPABILITY,
+        )
+        declarations.append(SEEING_CAPABILITY)
+
+    # Almanac enrichment provider (AstronomyAPI — keyed, optional).
+    if settings.almanac.astronomyapi_app_id:
+        from weewx_clearskies_api.services.astronomyapi_client import (
+            CAPABILITY as ALMANAC_CAPABILITY,
+        )
+        declarations.append(ALMANAC_CAPABILITY)
+
     wire_providers(declarations)
 
 

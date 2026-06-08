@@ -29,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from weewx_clearskies_api.providers._common.capability import ProviderCapability
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.astronomyapi.com/api/v2"
@@ -462,3 +464,16 @@ class AstronomyApiClient:
             "contactTimes": contact_times,
             "obscuration": obscuration,
         }
+
+
+CAPABILITY = ProviderCapability(
+    provider_id="astronomyapi",
+    domain="almanac",
+    supplied_canonical_fields=(
+        "solarEclipses", "lunarEclipses", "contactTimes", "obscuration",
+    ),
+    geographic_coverage="global",
+    auth_required=("app_id", "app_secret"),
+    default_poll_interval_seconds=86400,
+    operator_notes="Keyed; AstronomyAPI.com eclipse events with local visibility.",
+)

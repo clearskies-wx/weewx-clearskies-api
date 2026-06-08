@@ -30,6 +30,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from weewx_clearskies_api.providers._common.capability import ProviderCapability
+
 logger = logging.getLogger(__name__)
 
 
@@ -278,3 +280,16 @@ class SevenTimerProvider:
                 lat, lon, exc,
             )
             return None
+
+
+CAPABILITY = ProviderCapability(
+    provider_id="seven_timer",
+    domain="seeing",
+    supplied_canonical_fields=(
+        "seeing", "transparency", "cloudCover",
+        "liftedIndex", "humidity", "wind", "precipType",
+    ),
+    geographic_coverage="global",
+    default_poll_interval_seconds=10800,
+    operator_notes="Keyless; 7Timer ASTRO product, 3-hour intervals over 72 hours.",
+)
