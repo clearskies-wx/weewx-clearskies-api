@@ -44,6 +44,7 @@ from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.endpoints.alerts import router as alerts_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
 from weewx_clearskies_api.endpoints.aqi import router as aqi_router
+from weewx_clearskies_api.endpoints.archive_grouped import router as archive_grouped_router
 from weewx_clearskies_api.endpoints.branding import router as branding_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
@@ -180,6 +181,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(branding_router, prefix="/api/v1")
         # Climatology: 12-month averages from archive.
         app.include_router(climatology_router, prefix="/api/v1")
+        # Archive grouped: general-purpose time-bucketed aggregation.
+        app.include_router(archive_grouped_router, prefix="/api/v1")
         # Seeing forecast: 7Timer 72-hour astronomical seeing forecast.
         app.include_router(seeing_router, prefix="/api/v1")
         # Custom SQL query: operator-defined series from charts.conf.
