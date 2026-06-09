@@ -534,7 +534,7 @@ def main() -> None:
     # reflection failure (table missing, DB error) is fatal.
     reflector = SchemaReflector(engine)
     try:
-        registry = reflector.reflect()
+        registry = reflector.reflect(operator_mapping=settings.column_mapping)
     except RuntimeError as exc:
         logger.critical(
             "FATAL: Schema reflection failed — clearskies-api cannot start. "

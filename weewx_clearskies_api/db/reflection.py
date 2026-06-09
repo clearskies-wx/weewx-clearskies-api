@@ -214,13 +214,17 @@ class ColumnRegistry:
         return None
 
 
-def _build_registry(columns: list[str]) -> ColumnRegistry:
+def _build_registry(
+    columns: list[str],
+    operator_mapping: dict[str, str] | None = None,
+) -> ColumnRegistry:
     """Build a ColumnRegistry from a list of DB column names.
 
     Classifies each column as stock (in STOCK_COLUMN_MAP) or unmapped.
-    Logs a WARNING for each unmapped column so operators see them in the
-    startup log.
+    Operator mappings from [column_mapping] in api.conf override the
+    identity mapping for non-stock columns.
     """
+    op_map = operator_mapping or {}
     registry = ColumnRegistry()
     for col in columns:
         canonical = STOCK_COLUMN_MAP.get(col)
@@ -230,19 +234,24 @@ def _build_registry(columns: list[str]) -> ColumnRegistry:
                 canonical_name=canonical,
                 is_stock=True,
             )
+        elif col in op_map:
+            registry.unmapped[col] = ColumnInfo(
+                db_name=col,
+                canonical_name=op_map[col],
+                is_stock=False,
+            )
+            logger.info(
+                "Non-stock column mapped by operator: %s → %s",
+                col, op_map[col],
+            )
         else:
-            # Identity mapping: use the DB column name as the canonical name so
-            # extension columns (e.g. aqi, aqi_level) are immediately queryable
-            # via /archive without operator action.  Task 3's mapping UI can
-            # later replace this with a user-chosen canonical name.
             registry.unmapped[col] = ColumnInfo(
                 db_name=col,
                 canonical_name=col,
                 is_stock=False,
             )
             logger.info(
-                "Non-stock archive column found — auto-mapped to its DB column name. "
-                "Task 3 / Phase 4 will expose this column in the operator mapping UI.",
+                "Non-stock archive column found — auto-mapped to its DB column name.",
                 extra={"column": col},
             )
     return registry
@@ -265,8 +274,13 @@ class SchemaReflector:
         """The current ColumnRegistry.  Populated after reflect() is called."""
         return self._registry
 
-    def reflect(self) -> ColumnRegistry:
+    def reflect(
+        self, operator_mapping: dict[str, str] | None = None,
+    ) -> ColumnRegistry:
         """Run MetaData.reflect() against the archive table and build the registry.
+
+        Args:
+            operator_mapping: db_name → canonical_name from [column_mapping] in api.conf.
 
         Returns:
             The populated ColumnRegistry.
@@ -307,7 +321,7 @@ class SchemaReflector:
             extra={"column_count": len(column_names), "columns": column_names},
         )
 
-        self._registry = _build_registry(column_names)
+        self._registry = _build_registry(column_names, operator_mapping)
         self._reflected = True
 
         stock_count = len(self._registry.stock)

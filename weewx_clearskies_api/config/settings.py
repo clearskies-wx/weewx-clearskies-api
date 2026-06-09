@@ -1039,6 +1039,7 @@ class Settings:
     conditions: ConditionsSettings
     cache_warmer: CacheWarmerSettings
     charts: ChartsSettings
+    column_mapping: dict[str, str]
 
     def __init__(
         self,
@@ -1065,6 +1066,7 @@ class Settings:
         conditions: ConditionsSettings | None = None,
         cache_warmer: CacheWarmerSettings | None = None,
         charts: ChartsSettings | None = None,
+        column_mapping: dict[str, str] | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -1091,6 +1093,7 @@ class Settings:
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
         self.charts = charts if charts is not None else ChartsSettings({})
+        self.column_mapping = column_mapping if column_mapping is not None else {}
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -1217,6 +1220,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
     charts_cfg = ChartsSettings(dict(cfg.get("charts", {})))
+    column_mapping_cfg = dict(cfg.get("column_mapping", {}))
 
     settings = Settings(
         api=api_cfg,
@@ -1242,6 +1246,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         conditions=conditions_cfg,
         cache_warmer=cache_warmer_cfg,
         charts=charts_cfg,
+        column_mapping=column_mapping_cfg,
     )
     settings.validate()
 
