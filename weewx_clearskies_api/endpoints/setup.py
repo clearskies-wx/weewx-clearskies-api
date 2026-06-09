@@ -538,11 +538,9 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
         cfg["station"]["default_locale"] = st.default_locale
 
     # [column_mapping] — operator-supplied canonical → archive column pairs.
-    if apply.column_mapping:
-        if "column_mapping" not in cfg:
-            cfg["column_mapping"] = {}
-        for canonical, archive_col in apply.column_mapping.items():
-            cfg["column_mapping"][canonical] = archive_col
+    # Replace the entire section so removed mappings don't persist from prior runs.
+    if apply.column_mapping is not None:
+        cfg["column_mapping"] = dict(apply.column_mapping)
 
     # [forecast] / [aqi] / [alerts] / [radar] / [earthquakes] — non-secret provider
     # fields only.  Credentials are written to secrets.env by the apply handler.
