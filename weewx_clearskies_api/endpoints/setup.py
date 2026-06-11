@@ -253,6 +253,8 @@ class BrandingApplyConfig(BaseModel):
     accent: str | None = None
     default_theme_mode: str | None = None
     custom_css_url: str | None = None
+    google_analytics_id: str | None = None
+    privacy_regions: str | None = None
 
 
 class SocialApplyConfig(BaseModel):
@@ -375,6 +377,8 @@ class CurrentConfigBrandingSection(BaseModel):
     accent: str = ""
     default_theme_mode: str = ""
     custom_css_url: str = ""
+    google_analytics_id: str = ""
+    privacy_regions: str = "global"
 
 
 class CurrentConfigSocialSection(BaseModel):
@@ -583,6 +587,10 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             cfg["branding"]["default_theme_mode"] = br.default_theme_mode
         if br.custom_css_url is not None:
             cfg["branding"]["custom_css_url"] = br.custom_css_url
+        if br.google_analytics_id is not None:
+            cfg["branding"]["google_analytics_id"] = br.google_analytics_id
+        if br.privacy_regions is not None:
+            cfg["branding"]["privacy_regions"] = br.privacy_regions
 
     # [social] — optional; only written when wizard sends this block.
     if apply.social is not None:
@@ -1173,6 +1181,10 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                 branding.default_theme_mode = str(br_section["default_theme_mode"])
             if br_section.get("custom_css_url"):
                 branding.custom_css_url = str(br_section["custom_css_url"])
+            if br_section.get("google_analytics_id") is not None:
+                branding.google_analytics_id = str(br_section["google_analytics_id"])
+            if br_section.get("privacy_regions"):
+                branding.privacy_regions = str(br_section["privacy_regions"])
 
     # --- Social ---
     social = CurrentConfigSocialSection()

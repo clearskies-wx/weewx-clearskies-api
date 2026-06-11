@@ -874,6 +874,10 @@ class BrandingSettings:
     logo_alt: str
     #: URL to the favicon. Empty = default Clear Skies favicon.
     favicon_url: str
+    #: GA4 Measurement ID (e.g. "G-XXXXXXXXXX"). Empty = GA disabled.
+    google_analytics_id: str
+    #: Comma-separated continent list or "global" (all jurisdictions).
+    privacy_regions: str
 
     #: Valid accent values from ADR-022 (curated palette, AA-tested).
     VALID_ACCENTS: frozenset[str] = frozenset({
@@ -897,6 +901,10 @@ class BrandingSettings:
         self.logo_dark_url = str(section.get("logo_dark_url", "")).strip()
         self.logo_alt = str(section.get("logo_alt", "")).strip()
         self.favicon_url = str(section.get("favicon_url", "")).strip()
+        #: GA4 Measurement ID (e.g. "G-XXXXXXXXXX"). Empty = GA disabled.
+        self.google_analytics_id = str(section.get("google_analytics_id", "")).strip()
+        #: Comma-separated continent list or "global". "global" = all jurisdictions.
+        self.privacy_regions = str(section.get("privacy_regions", "global")).strip()
 
     def validate(self) -> None:
         """Raise ValueError on invalid accent or theme mode."""
