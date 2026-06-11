@@ -65,6 +65,4 @@ def get_branding(
         copyrightEntity=branding_settings.copyright_entity,
         faviconUrl=branding_settings.favicon_url,
         social=social,
-        googleAnalyticsId=branding_settings.google_analytics_id,
-        privacyRegions=branding_settings.privacy_regions,
     )

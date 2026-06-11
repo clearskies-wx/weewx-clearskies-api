@@ -1213,10 +1213,6 @@ class BrandingConfig(BaseModel):
     copyrightEntity: str = ""
     faviconUrl: str = ""
     social: SocialConfig = SocialConfig()
-    #: GA4 Measurement ID (e.g. "G-XXXXXXXXXX"). Empty string = GA disabled.
-    googleAnalyticsId: str = ""
-    #: Comma-separated continent list or "global" (all jurisdictions).
-    privacyRegions: str = "global"
 
 
 class BrandingResponse(BaseModel):
