@@ -1050,6 +1050,48 @@ class InputSettings:
         pass
 
 
+class UnitsSettings:
+    """[units] section — operator display unit preferences (ADR-042).
+
+    Mirrors weewx skin.conf [Units] subsection names for operator familiarity.
+    ConfigObj returns nested [[subsections]] as nested dicts.
+    """
+
+    #: [[groups]] — display unit per group (e.g. group_temperature = degree_C).
+    groups: dict[str, str]
+    #: [[string_formats]] — decimal places per unit (e.g. degree_C = %.1f).
+    string_formats: dict[str, str]
+    #: [[labels]] — display symbols per unit (e.g. degree_C = °C).
+    labels: dict[str, str]
+    #: [[ordinates]] directions — comma-separated 16-point compass labels.
+    directions: list[str]
+    #: [[trend]] time_delta — barometer trend window in seconds (default 3 hours).
+    trend_time_delta: int
+    #: [[trend]] time_grace — grace period for trend computation (default 5 min).
+    trend_time_grace: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        # [[groups]] — display unit per group
+        self.groups: dict[str, str] = dict(section.get("groups", {}))
+        # [[string_formats]] — decimal places per unit
+        self.string_formats: dict[str, str] = dict(section.get("string_formats", {}))
+        # [[labels]] — display symbols per unit
+        self.labels: dict[str, str] = dict(section.get("labels", {}))
+        # [[ordinates]] — compass direction labels
+        ordinates = section.get("ordinates", {})
+        directions_raw = ordinates.get("directions", "") if isinstance(ordinates, dict) else ""
+        self.directions: list[str] = [
+            d.strip() for d in str(directions_raw).split(",") if d.strip()
+        ] if directions_raw else []
+        # [[trend]] — barometer trend window config
+        trend = section.get("trend", {}) if isinstance(section.get("trend"), dict) else {}
+        self.trend_time_delta: int = int(trend.get("time_delta", 10800))
+        self.trend_time_grace: int = int(trend.get("time_grace", 300))
+
+    def validate(self) -> None:
+        pass
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -1078,6 +1120,7 @@ class Settings:
     cache_warmer: CacheWarmerSettings
     charts: ChartsSettings
     input: InputSettings
+    units: UnitsSettings
     column_mapping: dict[str, str]
     #: Operator-confirmed unit for each mapped column, parsed from the
     #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
@@ -1111,6 +1154,7 @@ class Settings:
         cache_warmer: CacheWarmerSettings | None = None,
         charts: ChartsSettings | None = None,
         input: InputSettings | None = None,
+        units: UnitsSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
         configured: bool = True,
@@ -1140,6 +1184,7 @@ class Settings:
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
         self.charts = charts if charts is not None else ChartsSettings({})
         self.input = input if input is not None else InputSettings({})
+        self.units = units if units is not None else UnitsSettings({})
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
 
@@ -1270,6 +1315,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
     charts_cfg = ChartsSettings(dict(cfg.get("charts", {})))
     input_cfg = InputSettings(dict(cfg.get("input", {})))
+    units_cfg = UnitsSettings(dict(cfg.get("units", {})))
     column_mapping_cfg = dict(cfg.get("column_mapping", {}))
     column_units_cfg = dict(cfg.get("column_units", {}))
 
@@ -1298,6 +1344,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         cache_warmer=cache_warmer_cfg,
         charts=charts_cfg,
         input=input_cfg,
+        units=units_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
     )
