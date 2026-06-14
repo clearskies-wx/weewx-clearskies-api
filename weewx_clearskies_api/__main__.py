@@ -816,6 +816,12 @@ def main() -> None:
     transformer = UnitTransformer.from_settings(settings.units)
     app.state.transformer = transformer
 
+    # Step 7b½: Configure response_conversion module with the transformer so
+    # that apply_conversion() in /current, /archive, and SSE can convert units.
+    from weewx_clearskies_api.units.response_conversion import configure as _configure_response_conversion  # noqa: PLC0415, E501
+
+    _configure_response_conversion(transformer)
+
     # Step 7c: Configure enrichment processors and register packet-tap processors.
     from weewx_clearskies_api.sse.packet_tap import register_processor  # noqa: PLC0415
     from weewx_clearskies_api.sse.enrichment import (  # noqa: PLC0415

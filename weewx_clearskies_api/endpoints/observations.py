@@ -289,8 +289,10 @@ def get_current_endpoint(
     )
 
     from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
+    from weewx_clearskies_api.units.response_conversion import apply_conversion  # noqa: PLC0415
 
     response_dict = response.model_dump(by_alias=True, exclude_none=True)
+    response_dict = apply_conversion(response_dict)  # convert before enrichments
     response_dict = apply_enrichments("current", response_dict)
     return response_dict
 
@@ -374,10 +376,15 @@ def get_archive_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return ArchiveResponse(
+    archive_response = ArchiveResponse(
         data=records,
         units=units,
         source="weewx",
         generatedAt=_now_utc_z(),
         page=page_info,
     )
+
+    from weewx_clearskies_api.units.response_conversion import apply_conversion  # noqa: PLC0415
+
+    archive_dict = archive_response.model_dump(by_alias=True, exclude_none=True)
+    return apply_conversion(archive_dict)
