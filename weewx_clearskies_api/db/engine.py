@@ -207,9 +207,11 @@ def build_engine(settings: DatabaseSettings) -> Engine:
         url = _build_sqlite_url(settings)
         # NullPool for SQLite: file-locking semantics make persistent pools
         # unreliable and SQLite has no real connection overhead.
+        # timeout=30: covers lock-wait time (the main blocking path for SQLite).
         engine = create_engine(
             url,
             poolclass=NullPool,
+            connect_args={"timeout": 30},
             future=True,  # SQLAlchemy 2.x behaviour
             echo=False,
         )
@@ -223,12 +225,16 @@ def build_engine(settings: DatabaseSettings) -> Engine:
         url = _build_mysql_url(settings)
         pool_size = settings.pool_size
         max_overflow = settings.max_overflow
+        # read_timeout/write_timeout: abort queries that run longer than 30 s.
+        # These are pymysql-level socket timeouts (seconds), not MariaDB server
+        # wait_timeout.  They prevent indefinite hangs on unbounded archive queries.
         engine = create_engine(
             url,
             poolclass=QueuePool,
             pool_size=pool_size,
             max_overflow=max_overflow,
             pool_pre_ping=True,  # validate connections on checkout
+            connect_args={"read_timeout": 30, "write_timeout": 30},
             future=True,
             echo=False,
         )

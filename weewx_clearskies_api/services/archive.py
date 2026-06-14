@@ -352,6 +352,19 @@ def get_archive(
     from_epoch = int(effective_from.timestamp())
     to_epoch = int(effective_to.timestamp())
 
+    # Max time range for raw queries: 366 days (configurable).
+    # Aggregated queries (hour/day) are bounded by GROUP BY cardinality.
+    _MAX_RAW_RANGE_SECONDS = 366 * 86400
+
+    if interval == "raw" and aggregate_interval is None:
+        span = to_epoch - from_epoch
+        if span > _MAX_RAW_RANGE_SECONDS:
+            raise ValueError(
+                f"Time range {span}s exceeds maximum {_MAX_RAW_RANGE_SECONDS}s "
+                f"({_MAX_RAW_RANGE_SECONDS // 86400} days) for raw queries. "
+                f"Use interval=hour or interval=day for longer ranges."
+            )
+
     offset = 0
     if page is not None:
         offset = (page - 1) * limit
