@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 _DEFAULT_RPM = 60
 _DEFAULT_WINDOW = 60  # seconds
 
+# Only trust X-Forwarded-For when the direct TCP connection comes from one of
+# these addresses.  Loopback covers Caddy-on-localhost and same-host Docker.
+# An attacker connecting directly (not through the reverse proxy) cannot forge
+# a privileged client IP via XFF — their direct IP won't be in this set.
+_TRUSTED_PROXIES: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding-window per-IP rate limiter with proxy-auth bypass.
@@ -64,18 +70,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # from the TTLCache. Access pattern: get then set.
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract the client IP from the request.
+        """Extract the client IP, trusting X-Forwarded-For only from trusted proxies.
 
-        Trusts X-Forwarded-For when present (proxy sets it per ADR-037).
-        Only takes the FIRST entry (the original client), not the last,
-        to avoid IP spoofing via header injection.
+        XFF is only honoured when the direct TCP connection originates from a
+        known proxy address (_TRUSTED_PROXIES — loopback by default, covering
+        Caddy-on-localhost and same-host Docker deployments).
+
+        If the connection arrives from any other address, XFF is ignored and the
+        direct IP is used.  This prevents an external attacker from spoofing a
+        privileged client IP via a crafted X-Forwarded-For header, which would
+        otherwise let them bypass per-IP rate limiting.
         """
-        forwarded = request.headers.get("X-Forwarded-For", "").strip()
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-        # Direct connection (tests / health port).
-        client = request.client
-        return client.host if client else "unknown"
+        direct_ip = request.client.host if request.client else "unknown"
+
+        # Only trust X-Forwarded-For when the request arrives from a known proxy.
+        if direct_ip in _TRUSTED_PROXIES:
+            xff = request.headers.get("X-Forwarded-For", "").strip()
+            if xff:
+                # First entry is the original client IP.
+                return xff.split(",")[0].strip()
+
+        return direct_ip
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Bypass: request is trusted (valid proxy secret already verified).
