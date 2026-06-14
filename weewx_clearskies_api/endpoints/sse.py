@@ -20,6 +20,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from weewx_clearskies_api.sse.emitter import SSEEmitter
@@ -60,7 +61,18 @@ async def sse_stream(request: Request) -> EventSourceResponse:
     """
     emitter: SSEEmitter = request.app.state.sse_emitter
     transformer = request.app.state.transformer
-    q = emitter.subscribe()
+    try:
+        q = emitter.subscribe()
+    except RuntimeError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "type": "urn:clearskies:sse-capacity",
+                "title": "Too many connections",
+                "status": 503,
+                "detail": "Maximum SSE subscriber limit reached. Try again later.",
+            },
+        )
 
     async def _generator():  # type: ignore[return]
         try:

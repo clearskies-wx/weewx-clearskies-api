@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 # are dropped for that subscriber rather than blocking the fan-out task.
 _SUBSCRIBER_QUEUE_MAX = 64
 
+# Maximum number of concurrent SSE subscribers.  Connections beyond this limit
+# receive a 503 response (handled in the endpoint layer).  Prevents an attacker
+# from exhausting memory with unbounded subscriber queues.
+_MAX_SUBSCRIBERS = 500
+
 # ADR-002: SSE keepalive comment emitted when no real event arrives within
 # this window.  Prevents corporate proxies and mobile-network NAT from
 # treating idle SSE connections as dead and closing them.
@@ -78,7 +83,13 @@ class SSEEmitter:
     # ------------------------------------------------------------------
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any] | None]:
-        """Create and register a new subscriber queue for one SSE client."""
+        """Create and register a new subscriber queue for one SSE client.
+
+        Raises:
+            RuntimeError: When the subscriber count is at or above _MAX_SUBSCRIBERS.
+        """
+        if len(self._subscribers) >= _MAX_SUBSCRIBERS:
+            raise RuntimeError("Too many SSE subscribers")
         q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAX)
         self._subscribers.add(q)
         logger.debug("SSE subscriber added", extra={"total": len(self._subscribers)})
