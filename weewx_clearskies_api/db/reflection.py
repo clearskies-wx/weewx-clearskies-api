@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from sqlalchemy import Engine, MetaData, Table
 from sqlalchemy.exc import InvalidRequestError, OperationalError
 
+from weewx_clearskies_api.services.weewx_metadata import get_obs_group
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -181,6 +183,9 @@ class ColumnInfo:
     canonical_name: str
     #: True for columns in STOCK_COLUMN_MAP; False for operator-custom columns.
     is_stock: bool
+    #: weewx unit group from obs_group_dict (e.g. "group_temperature"), or
+    #: None when weewx is not importable or the column has no known group.
+    auto_detected_group: str | None = None
 
 
 @dataclass
@@ -227,18 +232,21 @@ def _build_registry(
     op_map = operator_mapping or {}
     registry = ColumnRegistry()
     for col in columns:
+        group = get_obs_group(col)
         canonical = STOCK_COLUMN_MAP.get(col)
         if canonical is not None:
             registry.stock[col] = ColumnInfo(
                 db_name=col,
                 canonical_name=canonical,
                 is_stock=True,
+                auto_detected_group=group,
             )
         elif col in op_map:
             registry.unmapped[col] = ColumnInfo(
                 db_name=col,
                 canonical_name=op_map[col],
                 is_stock=False,
+                auto_detected_group=group,
             )
             logger.info(
                 "Non-stock column mapped by operator: %s → %s",
@@ -249,6 +257,7 @@ def _build_registry(
                 db_name=col,
                 canonical_name=col,
                 is_stock=False,
+                auto_detected_group=group,
             )
             logger.info(
                 "Non-stock archive column found — auto-mapped to its DB column name.",

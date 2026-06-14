@@ -107,6 +107,54 @@ logger = logging.getLogger(__name__)
 
 _LOOPBACK_PREFIXES = ("127.", "::1", "localhost")
 
+# weewx unit system constants (US=1, Metric=16, MetricWX=17).
+_UNIT_SYSTEMS = (1, 16, 17)
+
+
+def _validate_column_units(column_units: dict[str, str]) -> None:
+    """Log warnings for confirmed units that conflict with weewx metadata (T2.7).
+
+    For each entry in the operator-confirmed ``column_units`` dict, looks up
+    the column's observation group via ``get_obs_group`` and then resolves all
+    valid units for that group across the three weewx unit systems.  If the
+    confirmed unit is not among the valid set, a WARNING is emitted but the
+    API still starts (confirmed unit wins; operator can re-run setup to fix).
+
+    Silently skips when weewx metadata is unavailable or when a column is
+    not present in ``obs_group_dict``.
+    """
+    from weewx_clearskies_api.services.weewx_metadata import (  # noqa: PLC0415
+        get_obs_group,
+        get_unit_for_group,
+        is_available,
+    )
+
+    if not is_available() or not column_units:
+        return
+
+    for column, confirmed_unit in column_units.items():
+        obs_group = get_obs_group(column)
+        if obs_group is None:
+            continue
+
+        # Collect every unit that any unit system maps this group to.
+        valid_units: set[str] = set()
+        for us in _UNIT_SYSTEMS:
+            unit = get_unit_for_group(obs_group, us)
+            if unit:
+                valid_units.add(unit)
+
+        if confirmed_unit not in valid_units:
+            logger.warning(
+                "Column unit mismatch: %s has confirmed unit '%s' but "
+                "weewx group '%s' expects one of %s. Data will be served "
+                "with the confirmed unit; re-run setup if this is wrong.",
+                column,
+                confirmed_unit,
+                obs_group,
+                sorted(valid_units),
+            )
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Clear Skies Weather API")
@@ -458,6 +506,19 @@ def main() -> None:
 
     # Step 3: Reconfigure logging at the operator's level.
     setup_logging(settings.logging.level)
+
+    # Load weewx metadata for unit auto-detection (ADR-056).
+    # Runs early so metadata is available in both configured and setup modes.
+    from weewx_clearskies_api.services.weewx_metadata import load_weewx_metadata  # noqa: PLC0415
+
+    weewx_python_path = getattr(getattr(settings, "weewx", None), "python_path", None)
+    load_weewx_metadata(python_path=weewx_python_path)
+
+    # T2.7: Validate operator-confirmed column units against weewx metadata.
+    # Runs after both settings (step 2) and weewx metadata are loaded.
+    # Mismatches produce warnings, not errors — the API still starts.
+    if settings.column_units:
+        _validate_column_units(settings.column_units)
 
     # Step 3a: Determine config_dir from the resolved config file path.
     # find_config_file() follows the same ADR-027 search order as load_settings().

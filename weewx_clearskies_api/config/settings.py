@@ -239,12 +239,17 @@ class WeewxSettings:
     config_path: str
     #: Directory where weewx writes NOAA-*.txt report files.
     reports_directory: str
+    #: Optional path to a directory containing the weewx package, prepended
+    #: to sys.path at startup so ``import weewx.units`` succeeds (ADR-056).
+    python_path: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.config_path = str(section.get("config_path", "/etc/weewx/weewx.conf"))
         self.reports_directory = str(
             section.get("reports_directory", "/var/www/html/weewx/NOAA")
         )
+        raw_python_path = section.get("python_path")
+        self.python_path = str(raw_python_path) if raw_python_path is not None else None
 
 
 class StationSettings:
@@ -1040,6 +1045,11 @@ class Settings:
     cache_warmer: CacheWarmerSettings
     charts: ChartsSettings
     column_mapping: dict[str, str]
+    #: Operator-confirmed unit for each mapped column, parsed from the
+    #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
+    #: after the wizard's column-mapping step.  Empty dict when the section
+    #: is absent (fresh install or pre-T2.6 config).
+    column_units: dict[str, str]
 
     def __init__(
         self,
@@ -1067,6 +1077,7 @@ class Settings:
         cache_warmer: CacheWarmerSettings | None = None,
         charts: ChartsSettings | None = None,
         column_mapping: dict[str, str] | None = None,
+        column_units: dict[str, str] | None = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -1094,6 +1105,7 @@ class Settings:
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
         self.charts = charts if charts is not None else ChartsSettings({})
         self.column_mapping = column_mapping if column_mapping is not None else {}
+        self.column_units = column_units if column_units is not None else {}
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -1221,6 +1233,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
     charts_cfg = ChartsSettings(dict(cfg.get("charts", {})))
     column_mapping_cfg = dict(cfg.get("column_mapping", {}))
+    column_units_cfg = dict(cfg.get("column_units", {}))
 
     settings = Settings(
         api=api_cfg,
@@ -1247,6 +1260,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         cache_warmer=cache_warmer_cfg,
         charts=charts_cfg,
         column_mapping=column_mapping_cfg,
+        column_units=column_units_cfg,
     )
     settings.validate()
 

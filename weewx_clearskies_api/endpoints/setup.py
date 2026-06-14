@@ -23,6 +23,7 @@ import hmac
 import ipaddress
 import logging
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -42,6 +43,7 @@ from sqlalchemy.pool import NullPool
 from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, SchemaReflector
 from weewx_clearskies_api.services.station import _get_str_field, _parse_altitude
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, get_weewx_conf, load_weewx_conf
+from weewx_clearskies_api.services.weewx_metadata import get_unit_for_group
 from weewx_clearskies_api.trust import TrustManager, _read_secrets_env, _write_secrets_env
 
 logger = logging.getLogger(__name__)
@@ -165,6 +167,11 @@ class ColumnEntry(BaseModel):
     db_type: str
     stock: bool
     canonical: str | None
+    auto_detected_group: str | None = None
+    auto_detected_unit: str | None = None
+    suggested_group: str | None = None
+    suggested_unit: str | None = None
+    unit_source: str | None = None
 
 
 class SchemaResponse(BaseModel):
@@ -291,6 +298,11 @@ class ApplyRequest(BaseModel):
 
     database: DatabaseApplyConfig
     column_mapping: dict[str, str] = {}
+    #: Operator-confirmed unit for each mapped column (e.g. ``outTemp`` →
+    #: ``degree_F``).  Written to ``[column_units]`` in api.conf.  On re-run
+    #: the entire section is replaced (stale entries from unmapped columns
+    #: are not carried over).
+    column_units: dict[str, str] = {}
     station: StationApplyConfig = StationApplyConfig()
     weewx_conf_path: str | None = None
     #: Provider configurations keyed by domain: "forecast", "aqi", "alerts",
@@ -400,6 +412,7 @@ class CurrentConfigResponse(BaseModel):
     social: CurrentConfigSocialSection = CurrentConfigSocialSection()
     earthquakes: CurrentConfigEarthquakeSection = CurrentConfigEarthquakeSection()
     column_mapping: dict[str, str] | None = None
+    column_units: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +430,39 @@ _PROVIDER_ALIASES: dict[str, str] = {
 def _canonical_provider(name: str) -> str:
     """Return the canonical provider name, resolving any known aliases."""
     return _PROVIDER_ALIASES.get(name, name)
+
+
+# ---------------------------------------------------------------------------
+# Heuristic unit-group suggestions for custom/extension columns (T2.4)
+# ---------------------------------------------------------------------------
+
+# Patterns are tried in order; first match wins.  Group names are validated
+# against weewx.units.obs_group_dict values on the production weewx host.
+_HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)pm[_]?2[_.]?5"), "group_concentration"),
+    (re.compile(r"(?i)pm[_]?10"), "group_concentration"),
+    (re.compile(r"(?i)pm[_]?1(?!\d)"), "group_concentration"),
+    (re.compile(r"(?i)(?:no2|so2|o3|co(?!ol|unt|n)|nh3)"), "group_fraction"),
+    (re.compile(r"(?i)temp"), "group_temperature"),
+    (re.compile(r"(?i)humid"), "group_percent"),
+    (re.compile(r"(?i)press|barom"), "group_pressure"),
+    (re.compile(r"(?i)rain(?!bow)"), "group_rain"),
+    (re.compile(r"(?i)wind.*(?:speed|gust)"), "group_speed"),
+    (re.compile(r"(?i)wind.*dir"), "group_direction"),
+]
+
+
+def _suggest_group(column_name: str) -> str | None:
+    """Pattern-match a column name to a likely weewx unit group.
+
+    Returns the first matching group name, or None if no pattern matches.
+    Used as a lower-confidence fallback when weewx auto-detection (obs_group_dict)
+    returns nothing for custom/extension columns.
+    """
+    for pattern, group in _HEURISTIC_PATTERNS:
+        if pattern.search(column_name):
+            return group
+    return None
 
 
 def _build_temp_mysql_url(host: str, port: int, user: str, password: str, name: str) -> str:
@@ -541,6 +587,12 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
     # Replace the entire section so removed mappings don't persist from prior runs.
     if apply.column_mapping is not None:
         cfg["column_mapping"] = dict(apply.column_mapping)
+
+    # [column_units] — operator-confirmed unit for each mapped column.
+    # Replace the entire section so stale units from columns that were unmapped
+    # on re-run don't persist (same pattern as column_mapping above).
+    if apply.column_units is not None:
+        cfg["column_units"] = dict(apply.column_units)
 
     # [forecast] / [aqi] / [alerts] / [radar] / [earthquakes] — non-secret provider
     # fields only.  Credentials are written to secrets.env by the apply handler.
@@ -831,6 +883,14 @@ async def schema(request: Request) -> SchemaResponse:
     try:
         reflector = SchemaReflector(engine)
         registry = reflector.reflect()
+
+        # Read the unit system from the first archive record so we can resolve
+        # unit groups to concrete unit strings (e.g. group_temperature → degree_F).
+        # Returns None when the archive table is empty (fresh install).
+        with engine.connect() as conn:
+            us_units: int | None = conn.execute(
+                text("SELECT usUnits FROM archive LIMIT 1"),
+            ).scalar()
     except RuntimeError as exc:
         logger.error("Schema reflection failed during setup: %s", type(exc).__name__)
         raise HTTPException(502, detail="Schema reflection failed. Verify database and archive table exist.") from exc
@@ -853,11 +913,36 @@ async def schema(request: Request) -> SchemaResponse:
         else:
             db_type = "REAL"
 
+        auto_unit: str | None = None
+        if col_info.auto_detected_group and us_units is not None:
+            auto_unit = get_unit_for_group(col_info.auto_detected_group, us_units)
+
+        # Determine unit_source and heuristic suggestion fields.
+        # Priority: weewx auto-detection > heuristic pattern match > nothing.
+        suggested_group: str | None = None
+        suggested_unit: str | None = None
+        unit_source: str | None = None
+
+        if col_info.auto_detected_group:
+            unit_source = "weewx"
+        else:
+            heuristic_group = _suggest_group(col_info.db_name)
+            if heuristic_group:
+                unit_source = "heuristic"
+                suggested_group = heuristic_group
+                if us_units is not None:
+                    suggested_unit = get_unit_for_group(heuristic_group, us_units)
+
         columns.append(ColumnEntry(
             name=col_info.db_name,
             db_type=db_type,
             stock=col_info.is_stock,
             canonical=col_info.canonical_name,
+            auto_detected_group=col_info.auto_detected_group,
+            auto_detected_unit=auto_unit,
+            suggested_group=suggested_group,
+            suggested_unit=suggested_unit,
+            unit_source=unit_source,
         ))
 
     return SchemaResponse(
@@ -1222,6 +1307,13 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                 if v and k != "_excluded"
             }
 
+    # --- Column units ---
+    col_units: dict[str, str] | None = None
+    if api_cfg is not None:
+        cu_section = api_cfg.get("column_units", {})
+        if isinstance(cu_section, dict) and cu_section:
+            col_units = {str(k): str(v) for k, v in cu_section.items() if v}
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -1230,6 +1322,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         social=social,
         earthquakes=earthquakes_config,
         column_mapping=col_mapping,
+        column_units=col_units,
     )
 
 
