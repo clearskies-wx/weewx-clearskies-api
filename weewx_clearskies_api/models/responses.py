@@ -1083,6 +1083,7 @@ class AQIReading(BaseModel):
     pollutantNH3: float | None = None    # µg/m³ (group_concentration; OWM/OpenMeteo Europe only — ADR-059)
     observedAt: str                      # UTC ISO-8601 with Z; required per OpenAPI
     source: str                          # "weewx" (Path A) or provider_id (Path B)
+    pollutantSources: dict[str, str] | None = None  # field → source string (T4B.3); non-null only when merge ran
 
 
 class AQIResponse(BaseModel):

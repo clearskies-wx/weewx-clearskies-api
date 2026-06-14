@@ -64,6 +64,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.services.aqi_history import get_aqi_history
+from weewx_clearskies_api.services.aqi_merge import merge_aqi_with_db
 from weewx_clearskies_api.services.station import get_station_info
 from weewx_clearskies_api.services.units import get_units_block
 
@@ -365,6 +366,29 @@ def get_aqi_current(
         # Unknown provider should have been caught at startup by _wire_providers_from_config.
         logger.error("Unknown AQI provider at request time: %r", provider_id)
         raise HTTPException(status_code=502, detail=f"Unknown AQI provider: {provider_id!r}")
+
+    # --- Multi-source pollutant merge (T4B.3, FIX-004) ---
+    # Supplement provider-only data with weewx-mapped pollutant columns from the archive.
+    # Merge is skipped when no AQI columns are mapped (no DB hit).
+    # DB errors are isolated: logged, then provider-only response returned unchanged.
+    if record is not None:
+        try:
+            from weewx_clearskies_api.db.registry import get_registry  # noqa: PLC0415
+            from weewx_clearskies_api.db.session import get_engine  # noqa: PLC0415
+            registry = get_registry()
+            engine = get_engine()
+            record = merge_aqi_with_db(
+                reading=record,
+                provider_id=provider_id,
+                registry=registry,
+                db_engine=engine,
+            )
+        except RuntimeError:
+            # get_registry() or get_engine() raised — startup not complete.
+            # This is a test or early-startup condition; proceed without merge.
+            logger.debug(
+                "[aqi] Column registry or DB engine not wired; skipping pollutant merge."
+            )
 
     return AQIResponse(
         data=record,
