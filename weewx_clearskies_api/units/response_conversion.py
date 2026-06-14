@@ -269,6 +269,12 @@ def apply_conversion(
                         flattened_rec[key] = val["value"]
                     else:
                         flattened_rec[key] = val
+                # Preserve metadata fields stripped by transform_record
+                # (dateTime, usUnits, interval) — not observations, but
+                # required by the response schema.
+                for meta_key in ("interval", "dateTime", "usUnits"):
+                    if meta_key in record and meta_key not in flattened_rec:
+                        flattened_rec[meta_key] = record[meta_key]
                 converted_list.append(flattened_rec)
             except Exception:  # noqa: BLE001
                 converted_list.append(record)
