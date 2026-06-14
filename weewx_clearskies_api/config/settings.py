@@ -1017,6 +1017,39 @@ class ChartsSettings:
         self.config_path = raw if raw else None
 
 
+def _bool(value: object) -> bool:
+    """Parse a boolean from a string or bool value (INI-safe)."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
+class InputSettings:
+    """[input] section settings (ADR-058).
+
+    Controls the direct Unix-socket adapter that receives loop packets from
+    the ClearSkiesLoopRelay weewx extension.
+
+    When enabled is False, the adapter and SSE emitter are not started and
+    the API operates in REST-only mode (no /sse stream).
+    """
+
+    #: Path to the Unix domain socket served by ClearSkiesLoopRelay.
+    socket_path: str
+    #: When False, the direct adapter and SSE emitter are not started.
+    enabled: bool
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.socket_path = str(
+            section.get("socket_path", "/var/run/weewx-clearskies/loop.sock")
+        )
+        self.enabled = _bool(section.get("enabled", "true"))
+
+    def validate(self) -> None:
+        # socket_path is validated at connection time, not startup.
+        pass
+
+
 class Settings:
     """Top-level runtime settings, assembled from INI file + env vars."""
 
@@ -1044,6 +1077,7 @@ class Settings:
     conditions: ConditionsSettings
     cache_warmer: CacheWarmerSettings
     charts: ChartsSettings
+    input: InputSettings
     column_mapping: dict[str, str]
     #: Operator-confirmed unit for each mapped column, parsed from the
     #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
@@ -1076,6 +1110,7 @@ class Settings:
         conditions: ConditionsSettings | None = None,
         cache_warmer: CacheWarmerSettings | None = None,
         charts: ChartsSettings | None = None,
+        input: InputSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
         configured: bool = True,
@@ -1104,6 +1139,7 @@ class Settings:
         self.conditions = conditions if conditions is not None else ConditionsSettings({})
         self.cache_warmer = cache_warmer if cache_warmer is not None else CacheWarmerSettings({})
         self.charts = charts if charts is not None else ChartsSettings({})
+        self.input = input if input is not None else InputSettings({})
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
 
@@ -1124,6 +1160,7 @@ class Settings:
         self.branding.validate()
         self.conditions.validate()
         self.cache_warmer.validate()
+        self.input.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1232,6 +1269,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     conditions_cfg = ConditionsSettings(dict(cfg.get("conditions", {})))
     cache_warmer_cfg = CacheWarmerSettings(dict(cfg.get("cache_warmer", {})))
     charts_cfg = ChartsSettings(dict(cfg.get("charts", {})))
+    input_cfg = InputSettings(dict(cfg.get("input", {})))
     column_mapping_cfg = dict(cfg.get("column_mapping", {}))
     column_units_cfg = dict(cfg.get("column_units", {}))
 
@@ -1259,6 +1297,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         conditions=conditions_cfg,
         cache_warmer=cache_warmer_cfg,
         charts=charts_cfg,
+        input=input_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
     )

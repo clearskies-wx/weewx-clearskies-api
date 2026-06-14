@@ -46,6 +46,9 @@ dependencies = [
     # CLEARSKIES_METRICS_ENABLED=true). prometheus-client is a pure-Python
     # library; no native build required.
     "prometheus-client==0.25.0",
+    # ADR-058: sse-starlette provides EventSourceResponse for the /sse endpoint
+    # that streams weewx loop packets to dashboard clients.
+    "sse-starlette>=2.0.0",
 ]
 
 [project.optional-dependencies]

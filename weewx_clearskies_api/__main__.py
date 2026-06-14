@@ -218,6 +218,8 @@ def _run_server(
     cert_path: Path,
     key_path: Path,
     app: FastAPI,
+    sse_emitter: object = None,
+    adapter: object = None,
 ) -> None:
     """Start the public API and health servers.
 
@@ -229,6 +231,9 @@ def _run_server(
 
     app is passed in (rather than created here) so main() can attach state to it
     before the server starts.
+
+    sse_emitter and adapter are optional; when provided they are started before
+    uvicorn and stopped after uvicorn exits (ADR-058).
     """
     health_app = create_health_app(
         metrics_enabled=settings.health.metrics_enabled,
@@ -299,8 +304,21 @@ def _run_server(
     )
 
     async def _serve_all() -> None:
+        # Start SSE infrastructure before uvicorn accepts connections (ADR-058).
+        if adapter is not None:
+            adapter.start(asyncio.get_running_loop())  # type: ignore[union-attr]
+        if sse_emitter is not None:
+            sse_emitter.start()  # type: ignore[union-attr]
+
         servers = [uvicorn.Server(cfg) for cfg in all_configs]
-        await asyncio.gather(*[server.serve() for server in servers])
+        try:
+            await asyncio.gather(*[server.serve() for server in servers])
+        finally:
+            # Stop SSE infrastructure after uvicorn exits (graceful or not).
+            if sse_emitter is not None:
+                sse_emitter.stop()  # type: ignore[union-attr]
+            if adapter is not None:
+                adapter.stop()  # type: ignore[union-attr]
 
     asyncio.run(_serve_all())
 
@@ -770,8 +788,33 @@ def main() -> None:
     # Step 7: Register DB readiness probe.
     wire_db_health_probe()
 
+    # Step 7a: Create SSE infrastructure (ADR-058).
+    # Packet tap wired but empty — enrichment processors registered in Phase 3B.
+    from weewx_clearskies_api.sse.direct_adapter import DirectAdapter  # noqa: PLC0415
+    from weewx_clearskies_api.sse.emitter import SSEEmitter  # noqa: PLC0415
+    from weewx_clearskies_api.sse.packet_tap import process_packet  # noqa: PLC0415
+    from weewx_clearskies_api.health import register_readiness_probe  # noqa: PLC0415
+
+    packet_queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+    sse_emitter = SSEEmitter(packet_queue, on_packet=process_packet)
+    app.state.sse_emitter = sse_emitter
+
+    if settings.input.enabled:
+        sse_adapter: DirectAdapter | None = DirectAdapter(settings.input, packet_queue)
+        register_readiness_probe(sse_adapter.health_probe)
+    else:
+        sse_adapter = None
+        logger.info("SSE input disabled ([input] enabled = false); running in REST-only mode")
+
     # Step 8: Start servers (TLS-enabled via cert_path / key_path from step 3b).
-    _run_server(settings, cert_path=cert_path, key_path=key_path, app=app)
+    _run_server(
+        settings,
+        cert_path=cert_path,
+        key_path=key_path,
+        app=app,
+        sse_emitter=sse_emitter,
+        adapter=sse_adapter,
+    )
 
 
 if __name__ == "__main__":
