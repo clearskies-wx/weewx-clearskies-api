@@ -444,7 +444,8 @@ class AlertsSettings:
 
 
 class AQISettings:
-    """[aqi] section settings (3b-9, extended 3b-10 with Aeris, 3b-12 with IQAir).
+    """[aqi] section settings (3b-9, extended 3b-10 with Aeris, 3b-12 with IQAir,
+    extended 4AB-1 with regional config per ADR-059).
 
     Provider id for the AQI data source.  Open-Meteo is keyless — no env vars
     needed.  Aeris (3b-10) is keyed — credentials come from the shared [aeris]
@@ -454,6 +455,12 @@ class AQISettings:
     domain-scoped per Q1 user decision 2026-05-11 (IQAir is AQI-only; distinct
     from multi-domain Aeris/OWM).
 
+    Regional config (ADR-059):
+      aeris_aqi_filter: one of airnow|china|india|eaqi|caqi|uk|de|cai (default airnow).
+      openmeteo_aqi_index: one of us_aqi|european_aqi (default us_aqi).
+      iqair_aqi_scale: one of us|cn (default us).
+      OWM has no regional config — always returns OWM 1-5 ordinal scale.
+
     Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
     """
 
@@ -461,6 +468,21 @@ class AQISettings:
     provider: str | None
     #: IQAir API key (domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
     iqair_key: str | None
+    #: Aeris regional AQI filter (ADR-059). Passed as filter= query param.
+    #: One of: airnow|china|india|eaqi|caqi|uk|de|cai. Default: airnow.
+    aeris_aqi_filter: str
+    #: OpenMeteo AQI index variable (ADR-059). Determines which AQI variable to request.
+    #: One of: us_aqi|european_aqi. Default: us_aqi.
+    openmeteo_aqi_index: str
+    #: IQAir AQI scale (ADR-059). Determines whether to read aqius (US EPA) or aqicn (China MEP).
+    #: One of: us|cn. Default: us.
+    iqair_aqi_scale: str
+
+    _VALID_AERIS_FILTERS: frozenset[str] = frozenset({
+        "airnow", "china", "india", "eaqi", "caqi", "uk", "de", "cai",
+    })
+    _VALID_OPENMETEO_INDICES: frozenset[str] = frozenset({"us_aqi", "european_aqi"})
+    _VALID_IQAIR_SCALES: frozenset[str] = frozenset({"us", "cn"})
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -473,13 +495,37 @@ class AQISettings:
         raw_iqair_key = os.environ.get("WEEWX_CLEARSKIES_IQAIR_KEY", "").strip()
         self.iqair_key = raw_iqair_key if raw_iqair_key else None
 
+        # Regional AQI config (ADR-059) — from INI section, not env vars (not secrets).
+        self.aeris_aqi_filter = str(section.get("aeris_aqi_filter", "airnow")).strip()
+        self.openmeteo_aqi_index = str(section.get("openmeteo_aqi_index", "us_aqi")).strip()
+        self.iqair_aqi_scale = str(section.get("iqair_aqi_scale", "us")).strip()
+
     def validate(self) -> None:
-        """Raise ValueError on invalid provider id."""
+        """Raise ValueError on invalid provider id or regional config."""
         valid_providers = {"openmeteo", "aeris", "openweathermap", "iqair"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[aqi] provider {self.provider!r} not in {valid_providers}. "
                 "Supported values: 'openmeteo', 'aeris', 'openweathermap', 'iqair'."
+            )
+        if self.aeris_aqi_filter not in self._VALID_AERIS_FILTERS:
+            raise ValueError(
+                f"[aqi] aeris_aqi_filter {self.aeris_aqi_filter!r} not in "
+                f"{sorted(self._VALID_AERIS_FILTERS)}. "
+                "Supported values per ADR-059: 'airnow', 'china', 'india', "
+                "'eaqi', 'caqi', 'uk', 'de', 'cai'."
+            )
+        if self.openmeteo_aqi_index not in self._VALID_OPENMETEO_INDICES:
+            raise ValueError(
+                f"[aqi] openmeteo_aqi_index {self.openmeteo_aqi_index!r} not in "
+                f"{sorted(self._VALID_OPENMETEO_INDICES)}. "
+                "Supported values per ADR-059: 'us_aqi', 'european_aqi'."
+            )
+        if self.iqair_aqi_scale not in self._VALID_IQAIR_SCALES:
+            raise ValueError(
+                f"[aqi] iqair_aqi_scale {self.iqair_aqi_scale!r} not in "
+                f"{sorted(self._VALID_IQAIR_SCALES)}. "
+                "Supported values per ADR-059: 'us', 'cn'."
             )
 
 

@@ -1079,6 +1079,8 @@ class AQIReading(BaseModel):
     pollutantNO2: float | None = None    # µg/m³ (group_concentration; raw provider value)
     pollutantSO2: float | None = None    # µg/m³ (group_concentration; raw provider value)
     pollutantCO: float | None = None     # µg/m³ (group_concentration; raw provider value)
+    pollutantNO: float | None = None     # µg/m³ (group_concentration; OWM/OpenMeteo only — ADR-059)
+    pollutantNH3: float | None = None    # µg/m³ (group_concentration; OWM/OpenMeteo Europe only — ADR-059)
     observedAt: str                      # UTC ISO-8601 with Z; required per OpenAPI
     source: str                          # "weewx" (Path A) or provider_id (Path B)
 

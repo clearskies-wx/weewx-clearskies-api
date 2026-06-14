@@ -127,17 +127,21 @@ def wire_aqi_settings(settings: object) -> None:
     """Wire AQI-related settings from the Settings object.
 
     For Open-Meteo (keyless): no-op for credentials — but AQI history settings
-      are always wired from settings.aqi_history (P4-T3).
+      are always wired from settings.aqi_history (P4-T3).  Regional config
+      (aqi_index) is wired via openmeteo.configure_regional_settings() (ADR-059).
     For Aeris (3b-10): extracts client_id + client_secret from settings.forecast
       (provider-scoped per 3b-4 Q1 user decision; same [aeris] section as
       forecast/alerts Aeris) and stores in module-level _AERIS_CLIENT_ID +
       _AERIS_CLIENT_SECRET for the dispatch to pass to aeris.fetch().
+      Regional config (aqi_filter) is wired via aeris.configure_regional_settings() (ADR-059).
     For OWM (3b-11): extracts openweathermap_appid from settings.forecast
       (provider-scoped per 3b-5 Q2 user decision; same env var as forecast/alerts OWM:
       WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID) and stores in _OWM_APPID.
+      OWM has no regional config (always uses OWM 1-5 ordinal scale globally).
     For IQAir (3b-12): extracts iqair_key from settings.aqi (domain-scoped per
       Q1 user decision 2026-05-11; IQAir is AQI-only, not multi-domain like Aeris/OWM)
-      and stores in _IQAIR_KEY.
+      and stores in _IQAIR_KEY.  Regional config (aqi_scale) wired via
+      iqair.configure_regional_settings() (ADR-059).
     AQI history (P4-T3): stores settings.aqi_history in _AQI_HISTORY_SETTINGS so
       get_aqi_history() can read archive column mappings at request time.
     """
@@ -184,6 +188,13 @@ def wire_aqi_settings(settings: object) -> None:
                 "capability still registered but /aqi/current will return 502 until wired"
             )
 
+        # Wire regional config (ADR-059) — filter determines AQI methodology.
+        # Default "airnow"; configurable via [aqi] aeris_aqi_filter in api.conf.
+        from weewx_clearskies_api.providers.aqi import aeris as _aeris_mod  # noqa: PLC0415
+        _aeris_mod.configure_regional_settings(
+            aqi_filter=getattr(aqi_section, "aeris_aqi_filter", "airnow"),
+        )
+
     elif provider == "openweathermap":
         # Provider-scoped credential per 3b-5 Q2 user decision — same env var as
         # forecast/alerts OWM (WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID).
@@ -205,6 +216,16 @@ def wire_aqi_settings(settings: object) -> None:
                 "WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID env var missing; "
                 "capability still registered but /aqi/current will return 502 until wired"
             )
+        # OWM has no regional config (always uses OWM 1-5 ordinal scale globally — ADR-059).
+
+    elif provider == "openmeteo":
+        # Open-Meteo is keyless (auth_required=()); no credential wiring needed.
+        # Wire regional config (ADR-059) — aqi_index determines us_aqi vs european_aqi.
+        # Default "us_aqi"; configurable via [aqi] openmeteo_aqi_index in api.conf.
+        from weewx_clearskies_api.providers.aqi import openmeteo as _openmeteo_mod  # noqa: PLC0415
+        _openmeteo_mod.configure_regional_settings(
+            aqi_index=getattr(aqi_section, "openmeteo_aqi_index", "us_aqi"),
+        )
 
     elif provider == "iqair":
         # Domain-scoped credential per Q1 user decision 2026-05-11 — IQAir is
@@ -219,7 +240,14 @@ def wire_aqi_settings(settings: object) -> None:
                 "capability still registered but /aqi/current will return 502 until wired"
             )
 
-    # Open-Meteo is keyless (auth_required=()); nothing to wire.
+        # Wire regional config (ADR-059) — scale determines aqius vs aqicn.
+        # Default "us"; configurable via [aqi] iqair_aqi_scale in api.conf.
+        from weewx_clearskies_api.providers.aqi import iqair as _iqair_mod  # noqa: PLC0415
+        _iqair_mod.configure_regional_settings(
+            aqi_scale=getattr(aqi_section, "iqair_aqi_scale", "us"),
+        )
+
+    # For any unrecognized provider: no wiring attempt (capability registry catches this at startup).
 
 
 # ---------------------------------------------------------------------------

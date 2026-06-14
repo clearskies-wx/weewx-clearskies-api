@@ -1,4 +1,4 @@
-"""OpenWeatherMap Air Pollution AQI provider module (ADR-013, ADR-038).
+"""OpenWeatherMap Air Pollution AQI provider module (ADR-013, ADR-038, ADR-059).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
@@ -9,21 +9,21 @@ Five responsibilities per ADR-038 §2:
      pattern (distinct from forecast/openweathermap.py which uses a paid endpoint).
   2. Response parsing — wire-shape Pydantic models with extra="ignore" (LC5):
        _OWMAirPollutionComponents — co/no/no2/o3/so2/pm2_5/pm10/nh3 (all float|None)
-       _OWMAirPollutionMain — aqi: int|None (OWM 1–5; declared for wire validity,
-         NOT read in translation per LC4 — canonical aqi is derived from concentrations)
+       _OWMAirPollutionMain — aqi: int|None (OWM 1–5; served as-is per ADR-059)
        _OWMAirPollutionEntry — dt, main, components
        _OWMAirPollutionResponse — list: list[_OWMAirPollutionEntry] (shadows Python
          builtin; uses Field(default_factory=list) per LC11)
   3. Translation to canonical AQIReading (_wire_to_canonical):
        - aqi = main.aqi (OWM's native 1–5 ordinal; served as-is)
        - aqiScale = "owm" (1–5 ordinal scale, not EPA 0–500)
-       - aqiCategory = None (dashboard-computed from aqi+aqiScale)
+       - aqiCategory = derived from OWM 1–5 ordinal via _OWM_CATEGORY_MAP (ADR-059)
        - aqiMainPollutant = None (OWM Air Pollution does not supply dominant pollutant)
        - aqiLocation = None (PARTIAL-DOMAIN per LC12 — no location label at any tier)
        - pollutantPM25/PM10/O3/NO2/SO2/CO: raw µg/m³ from components (no conversion)
+       - pollutantNO: components.no µg/m³ (ADR-059 — no longer dropped)
+       - pollutantNH3: components.nh3 µg/m³ (ADR-059 — no longer dropped)
        - observedAt: epoch_to_utc_iso8601(entry.dt) — shared helper (DRY per LC17)
        - source = "openweathermap"
-       - NH3 and NO dropped unconditionally (no EPA AQI band; not on canonical — LC16)
   4. Capability declaration — CAPABILITY symbol consumed at startup.
      Full max-surface MINUS aqiLocation (only PARTIAL-DOMAIN for OWM at all tiers).
      FREE-tier endpoint — no tier-conditional fields (distinct from Aeris which has
@@ -55,12 +55,13 @@ Cache layer (ADR-017 / LC3 / LC6 / LC7):
 
 OWM main.aqi (1–5) field:
   Served as-is as the canonical aqi value with aqiScale="owm".
-  The dashboard converts to the operator's preferred display scale.
+  aqiCategory derived client-side via _OWM_CATEGORY_MAP (ADR-059):
+    1 → "Good", 2 → "Fair", 3 → "Moderate", 4 → "Poor", 5 → "Very Poor".
 
-NH3 / NO handling (LC16):
-  Both present on wire (nh3, no in components).  Neither has an EPA AQI band.
-  Neither appears on canonical AQIReading.  Silently dropped during translation.
-  Mirrors aeris.py dropping pm1.
+NO / NH3 handling (ADR-059):
+  Both present on wire (nh3, no in components) as µg/m³.
+  Now mapped to pollutantNO and pollutantNH3 per ADR-059 (no longer dropped).
+  OWM has no regional config — always returns OWM 1–5 ordinal scale globally.
 
 Rate limiter (LC8):
   max_calls=5, window_seconds=1 (be-polite guard; 15-min TTL → ~96 calls/day,
@@ -104,6 +105,17 @@ _API_VERSION = "0.1.0"
 OWM_AIRPOL_BASE_URL = "https://api.openweathermap.org"
 OWM_AIRPOL_PATH = "/data/2.5/air_pollution"
 
+# OWM 1–5 ordinal → human-readable category name (ADR-059).
+# OWM's published category labels per their documentation:
+#   1=Good, 2=Fair, 3=Moderate, 4=Poor, 5=Very Poor.
+_OWM_CATEGORY_MAP: dict[int, str] = {
+    1: "Good",
+    2: "Fair",
+    3: "Moderate",
+    4: "Poor",
+    5: "Very Poor",
+}
+
 
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4)
@@ -116,9 +128,11 @@ CAPABILITY = ProviderCapability(
         # Full max-surface MINUS aqiLocation (PARTIAL-DOMAIN — no location field at ANY tier).
         # FREE-tier endpoint: no tier-conditional fields.  All listed fields are
         # delivered on the free tier; no paid-tier-only splits here.
+        # pollutantNO and pollutantNH3 added per ADR-059 (no longer dropped).
         "aqi", "aqiCategory", "aqiMainPollutant",
         "pollutantPM25", "pollutantPM10",
         "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
+        "pollutantNO", "pollutantNH3",
         "observedAt", "source",
         # aqiLocation EXCLUDED — PARTIAL-DOMAIN (no location field on wire at any tier).
     ),
@@ -132,11 +146,13 @@ CAPABILITY = ProviderCapability(
         "forecast/alerts OWM — same WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID env var "
         "per 3b-5 Q2 user decision. "
         "OWM main.aqi (1–5 ordinal) is served as-is with aqiScale='owm'. "
-        "The dashboard converts to the operator's preferred display scale. "
-        "aqiCategory=None (dashboard-computed). aqiMainPollutant=None "
-        "(OWM Air Pollution does not supply a dominant pollutant field). "
+        "No regional config — OWM always uses its own 1–5 ordinal scale globally (ADR-059). "
+        "aqiCategory derived client-side from OWM 1–5 ordinal via _OWM_CATEGORY_MAP "
+        "(1=Good, 2=Fair, 3=Moderate, 4=Poor, 5=Very Poor). "
+        "aqiMainPollutant=None (OWM Air Pollution does not supply a dominant pollutant field). "
         "aqiLocation is PARTIAL-DOMAIN (no location label on wire at any tier). "
-        "NH3 and NO are dropped (no EPA AQI band; not on canonical AQIReading). "
+        "pollutantNO (no) and pollutantNH3 (nh3) passed through as µg/m³ per ADR-059 "
+        "(previously dropped — ADR-059 stops dropping pollutant data). "
         "Gas pollutants (O3, NO2, SO2, CO) passed through as µg/m³ (raw provider values)."
     ),
 )
@@ -280,26 +296,33 @@ def _wire_to_canonical(entry: _OWMAirPollutionEntry) -> AQIReading | None:
     Returns None if main.aqi AND all component values are null (no useful reading).
 
     OWM main.aqi (1–5 ordinal) is used directly as the canonical aqi value with
-    aqiScale="owm".  The dashboard applies any display-scale conversion.
+    aqiScale="owm".  aqiCategory derived from the 1–5 ordinal via _OWM_CATEGORY_MAP.
 
-    Per LC16: NH3 (nh3) and NO (no) are silently dropped — they have no EPA
-    AQI band and no slot on canonical AQIReading.
+    Per ADR-059: NH3 (nh3) and NO (no) are now mapped to pollutantNH3 and
+    pollutantNO instead of being dropped.  OWM returns these globally in µg/m³.
     """
     components = entry.components
 
     # aqi: OWM's native 1–5 ordinal (main.aqi).
     aqi_val: int | None = entry.main.aqi
 
-    # Empty-result guard: return None if aqi AND all canonical pollutant values are null.
+    # Empty-result guard: return None if aqi AND all component values are null.
+    # Includes NO and NH3 in the check now that they're part of canonical (ADR-059).
     has_data = aqi_val is not None or any(
         v is not None
         for v in (
             components.pm2_5, components.pm10,
             components.o3, components.no2, components.so2, components.co,
+            components.no, components.nh3,
         )
     )
     if not has_data:
         return None
+
+    # aqiCategory: derive from OWM 1–5 ordinal (ADR-059).
+    # _OWM_CATEGORY_MAP: 1=Good, 2=Fair, 3=Moderate, 4=Poor, 5=Very Poor.
+    # None if aqi_val is not in the expected 1–5 range (defensive).
+    aqi_category: str | None = _OWM_CATEGORY_MAP.get(aqi_val) if aqi_val is not None else None
 
     # observedAt: Unix UTC epoch → ISO-8601 Z via shared helper (LC17 / DRY).
     observed_at = epoch_to_utc_iso8601(
@@ -311,15 +334,17 @@ def _wire_to_canonical(entry: _OWMAirPollutionEntry) -> AQIReading | None:
     return AQIReading(
         aqi=aqi_val,
         aqiScale="owm",
-        aqiCategory=None,
-        aqiMainPollutant=None,          # OWM Air Pollution does not supply dominant pollutant
-        aqiLocation=None,               # PARTIAL-DOMAIN — no location label at any tier (LC12)
+        aqiCategory=aqi_category,
+        aqiMainPollutant=None,           # OWM Air Pollution does not supply dominant pollutant
+        aqiLocation=None,                # PARTIAL-DOMAIN — no location label at any tier (LC12)
         pollutantPM25=components.pm2_5,  # µg/m³ passthrough (group_concentration)
         pollutantPM10=components.pm10,   # µg/m³ passthrough (group_concentration)
         pollutantO3=components.o3,       # µg/m³ raw provider value
         pollutantNO2=components.no2,     # µg/m³ raw provider value
         pollutantSO2=components.so2,     # µg/m³ raw provider value
         pollutantCO=components.co,       # µg/m³ raw provider value
+        pollutantNO=components.no,       # µg/m³ raw provider value (ADR-059 — no longer dropped)
+        pollutantNH3=components.nh3,     # µg/m³ raw provider value (ADR-059 — no longer dropped)
         observedAt=observed_at,
         source=PROVIDER_ID,
     )

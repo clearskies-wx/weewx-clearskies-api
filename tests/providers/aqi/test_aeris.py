@@ -8,7 +8,7 @@ Covers per the task-3b-10 brief §Test-author parallel scope (test_aeris.py):
 
   _wire_to_canonical happy path:
   - Real fixture → canonical AQIReading with all fields populated correctly.
-  - aqi = 33 → int; aqiCategory = "Good" (EPA band); aqiMainPollutant = "O3" (o3→O3).
+  - aqi = 33 → int; aqiScale = "airnow" (period.method, ADR-059); aqiCategory = "good" (period.category, ADR-059); aqiMainPollutant = "O3" (o3→O3).
   - observedAt = "2026-05-10T23:00:00Z" (LC4: explicit-offset -07:00 → UTC Z).
   - source = "aeris" (provider_id literal).
   - aqiLocation = "seattle" (place.name from Aeris — NOT PARTIAL-DOMAIN).
@@ -209,24 +209,34 @@ class TestWireToCanonicalHappyPath:
         assert result is not None
         assert result.aqi == 33, f"Expected aqi=33, got {result.aqi!r}"
 
-    def test_fixture_aqi_scale_is_epa(self) -> None:
-        """data.aqiScale = 'epa' (Aeris /airquality?filter=airnow is EPA native)."""
+    def test_fixture_aqi_scale_is_airnow(self) -> None:
+        """data.aqiScale = 'airnow' (ADR-059: pass through period.method; fixture method='airnow').
+
+        ADR-059 amends ADR-013: aqiScale now carries the provider's actual scale string
+        (e.g., 'airnow', 'india', 'eaqi'), not a hardcoded 'epa'.  When filter=airnow
+        the Aeris API returns method='airnow' in each period; that value is passed through.
+        """
         from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
         location = self._get_location_from_fixture()
         result = _wire_to_canonical(location)
         assert result is not None
-        assert result.aqiScale == "epa", (
-            f"Expected aqiScale='epa', got {result.aqiScale!r}"
+        assert result.aqiScale == "airnow", (
+            f"Expected aqiScale='airnow' (from period.method per ADR-059), got {result.aqiScale!r}"
         )
 
-    def test_fixture_aqi_category_is_none(self) -> None:
-        """data.aqiCategory = None (dashboard-computed; parsers set None)."""
+    def test_fixture_aqi_category_is_good(self) -> None:
+        """data.aqiCategory = 'good' (ADR-059: pass through period.category; fixture category='good').
+
+        ADR-059 amends ADR-013: aqiCategory is no longer always null.  Providers return
+        category strings appropriate to their scale; the API passes them through.
+        Fixture periods[0].category = 'good' (airnow scale Good band, AQI 33).
+        """
         from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
         location = self._get_location_from_fixture()
         result = _wire_to_canonical(location)
         assert result is not None
-        assert result.aqiCategory is None, (
-            f"Expected aqiCategory=None (dashboard-computed), got {result.aqiCategory!r}"
+        assert result.aqiCategory == "good", (
+            f"Expected aqiCategory='good' (from period.category per ADR-059), got {result.aqiCategory!r}"
         )
 
     def test_fixture_aqi_main_pollutant_is_O3(self) -> None:
@@ -404,16 +414,25 @@ class TestWireToCanonicalEdgeCases:
         assert result.pollutantSO2 is None
         assert result.pollutantCO is None
 
-    def test_empty_pollutants_list_aqi_populates_category_is_none(self) -> None:
-        """Empty pollutants[] → aqi populates from period.aqi; aqiCategory=None (dashboard-computed)."""
+    def test_empty_pollutants_list_aqi_populates_scale_and_category(self) -> None:
+        """Empty pollutants[] → aqi populates from period.aqi; aqiScale from method/filter.
+
+        ADR-059: aqiScale = period.method if present, else _AQI_FILTER default ("airnow").
+        The minimal fixture has no method field → falls back to _AQI_FILTER = "airnow".
+        aqiCategory = period.category (None in minimal fixture — no category set).
+        """
         from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
         location = self._make_minimal_location(aqi=75.0, pollutants=[])
         result = _wire_to_canonical(location)
         assert result is not None
         assert result.aqi == 75, f"Expected aqi=75, got {result.aqi!r}"
-        assert result.aqiScale == "epa", f"Expected aqiScale='epa', got {result.aqiScale!r}"
+        assert result.aqiScale == "airnow", (
+            f"Expected aqiScale='airnow' (from _AQI_FILTER default, no period.method in fixture), "
+            f"got {result.aqiScale!r}"
+        )
         assert result.aqiCategory is None, (
-            f"Expected aqiCategory=None (dashboard-computed), got {result.aqiCategory!r}"
+            f"Expected aqiCategory=None (period.category not set in minimal fixture), "
+            f"got {result.aqiCategory!r}"
         )
 
     def test_dominant_pm1_yields_none_main_pollutant(self) -> None:

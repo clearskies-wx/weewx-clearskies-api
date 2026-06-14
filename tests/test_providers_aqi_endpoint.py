@@ -665,20 +665,22 @@ class TestAqiCurrentAerisRegistered:
             f"Expected aqi=33, got {body['data'].get('aqi')!r}"
         )
 
-    def test_aeris_registered_aqi_scale_is_epa(self) -> None:
-        """data.aqiScale = 'epa' (Aeris airnow filter is EPA native)."""
+    def test_aeris_registered_aqi_scale_is_airnow(self) -> None:
+        """data.aqiScale = 'airnow' (ADR-059: pass through period.method; fixture method='airnow')."""
         response, _ = self._get_aeris_response()
         body = response.json()
-        assert body["data"]["aqiScale"] == "epa", (
-            f"Expected aqiScale='epa', got {body['data'].get('aqiScale')!r}"
+        assert body["data"]["aqiScale"] == "airnow", (
+            f"Expected aqiScale='airnow' (from period.method per ADR-059), "
+            f"got {body['data'].get('aqiScale')!r}"
         )
 
-    def test_aeris_registered_aqi_category_is_null(self) -> None:
-        """data.aqiCategory = null (dashboard-computed; parsers set None)."""
+    def test_aeris_registered_aqi_category_is_good(self) -> None:
+        """data.aqiCategory = 'good' (ADR-059: pass through period.category; fixture category='good')."""
         response, _ = self._get_aeris_response()
         body = response.json()
-        assert body["data"]["aqiCategory"] is None, (
-            f"Expected aqiCategory=null (dashboard-computed), got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "good", (
+            f"Expected aqiCategory='good' (ADR-059 pass-through from period.category), "
+            f"got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_aeris_registered_aqi_location_is_seattle(self) -> None:
@@ -947,12 +949,18 @@ class TestAqiCurrentOpenWeatherMapRegistered:
             f"Expected aqiScale='owm', got {body['data'].get('aqiScale')!r}"
         )
 
-    def test_owm_registered_aqi_category_is_null(self) -> None:
-        """data.aqiCategory = null (dashboard-computed; parsers set None)."""
+    def test_owm_registered_aqi_category_is_fair(self) -> None:
+        """data.aqiCategory = 'Fair' (ADR-059: OWM ordinal 2 → 'Fair' via _OWM_CATEGORY_MAP).
+
+        ADR-059 amends ADR-013: aqiCategory is no longer always null.  OWM does not
+        return a textual category, so it is derived client-side from the 1-5 ordinal.
+        Fixture main.aqi=2 → 'Fair'.
+        """
         response, _ = self._get_owm_response()
         body = response.json()
-        assert body["data"]["aqiCategory"] is None, (
-            f"Expected aqiCategory=null (dashboard-computed), got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "Fair", (
+            f"Expected aqiCategory='Fair' (OWM ordinal 2 → Fair per ADR-059), "
+            f"got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_owm_registered_aqi_main_pollutant_is_null(self) -> None:

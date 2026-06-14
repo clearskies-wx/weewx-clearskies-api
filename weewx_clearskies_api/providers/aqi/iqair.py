@@ -109,6 +109,12 @@ _API_VERSION = "0.1.0"
 IQAIR_BASE_URL = "https://api.airvisual.com"
 IQAIR_NEAREST_CITY_PATH = "/v2/nearest_city"
 
+# Module-level regional config (ADR-059).
+# Set by configure_regional_settings() from endpoints/aqi.py wire_aqi_settings().
+# "us" → read aqius (US EPA AQI 0-500) with aqiScale="epa" (default).
+# "cn" → read aqicn (China MEP AQI 0-500) with aqiScale="mep".
+_AQI_SCALE: str = "us"
+
 # IQAir mainus/maincn pollutant code → canonical pollutant id (LC2).
 # p1/p2/n2 confirmed via published examples + third-party docs.
 # o3/s2/co inferred from naming convention (IQAir AirVisual Pro data export
@@ -173,16 +179,18 @@ CAPABILITY = ProviderCapability(
         "Rate limiter: 5/min (window_seconds=60) — IQAir Community per-minute cap; "
         "≈12× tighter per minute than OWM/Aeris's 5-req/sec limiters (which allow ~300/min). "
         "With 15-min TTL → ~96 calls/day, well within 500/day + 10000/month caps. "
-        "aqius (US EPA AQI 0-500) is published directly; no breakpoint computation needed "
-        "(distinct from OWM 1-5 ordinal and Open-Meteo sub-AQI computation paths). "
-        "aqiScale='epa'; aqiCategory=None (dashboard-computed from aqi+aqiScale). "
-        "aqiMainPollutant from mainus code via _MAINUS_TO_CANONICAL lookup "
+        "Regional config (ADR-059): [aqi] iqair_aqi_scale — 'us' (default) or 'cn'. "
+        "'us' → reads aqius (US EPA AQI 0-500), aqiScale='epa'. "
+        "'cn' → reads aqicn (China MEP AQI 0-500), aqiScale='mep'. "
+        "aqiCategory=None (IQAir free tier does not supply a category field). "
+        "aqiMainPollutant from mainus or maincn code via _MAINUS_TO_CANONICAL lookup "
         "(p1=PM10, p2=PM2.5, n2=NO2, o3=O3, s2=SO2, co=CO; "
         "p1/p2/n2 confirmed, o3/s2/co inferred — real-capture should verify). "
-        "Unmappable mainus codes → None + logger.info notice (LC3). "
+        "Unmappable pollutant codes → None + logger.info notice (LC3). "
         "aqiLocation = f'{city}, {state}' (comma+space per Q3 user decision 2026-05-11). "
         "pollutantPM25/PM10/O3/NO2/SO2/CO = None (PARTIAL-DOMAIN on free Community tier; "
         "wire path for paid Startup+ tier unverified at 3b-12 brief time). "
+        "pollutantNO and pollutantNH3 not available from IQAir (ADR-059). "
         "Envelope: 200-success-false (status:'fail' + data.message dispatch, LC12/LC27). "
         "Known error message strings: incorrect_api_key, api_key_expired, payment required, "
         "permission_denied, forbidden, feature_not_available, call_limit_reached, "
@@ -381,32 +389,46 @@ def _raise_for_envelope_error(message: str) -> None:
 def _wire_to_canonical(data: _IQAirData) -> AQIReading | None:
     """Translate IQAir _IQAirData to canonical AQIReading.
 
+    AQI source is determined by _AQI_SCALE (ADR-059):
+      "us" → pollution.aqius (US EPA 0-500), aqiScale="epa", main pollutant from mainus.
+      "cn" → pollution.aqicn (China MEP 0-500), aqiScale="mep", main pollutant from maincn.
+
     Returns:
-        Canonical AQIReading or None if aqius is null (no useful reading).
+        Canonical AQIReading or None if the selected aqi field is null (no useful reading).
     """
     pollution = data.current.pollution
 
-    # aqi: IQAir publishes US EPA AQI directly (0-500 int).
-    # No conversion, no breakpoint computation — distinct from OWM 1-5 ordinal
-    # and Open-Meteo sub-AQI computation paths.
-    aqi_val: int | None = pollution.aqius
+    # aqi + aqiScale + pollutant code: selected by _AQI_SCALE (ADR-059).
+    if _AQI_SCALE == "cn":
+        aqi_val: int | None = pollution.aqicn
+        aqi_scale = "mep"
+        pollutant_code: str | None = pollution.maincn
+    else:
+        # Default: "us" — US EPA AQI (aqius), distinct from OWM 1-5 ordinal
+        # and Open-Meteo sub-AQI computation paths.
+        aqi_val = pollution.aqius
+        aqi_scale = "epa"
+        pollutant_code = pollution.mainus
 
-    # Empty-result guard: if aqius is null, no useful reading.
+    # Empty-result guard: if selected aqi field is null, no useful reading.
     # (All pollutant* fields are None on free tier regardless.)
     if aqi_val is None:
         return None
 
-    # aqiMainPollutant: normalize mainus code to canonical id (LC2).
+    # aqiMainPollutant: normalize pollutant code to canonical id (LC2).
+    # Both mainus and maincn use the same _MAINUS_TO_CANONICAL lookup table
+    # (pollutant codes are the same across both scales: p1=PM10, p2=PM2.5, etc.).
     # Unknown codes → None + logger.info notice (LC3; mirrors Aeris pm1 handling).
     main_pollutant: str | None = None
-    if pollution.mainus:
-        mainus_lower = pollution.mainus.lower()
-        main_pollutant = _MAINUS_TO_CANONICAL.get(mainus_lower)
+    if pollutant_code:
+        code_lower = pollutant_code.lower()
+        main_pollutant = _MAINUS_TO_CANONICAL.get(code_lower)
         if main_pollutant is None:
             logger.info(
-                "IQAir AQI mainus code %r not in _MAINUS_TO_CANONICAL; "
+                "IQAir AQI pollutant code %r (scale=%r) not in _MAINUS_TO_CANONICAL; "
                 "aqiMainPollutant=None. Add to lookup table if confirmed by real-capture.",
-                pollution.mainus,
+                pollutant_code,
+                _AQI_SCALE,
                 extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
             )
 
@@ -419,6 +441,7 @@ def _wire_to_canonical(data: _IQAirData) -> AQIReading | None:
     # pollutantPM25/PM10/O3/NO2/SO2/CO: all None on free Community tier (LC5).
     # PARTIAL-DOMAIN — categorical absence (not tier-conditional null).
     # A future round can add these after paid-tier real-capture confirms wire shape.
+    # pollutantNO and pollutantNH3: not available from IQAir (ADR-059).
 
     # observedAt: parse pollution.ts via shared helper (LC6 / ADR-020).
     # Py 3.11+ datetime.fromisoformat accepts Z suffix ("2019-04-08T18:00:00.000Z").
@@ -433,8 +456,8 @@ def _wire_to_canonical(data: _IQAirData) -> AQIReading | None:
 
     return AQIReading(
         aqi=aqi_val,
-        aqiScale="epa",
-        aqiCategory=None,
+        aqiScale=aqi_scale,
+        aqiCategory=None,          # IQAir does not supply a category field on free tier
         aqiMainPollutant=main_pollutant,
         aqiLocation=aqi_location,
         pollutantPM25=None,   # LC5 — PARTIAL-DOMAIN free Community tier
@@ -645,6 +668,31 @@ def fetch(
 
 
 # ---------------------------------------------------------------------------
+# Regional config wiring (ADR-059)
+# ---------------------------------------------------------------------------
+
+
+def configure_regional_settings(*, aqi_scale: str) -> None:
+    """Set the module-level AQI scale from operator config (ADR-059).
+
+    Called by wire_aqi_settings() in endpoints/aqi.py at startup.
+    aqi_scale must be one of "us" (default) or "cn".
+    The settings validator in AQISettings.validate() enforces valid values;
+    this function accepts whatever was validated there.
+
+    Args:
+        aqi_scale: "us" to read aqius (EPA); "cn" to read aqicn (MEP).
+    """
+    global _AQI_SCALE  # noqa: PLW0603
+    _AQI_SCALE = aqi_scale
+    logger.debug(
+        "IQAir AQI scale configured: aqi_scale=%r",
+        aqi_scale,
+        extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test reset helpers
 # ---------------------------------------------------------------------------
 
@@ -653,3 +701,9 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton. Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
+
+
+def _reset_regional_settings_for_tests() -> None:
+    """Reset module-level regional config to defaults. Used in tests only."""
+    global _AQI_SCALE  # noqa: PLW0603
+    _AQI_SCALE = "us"

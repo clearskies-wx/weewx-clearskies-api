@@ -341,9 +341,13 @@ class TestIntegrationAerisAqiHappyPath:
             f"Expected aqi=33, got {body['data'].get('aqi')!r}"
         )
 
-    def test_aeris_aqi_data_aqi_category_is_none(self, integration_client: TestClient) -> None:
-        """data.aqiCategory is None — providers never derive it (ADR-013); the
-        dashboard computes the label from aqi + aqiScale."""
+    def test_aeris_aqi_data_aqi_category_is_good(self, integration_client: TestClient) -> None:
+        """data.aqiCategory = 'good' — ADR-059: passed through from period.category.
+
+        ADR-059 amends ADR-013: aqiCategory is no longer always null.  Aeris returns
+        period.category on every response; it is passed through as-is.  Fixture
+        periods[0].category = 'good' (airnow scale Good band, AQI 33).
+        """
         data = _load_fixture("aeris_current.json")
 
         with respx.mock(assert_all_called=False) as mock:
@@ -353,8 +357,9 @@ class TestIntegrationAerisAqiHappyPath:
             response = integration_client.get("/api/v1/aqi/current")
 
         body = response.json()
-        assert body["data"]["aqiCategory"] is None, (
-            f"Expected aqiCategory=None (ADR-013), got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "good", (
+            f"Expected aqiCategory='good' (ADR-059 pass-through from period.category), "
+            f"got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_aeris_aqi_data_aqi_location_is_seattle(self, integration_client: TestClient) -> None:

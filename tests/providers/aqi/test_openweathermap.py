@@ -13,13 +13,13 @@ Covers per the task-3b-11 brief §Test coverage shape (test_openweathermap.py):
   - Real fixture → canonical AQIReading with all fields populated correctly.
   - aqi = 2 (OWM main.aqi ordinal served as-is).
   - aqiScale = "owm" (1–5 ordinal scale).
-  - aqiCategory = None (dashboard-computed).
+  - aqiCategory = "Fair" (ADR-059: derived from OWM ordinal 2 via _OWM_CATEGORY_MAP).
   - aqiMainPollutant = None (OWM does not supply dominant pollutant).
   - aqiLocation = None (PARTIAL-DOMAIN — no location field on OWM Air Pollution wire).
   - observedAt = "2026-05-11T03:56:58Z" (epoch 1778471818 → UTC Z, LC17).
   - source = "openweathermap".
   - All gases (O3, NO2, SO2, CO) and PM2.5/PM10 passed through as µg/m³.
-  - NH3 and NO silently dropped (no EPA AQI band; LC16).
+  - NH3 → pollutantNH3 and NO → pollutantNO now mapped through (ADR-059 — no longer dropped).
 
   _wire_to_canonical edge cases:
   - main.aqi=None AND all-null components → returns None + would cache sentinel.
@@ -307,16 +307,22 @@ class TestWireToCanonicalHappyPath:
             f"Expected aqiScale='owm', got {result.aqiScale!r}"
         )
 
-    def test_fixture_aqi_category_is_none(self) -> None:
-        """aqiCategory = None (dashboard-computed; parsers set None)."""
+    def test_fixture_aqi_category_is_fair(self) -> None:
+        """aqiCategory = 'Fair' (ADR-059: OWM aqi=2 maps to 'Fair' via _OWM_CATEGORY_MAP).
+
+        ADR-059 amends ADR-013: aqiCategory is no longer always null.  OWM does not
+        return a textual category, so it is derived client-side from the 1-5 ordinal
+        via _OWM_CATEGORY_MAP (1=Good, 2=Fair, 3=Moderate, 4=Poor, 5=Very Poor).
+        Fixture main.aqi=2 → 'Fair'.
+        """
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
         entry = self._load_entry()
         result = _wire_to_canonical(entry)
         assert result is not None
-        assert result.aqiCategory is None, (
-            f"Expected aqiCategory=None (dashboard-computed), got {result.aqiCategory!r}"
+        assert result.aqiCategory == "Fair", (
+            f"Expected aqiCategory='Fair' (OWM ordinal 2 → Fair per ADR-059), got {result.aqiCategory!r}"
         )
 
     def test_fixture_aqi_main_pollutant_is_none(self) -> None:
@@ -453,8 +459,14 @@ class TestWireToCanonicalHappyPath:
             f"CO: expected 139.79 µg/m³ (passthrough), got {result.pollutantCO!r}"
         )
 
-    def test_canonical_output_has_no_pollutant_nh3_or_no_field(self) -> None:
-        """NH3 and NO fields are dropped — not present on canonical AQIReading (LC16)."""
+    def test_canonical_output_has_pollutant_nh3_and_no_fields(self) -> None:
+        """pollutantNH3 and pollutantNO are present in canonical output (ADR-059).
+
+        ADR-059 adds pollutantNO and pollutantNH3 to AQIReading — OWM returns no (NO)
+        and nh3 (NH3) globally in µg/m³.  Both are mapped through; no longer dropped.
+        The raw 'nh3' and 'no' keys from OWM wire format are not exposed (only canonical
+        'pollutantNH3' and 'pollutantNO' fields appear in model_dump()).
+        """
         from weewx_clearskies_api.providers.aqi.openweathermap import (  # noqa: PLC0415
             _wire_to_canonical,
         )
@@ -462,10 +474,17 @@ class TestWireToCanonicalHappyPath:
         result = _wire_to_canonical(entry)
         assert result is not None
         result_dict = result.model_dump()
-        # NH3 and NO have no canonical fields; should not appear
-        for absent_key in ("pollutantNH3", "pollutantNO", "nh3", "no"):
-            assert absent_key not in result_dict, (
-                f"'{absent_key}' must NOT appear in canonical output (dropped per LC16)"
+        # ADR-059: pollutantNO and pollutantNH3 are now canonical fields (no longer dropped)
+        assert "pollutantNH3" in result_dict, (
+            "'pollutantNH3' must appear in canonical output (ADR-059 — no longer dropped)"
+        )
+        assert "pollutantNO" in result_dict, (
+            "'pollutantNO' must appear in canonical output (ADR-059 — no longer dropped)"
+        )
+        # Raw wire keys ('nh3', 'no') must not bleed through (only canonical aliases)
+        for raw_key in ("nh3", "no"):
+            assert raw_key not in result_dict, (
+                f"Raw OWM key '{raw_key}' must NOT appear in canonical output (use pollutantNH3/pollutantNO)"
             )
 
 
@@ -740,7 +759,7 @@ class TestFetchCachePaths:
         assert result.source == "openweathermap"
         assert result.aqi == 2  # OWM main.aqi ordinal from fixture
         assert result.aqiScale == "owm"
-        assert result.aqiCategory is None
+        assert result.aqiCategory == "Fair"  # ADR-059: OWM ordinal 2 → "Fair" via _OWM_CATEGORY_MAP
         assert result.aqiMainPollutant is None
 
         # Verify cache was populated

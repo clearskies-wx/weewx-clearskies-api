@@ -1,19 +1,21 @@
-"""Aeris (AerisWeather/Xweather) AQI provider module (ADR-013, ADR-038).
+"""Aeris (AerisWeather/Xweather) AQI provider module (ADR-013, ADR-038, ADR-059).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
        GET https://data.api.xweather.com/airquality/{lat},{lon}
-     with filter=airnow (lock US EPA methodology per ADR-013 / LC21) and
-     keyed query-param credentials (client_id + client_secret per LC11).
+     with filter=<_AQI_FILTER> (default airnow per ADR-059; configurable to
+     china|india|eaqi|caqi|uk|de|cai) and keyed query-param credentials
+     (client_id + client_secret per LC11).
   2. Response parsing — wire-shape Pydantic models for the Aeris
      success/error/response[]/periods[]/pollutants[] envelope (LC5).
      extra="ignore" on all models (Aeris carries many fields canonical
-     AQIReading does not consume: color, method, health.*, per-pollutant
+     AQIReading does not consume: color, health.*, per-pollutant
      aqi/category/color/method/name, profile, loc, id).
+     periods[0].category and periods[0].method ARE now consumed (ADR-059).
   3. Translation to canonical AQIReading (_wire_to_canonical):
        - aqi from periods[0].aqi (rounded to int, capped at 500)
-       - aqiScale = "epa" (Aeris /airquality?filter=airnow is EPA 0–500 native)
-       - aqiCategory = None (dashboard-computed from aqi+aqiScale)
+       - aqiScale = periods[0].method (e.g. "airnow", "india", "eaqi" — ADR-059)
+       - aqiCategory = periods[0].category (pass through from response — ADR-059)
        - aqiMainPollutant normalized from periods[0].dominant lowercase id
          to canonical id via _DOMINANT_TO_CANONICAL lookup (LC14)
        - aqiLocation from place.name (NOT PARTIAL-DOMAIN — Aeris supplies
@@ -43,9 +45,19 @@ Aeris is a keyed provider (ADR-006):
   forecast/alerts Aeris. Credentials live at settings.aeris.client_id +
   settings.aeris.client_secret; wired at startup via wire_aqi_settings().
 
+Regional config (ADR-059):
+  _AQI_FILTER: module-level variable set by configure_regional_settings().
+  Default "airnow".  Set via [aqi] aeris_aqi_filter in api.conf.
+  Passed as filter= query param on every API call.
+  Supported values: airnow|china|india|eaqi|caqi|uk|de|cai.
+  The filter does NOT auto-detect by location — must be configured explicitly.
+  aqiScale comes from the response method field (mirrors filter value).
+  aqiCategory comes from the response category field (filter-specific labels).
+
 Cache layer (ADR-017 / LC3 / LC6 / LC7):
   TTL: 900s (15 min) per ADR-017 AQI domain.
-  Key: SHA-256 of (provider_id="aeris", endpoint="aqi_current", {lat4, lon4}).
+  Key: SHA-256 of (provider_id="aeris", endpoint="aqi_current", {lat4, lon4, filter}).
+  filter included in cache key so changing filter invalidates the cache entry.
   Credentials NOT in key (LC7 — privacy/leakage concern).
   Value: model_dump() dict (JSON-serializable for Redis backend).
   Sentinel: {"_no_reading": True} when provider returns empty response or
@@ -119,6 +131,11 @@ _API_VERSION = "0.1.0"
 AERIS_AQ_BASE_URL = "https://data.api.xweather.com"
 AERIS_AQ_PATH_TMPL = "/airquality/{lat},{lon}"  # location in path (LC22)
 
+# Module-level regional config (ADR-059).
+# Set by configure_regional_settings() from endpoints/aqi.py wire_aqi_settings().
+# Default "airnow"; valid values: airnow|china|india|eaqi|caqi|uk|de|cai.
+_AQI_FILTER: str = "airnow"
+
 # Aeris dominant pollutant id (lowercase) → canonical pollutant id (LC14).
 # pm1 intentionally omitted — canonical AQIReading has no pollutantPM1 field.
 # If Aeris reports pm1 as dominant, aqiMainPollutant = None (LC26).
@@ -185,6 +202,10 @@ CAPABILITY = ProviderCapability(
         # Full paid-tier max surface per L1 rule — Aeris supplies all 12 fields.
         # aqiLocation is NOT partial-domain for Aeris (place.name is present);
         # distinct from Open-Meteo which omits aqiLocation.
+        # aqiCategory now supplied from response (ADR-059 — no longer null).
+        # pollutantNO and pollutantNH3 NOT in this list — Aeris returns 7
+        # pollutants only (pm2.5, pm10, o3, no2, so2, co, pm1); NO and NH3
+        # are not in the Aeris /airquality response (per api-docs).
         "aqi", "aqiCategory", "aqiMainPollutant", "aqiLocation",
         "pollutantPM25", "pollutantPM10",
         "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
@@ -194,14 +215,19 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),  # LC11
     default_poll_interval_seconds=DEFAULT_AQI_TTL_SECONDS,
     operator_notes=(
-        "Aeris (Xweather) /airquality endpoint with filter=airnow (US EPA AQI). "
+        "Aeris (Xweather) /airquality endpoint. Regional config (ADR-059): "
+        "[aqi] aeris_aqi_filter sets the filter= query param; default 'airnow' (US EPA). "
+        "Supported filters: airnow|china|india|eaqi|caqi|uk|de|cai. "
+        "Filter does NOT auto-detect by location — must be configured explicitly. "
         "Keyed (query-param client_id + client_secret; reuses provider-scoped "
         "credentials from forecast/alerts Aeris — same [aeris] config section). "
         "Gas concentrations converted PPB→µg/m³ via providers/aqi/_units.ppb_to_ugm3 "
         "(formula: µg/m³ = ppb × MW / 24.45; Aeris returns valuePPB directly for O3/NO2/SO2/CO). "
-        "aqiScale='epa'; aqiCategory=None (dashboard-computed from aqi+aqiScale). "
+        "aqiScale passed from response periods[].method (mirrors filter value). "
+        "aqiCategory passed from response periods[].category (filter-specific labels). "
         "aqiMainPollutant normalized from lowercase periods[].dominant to canonical id. "
         "pm1 dropped during translation (no pollutantPM1 field on canonical AQIReading). "
+        "pollutantNO and pollutantNH3 not available (Aeris returns 7 pollutants only). "
         "aqiLocation supplied via place.name (NOT PARTIAL-DOMAIN for Aeris)."
     ),
 )
@@ -245,10 +271,12 @@ class _AerisPeriod(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     dateTimeISO: str              # explicit-offset ISO e.g. "2026-04-30T10:00:00-07:00"
-    aqi: float | None = None     # overall US EPA AQI value
+    aqi: float | None = None     # overall AQI value (scale depends on filter)
+    category: str | None = None  # category name (filter-specific — ADR-059 pass-through)
+    method: str | None = None    # calculation method / scale id (e.g. "airnow", "india" — ADR-059)
     dominant: str | None = None  # lowercase pollutant id e.g. "pm2.5"
     pollutants: list[_AerisPollutant] = []
-    # category, color, method, health, timestamp are present but not consumed.
+    # color, health, timestamp are present but not consumed.
 
 
 class _AerisLocation(BaseModel):
@@ -326,10 +354,13 @@ def _client_for() -> ProviderHTTPClient:
 
 
 def _build_cache_key(lat: float, lon: float) -> str:
-    """Build a deterministic SHA-256 cache key for (provider_id, endpoint, {lat4, lon4}).
+    """Build a deterministic SHA-256 cache key for (provider_id, endpoint, {lat4, lon4, filter}).
 
     Credentials NOT in the key per LC7 — privacy/leakage concern; cache scope is
     per-location-per-provider, not per-tenant.
+
+    filter included in key (ADR-059) so changing the regional filter invalidates
+    the existing cache entry (different filter → different AQI methodology → different data).
 
     Lat/lon rounded to 4 decimal places per ADR-017 §Cache key.
     Endpoint key "aqi_current" distinct from any other module's endpoint key.
@@ -341,6 +372,7 @@ def _build_cache_key(lat: float, lon: float) -> str:
             "params": {
                 "lat4": round(lat, 4),
                 "lon4": round(lon, 4),
+                "filter": _AQI_FILTER,
             },
         },
         sort_keys=True,
@@ -485,10 +517,20 @@ def _wire_to_canonical(location: _AerisLocation) -> AQIReading | None:
     if not has_data:
         return None
 
+    # aqiScale: pass through period.method (e.g. "airnow", "india", "eaqi" — ADR-059).
+    # method mirrors the filter parameter sent in the request.
+    # None guard: if method is absent (unexpected), fall back to the configured filter.
+    aqi_scale = period.method if period.method else _AQI_FILTER
+
+    # aqiCategory: pass through period.category directly from the response (ADR-059).
+    # Aeris returns filter-specific category names (e.g. "good", "usg", "moderate").
+    # Previously this was None (dashboard-computed); now we pass through provider value.
+    aqi_category = period.category  # may be None if Aeris doesn't supply it
+
     return AQIReading(
         aqi=aqi_int,
-        aqiScale="epa",
-        aqiCategory=None,
+        aqiScale=aqi_scale,
+        aqiCategory=aqi_category,
         aqiMainPollutant=main_pollutant,
         aqiLocation=aqi_location,
         pollutantPM25=pollutant_values.get("pollutantPM25"),
@@ -497,6 +539,8 @@ def _wire_to_canonical(location: _AerisLocation) -> AQIReading | None:
         pollutantNO2=pollutant_values.get("pollutantNO2"),
         pollutantSO2=pollutant_values.get("pollutantSO2"),
         pollutantCO=pollutant_values.get("pollutantCO"),
+        # pollutantNO and pollutantNH3 not available from Aeris (7 pollutants only;
+        # NO and NH3 not in Aeris's /airquality response per api-docs — ADR-059).
         observedAt=observed_at,
         source=PROVIDER_ID,
     )
@@ -574,11 +618,12 @@ def fetch(
     )
     # Credentials in query params (not URL path — avoids logging creds at INFO
     # level if the URL is logged; they stay in the params dict per LC11/LC22).
-    # filter=airnow locks US EPA AQI methodology per ADR-013 / LC21.
+    # filter= passes the regional AQI methodology (ADR-059).
+    # Default "airnow" (US EPA); configurable via [aqi] aeris_aqi_filter in api.conf.
     params = {
         "client_id": client_id,
         "client_secret": client_secret,
-        "filter": "airnow",
+        "filter": _AQI_FILTER,
     }
 
     client = http_client or _client_for()
@@ -659,6 +704,31 @@ def fetch(
 
 
 # ---------------------------------------------------------------------------
+# Regional config wiring (ADR-059)
+# ---------------------------------------------------------------------------
+
+
+def configure_regional_settings(*, aqi_filter: str) -> None:
+    """Set the module-level AQI filter from operator config (ADR-059).
+
+    Called by wire_aqi_settings() in endpoints/aqi.py at startup.
+    aqi_filter must be one of airnow|china|india|eaqi|caqi|uk|de|cai.
+    The settings validator in AQISettings.validate() enforces valid values;
+    this function accepts whatever was validated there.
+
+    Args:
+        aqi_filter: Regional AQI filter to pass as filter= query param.
+    """
+    global _AQI_FILTER  # noqa: PLW0603
+    _AQI_FILTER = aqi_filter
+    logger.debug(
+        "Aeris AQI filter configured: aqi_filter=%r",
+        aqi_filter,
+        extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test reset helpers
 # ---------------------------------------------------------------------------
 
@@ -667,3 +737,9 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton. Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
+
+
+def _reset_regional_settings_for_tests() -> None:
+    """Reset module-level regional config to defaults. Used in tests only."""
+    global _AQI_FILTER  # noqa: PLW0603
+    _AQI_FILTER = "airnow"

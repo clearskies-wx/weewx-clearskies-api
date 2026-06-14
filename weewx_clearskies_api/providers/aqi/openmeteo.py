@@ -1,19 +1,24 @@
-"""Open-Meteo air-quality provider module (ADR-013, ADR-038).
+"""Open-Meteo air-quality provider module (ADR-013, ADR-038, ADR-059).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
        GET https://air-quality-api.open-meteo.com/v1/air-quality
-     with current= projection listing all 13 variables (us_aqi + 6 sub-AQIs
-     + 6 per-pollutant concentrations) and timezone=GMT (LC4).
+     with current= projection listing variables depending on _AQI_INDEX config:
+       us_aqi (default): us_aqi + 6 sub-AQIs + 6 concentrations + nitrogen_monoxide + ammonia
+       european_aqi: european_aqi + 6 European sub-AQIs + 6 concentrations + nitrogen_monoxide + ammonia
+     timezone=GMT (LC4).
   2. Response parsing — wire-shape Pydantic models _OpenMeteoCurrentBlock
      and _OpenMeteoAQResponse with extra="ignore" (LC5).
   3. Translation to canonical AQIReading (_wire_to_canonical):
-       - aqi from current.us_aqi (rounded to int, capped at 500)
-       - aqiScale = "epa" (us_aqi is EPA 0–500 native from provider)
+       - aqi from current.us_aqi or current.european_aqi (based on _AQI_INDEX)
+         (rounded to int, capped at 500)
+       - aqiScale = "epa" when _AQI_INDEX="us_aqi"; "eaqi" when "european_aqi" (ADR-059)
        - aqiCategory = None (dashboard-computed from aqi+aqiScale)
        - aqiMainPollutant via argmax of 6 sub-AQI sub-fields (LC14)
        - aqiLocation always None (PARTIAL-DOMAIN per LC12 + L1 rule)
        - pollutantPM25/PM10/O3/NO2/SO2/CO pass through as µg/m³ (raw provider values)
+       - pollutantNO: nitrogen_monoxide µg/m³ (ADR-059; global variable)
+       - pollutantNH3: ammonia µg/m³ (ADR-059; Europe-only — null outside Europe)
        - observedAt = current.time + "Z" (LC4 — timezone=GMT, no double-shift)
        - source = "openmeteo"
   4. Capability declaration — CAPABILITY symbol consumed at startup.
@@ -26,12 +31,20 @@ Open-Meteo is keyless (ADR-006 / LC11):
   No API key required.  auth_required=() (empty tuple).  No operator-managed
   secrets.  No env-var wiring needed for 3b-9.
 
+Regional config (ADR-059):
+  _AQI_INDEX: module-level variable set by configure_regional_settings().
+  Default "us_aqi" (EPA 0–500 scale).  Set to "european_aqi" for European AQI.
+  Determines which AQI variable to request and what aqiScale to return.
+  Both us_aqi and european_aqi work globally (not region-locked per api-docs).
+
 Base URL distinct from forecast module (LC-endpoint):
   air-quality-api.open-meteo.com (NOT api.open-meteo.com used by forecast).
 
 Cache layer (ADR-017 / LC3 / LC6 / LC7):
   TTL: 900s (15 min) per ADR-017 AQI domain.
-  Key: SHA-256 of (provider_id, endpoint="aqi_current", {lat4, lon4}).
+  Key: SHA-256 of (provider_id, endpoint="aqi_current", {lat4, lon4, aqi_index}).
+  aqi_index included in cache key so us_aqi and european_aqi requests are not
+  aliased (different data from same coordinates).
   Value: model_dump() dict (JSON-serializable for Redis backend).
   Sentinel: {"_no_reading": True} cached when provider returns all-null reading.
   Reconstruction on hit: AQIReading.model_validate(cached_dict).
@@ -46,6 +59,11 @@ aqiLocation PARTIAL-DOMAIN (L1 rule extension, 3b-7+):
   Open-Meteo air-quality API has no location-label field at any tier.
   aqiLocation is always None on the canonical AQIReading.
   Not in CAPABILITY.supplied_canonical_fields.
+
+NO / NH3 (ADR-059):
+  nitrogen_monoxide: global variable, returned for all coordinates.
+  ammonia: Europe-only — returns null for non-European coordinates (per api-docs).
+  Both requested unconditionally; null values pass through as None (no error).
 
 Rate limiter (LC8):
   max_calls=5, window_seconds=1 (courtesy guard; 15-min TTL → ~96 calls/day).
@@ -83,18 +101,34 @@ _API_VERSION = "0.1.0"
 OPENMETEO_AQ_BASE_URL = "https://air-quality-api.open-meteo.com"
 OPENMETEO_AQ_PATH = "/v1/air-quality"
 
-# Fixed current= CSV — all 13 variables in one request.
-# us_aqi + 6 sub-AQIs (for aqiMainPollutant argmax) + 6 concentrations.
-_REQUESTED_CURRENT_VARS = (
+# Module-level regional config (ADR-059).
+# Set by configure_regional_settings() from endpoints/aqi.py wire_aqi_settings().
+# Default "us_aqi" (EPA 0–500 scale); can be set to "european_aqi".
+_AQI_INDEX: str = "us_aqi"
+
+# current= CSV for us_aqi index — 13 variables + nitrogen_monoxide + ammonia (ADR-059).
+# us_aqi + 6 US sub-AQIs (for aqiMainPollutant argmax) + 6 concentrations + NO + NH3.
+_CURRENT_VARS_US_AQI = (
     "us_aqi,"
     "us_aqi_pm2_5,us_aqi_pm10,us_aqi_nitrogen_dioxide,"
     "us_aqi_ozone,us_aqi_sulphur_dioxide,us_aqi_carbon_monoxide,"
-    "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone"
+    "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,"
+    "nitrogen_monoxide,ammonia"
 )
 
-# Sub-AQI field order for argmax + canonical pollutant id mapping (LC14).
+# current= CSV for european_aqi index (ADR-059).
+# european_aqi + 5 European sub-AQIs (no CO sub-AQI in EAQI) + 6 concentrations + NO + NH3.
+_CURRENT_VARS_EUROPEAN_AQI = (
+    "european_aqi,"
+    "european_aqi_pm2_5,european_aqi_pm10,european_aqi_nitrogen_dioxide,"
+    "european_aqi_ozone,european_aqi_sulphur_dioxide,"
+    "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,"
+    "nitrogen_monoxide,ammonia"
+)
+
+# Sub-AQI field order for argmax + canonical pollutant id mapping (LC14) — US scale.
 # Ties broken by table order (PM2.5 wins a tie with PM10 — deterministic).
-_SUB_AQI_TO_POLLUTANT: list[tuple[str, str]] = [
+_US_SUB_AQI_TO_POLLUTANT: list[tuple[str, str]] = [
     ("us_aqi_pm2_5",             "PM2.5"),
     ("us_aqi_pm10",              "PM10"),
     ("us_aqi_nitrogen_dioxide",  "NO2"),
@@ -102,6 +136,26 @@ _SUB_AQI_TO_POLLUTANT: list[tuple[str, str]] = [
     ("us_aqi_sulphur_dioxide",   "SO2"),
     ("us_aqi_carbon_monoxide",   "CO"),
 ]
+
+# Sub-AQI field order for argmax — European scale (ADR-059).
+# EAQI has 5 sub-indices (no CO sub-AQI; CO is not part of the European AQI formula).
+_EUROPEAN_SUB_AQI_TO_POLLUTANT: list[tuple[str, str]] = [
+    ("european_aqi_pm2_5",            "PM2.5"),
+    ("european_aqi_pm10",             "PM10"),
+    ("european_aqi_nitrogen_dioxide", "NO2"),
+    ("european_aqi_ozone",            "O3"),
+    ("european_aqi_sulphur_dioxide",  "SO2"),
+]
+
+# Backward-compatible alias — kept so existing code that references _SUB_AQI_TO_POLLUTANT
+# continues to work; resolves to the US table (same as old default).
+_SUB_AQI_TO_POLLUTANT = _US_SUB_AQI_TO_POLLUTANT
+
+# Map aqi_index value → canonical aqiScale string (ADR-059).
+_AQI_INDEX_TO_SCALE: dict[str, str] = {
+    "us_aqi":       "epa",
+    "european_aqi": "eaqi",
+}
 
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4)
@@ -114,9 +168,12 @@ CAPABILITY = ProviderCapability(
         "aqi", "aqiCategory", "aqiMainPollutant",
         "pollutantPM25", "pollutantPM10",
         "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
+        "pollutantNO", "pollutantNH3",
         "observedAt", "source",
         # aqiLocation is PARTIAL-DOMAIN — Open-Meteo has no location field.
         # Not in this tuple per L1 rule extension (3b-7+).
+        # pollutantNH3 is Europe-only (null outside Europe) but is declared
+        # here because the field is always requested; consumer sees null, not error.
     ),
     geographic_coverage="global",
     auth_required=(),  # keyless (LC11)
@@ -127,11 +184,14 @@ CAPABILITY = ProviderCapability(
         "Global Atmospheric Composition (rest of world). "
         "aqiLocation is not supplied by this provider (PARTIAL-DOMAIN per "
         "canonical §4.2 openmeteo column); always null on canonical bundle. "
-        "aqiScale='epa' (us_aqi is EPA 0–500 native). aqiCategory=None — "
-        "dashboard-computed from aqi+aqiScale. aqiMainPollutant derived "
-        "client-side from per-pollutant sub-AQIs (provider does not supply "
-        "either field directly). Per-gas concentrations passed through as "
-        "µg/m³ (raw provider values; no conversion at ingest)."
+        "Regional config (ADR-059): openmeteo_aqi_index in [aqi] section — "
+        "'us_aqi' (default, EPA 0–500, aqiScale='epa') or "
+        "'european_aqi' (European AQI, aqiScale='eaqi'). Both scales work "
+        "globally. aqiCategory=None (dashboard-computed from aqi+aqiScale). "
+        "aqiMainPollutant derived client-side from per-pollutant sub-AQIs. "
+        "pollutantNO (nitrogen_monoxide) is global. "
+        "pollutantNH3 (ammonia) is Europe-only — null outside Europe. "
+        "Per-gas concentrations passed through as µg/m³ (raw provider values)."
     ),
 )
 
@@ -142,7 +202,11 @@ CAPABILITY = ProviderCapability(
 
 
 class _OpenMeteoCurrentBlock(BaseModel):
-    """current= block of the air-quality response (LC5)."""
+    """current= block of the air-quality response (LC5).
+
+    Declares all variables for both us_aqi and european_aqi index modes (ADR-059).
+    extra="ignore" drops any fields not declared here.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -150,16 +214,25 @@ class _OpenMeteoCurrentBlock(BaseModel):
     # Open-Meteo may omit individual variables (regional model coverage gaps).
     time: str  # local-naive ISO ("YYYY-MM-DDTHH:mm") — wire is GMT per LC4
 
-    # Overall US AQI
+    # Overall AQI — both index modes declared; only the requested one is non-null.
     us_aqi: float | None = None
+    european_aqi: float | None = None
 
-    # Per-pollutant sub-AQIs (for aqiMainPollutant argmax per LC14)
+    # Per-pollutant US sub-AQIs (for aqiMainPollutant argmax per LC14, us_aqi mode)
     us_aqi_pm2_5: float | None = None
     us_aqi_pm10: float | None = None
     us_aqi_nitrogen_dioxide: float | None = None
     us_aqi_ozone: float | None = None
     us_aqi_sulphur_dioxide: float | None = None
     us_aqi_carbon_monoxide: float | None = None
+
+    # Per-pollutant European sub-AQIs (ADR-059, european_aqi mode)
+    # EAQI has 5 sub-indices (no CO sub-AQI in the European formula).
+    european_aqi_pm2_5: float | None = None
+    european_aqi_pm10: float | None = None
+    european_aqi_nitrogen_dioxide: float | None = None
+    european_aqi_ozone: float | None = None
+    european_aqi_sulphur_dioxide: float | None = None
 
     # Per-pollutant concentrations (µg/m³ — passed through as-is)
     pm2_5: float | None = None
@@ -168,6 +241,10 @@ class _OpenMeteoCurrentBlock(BaseModel):
     nitrogen_dioxide: float | None = None
     sulphur_dioxide: float | None = None
     carbon_monoxide: float | None = None
+
+    # Additional pollutants (ADR-059 — NO/NH3 no longer dropped)
+    nitrogen_monoxide: float | None = None  # µg/m³ — global
+    ammonia: float | None = None            # µg/m³ — Europe-only (null outside Europe)
 
 
 class _OpenMeteoAQResponse(BaseModel):
@@ -223,9 +300,10 @@ def _client_for() -> ProviderHTTPClient:
 
 
 def _build_cache_key(lat: float, lon: float) -> str:
-    """Build a deterministic SHA-256 cache key for (provider_id, endpoint, {lat4, lon4}).
+    """Build a deterministic SHA-256 cache key for (provider_id, endpoint, {lat4, lon4, aqi_index}).
 
-    No target_unit dimension — AQI has no unit conversion at request time.
+    aqi_index included in the key (ADR-059) so that us_aqi and european_aqi
+    requests for the same coordinates are NOT aliased — they return different data.
     Lat/lon rounded to 4 decimal places per ADR-017 §Cache key.
     Logical endpoint key "aqi_current" distinct from any other module's key.
     """
@@ -236,6 +314,7 @@ def _build_cache_key(lat: float, lon: float) -> str:
             "params": {
                 "lat4": round(lat, 4),
                 "lon4": round(lon, 4),
+                "aqi_index": _AQI_INDEX,
             },
         },
         sort_keys=True,
@@ -251,18 +330,27 @@ def _build_cache_key(lat: float, lon: float) -> str:
 def _main_pollutant_from_sub_aqis(current: _OpenMeteoCurrentBlock) -> str | None:
     """Return canonical pollutant id for the sub-AQI with the highest value.
 
-    Per LC14: argmax over the six us_aqi_* sub-fields; None values excluded
-    from the comparison.  Ties broken by table order (_SUB_AQI_TO_POLLUTANT)
+    Per LC14: argmax over the sub-AQI fields for the configured index; None
+    values excluded from the comparison.  Ties broken by table order
+    (_US_SUB_AQI_TO_POLLUTANT / _EUROPEAN_SUB_AQI_TO_POLLUTANT)
     — PM2.5 wins a tie with PM10 (deterministic).
 
+    Uses the active _AQI_INDEX to select the correct sub-AQI table (ADR-059).
+
     Returns:
-        Canonical pollutant id (e.g. "PM2.5", "O3", "CO") or None if all six
+        Canonical pollutant id (e.g. "PM2.5", "O3", "CO") or None if all
         sub-AQI values are None.
     """
+    sub_aqi_table = (
+        _EUROPEAN_SUB_AQI_TO_POLLUTANT
+        if _AQI_INDEX == "european_aqi"
+        else _US_SUB_AQI_TO_POLLUTANT
+    )
+
     best_val: float | None = None
     best_pollutant: str | None = None
 
-    for field_name, canonical_id in _SUB_AQI_TO_POLLUTANT:
+    for field_name, canonical_id in sub_aqi_table:
         val = getattr(current, field_name, None)
         if val is None:
             continue
@@ -280,44 +368,54 @@ def _wire_to_canonical(wire: _OpenMeteoAQResponse) -> AQIReading | None:
     Returns None if no AQI value AND no per-pollutant concentration or
     sub-AQI value is populated — indicating no useful reading at this location.
 
-    Otherwise constructs the canonical record per canonical §4.2:
-      - aqi:               current.us_aqi (rounded to int if non-None; capped at 500)
-      - aqiScale:          "epa" (Open-Meteo us_aqi is EPA 0–500 native)
-      - aqiCategory:       None (dashboard-computed from aqi+aqiScale)
-      - aqiMainPollutant:  argmax of sub-AQIs → canonical pollutant id (LC14)
-      - aqiLocation:       None (PARTIAL-DOMAIN per LC12 / L1 rule)
-      - pollutantPM25:     current.pm2_5 (µg/m³ — passthrough, group_concentration)
-      - pollutantPM10:     current.pm10  (µg/m³ — passthrough, group_concentration)
-      - pollutantO3:       current.ozone          (µg/m³ — raw provider value)
-      - pollutantNO2:      current.nitrogen_dioxide (µg/m³ — raw provider value)
-      - pollutantSO2:      current.sulphur_dioxide  (µg/m³ — raw provider value)
-      - pollutantCO:       current.carbon_monoxide  (µg/m³ — raw provider value)
-      - observedAt:        current.time + "Z" → UTC ISO-8601 (LC4)
-      - source:            "openmeteo" (LC16)
+    AQI index is determined by the module-level _AQI_INDEX (ADR-059):
+      us_aqi:       aqiScale="epa", uses US sub-AQI table for aqiMainPollutant
+      european_aqi: aqiScale="eaqi", uses European sub-AQI table for aqiMainPollutant
+
+    Additional fields (ADR-059):
+      pollutantNO:  nitrogen_monoxide µg/m³ (global; non-null everywhere)
+      pollutantNH3: ammonia µg/m³ (Europe-only; null outside Europe — pass through)
     """
     current = wire.current
 
+    # Select the active AQI value and scale based on _AQI_INDEX.
+    if _AQI_INDEX == "european_aqi":
+        aqi_raw = current.european_aqi
+        aqi_scale = "eaqi"
+        # has_data check covers European sub-AQIs
+        sub_aqi_fields = (
+            "european_aqi_pm2_5", "european_aqi_pm10",
+            "european_aqi_nitrogen_dioxide", "european_aqi_ozone",
+            "european_aqi_sulphur_dioxide",
+        )
+    else:
+        # Default: us_aqi (EPA 0–500)
+        aqi_raw = current.us_aqi
+        aqi_scale = "epa"
+        sub_aqi_fields = (
+            "us_aqi_pm2_5", "us_aqi_pm10", "us_aqi_nitrogen_dioxide",
+            "us_aqi_ozone", "us_aqi_sulphur_dioxide", "us_aqi_carbon_monoxide",
+        )
+
     # Check whether this response has any useful data at all.
-    # If us_aqi AND all concentration fields are None, return None.
-    has_data = current.us_aqi is not None or any(
+    has_data = aqi_raw is not None or any(
         getattr(current, f) is not None
         for f in (
             "pm2_5", "pm10", "ozone",
             "nitrogen_dioxide", "sulphur_dioxide", "carbon_monoxide",
-            "us_aqi_pm2_5", "us_aqi_pm10", "us_aqi_nitrogen_dioxide",
-            "us_aqi_ozone", "us_aqi_sulphur_dioxide", "us_aqi_carbon_monoxide",
+            "nitrogen_monoxide", "ammonia",
+            *sub_aqi_fields,
         )
     )
     if not has_data:
         return None
 
     # AQI: round to int if non-None; cap at 500 (defensive per brief §per-module).
-    aqi_raw = current.us_aqi
     aqi_int: float | None = None
     if aqi_raw is not None:
         aqi_int = min(round(aqi_raw), 500)
 
-    # aqiMainPollutant: argmax of sub-AQIs (None if all sub-AQIs are null)
+    # aqiMainPollutant: argmax of sub-AQIs for the active index (None if all null).
     main_pollutant = _main_pollutant_from_sub_aqis(current)
 
     # observedAt: append "Z" to the local-naive GMT timestamp (LC4).
@@ -328,16 +426,18 @@ def _wire_to_canonical(wire: _OpenMeteoAQResponse) -> AQIReading | None:
 
     return AQIReading(
         aqi=aqi_int,
-        aqiScale="epa",
-        aqiCategory=None,
+        aqiScale=aqi_scale,
+        aqiCategory=None,            # dashboard-computed from aqi+aqiScale
         aqiMainPollutant=main_pollutant,
-        aqiLocation=None,          # PARTIAL-DOMAIN — Open-Meteo has no location field
+        aqiLocation=None,            # PARTIAL-DOMAIN — Open-Meteo has no location field
         pollutantPM25=current.pm2_5,
         pollutantPM10=current.pm10,
         pollutantO3=current.ozone,
         pollutantNO2=current.nitrogen_dioxide,
         pollutantSO2=current.sulphur_dioxide,
         pollutantCO=current.carbon_monoxide,
+        pollutantNO=current.nitrogen_monoxide,   # ADR-059: no longer dropped
+        pollutantNH3=current.ammonia,             # ADR-059: Europe-only; null outside Europe
         observedAt=observed_at,
         source=PROVIDER_ID,
     )
@@ -402,10 +502,17 @@ def fetch(
         extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
     )
 
+    # Select current= variable list based on the configured AQI index (ADR-059).
+    current_vars = (
+        _CURRENT_VARS_EUROPEAN_AQI
+        if _AQI_INDEX == "european_aqi"
+        else _CURRENT_VARS_US_AQI
+    )
+
     params = {
         "latitude": str(round(lat, 6)),
         "longitude": str(round(lon, 6)),
-        "current": _REQUESTED_CURRENT_VARS,
+        "current": current_vars,
         "timezone": "GMT",
     }
 
@@ -465,6 +572,32 @@ def fetch(
 
 
 # ---------------------------------------------------------------------------
+# Regional config wiring (ADR-059)
+# ---------------------------------------------------------------------------
+
+
+def configure_regional_settings(*, aqi_index: str) -> None:
+    """Set the module-level AQI index from operator config (ADR-059).
+
+    Called by wire_aqi_settings() in endpoints/aqi.py at startup.
+    aqi_index must be one of "us_aqi" (default) or "european_aqi".
+    The settings validator in AQISettings.validate() enforces valid values;
+    this function accepts whatever was validated there.
+
+    Args:
+        aqi_index: "us_aqi" for EPA 0–500 scale; "european_aqi" for EAQI.
+    """
+    global _AQI_INDEX  # noqa: PLW0603
+    _AQI_INDEX = aqi_index
+    logger.debug(
+        "Open-Meteo AQI index configured: aqi_index=%r → aqiScale=%r",
+        aqi_index,
+        _AQI_INDEX_TO_SCALE.get(aqi_index, "unknown"),
+        extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test reset helpers
 # ---------------------------------------------------------------------------
 
@@ -473,3 +606,9 @@ def _reset_http_client_for_tests() -> None:
     """Reset module-level HTTP client singleton. Used in tests only."""
     global _http_client  # noqa: PLW0603
     _http_client = None
+
+
+def _reset_regional_settings_for_tests() -> None:
+    """Reset module-level regional config to defaults. Used in tests only."""
+    global _AQI_INDEX  # noqa: PLW0603
+    _AQI_INDEX = "us_aqi"
