@@ -281,12 +281,18 @@ def get_current_endpoint(
     ):
         observation = _fill_cloudcover_from_provider(observation)
 
-    return ObservationResponse(
+    response = ObservationResponse(
         data=observation,
         units=units,
         source="weewx",
         generatedAt=_now_utc_z(),
     )
+
+    from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
+
+    response_dict = response.model_dump(by_alias=True, exclude_none=True)
+    response_dict = apply_enrichments("current", response_dict)
+    return response_dict
 
 
 # ---------------------------------------------------------------------------

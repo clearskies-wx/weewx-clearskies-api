@@ -488,7 +488,7 @@ def get_planets(
             for p in raw_list
         ]
 
-    return PlanetResponse(
+    planet_response = PlanetResponse(
         data=PlanetVisibility(
             evening=_to_entries(visibility_raw["evening"]),
             morning=_to_entries(visibility_raw["morning"]),
@@ -496,6 +496,12 @@ def get_planets(
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
     )
+
+    from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
+
+    response_dict = planet_response.model_dump(by_alias=True, exclude_none=True)
+    response_dict = apply_enrichments("almanac/planets", response_dict)
+    return response_dict
 
 
 @router.get("/almanac/eclipses", summary="Lunar eclipses", tags=["Almanac"])

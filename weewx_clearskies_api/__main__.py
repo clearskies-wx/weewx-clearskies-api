@@ -504,6 +504,10 @@ def main() -> None:
       6m. Wire forecast settings.
       6o. Wire radar settings (keyed provider credentials — 3b-15; no-op for keyless).
       7. Register DB health probe.
+      7a. Create SSE infrastructure (emitter + direct adapter).
+      7b. Create UnitTransformer from settings; attach to app.state.
+      7c. Configure enrichment processors; register packet-tap processors.
+      7d. Register endpoint enrichments (current, almanac/planets).
       8. Start uvicorn (TLS-enabled).
     """
     # Step 0: Parse CLI args before logging so --help works cleanly.
@@ -789,7 +793,7 @@ def main() -> None:
     wire_db_health_probe()
 
     # Step 7a: Create SSE infrastructure (ADR-058).
-    # Packet tap wired but empty — enrichment processors registered in Phase 3B.
+    # Enrichment processors and endpoint enrichments are registered in Steps 7c/7d below.
     from weewx_clearskies_api.sse.direct_adapter import DirectAdapter  # noqa: PLC0415
     from weewx_clearskies_api.sse.emitter import SSEEmitter  # noqa: PLC0415
     from weewx_clearskies_api.sse.packet_tap import process_packet  # noqa: PLC0415
@@ -805,6 +809,56 @@ def main() -> None:
     else:
         sse_adapter = None
         logger.info("SSE input disabled ([input] enabled = false); running in REST-only mode")
+
+    # Step 7b: Create UnitTransformer from settings and attach to app state.
+    from weewx_clearskies_api.units.transformer import UnitTransformer  # noqa: PLC0415
+
+    transformer = UnitTransformer.from_settings(settings.units)
+    app.state.transformer = transformer
+
+    # Step 7c: Configure enrichment processors and register packet-tap processors.
+    from weewx_clearskies_api.sse.packet_tap import register_processor  # noqa: PLC0415
+    from weewx_clearskies_api.sse.enrichment import (  # noqa: PLC0415
+        input_smoother,
+        uv_smoother,
+        sky_tap,
+        wind_rolling_window,
+        lightning_strike_buffer,
+        scene_packet_tap,
+        barometer_trend,
+    )
+
+    # Configure processors that need startup state.
+    wind_rolling_window.configure(transformer)
+    barometer_trend.configure(
+        transformer,
+        trend_time_delta=settings.units.trend_time_delta,
+        trend_time_grace=settings.units.trend_time_grace,
+    )
+
+    # Register packet-tap processors (order: smoother → UV → sky → wind → lightning → scene).
+    register_processor(input_smoother.process_packet)
+    register_processor(uv_smoother.accumulate_uv)
+    register_processor(sky_tap.update_from_packet)
+    register_processor(wind_rolling_window.process_packet)
+    register_processor(lightning_strike_buffer.process_packet)
+    register_processor(scene_packet_tap.inject_scene_into_packet)
+
+    # Step 7d: Register endpoint enrichments.
+    from weewx_clearskies_api.sse.endpoint_enrichment import register_enrichment  # noqa: PLC0415
+    from weewx_clearskies_api.sse.enrichment import (  # noqa: PLC0415
+        weather_text,
+        scene_enrichment,
+        planet_viewing,
+    )
+
+    register_enrichment("current", barometer_trend.enrich_barometer_trend)
+    register_enrichment("current", wind_rolling_window.enrich_wind_rolling_average)
+    register_enrichment("current", lightning_strike_buffer.enrich_lightning_history)
+    register_enrichment("current", weather_text.enrich_weather_text)
+    register_enrichment("current", uv_smoother.enrich_uv)
+    register_enrichment("current", scene_enrichment.enrich_scene)
+    register_enrichment("almanac/planets", planet_viewing.enrich_planet_viewing)
 
     # Step 8: Start servers (TLS-enabled via cert_path / key_path from step 3b).
     _run_server(
