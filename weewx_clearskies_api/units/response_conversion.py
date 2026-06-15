@@ -88,43 +88,6 @@ def _infer_us_units(units_block: dict[str, object]) -> int:
     return us_units
 
 
-def _flatten_converted_value(val: object) -> object:
-    """Flatten one ConvertedValue dict to a scalar, or pass non-converted values through.
-
-    A ConvertedValue dict has the shape ``{"value": float|None, "label": str,
-    "formatted": str}`` — the output of ``UnitTransformer.transform_record()``
-    for known observations.  This function extracts the appropriately rounded
-    scalar the dashboard expects:
-
-    - ``None`` value → ``None``
-    - String value (e.g. weatherText) → the string as-is
-    - Numeric value → ``float(formatted)`` (preserves operator StringFormats
-      rounding), falling back to ``round(value, 1)`` when ``formatted`` is
-      non-numeric (compass ordinate, ``"N/A"``, etc.)
-
-    Values that are NOT ConvertedValue dicts (plain strings, raw numbers,
-    arbitrary nested dicts) are returned unchanged — they are unknown /
-    passthrough fields that skipped conversion.
-    """
-    if not isinstance(val, dict) or "value" not in val:
-        return val
-    raw_val = val["value"]
-    formatted_str = val.get("formatted", "")
-    if raw_val is None:
-        return None
-    if isinstance(raw_val, str):
-        return raw_val
-    # Numeric: parse formatted string back to float to honour StringFormats.
-    try:
-        return float(formatted_str)
-    except (ValueError, TypeError):
-        # Non-numeric formatted string (compass ordinate, "N/A") — fall back
-        # to the raw converted float rounded to 1 decimal.
-        if isinstance(raw_val, float):
-            return round(raw_val, 1)
-        return raw_val
-
-
 def _cardinal_for_degrees(degrees: object) -> "str | None":
     """Return the canonical 16-point cardinal code for *degrees*, or None.
 
@@ -196,43 +159,38 @@ def apply_conversion(
         try:
             converted_obs = _transformer.transform_record(obs_payload, us_units)
             # transform_record returns {value, label, formatted} dicts for
-            # numeric observations.  The dashboard expects a flat shape — numeric
-            # values in "data" and unit labels already in the "units" envelope —
-            # so flatten to a single scalar per observation.
+            # known numeric observations.  Pass them through as-is so the
+            # dashboard's isConvertedValue() check succeeds (aligns REST shape
+            # with SSE — see sse.py lines 95-97).
             #
-            # Rounding strategy: parse the "formatted" string back to float so
-            # the precision matches the operator's StringFormats config (e.g.
-            # "%.1f" for temperature, "%.0f" for wind speed).  Fall back to the
-            # raw "value" float when "formatted" is not a valid number (compass
-            # direction labels, "N/A" for None values, text fields like
-            # weatherText).  String pass-throughs and unknown fields are kept
-            # as-is.
-            flattened: dict[str, object] = {}
-            for key, val in converted_obs.items():
-                # extras sub-dict: each entry may itself be a ConvertedValue
-                # dict (for known observations transformed by transform_record)
-                # or a raw passthrough value (unknown fields).
-                if key == "extras" and isinstance(val, dict):
-                    flattened_extras: dict[str, object] = {}
-                    for sub_key, sub_val in val.items():
-                        flattened_extras[sub_key] = _flatten_converted_value(sub_val)
-                    flattened[key] = flattened_extras
-                    continue
+            # Wrap any remaining raw numeric fields (not yet converted) in the
+            # same ConvertedValue format so every numeric field is uniform.
+            for k, v in converted_obs.items():
+                if k == "extras":
+                    continue  # extras handled separately below
+                if isinstance(v, (int, float)) and v is not True and v is not False:
+                    converted_obs[k] = {"value": v, "label": "", "formatted": str(v)}
 
-                if not isinstance(val, dict) or "value" not in val:
-                    # Unknown / passthrough field — no conversion applied.
-                    flattened[key] = val
-                    continue
-                flattened[key] = _flatten_converted_value(val)
+            # extras sub-dict: wrap its raw numerics the same way.
+            extras = converted_obs.get("extras")
+            if isinstance(extras, dict):
+                for k, v in extras.items():
+                    if isinstance(v, (int, float)) and v is not True and v is not False:
+                        extras[k] = {"value": v, "label": "", "formatted": str(v)}
+
             # Inject canonical 16-point cardinal codes alongside windDir /
             # windGustDir so the dashboard can localise them via i18next
             # (ADR-021) without recomputing the sector on the client side.
             # null windDir → null windDirCardinal (not omitted).
-            flattened["windDirCardinal"] = _cardinal_for_degrees(flattened.get("windDir"))
-            flattened["windGustDirCardinal"] = _cardinal_for_degrees(
-                flattened.get("windGustDir")
-            )
-            return {**data, "data": flattened}
+            # Extract degrees from the ConvertedValue dict (value key).
+            wind_dir = converted_obs.get("windDir")
+            wind_gust_dir = converted_obs.get("windGustDir")
+            deg = wind_dir["value"] if isinstance(wind_dir, dict) and "value" in wind_dir else wind_dir
+            gust_deg = wind_gust_dir["value"] if isinstance(wind_gust_dir, dict) and "value" in wind_gust_dir else wind_gust_dir
+            converted_obs["windDirCardinal"] = _cardinal_for_degrees(deg)
+            converted_obs["windGustDirCardinal"] = _cardinal_for_degrees(gust_deg)
+
+            return {**data, "data": converted_obs}
         except Exception:  # noqa: BLE001
             logger.debug("Observation envelope conversion failed; passing through raw")
 
@@ -256,9 +214,9 @@ def apply_conversion(
             try:
                 converted = _transformer.transform_record(record, us_units)
                 # Extract raw converted values from ConvertedValue dicts.
-                # Unlike Shape 2 (which uses _flatten_converted_value to parse
-                # the formatted string — lossy rounding for display), archive
-                # records need full-precision values for chart rendering.
+                # Unlike Shape 2 (which passes ConvertedValue dicts through
+                # as-is), archive records need full-precision scalar values
+                # for chart rendering.
                 # Exception: keep 'beaufort' as a ConvertedValue dict — the
                 # wind rose binning reads it via extractNumber({value, label, formatted}).
                 flattened_rec: dict[str, object] = {}
