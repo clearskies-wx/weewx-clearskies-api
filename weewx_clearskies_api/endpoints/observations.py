@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -294,7 +295,7 @@ def get_current_endpoint(
     response_dict = response.model_dump(by_alias=True, exclude_none=True)
     response_dict = apply_conversion(response_dict)  # convert before enrichments
     response_dict = apply_enrichments("current", response_dict)
-    return response_dict
+    return JSONResponse(content=response_dict)
 
 
 # ---------------------------------------------------------------------------
