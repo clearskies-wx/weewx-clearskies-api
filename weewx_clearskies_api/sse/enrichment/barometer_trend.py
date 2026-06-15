@@ -195,6 +195,11 @@ def enrich_barometer_trend(data: dict[str, Any]) -> dict[str, Any]:
     record nearest to 3 hours ago, computes the numeric delta, and classifies
     the direction by converting that delta to inHg before thresholding.
 
+    The ``barometer`` field may arrive as a plain scalar (float/int) or as a
+    unit-transformed dict ``{"value": <float>, "label": ..., "formatted": ...}``.
+    Both shapes are handled — the dict form extracts ``["value"]`` before
+    numeric conversion.
+
     Any failure (missing fields, unparseable timestamp, DB error, no record in
     grace window) results in both fields being ``null``.  The function never
     raises — GET /current must not break because of this enrichment.
@@ -214,10 +219,27 @@ def enrich_barometer_trend(data: dict[str, Any]) -> dict[str, Any]:
         data["barometerTrendDirection"] = None
         return data
 
+    # The /current response serialises observation values as
+    # {"value": <float>, "label": <str>, "formatted": <str>} dicts (the
+    # unit-transformed representation).  Extract the raw numeric value before
+    # converting so float() doesn't raise TypeError on a dict.
+    if isinstance(current_barometer, dict):
+        current_barometer = current_barometer.get("value")
+        if current_barometer is None:
+            data["barometerTrend"] = None
+            data["barometerTrendDirection"] = None
+            return data
+
     try:
         current_barometer = float(current_barometer)
         ts_current = _iso_to_epoch(str(timestamp))
     except (TypeError, ValueError):
+        logger.warning(
+            "barometer_trend: could not parse current barometer or timestamp "
+            "(barometer=%r, timestamp=%r)",
+            current_barometer,
+            timestamp,
+        )
         data["barometerTrend"] = None
         data["barometerTrendDirection"] = None
         return data
