@@ -194,6 +194,8 @@ def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
                 updates["snow"] = provider_conditions.snow
             if observation.snowRate is None and provider_conditions.snowRate is not None:
                 updates["snowRate"] = provider_conditions.snowRate
+            if observation.precipType is None and provider_conditions.precipType is not None:
+                updates["precipType"] = provider_conditions.precipType
             if updates:
                 return observation.model_copy(update=updates)
 
@@ -271,14 +273,15 @@ def get_current_endpoint(
 
     observation = get_current(db, registry)
 
-    # Blend cloudcover, snow, and snowRate from the forecast provider cache
-    # when the archive row lacks the hardware to supply those fields.
+    # Blend cloudcover, snow, snowRate, and precipType from the forecast
+    # provider when the archive row lacks the hardware to supply those fields.
     # Almost always a cache hit (<1 ms); errors are swallowed so /current
     # never crashes due to a provider outage.
     if observation is not None and (
         observation.cloudcover is None
         or observation.snow is None
         or observation.snowRate is None
+        or observation.precipType is None
     ):
         observation = _fill_cloudcover_from_provider(observation)
 

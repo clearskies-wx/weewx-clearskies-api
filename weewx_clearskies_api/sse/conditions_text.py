@@ -27,33 +27,76 @@ from weewx_clearskies_api.units.derived import beaufort
 # ---------------------------------------------------------------------------
 
 
-def _precip_label(rain_rate: float | None, source_unit: str) -> str | None:
-    """Classify precipitation from rain rate (AMS/WMO thresholds).
+def _precip_label(
+    rain_rate: float | None,
+    source_unit: str,
+    *,
+    precip_type: str | None = None,
+    snow_rate: float | None = None,
+) -> str | None:
+    """Classify precipitation from rain rate and provider precipitation type.
 
-    Thresholds are applied in in/hr:
-      < 0.10 → Light Rain
-      0.10–0.30 → Moderate Rain
-      > 0.30 → Heavy Rain
+    Provider precipType is authoritative for WHAT is falling.  The local
+    tipping-bucket gauge is authoritative for HOW MUCH — but only when it
+    can measure it.  Gauges cannot measure snow (accumulates in funnel
+    without tipping), and sleet/hail bounce out.  So:
 
-    Returns None when rain_rate is None or ≤ 0.
+    - snow:          gauge rate for intensity if > 0, else provider snowRate,
+                     else bare "Snow" label (provider confirms falling)
+    - freezing-rain: always "Freezing Rain" (trust provider)
+    - sleet:         always "Sleet" (trust provider)
+    - hail:          always "Hail" (trust provider)
+    - rain / None:   existing logic — None when rainRate ≤ 0
+
+    Thresholds (water-equivalent in/hr, AMS/WMO):
+      < 0.10 → Light
+      0.10–0.30 → Moderate
+      > 0.30 → Heavy
     """
+    pt = (precip_type or "").strip().lower()
+
+    # --- Non-rain types: trust provider even when gauge reads zero ----------
+    if pt == "freezing-rain":
+        return "Freezing Rain"
+    if pt == "sleet":
+        return "Sleet"
+    if pt == "hail":
+        return "Hail"
+
+    if pt == "snow":
+        rate = _to_inhr(rain_rate, source_unit)
+        if rate is not None and rate > 0:
+            return _intensity("Snow", rate)
+        sr = _to_inhr(snow_rate, source_unit)
+        if sr is not None and sr > 0:
+            return _intensity("Snow", sr)
+        return "Snow"
+
+    # --- Rain (or precipType unknown/absent): existing behavior -------------
     if rain_rate is None or rain_rate <= 0:
         return None
+    rate = _to_inhr(rain_rate, source_unit)
+    if rate is None:
+        return None
+    return _intensity("Rain", rate)
 
-    # Convert to in/hr for canonical threshold comparison.
+
+def _to_inhr(rate: float | None, source_unit: str) -> float | None:
+    """Convert a rate to in/hr, returning None on failure."""
+    if rate is None or rate <= 0:
+        return None
     if source_unit == "inch_per_hour":
-        rate_inhr = rain_rate
-    else:
-        converted = convert(rain_rate, source_unit, "inch_per_hour")
-        if converted is None:
-            return None
-        rate_inhr = converted
+        return rate
+    return convert(rate, source_unit, "inch_per_hour")
 
+
+def _intensity(noun: str, rate_inhr: float) -> str:
+    """Apply AMS/WMO intensity tiers to a precipitation noun."""
     if rate_inhr < 0.10:
-        return "Light Rain"
+        return f"Light {noun}"
     if rate_inhr < 0.30:
-        return "Moderate Rain"
-    return "Heavy Rain"
+        return f"Moderate {noun}"
+    return f"Heavy {noun}"
 
 
 def _compose(parts: list[str | None]) -> str:
@@ -125,6 +168,8 @@ def build_weather_text(
     temp_unit: str = "degree_F",
     dewpoint_unit: str = "degree_F",
     provider_sky: str | None = None,
+    precip_type: str | None = None,
+    snow_rate: float | None = None,
 ) -> str:
     """Build the full weatherText string (ADR-044 §9 amendment, 2026-05-28).
 
@@ -222,6 +267,6 @@ def build_weather_text(
             pass
 
     # 4. Precipitation.
-    parts.append(_precip_label(rain_rate, rain_rate_unit))
+    parts.append(_precip_label(rain_rate, rain_rate_unit, precip_type=precip_type, snow_rate=snow_rate))
 
     return _compose(parts)

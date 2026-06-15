@@ -17,9 +17,8 @@ This enrichment runs once per GET /current request and:
 4. Calls scene.build_scene() to build the current descriptor and injects it into
    ``data["data"]``.
 
-precipType from the forecast provider is NOT available (no cached internal API
-exists for this).  Precipitation detection falls back to rain_rate from the
-observation and the realtime fallback path in scene.detect_precip().
+precipType is populated from the forecast provider via _fill_cloudcover_from_provider()
+and passed to scene.detect_precip() for accurate snow/rain overlay detection.
 
 The SSE stream carries the same ``scene`` field: a packet-tap processor
 (scene_packet_tap.py) reads the current scene state from the module and injects
@@ -174,11 +173,13 @@ def enrich_scene(data: dict[str, Any]) -> dict[str, Any]:
         # Local rain rate (sign only — used as a presence check, not threshold).
         rain_rate = _extract_float(obs.get("rainRate"))
 
-        # Update server-side precip linger state.
-        # precipType is not available from the internal API (no forecast cache
-        # read function); pass None and rely on rain_rate for detection.
+        precip_type = obs.get("precipType") if obs else None
+        if isinstance(precip_type, dict):
+            precip_type = precip_type.get("value")
+        precip_type = str(precip_type) if precip_type is not None else None
+
         scene_mod.detect_precip(
-            precip_type=None,
+            precip_type=precip_type,
             conditions_text=conditions_text,
             rain_rate=rain_rate,
         )

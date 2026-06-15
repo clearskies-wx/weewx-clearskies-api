@@ -53,15 +53,25 @@ def _derive_weather_code(
 ) -> int:
     """Map current conditions state to a WMO present-weather code (subset).
 
-    Priority order: rain > fog > sky.
+    Priority order: precipitation > fog > sky.
 
-    Rain codes (WMO group 6x — liquid precipitation):
-      "Heavy Rain"    → 65
-      "Moderate Rain" → 63
-      "Light Rain"    → 61
+    Snow codes (WMO group 7x):
+      "Heavy Snow"     → 75
+      "Moderate Snow"  → 73
+      "Light Snow"/"Snow" → 71
+
+    Frozen precipitation:
+      "Freezing Rain"  → 66
+      "Sleet"          → 79  (ice pellets NOS)
+      "Hail"           → 96  (thunderstorm with hail)
+
+    Rain codes (WMO group 6x):
+      "Heavy Rain"     → 65
+      "Moderate Rain"  → 63
+      "Light Rain"     → 61
 
     Fog code (WMO 45):
-      is_foggy=True   → 45
+      is_foggy=True    → 45
 
     Sky codes (WMO okta-based cloudiness):
       "Cloudy" / "Mostly Cloudy"      → 3
@@ -71,6 +81,21 @@ def _derive_weather_code(
 
     Returns an int WMO code.
     """
+    # Snow
+    if rain_label == "Heavy Snow":
+        return 75
+    if rain_label == "Moderate Snow":
+        return 73
+    if rain_label in ("Light Snow", "Snow"):
+        return 71
+    # Frozen precipitation
+    if rain_label == "Freezing Rain":
+        return 66
+    if rain_label == "Sleet":
+        return 79
+    if rain_label == "Hail":
+        return 96
+    # Rain
     if rain_label == "Heavy Rain":
         return 65
     if rain_label == "Moderate Rain":
@@ -137,6 +162,9 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     ):
         _provider_sky = "Foggy"
 
+    _precip_type = obs_data.get("precipType") if obs_data else None
+    _snow_rate = get_smoothed("snowRate")
+
     return build_weather_text(
         sky=sky_classify(),
         rain_rate=get_smoothed("rainRate"),
@@ -153,6 +181,8 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         temp_unit="degree_F",
         dewpoint_unit="degree_F",
         provider_sky=_provider_sky,
+        precip_type=_precip_type,
+        snow_rate=_snow_rate,
     )
 
 
@@ -214,7 +244,15 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         else:
             _effective_sky = _provider_sky
 
-        _rain_label = _precip_label(get_smoothed("rainRate"), "inch_per_hour")
+        _precip_type2 = obs_data.get("precipType") if obs_data else None
+        _snow_rate_raw = obs_data.get("snowRate") if obs_data else None
+        _snow_rate2 = (
+            _snow_rate_raw.get("value") if isinstance(_snow_rate_raw, dict) else _snow_rate_raw
+        )
+        _rain_label = _precip_label(
+            get_smoothed("rainRate"), "inch_per_hour",
+            precip_type=_precip_type2, snow_rate=_snow_rate2,
+        )
 
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,

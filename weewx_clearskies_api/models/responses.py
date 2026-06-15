@@ -139,6 +139,9 @@ class Observation(BaseModel):
     # None when conditions engine is "off" or no provider is configured.
     weatherText: str | None = None
 
+    # Provider-sourced precipitation type: "rain" | "snow" | "freezing-rain" | "sleet" | "hail" | null
+    precipType: str | None = None
+
     # Operator-custom columns (stock weewx columns NEVER appear here)
     extras: dict[str, Any] = {}
     source: str = "weewx"
