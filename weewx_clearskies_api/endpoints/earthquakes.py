@@ -197,6 +197,7 @@ def get_earthquakes(
         logger.debug("No earthquakes provider in registry; returning empty list")
         return EarthquakeListResponse(
             data=[],
+            units={"depth": "km", "magnitude": ""},
             source="none",
             generatedAt=now_str,
         )
@@ -292,6 +293,7 @@ def get_earthquakes(
 
     return EarthquakeListResponse(
         data=filtered_records,
+        units={"depth": "km", "magnitude": ""},
         source=provider_id,
         generatedAt=now_str,
     )

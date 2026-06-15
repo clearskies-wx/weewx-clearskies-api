@@ -390,6 +390,13 @@ def get_aqi_current(
                 "[aqi] Column registry or DB engine not wired; skipping pollutant merge."
             )
 
+    # EPA category enrichment — compute category from AQI value when provider
+    # did not supply one (IQAir, OpenMeteo return aqiCategory=None).
+    if record is not None and record.aqiCategory is None and record.aqi is not None:
+        if record.aqiScale in ("epa", "airnow"):
+            from weewx_clearskies_api.providers.aqi._units import epa_category  # noqa: PLC0415
+            record = record.model_copy(update={"aqiCategory": epa_category(record.aqi)})
+
     return AQIResponse(
         data=record,
         units=units,
@@ -444,6 +451,16 @@ def get_aqi_history_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Enrich each reading with EPA category if missing
+    enriched_readings = []
+    for reading in readings:
+        if reading.aqiCategory is None and reading.aqi is not None:
+            if reading.aqiScale in ("epa", "airnow"):
+                from weewx_clearskies_api.providers.aqi._units import epa_category  # noqa: PLC0415
+                reading = reading.model_copy(update={"aqiCategory": epa_category(reading.aqi)})
+        enriched_readings.append(reading)
+    readings = enriched_readings
 
     return AQIHistoryResponse(
         data=readings,

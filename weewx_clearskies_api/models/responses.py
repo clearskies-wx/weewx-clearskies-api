@@ -1159,13 +1159,14 @@ class EarthquakeRecord(BaseModel):
 class EarthquakeListResponse(BaseModel):
     """EarthquakeListResponse envelope (OpenAPI EarthquakeListResponse schema).
 
-    Note: OpenAPI EarthquakeListResponse does NOT carry a units block (per
-    canonical-data-model §2.4, earthquakes are unit-system-invariant).
+    Earthquake depth is always km (seismological convention). The units block
+    is included so the dashboard can read it instead of hardcoding.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     data: list[EarthquakeRecord]
+    units: dict[str, str] | None = None
     source: str  # provider_id or "none"
     generatedAt: str  # UTC ISO-8601 with Z
 

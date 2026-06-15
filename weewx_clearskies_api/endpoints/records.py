@@ -18,6 +18,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,7 @@ from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import RecordsQueryParams
 from weewx_clearskies_api.providers._common.cache import get_cache
+from weewx_clearskies_api.units.response_conversion import apply_conversion
 
 # Alias kept for backwards-compatibility with tests that import RecordsParams
 # from this module (test_archive_params.py).
@@ -81,12 +83,15 @@ def get_records_endpoint(
             if cached is not None:
                 logger.debug("records cache hit: period=%s", params.period)
                 bundle = RecordsBundle.model_validate(cached)
-                return RecordsResponse(
+                response = RecordsResponse(
                     data=bundle,
                     units=units,
                     source="weewx",
                     generatedAt=_now_utc_z(),
                 )
+                response_dict = response.model_dump(by_alias=True, exclude_none=True)
+                response_dict = apply_conversion(response_dict)
+                return JSONResponse(content=response_dict)
         except Exception:
             # Cache miss or deserialisation error — fall through to live query.
             logger.debug("records cache miss or error: period=%s", params.period, exc_info=True)
@@ -98,9 +103,12 @@ def get_records_endpoint(
         section_filter=params.section,
     )
 
-    return RecordsResponse(
+    response = RecordsResponse(
         data=bundle,
         units=units,
         source="weewx",
         generatedAt=_now_utc_z(),
     )
+    response_dict = response.model_dump(by_alias=True, exclude_none=True)
+    response_dict = apply_conversion(response_dict)
+    return JSONResponse(content=response_dict)
