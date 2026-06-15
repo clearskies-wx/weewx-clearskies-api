@@ -293,6 +293,27 @@ class EarthquakeApplyConfig(BaseModel):
     default_days: int | None = None
 
 
+class UnitsApplyConfig(BaseModel):
+    """Unit configuration for api.conf [units] (ADR-042).
+
+    Each subsection mirrors the matching weewx unit-system concept:
+    - groups: maps unit-group names to unit names (e.g. group_temperature → degree_F)
+    - string_formats: maps unit names to printf-style format strings (e.g. degree_F → %.1f)
+    - labels: maps unit names to display labels (e.g. degree_F → °F)
+    - ordinates: ordered list of 16 compass-direction labels (N, NNE, … NNW)
+
+    This is the single unit authority for the API (T2A.5).  On re-run the
+    entire [units] section is replaced.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    groups: dict[str, str] | None = None
+    string_formats: dict[str, str] | None = None
+    labels: dict[str, str] | None = None
+    ordinates: list[str] | None = None
+
+
 class ApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -326,6 +347,11 @@ class ApplyRequest(BaseModel):
     #: Optional earthquake settings.  When present, written to the [earthquakes]
     #: section of api.conf.  None → skip (leaves existing values unchanged).
     earthquakes: EarthquakeApplyConfig | None = None
+    #: Optional unit configuration.  When present, written to the [units]
+    #: section of api.conf with subsections [[groups]], [[string_formats]],
+    #: [[labels]], [[ordinates]].  This is the single unit authority (T2A.5).
+    #: Old wizard versions that do not send this field are unaffected (None → skip).
+    units: UnitsApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -404,6 +430,19 @@ class CurrentConfigEarthquakeSection(BaseModel):
     default_days: int | None = None
 
 
+class CurrentConfigUnitsSection(BaseModel):
+    """Unit configuration from the [units] section of api.conf (ADR-042).
+
+    Mirrors UnitsApplyConfig: populated on re-run from api.conf so the
+    wizard can pre-populate its unit-configuration step.
+    """
+
+    groups: dict[str, str] | None = None
+    string_formats: dict[str, str] | None = None
+    labels: dict[str, str] | None = None
+    ordinates: list[str] | None = None
+
+
 class CurrentConfigResponse(BaseModel):
     database: CurrentConfigDatabaseSection
     providers: dict[str, CurrentConfigProviderSection]
@@ -411,6 +450,7 @@ class CurrentConfigResponse(BaseModel):
     branding: CurrentConfigBrandingSection = CurrentConfigBrandingSection()
     social: CurrentConfigSocialSection = CurrentConfigSocialSection()
     earthquakes: CurrentConfigEarthquakeSection = CurrentConfigEarthquakeSection()
+    units: CurrentConfigUnitsSection | None = None
     column_mapping: dict[str, str] | None = None
     column_units: dict[str, str] | None = None
 
@@ -662,6 +702,22 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             cfg["earthquakes"]["min_magnitude"] = str(eq.min_magnitude)
         if eq.default_days is not None:
             cfg["earthquakes"]["default_days"] = str(eq.default_days)
+
+    # [units] — optional; written when wizard sends unit configuration.
+    # Subsections mirror weewx skin.conf [Units] structure (ADR-042).
+    # On re-run the entire [units] section is replaced so stale group
+    # overrides from prior runs don't persist.
+    if apply.units is not None:
+        cfg["units"] = {}
+        u = apply.units
+        if u.groups is not None:
+            cfg["units"]["groups"] = dict(u.groups)
+        if u.string_formats is not None:
+            cfg["units"]["string_formats"] = dict(u.string_formats)
+        if u.labels is not None:
+            cfg["units"]["labels"] = dict(u.labels)
+        if u.ordinates is not None:
+            cfg["units"]["ordinates"] = list(u.ordinates)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1297,6 +1353,39 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                 except (ValueError, TypeError):
                     pass
 
+    # --- Units ---
+    units_config: CurrentConfigUnitsSection | None = None
+    if api_cfg is not None:
+        u_section = api_cfg.get("units", {})
+        if isinstance(u_section, dict) and u_section:
+            u_groups: dict[str, str] | None = None
+            raw_groups = u_section.get("groups")
+            if isinstance(raw_groups, dict) and raw_groups:
+                u_groups = {str(k): str(v) for k, v in raw_groups.items() if v}
+
+            u_string_formats: dict[str, str] | None = None
+            raw_string_formats = u_section.get("string_formats")
+            if isinstance(raw_string_formats, dict) and raw_string_formats:
+                u_string_formats = {str(k): str(v) for k, v in raw_string_formats.items() if v}
+
+            u_labels: dict[str, str] | None = None
+            raw_labels = u_section.get("labels")
+            if isinstance(raw_labels, dict) and raw_labels:
+                u_labels = {str(k): str(v) for k, v in raw_labels.items() if v}
+
+            u_ordinates: list[str] | None = None
+            raw_ordinates = u_section.get("ordinates")
+            if isinstance(raw_ordinates, (list, tuple)) and raw_ordinates:
+                u_ordinates = [str(o) for o in raw_ordinates]
+
+            if any(x is not None for x in (u_groups, u_string_formats, u_labels, u_ordinates)):
+                units_config = CurrentConfigUnitsSection(
+                    groups=u_groups,
+                    string_formats=u_string_formats,
+                    labels=u_labels,
+                    ordinates=u_ordinates,
+                )
+
     # --- Column mapping ---
     col_mapping: dict[str, str] | None = None
     if api_cfg is not None:
@@ -1321,6 +1410,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         branding=branding,
         social=social,
         earthquakes=earthquakes_config,
+        units=units_config,
         column_mapping=col_mapping,
         column_units=col_units,
     )
