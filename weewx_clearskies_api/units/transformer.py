@@ -121,6 +121,22 @@ class UnitTransformer:
     # Public API
     # ------------------------------------------------------------------
 
+    def build_units_block(self) -> dict[str, str]:
+        """Build the per-field units label dict from the transformer's target units.
+
+        Iterates OBS_GROUP (observation → group mapping). For each observation
+        whose group has a configured target unit, looks up the display label
+        (accounting for operator label overrides). Returns a dict suitable for
+        the REST response 'units' envelope.
+        """
+        block: dict[str, str] = {}
+        for obs, group in OBS_GROUP.items():
+            target = self._targets.get(group)
+            if target is None:
+                continue
+            block[obs] = get_label(target, self._label_overrides)
+        return block
+
     def transform_record(self, data: dict[str, object], us_units: int) -> dict[str, object]:
         """Transform an archive record dict from the REST API.
 

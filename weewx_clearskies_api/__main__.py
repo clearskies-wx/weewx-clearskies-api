@@ -96,11 +96,6 @@ from weewx_clearskies_api.services.custom_query import validate_custom_queries
 from weewx_clearskies_api.services.content import wire_content_directory
 from weewx_clearskies_api.services.reports import wire_reports_directory
 from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
-from weewx_clearskies_api.services.units import (
-    WeewxConfNotFoundError,
-    get_target_unit,
-    load_units_block,
-)
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_weewx_conf
 
 logger = logging.getLogger(__name__)
@@ -660,12 +655,26 @@ def main() -> None:
         logger.critical("%s", exc)
         sys.exit(1)
 
-    # Step 6c: Load the units block from weewx.conf.  Fatal if missing.
-    try:
-        load_units_block(settings.weewx.config_path)
-    except WeewxConfNotFoundError as exc:
-        logger.critical("%s", exc)
-        sys.exit(1)
+    # Step 6c½: Infer target_unit_str from api.conf [units] groups.
+    # This is computed here (from settings alone) so it is available both for
+    # station metadata at step 6d and for the units block at step 7b½-a.
+    # api.conf [units] is the single unit authority (ADR-042, T2A.5).
+    _temp_target = (
+        settings.units.groups.get("group_temperature", "")
+        if settings.units.groups
+        else ""
+    )
+    if _temp_target == "degree_F":
+        _target_unit_str = "US"
+    elif _temp_target == "degree_C":
+        _rain_target = (
+            settings.units.groups.get("group_rain", "")
+            if settings.units.groups
+            else ""
+        )
+        _target_unit_str = "METRICWX" if _rain_target == "mm" else "METRIC"
+    else:
+        _target_unit_str = "US"  # fallback
 
     # Step 6d: Load station metadata from weewx.conf [Station].  Fatal if
     # required fields are missing (no location/latitude/longitude = misconfigured).
@@ -674,7 +683,7 @@ def main() -> None:
             cfg=weewx_cfg,
             api_station_id=settings.station.station_id,
             api_timezone=settings.station.timezone,
-            unit_system=get_target_unit(),
+            unit_system=_target_unit_str,
             api_default_locale=settings.station.default_locale,
         )
     except StationConfigError as exc:
@@ -815,6 +824,20 @@ def main() -> None:
 
     transformer = UnitTransformer.from_settings(settings.units)
     app.state.transformer = transformer
+
+    # Step 7b½-a: Derive the units envelope from the transformer's target units.
+    # This is the single unit authority — api.conf [units] controls both
+    # conversion math AND display labels (ADR-042, T2A.5).
+    # _target_unit_str was computed at step 6c½ from the same settings source.
+    from weewx_clearskies_api.services.units import set_units_block  # noqa: PLC0415
+
+    units_block = transformer.build_units_block()
+    if not units_block:
+        logger.warning(
+            "api.conf [units] is empty or missing; units envelope will be empty. "
+            "Values pass through unconverted with source-unit labels."
+        )
+    set_units_block(units_block, _target_unit_str)
 
     # Step 7b½: Configure response_conversion module with the transformer so
     # that apply_conversion() in /current, /archive, and SSE can convert units.

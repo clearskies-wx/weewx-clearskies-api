@@ -464,6 +464,22 @@ def load_units_block(weewx_conf_path: str | Path) -> tuple[UnitsBlock, str]:
     return units_block, target_unit
 
 
+def set_units_block(units_block: UnitsBlock, target_unit: str) -> None:
+    """Set the cached units block directly (from the transformer).
+
+    Called at startup after creating the UnitTransformer, instead of
+    load_units_block(). This ensures the units envelope in REST responses
+    matches the transformer's actual conversion targets.
+    """
+    global _cached_units_block, _cached_target_unit  # noqa: PLW0603
+    _cached_units_block = units_block
+    _cached_target_unit = target_unit
+    logger.info(
+        "Units block set from transformer",
+        extra={"target_unit": target_unit, "field_count": len(units_block)},
+    )
+
+
 def get_units_block() -> UnitsBlock:
     """Return the cached units block.
 
