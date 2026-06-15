@@ -113,7 +113,12 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         "" when no components are available.
     """
     # Derive provider_sky from cloud cover percentage (provider-agnostic field).
-    _cloud_pct = obs_data.get("cloudcover") if obs_data else None
+    # cloudcover may be a raw number OR a ConvertedValue dict {value, label, formatted}
+    # after unit conversion runs before enrichments.
+    _cloud_raw = obs_data.get("cloudcover") if obs_data else None
+    _cloud_pct = (
+        _cloud_raw.get("value") if isinstance(_cloud_raw, dict) else _cloud_raw
+    )
     _is_day = _sky_module.is_daytime()
     _provider_sky = (
         _cloud_pct_to_sky(_cloud_pct, is_day=_is_day)
@@ -182,7 +187,10 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             data["weatherText"] = value
 
         # Derive weatherCode from the same inputs used for weatherText.
-        _cloud_pct = obs_data.get("cloudcover") if obs_data else None
+        _cloud_raw2 = obs_data.get("cloudcover") if obs_data else None
+        _cloud_pct = (
+            _cloud_raw2.get("value") if isinstance(_cloud_raw2, dict) else _cloud_raw2
+        )
         _is_day_code = _sky_module.is_daytime()
         _provider_sky: str | None = (
             _cloud_pct_to_sky(_cloud_pct, is_day=_is_day_code)
