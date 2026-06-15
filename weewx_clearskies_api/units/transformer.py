@@ -126,14 +126,19 @@ class UnitTransformer:
 
         Iterates OBS_GROUP (observation → group mapping). For each observation
         whose group has a configured target unit, looks up the display label
-        (accounting for operator label overrides). Returns a dict suitable for
-        the REST response 'units' envelope.
+        (accounting for operator label overrides). Pass-through groups (single
+        valid unit, e.g. percent, uv_index) are included using their sole unit.
+        Returns a dict suitable for the REST response 'units' envelope.
         """
         block: dict[str, str] = {}
         for obs, group in OBS_GROUP.items():
             target = self._targets.get(group)
             if target is None:
-                continue
+                valid = VALID_UNITS.get(group)
+                if valid and len(valid) == 1:
+                    target = next(iter(valid))
+                else:
+                    continue
             block[obs] = get_label(target, self._label_overrides)
         return block
 
