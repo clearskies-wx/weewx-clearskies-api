@@ -24,26 +24,11 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from weewx_clearskies_api.sse.emitter import SSEEmitter
-from weewx_clearskies_api.units.response_conversion import (
-    _cardinal_for_degrees,
-    _flatten_converted_value,
-)
+from weewx_clearskies_api.units.response_conversion import _cardinal_for_degrees
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Fields injected by add_derived_fields() that are merged into the flattened
-# SSE packet after conversion.  lightningStrikeHistory is a plain list and
-# skips the ConvertedValue flattening step.
-_DERIVED_FIELDS: tuple[str, ...] = (
-    "beaufort",
-    "comfortIndex",
-    "weatherText",
-    "windSpeedAvg10m",
-    "windGustMax10m",
-)
-_DERIVED_LIST_FIELDS: tuple[str, ...] = ("lightningStrikeHistory",)
 
 
 @router.get("/sse")
@@ -89,56 +74,29 @@ async def sse_stream(request: Request) -> EventSourceResponse:
                     packet: dict = json.loads(raw_str)
 
                     if transformer is not None:
-                        # 1. Determine unit system from the packet.
                         us_units = int(packet.get("usUnits", 1))
-
-                        # 2. transform_record() converts all known fields;
-                        #    returns a NEW dict (original packet is unchanged).
                         converted = transformer.transform_record(packet, us_units)
 
-                        # 3. Flatten ConvertedValue dicts to display-precision
-                        #    scalars (same as /current — not full-precision).
-                        flattened: dict = {}
-                        for key, val in converted.items():
-                            if key == "extras" and isinstance(val, dict):
-                                flattened_extras: dict = {}
-                                for sub_key, sub_val in val.items():
-                                    flattened_extras[sub_key] = _flatten_converted_value(sub_val)
-                                flattened[key] = flattened_extras
-                                continue
-                            if not isinstance(val, dict) or "value" not in val:
-                                flattened[key] = val
-                                continue
-                            flattened[key] = _flatten_converted_value(val)
-
-                        # 4. Inject canonical 16-point cardinal wind direction
-                        #    codes (null windDir → null windDirCardinal).
-                        flattened["windDirCardinal"] = _cardinal_for_degrees(
-                            flattened.get("windDir")
-                        )
-                        flattened["windGustDirCardinal"] = _cardinal_for_degrees(
-                            flattened.get("windGustDir")
-                        )
-
-                        # 5. Add derived fields: beaufort, comfortIndex,
-                        #    weatherText, windSpeedAvg10m, windGustMax10m,
-                        #    lightningStrikeHistory.
-                        #    add_derived_fields() expects ConvertedValue dicts
-                        #    for windSpeed and outTemp, so pass the unconverted
-                        #    `converted` dict (not `flattened`).
+                        # Add derived fields (beaufort, comfortIndex) from
+                        # the ConvertedValue dicts in the converted record.
                         transformer.add_derived_fields(converted)
 
-                        # 6. Merge derived scalar fields into flattened output.
-                        for field in _DERIVED_FIELDS:
-                            if field in converted:
-                                flattened[field] = _flatten_converted_value(converted[field])
+                        # Inject cardinal codes from the ConvertedValue windDir.
+                        wind_dir = converted.get("windDir")
+                        wind_gust_dir = converted.get("windGustDir")
+                        deg = wind_dir["value"] if isinstance(wind_dir, dict) and "value" in wind_dir else wind_dir
+                        gust_deg = wind_gust_dir["value"] if isinstance(wind_gust_dir, dict) and "value" in wind_gust_dir else wind_gust_dir
+                        converted["windDirCardinal"] = _cardinal_for_degrees(deg)
+                        converted["windGustDirCardinal"] = _cardinal_for_degrees(gust_deg)
 
-                        # 7. Merge list-type derived fields (no flattening needed).
-                        for field in _DERIVED_LIST_FIELDS:
-                            if field in converted:
-                                flattened[field] = converted[field]
+                        # Wrap remaining raw numeric fields in ConvertedValue
+                        # format so the dashboard's isConvertedValue() check
+                        # passes for every field (matches old BFF behavior).
+                        for k, v in converted.items():
+                            if isinstance(v, (int, float)) and v is not True and v is not False:
+                                converted[k] = {"value": v, "label": "", "formatted": str(v)}
 
-                        packet = flattened
+                        packet = converted
 
                     yield {"event": "loop", "data": json.dumps(packet, default=str)}
 
