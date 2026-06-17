@@ -166,6 +166,12 @@ def enrich_scene(data: dict[str, Any]) -> dict[str, Any]:
         if "thunderstorm" in conditions_text.lower():
             sky_label = "Thunderstorm"
 
+        # Fog override: fog is a visibility phenomenon independent of cloud
+        # cover — 0% clouds + fog is common (marine layer, radiation fog).
+        # Map to "Foggy" which scene.py routes to the "cloudy" bucket.
+        if "fog" in conditions_text.lower() and sky_label not in ("Thunderstorm",):
+            sky_label = "Foggy"
+
         # Cache the provider-derived sky label so the SSE packet tap (which
         # has no access to cloudcover) can produce the same scene at night.
         scene_mod.update_provider_sky(sky_label)
