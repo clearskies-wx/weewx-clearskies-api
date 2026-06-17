@@ -266,8 +266,22 @@ def _daily_range_extreme(
     All value bindings use named parameters (:period_from / :period_to).
     """
     bucket_sql = _day_bucket_sql(dialect_name)
-    where = _where(period_clause)
     order = "DESC" if direction == "max" else "ASC"
+
+    # Exclude the current incomplete day — in the early hours its tiny range
+    # would always win "smallest" and its partial range is wrong for "largest".
+    today_start = datetime.now(tz=UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_epoch = int(today_start.timestamp())
+    today_clause = "dateTime < :today_start"
+    today_params = {"today_start": today_epoch}
+
+    if period_clause:
+        combined_clause = f"{period_clause} AND {today_clause}"
+    else:
+        combined_clause = today_clause
+    combined_params = {**period_params, **today_params}
+
+    where = _where(combined_clause)
 
     if direction == "min":
         # Exclude single-reading days (COUNT(*) < 2) to avoid false 0-range records.
@@ -287,7 +301,7 @@ def _daily_range_extreme(
         f"ORDER BY day_range {order} "
         f"LIMIT 1"
     )
-    row = db.execute(sql, period_params).fetchone()
+    row = db.execute(sql, combined_params).fetchone()
     if row is None or row[0] is None:
         return None, None
     return float(row[0]), int(row[1])
