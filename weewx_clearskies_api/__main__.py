@@ -60,6 +60,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from sqlalchemy import text as _sa_text
 from sqlalchemy.orm import Session as _SqlAlchemySession
 
 from weewx_clearskies_api.app import create_app
@@ -153,6 +154,43 @@ def _validate_column_units(column_units: dict[str, str]) -> None:
                 obs_group,
                 sorted(valid_units),
             )
+
+
+def _backfill_sky_classifier() -> None:
+    """Seed the sky condition ring buffer from the last 30 min of archive data.
+
+    Uses the same Session(get_engine()) pattern as barometer_trend. Failures
+    are logged and swallowed — the classifier gracefully degrades to None until
+    live LOOP packets accumulate.
+    """
+    from weewx_clearskies_api.sse import sky_condition  # noqa: PLC0415
+
+    try:
+        cutoff = int(time.time()) - 1800
+        with _SqlAlchemySession(get_engine()) as session:
+            rows = session.execute(
+                _sa_text(
+                    "SELECT dateTime, radiation, maxSolarRad FROM archive "
+                    "WHERE dateTime > :cutoff ORDER BY dateTime"
+                ),
+                {"cutoff": cutoff},
+            ).fetchall()
+        if not rows:
+            logger.info("sky_condition backfill: no archive records in last 30 min")
+            return
+        records = [
+            (float(row[0]), float(row[1]), float(row[2]))
+            for row in rows
+            if row[1] is not None and row[2] is not None
+        ]
+        if records:
+            sky_condition.backfill(records)
+            logger.info(
+                "sky_condition backfill: seeded ring buffer with %d archive records",
+                len(records),
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("sky_condition backfill failed", exc_info=True)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -869,6 +907,10 @@ def main() -> None:
     _station_for_enrichment = get_station_info()
     sky_condition.configure(archive_interval=_station_for_enrichment.archive_interval)
     temperature_comfort.configure(archive_interval=_station_for_enrichment.archive_interval)
+
+    # Seed sky classifier ring buffer from archive records (last 30 min) so
+    # classify() returns a result immediately instead of None for ~3 minutes.
+    _backfill_sky_classifier()
 
     # Use archive_interval as default for trend_time_grace when the operator
     # has not explicitly set it (i.e., settings value equals the hardcoded default).
