@@ -60,9 +60,9 @@ _RECENT_SECONDS: float = 600.0
 # Minimum samples before a classification is returned.
 _MIN_SAMPLES: int = 36
 
-# Night/twilight guard: maxSolarRad below this (W/m²) means solar analysis
-# is unreliable. Skip adding to the buffer.
-_MIN_SOLAR_RAD: float = 50.0
+# Night guard: below this (W/m²) there is not enough solar energy for
+# meaningful classification.
+_MIN_SOLAR_RAD: float = 20.0
 
 # Pyranometer noise floor (W/m²). Below this, treat as zero.
 _NOISE_FLOOR: float = 0.0
