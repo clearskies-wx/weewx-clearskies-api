@@ -715,18 +715,18 @@ def test_is_daytime_true_with_recent_data():
 
 
 def test_is_daytime_false_with_stale_data():
-    """is_daytime() returns False when the most recent reading is > 300 s old.
+    """is_daytime() returns False when the most recent reading exceeds the threshold.
 
-    A reading 10 minutes in the past is 600 s old, well beyond the 300-second
-    threshold in is_daytime().
+    Default archive_interval is 300 s, so the freshness threshold is
+    5 × 300 = 1500 s.  A reading 1600 s old is beyond this threshold.
     """
     import time
 
     sky_condition.reset()
-    stale_ts = time.time() - 600.0
+    stale_ts = time.time() - 1600.0
     sky_condition.update(800.0, 900.0, timestamp=stale_ts)
     assert not sky_condition.is_daytime(), (
-        "is_daytime() must return False for a reading timestamped 10 minutes ago"
+        "is_daytime() must return False for a reading older than 5 × archive_interval"
     )
 
 
