@@ -232,6 +232,16 @@ def backfill(records: list[tuple[float, float, float]]) -> None:
         _ring.append(MinuteRecord(ts=ts, ghi=float(radiation), max_solar_rad=float(msr)))
         existing_ts.add(ts)
 
+    # Pre-classify so classify() returns a result immediately after backfill.
+    # Archive data is pre-averaged — the coherence filter's stability requirement
+    # doesn't apply to historical data.
+    global _last_stable_label
+    if len(_ring) >= 3:
+        indices = _compute_indices()
+        if indices is not None:
+            kcs, km, kv, kvf, latest_msr = indices
+            _last_stable_label = _classify_caelus(kcs, km, kv, kvf, latest_msr)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
