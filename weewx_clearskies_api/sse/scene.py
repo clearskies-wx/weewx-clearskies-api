@@ -6,7 +6,7 @@ descriptor and selects assets; it does not recompute weather logic.
 
 Sky-bucket mapping (ADR-047 §2):
   Clear, Mostly Clear, Partly Cloudy  → "clear"
-  Mostly Cloudy, Overcast             → "cloudy"
+  Mostly Cloudy, Cloudy, Overcast     → "cloudy"
   Foggy                               → "cloudy"   (no fog photo)
   none / unknown / startup            → "clear"    (safe fallback)
   (provider) Thunderstorm             → "storm"
@@ -64,6 +64,7 @@ _SKY_LABEL_TO_BUCKET: dict[str, SkyBucket] = {
     "Mostly Clear": "clear",
     "Partly Cloudy": "clear",
     "Mostly Cloudy": "cloudy",
+    "Cloudy": "cloudy",
     "Overcast": "cloudy",
     "Foggy": "cloudy",   # no fog photo — falls back to cloudy
 }
