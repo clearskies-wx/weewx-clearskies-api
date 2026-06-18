@@ -92,10 +92,14 @@ from weewx_clearskies_api.services.charts_config import (
     prune_charts_config,
     wire_charts_config,
 )
-from weewx_clearskies_api.services.custom_query import validate_custom_queries
 from weewx_clearskies_api.services.content import wire_content_directory
+from weewx_clearskies_api.services.custom_query import validate_custom_queries
 from weewx_clearskies_api.services.reports import wire_reports_directory
-from weewx_clearskies_api.services.station import StationConfigError, load_station_metadata
+from weewx_clearskies_api.services.station import (
+    StationConfigError,
+    get_station_info,
+    load_station_metadata,
+)
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, load_weewx_conf
 
 logger = logging.getLogger(__name__)
@@ -735,7 +739,6 @@ def main() -> None:
     # so that station coordinates and the ephemeris are available.
     if settings.cache_warmer.enabled:
         from weewx_clearskies_api.services.cache_warmer import BackgroundCacheWarmer  # noqa: PLC0415
-        from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
 
         _station_info = get_station_info()
         _station_meta = {
@@ -846,7 +849,8 @@ def main() -> None:
     _configure_response_conversion(transformer)
 
     # Step 7c: Configure enrichment processors and register packet-tap processors.
-    from weewx_clearskies_api.sse.packet_tap import register_processor  # noqa: PLC0415
+    from weewx_clearskies_api.sse import sky_condition  # noqa: PLC0415
+    from weewx_clearskies_api.sse import temperature_comfort  # noqa: PLC0415
     from weewx_clearskies_api.sse.enrichment import (  # noqa: PLC0415
         input_smoother,
         uv_smoother,
@@ -856,13 +860,25 @@ def main() -> None:
         scene_packet_tap,
         barometer_trend,
     )
+    from weewx_clearskies_api.sse.packet_tap import register_processor  # noqa: PLC0415
 
     # Configure processors that need startup state.
     wind_rolling_window.configure(transformer)
+
+    # Wire archive_interval to sky classifier and temperature comfort hold.
+    _station_for_enrichment = get_station_info()
+    sky_condition.configure(archive_interval=_station_for_enrichment.archive_interval)
+    temperature_comfort.configure(archive_interval=_station_for_enrichment.archive_interval)
+
+    # Use archive_interval as default for trend_time_grace when the operator
+    # has not explicitly set it (i.e., settings value equals the hardcoded default).
+    _effective_trend_grace = settings.units.trend_time_grace
+    if _effective_trend_grace == 300:
+        _effective_trend_grace = _station_for_enrichment.archive_interval
     barometer_trend.configure(
         transformer,
         trend_time_delta=settings.units.trend_time_delta,
-        trend_time_grace=settings.units.trend_time_grace,
+        trend_time_grace=_effective_trend_grace,
     )
 
     # Register packet-tap processors (order: smoother → UV → sky → wind → lightning → scene).

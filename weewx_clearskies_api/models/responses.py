@@ -638,6 +638,8 @@ class StationMetadata(BaseModel):
     lastRecord: str | None = None
     hardware: str | None = None
     defaultLocale: str = "en"
+    archiveIntervalSeconds: int = 300
+    weekStartDay: int = 6
 
 
 class StationResponse(BaseModel):

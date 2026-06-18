@@ -65,6 +65,8 @@ class StationInfo:
     unit_system: str
     hardware: str | None
     default_locale: str
+    archive_interval: int
+    week_start: int
 
     def __init__(
         self,
@@ -78,6 +80,8 @@ class StationInfo:
         unit_system: str,
         hardware: str | None,
         default_locale: str = "en",
+        archive_interval: int = 300,
+        week_start: int = 6,
     ) -> None:
         self.station_id = station_id
         self.name = name
@@ -89,6 +93,8 @@ class StationInfo:
         self.unit_system = unit_system
         self.hardware = hardware
         self.default_locale = default_locale
+        self.archive_interval = archive_interval
+        self.week_start = week_start
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +358,38 @@ def load_station_metadata(
     raw_hardware = _get_str_field(station_section, "station_type")
     hardware: str | None = raw_hardware if raw_hardware else None
 
+    # --- Archive interval (from [StdArchive]) ---
+    std_archive = cfg.get("StdArchive")
+    if isinstance(std_archive, dict):
+        raw_interval = std_archive.get("archive_interval", 300)
+        try:
+            archive_interval = int(raw_interval)
+        except (ValueError, TypeError):
+            logger.warning(
+                "weewx.conf [StdArchive] archive_interval = %r is not a number; "
+                "defaulting to 300.",
+                raw_interval,
+            )
+            archive_interval = 300
+    else:
+        logger.warning(
+            "weewx.conf is missing [StdArchive] section; "
+            "defaulting archive_interval to 300."
+        )
+        archive_interval = 300
+
+    # --- Week start (from [Station]) ---
+    raw_week_start = station_section.get("week_start", 6)
+    try:
+        week_start = int(raw_week_start)
+    except (ValueError, TypeError):
+        logger.warning(
+            "weewx.conf [Station] week_start = %r is not a number; "
+            "defaulting to 6 (Sunday).",
+            raw_week_start,
+        )
+        week_start = 6
+
     info = StationInfo(
         station_id=station_id,
         name=raw_location,
@@ -363,6 +401,8 @@ def load_station_metadata(
         unit_system=unit_system,
         hardware=hardware,
         default_locale=api_default_locale,
+        archive_interval=archive_interval,
+        week_start=week_start,
     )
 
     logger.info(
@@ -374,6 +414,8 @@ def load_station_metadata(
             "longitude": longitude,
             "timezone": timezone,
             "unit_system": unit_system,
+            "archive_interval": archive_interval,
+            "week_start": week_start,
         },
     )
 

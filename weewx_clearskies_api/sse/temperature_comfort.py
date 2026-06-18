@@ -318,10 +318,23 @@ def classify(
     return base
 
 
+def configure(archive_interval: int) -> None:
+    """Set hold time based on archive interval.
+
+    Called once at startup from __main__.py after load_station_metadata().
+    The hold time scales to 5× the archive interval so that a station with
+    60-second archives holds for 300 s and a station with 300-second archives
+    holds for 1500 s.
+    """
+    global _HOLD_SECONDS  # noqa: PLW0603
+    _HOLD_SECONDS = float(archive_interval) * 5.0
+
+
 def reset() -> None:
     """Clear hysteresis state and hold cache.  For test isolation only."""
-    global _current_temp_tier, _current_moisture_tier, _cached_result, _cache_time
+    global _current_temp_tier, _current_moisture_tier, _cached_result, _cache_time, _HOLD_SECONDS
     _current_temp_tier = None
     _current_moisture_tier = None
     _cached_result = None
     _cache_time = 0.0
+    _HOLD_SECONDS = 300.0

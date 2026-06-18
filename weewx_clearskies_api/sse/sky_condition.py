@@ -111,6 +111,9 @@ _was_daytime: bool = False
 _classification_history: deque[tuple[float, str]] = deque()  # (ts, label)
 _last_stable_label: str | None = None
 
+# Archive interval — set by configure() at startup; default matches weewx default.
+_archive_interval: float = 300.0
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -175,6 +178,18 @@ def classify() -> str | None:
     return _apply_coherence_filter(raw_label, now)
 
 
+def configure(archive_interval: int) -> None:
+    """Set the archive interval for freshness thresholds.
+
+    Called once at startup from __main__.py after load_station_metadata().
+    The is_daytime() freshness threshold scales to 5× the archive interval
+    so that a station with 60-second archives uses 300 s and a station with
+    300-second archives uses 1500 s.
+    """
+    global _archive_interval  # noqa: PLW0603
+    _archive_interval = float(archive_interval)
+
+
 def is_daytime() -> bool:
     """Return True when the buffer has a recent daytime reading."""
     if not _ring and not _minute_acc:
@@ -183,18 +198,19 @@ def is_daytime() -> bool:
         last_ts = _ring[-1].ts
     else:
         last_ts = _minute_acc[-1][0]
-    return (time.time() - last_ts) < 300.0
+    return (time.time() - last_ts) < _archive_interval * 5.0
 
 
 def reset() -> None:
     """Clear all state. For test isolation only."""
-    global _was_daytime, _last_minute_ts, _last_stable_label
+    global _was_daytime, _last_minute_ts, _last_stable_label, _archive_interval
     _ring.clear()
     _minute_acc.clear()
     _last_minute_ts = 0.0
     _was_daytime = False
     _classification_history.clear()
     _last_stable_label = None
+    _archive_interval = 300.0
 
 
 def backfill(records: list[tuple[float, float, float]]) -> None:

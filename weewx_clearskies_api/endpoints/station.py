@@ -103,6 +103,8 @@ def get_station(
         lastRecord=last_record,
         hardware=info.hardware,
         defaultLocale=info.default_locale,
+        archiveIntervalSeconds=info.archive_interval,
+        weekStartDay=info.week_start,
     )
 
     return StationResponse(
