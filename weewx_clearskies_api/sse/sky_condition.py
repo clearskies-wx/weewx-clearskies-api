@@ -4,6 +4,17 @@ Uses the clear sky index kc = GHI_measured / GHI_clearsky with temporal
 variability analysis over a 30-minute sliding window to classify sky
 conditions. maxSolarRad from weewx serves as the clear-sky reference.
 
+When measured radiation meets or exceeds maxSolarRad, kc is pinned to
+1.0 — the sensor receives at least as much energy as the clear-sky model
+predicts, so nothing is blocking the sun.  This prevents false "Cloudy"
+classifications near sunrise/sunset when the maxSolarRad model
+underestimates actual clear-sky irradiance at low solar elevations.
+
+Daytime detection uses whichever is larger — measured radiation or
+maxSolarRad — so the rolling buffer is not cleared while the sensor
+still reports meaningful solar energy (even if the model has already
+crossed below the night threshold).
+
 Thresholds derived from:
   - NWS sky condition categories (okta-based)
   - Kasten & Czeplak (1980) cloud-cover-to-kc model: kc = 1 - 0.75*(N/8)^3.4
@@ -24,7 +35,7 @@ High-sigma (variable/broken sky) thresholds:
   Partly Cloudy  kc >= 0.60
   Mostly Cloudy  kc <  0.60
 
-Module-level state (the deque buffer) is intentional. The BFF is a
+Module-level state (the deque buffer) is intentional. The API is a
 single-process service; the buffer must persist across requests and
 packet calls. Use reset() in tests to isolate test cases.
 """
@@ -107,30 +118,38 @@ def update(
 ) -> None:
     """Add a new reading to the rolling buffer.
 
-    Silently skips the reading when:
-    - maxSolarRad is None or < 50 W/m² (night/twilight).
-    - radiation is None or < 0.
+    Silently skips the reading when neither radiation nor maxSolarRad
+    reaches _MIN_SOLAR_RAD (night/twilight), or radiation is None/< 0.
+
+    When measured radiation meets or exceeds maxSolarRad, kc is set to
+    1.0 — the sensor reads at least as much energy as the clear-sky model
+    predicts, so nothing is blocking the sun.
     """
     if timestamp is None:
         timestamp = time.time()
 
     global _was_daytime
-    currently_daytime = max_solar_rad is not None and max_solar_rad >= _MIN_SOLAR_RAD
+    _rad = radiation if isinstance(radiation, (int, float)) else 0.0
+    _msr = max_solar_rad if isinstance(max_solar_rad, (int, float)) else 0.0
+    currently_daytime = max(_rad, _msr) >= _MIN_SOLAR_RAD
     if _was_daytime and not currently_daytime:
         _buffer.clear()
         global _last_classification
         _last_classification = None
     _was_daytime = currently_daytime
 
-    if max_solar_rad is None or max_solar_rad < _MIN_SOLAR_RAD:
+    if not currently_daytime:
         return
     if radiation is None or radiation < _NOISE_FLOOR:
         return
 
-    kc = radiation / max_solar_rad
-    kc = min(kc, _KC_MAX)
-    kc = max(kc, 0.0)
+    if _msr > 0 and _rad < _msr:
+        kc = radiation / max_solar_rad  # type: ignore[operator]
+        kc = min(kc, _KC_MAX)
+    else:
+        kc = 1.0
 
+    kc = max(kc, 0.0)
     _buffer.append((timestamp, kc))
 
     cutoff = timestamp - _WINDOW_SECONDS
