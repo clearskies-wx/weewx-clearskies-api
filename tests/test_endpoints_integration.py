@@ -168,7 +168,6 @@ def integration_client(
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
         WeewxSettings,
     )
@@ -206,7 +205,6 @@ def integration_client(
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=db,
         weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
     )
@@ -354,7 +352,6 @@ class TestCurrentEndpoint:
             DatabaseSettings,
             HealthSettings,
             LoggingSettings,
-            RateLimitSettings,
             Settings,
             WeewxSettings,
         )
@@ -418,7 +415,6 @@ class TestCurrentEndpoint:
                 api=ApiSettings({}),
                 health=HealthSettings({}),
                 logging_settings=LoggingSettings({}),
-                ratelimit=RateLimitSettings({}),
                 database=DatabaseSettings({"kind": "sqlite", "path": ":memory:"}),
                 weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
             )
@@ -1108,7 +1104,6 @@ class TestReportsListingEndpoint:
             DatabaseSettings,
             HealthSettings,
             LoggingSettings,
-            RateLimitSettings,
             Settings,
             WeewxSettings,
         )
@@ -1146,7 +1141,6 @@ class TestReportsListingEndpoint:
             api=ApiSettings({}),
             health=HealthSettings({}),
             logging_settings=LoggingSettings({}),
-            ratelimit=RateLimitSettings({}),
             database=db,
             weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
         )
@@ -1173,7 +1167,6 @@ class TestReportsListingEndpoint:
             DatabaseSettings,
             HealthSettings,
             LoggingSettings,
-            RateLimitSettings,
             Settings,
             WeewxSettings,
         )
@@ -1210,7 +1203,6 @@ class TestReportsListingEndpoint:
             api=ApiSettings({}),
             health=HealthSettings({}),
             logging_settings=LoggingSettings({}),
-            ratelimit=RateLimitSettings({}),
             database=db,
             weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
         )
@@ -1244,7 +1236,6 @@ class TestReportsListingEndpoint:
             DatabaseSettings,
             HealthSettings,
             LoggingSettings,
-            RateLimitSettings,
             Settings,
             WeewxSettings,
         )
@@ -1279,7 +1270,6 @@ class TestReportsListingEndpoint:
             api=ApiSettings({}),
             health=HealthSettings({}),
             logging_settings=LoggingSettings({}),
-            ratelimit=RateLimitSettings({}),
             database=db,
             weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
         )
@@ -1312,7 +1302,6 @@ def app_with_reports_dir(
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
         WeewxSettings,
     )
@@ -1354,7 +1343,6 @@ def app_with_reports_dir(
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=db,
         weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
     )

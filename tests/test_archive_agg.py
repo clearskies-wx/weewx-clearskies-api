@@ -37,7 +37,6 @@ from weewx_clearskies_api.config.settings import (
     DatabaseSettings,
     HealthSettings,
     LoggingSettings,
-    RateLimitSettings,
     Settings,
 )
 from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, ColumnInfo, ColumnRegistry
@@ -201,7 +200,6 @@ def _make_agg_test_settings() -> Settings:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
 

@@ -11,7 +11,6 @@ Event format (matches realtime service format — dashboard needs no changes):
 Keepalive comments are emitted every 15 s when no packet arrives (ADR-002).
 
 No auth required — public endpoint, same posture as the former realtime service.
-Rate limiting is applied at connection time by the existing RateLimitMiddleware.
 """
 
 from __future__ import annotations

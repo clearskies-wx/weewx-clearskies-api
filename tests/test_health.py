@@ -88,7 +88,6 @@ def test_health_endpoints_not_on_public_app() -> None:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
 
@@ -96,7 +95,6 @@ def test_health_endpoints_not_on_public_app() -> None:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
     public_client = TestClient(create_app(settings), raise_server_exceptions=False)

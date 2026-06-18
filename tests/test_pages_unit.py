@@ -234,7 +234,6 @@ def _make_page_content_client(tmp_path: Path) -> TestClient:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
@@ -247,7 +246,6 @@ def _make_page_content_client(tmp_path: Path) -> TestClient:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
     app = create_app(settings)

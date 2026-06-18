@@ -27,7 +27,6 @@ from weewx_clearskies_api.config.settings import (
     DatabaseSettings,
     HealthSettings,
     LoggingSettings,
-    RateLimitSettings,
     Settings,
 )
 
@@ -44,7 +43,6 @@ def _make_benchmark_settings() -> Settings:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
 

@@ -13,7 +13,6 @@ Section mapping:
   [api]      → ApiSettings
   [health]   → HealthSettings
   [logging]  → LoggingSettings
-  [ratelimit]→ RateLimitSettings
   [database] → DatabaseSettings  (stub — DB wired in Task 2)
 
 Note: webcam is a UI concern (dashboard/stack), not an API concern.
@@ -141,25 +140,6 @@ class LoggingSettings:
         if raw_level not in valid:
             raise ValueError(f"[logging] level {raw_level!r} not in {valid}")
         self.level = raw_level
-
-
-class RateLimitSettings:
-    """[ratelimit] section settings."""
-
-    #: Requests per minute per IP for unauthenticated paths (security baseline §3.1).
-    requests_per_minute: int
-    #: Window size in seconds. Default 60 (1 minute).
-    window_seconds: int
-
-    def __init__(self, section: dict[str, Any]) -> None:
-        self.requests_per_minute = int(section.get("requests_per_minute", 60))
-        self.window_seconds = int(section.get("window_seconds", 60))
-
-    def validate(self) -> None:
-        if self.requests_per_minute < 1:
-            raise ValueError("[ratelimit] requests_per_minute must be >= 1")
-        if self.window_seconds < 1:
-            raise ValueError("[ratelimit] window_seconds must be >= 1")
 
 
 class DatabaseSettings:
@@ -1145,7 +1125,6 @@ class Settings:
     api: ApiSettings
     health: HealthSettings
     logging: LoggingSettings
-    ratelimit: RateLimitSettings
     database: DatabaseSettings
     weewx: WeewxSettings
     station: StationSettings
@@ -1179,7 +1158,6 @@ class Settings:
         api: ApiSettings,
         health: HealthSettings,
         logging_settings: LoggingSettings,
-        ratelimit: RateLimitSettings,
         database: DatabaseSettings,
         weewx: WeewxSettings | None = None,
         station: StationSettings | None = None,
@@ -1209,7 +1187,6 @@ class Settings:
         self.api = api
         self.health = health
         self.logging = logging_settings
-        self.ratelimit = ratelimit
         self.database = database
         self.weewx = weewx if weewx is not None else WeewxSettings({})
         self.station = station if station is not None else StationSettings({})
@@ -1238,7 +1215,6 @@ class Settings:
         """Validate all sections. Raises ValueError on the first failure."""
         self.api.validate()
         self.health.validate()
-        self.ratelimit.validate()
         self.database.validate()
         self.station.validate()
         self.alerts.validate()
@@ -1322,7 +1298,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
             api=ApiSettings({"bind_host": "0.0.0.0", "bind_port": 8765}),
             health=HealthSettings({"bind_host": "127.0.0.1", "bind_port": 8081}),
             logging_settings=LoggingSettings({}),
-            ratelimit=RateLimitSettings({}),
             database=DatabaseSettings({}),
             tls=TlsSettings({}),
             configured=False,
@@ -1340,7 +1315,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
     api_cfg = ApiSettings(dict(cfg.get("api", {})))
     health_cfg = HealthSettings(dict(cfg.get("health", {})))
     log_cfg = LoggingSettings(dict(cfg.get("logging", {})))
-    rl_cfg = RateLimitSettings(dict(cfg.get("ratelimit", {})))
     db_cfg = DatabaseSettings(dict(cfg.get("database", {})))
     weewx_cfg = WeewxSettings(dict(cfg.get("weewx", {})))
     station_cfg = StationSettings(dict(cfg.get("station", {})))
@@ -1369,7 +1343,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
         api=api_cfg,
         health=health_cfg,
         logging_settings=log_cfg,
-        ratelimit=rl_cfg,
         database=db_cfg,
         weewx=weewx_cfg,
         station=station_cfg,

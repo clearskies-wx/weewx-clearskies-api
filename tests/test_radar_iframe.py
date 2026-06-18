@@ -79,7 +79,6 @@ def _make_iframe_app(register_capability: bool = True) -> FastAPI:
         HealthSettings,
         LoggingSettings,
         RadarSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -97,7 +96,6 @@ def _make_iframe_app(register_capability: bool = True) -> FastAPI:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         radar=RadarSettings(
             {"provider": "iframe", "iframe_url": "https://example.com/radar"}

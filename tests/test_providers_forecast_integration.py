@@ -159,7 +159,6 @@ def _wire_integration_stack(
         ForecastSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
@@ -252,7 +251,6 @@ def _wire_integration_stack(
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         alerts=AlertsSettings({"provider": alerts_provider} if alerts_provider else {}),
         forecast=ForecastSettings({"provider": provider} if provider else {}),
@@ -672,7 +670,6 @@ def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
         ForecastSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
@@ -754,7 +751,6 @@ def _wire_aeris_integration_stack(engine: Engine) -> tuple[Any, Any]:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         alerts=AlertsSettings({}),
         forecast=ForecastSettings({"provider": "aeris"}),

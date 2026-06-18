@@ -85,7 +85,6 @@ def _make_alerts_settings(provider: str | None = None) -> Any:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
 
@@ -93,7 +92,6 @@ def _make_alerts_settings(provider: str | None = None) -> Any:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         alerts=AlertsSettings({"provider": provider} if provider else {}),
     )

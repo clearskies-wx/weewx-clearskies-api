@@ -19,7 +19,6 @@ from weewx_clearskies_api.config.settings import (
     AQISettings,
     HealthSettings,
     LoggingSettings,
-    RateLimitSettings,
     StationSettings,
     load_settings,
 )
@@ -74,18 +73,6 @@ class TestLoggingSettings:
         os.environ.pop("CLEARSKIES_LOG_LEVEL", None)
         with pytest.raises(ValueError):
             LoggingSettings({"level": "VERBOSE"})
-
-
-class TestRateLimitSettings:
-    def test_defaults(self) -> None:
-        s = RateLimitSettings({})
-        assert s.requests_per_minute == 60
-        assert s.window_seconds == 60
-
-    def test_invalid_rpm_raises(self) -> None:
-        s = RateLimitSettings({"requests_per_minute": "0"})
-        with pytest.raises(ValueError):
-            s.validate()
 
 
 class TestLoadSettings:

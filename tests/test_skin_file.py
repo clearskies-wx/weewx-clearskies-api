@@ -37,7 +37,6 @@ def _make_setup_app(tmp_path: Path) -> tuple[FastAPI, Path]:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.trust import TrustManager
@@ -50,7 +49,6 @@ def _make_setup_app(tmp_path: Path) -> tuple[FastAPI, Path]:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
 

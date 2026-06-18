@@ -16,7 +16,6 @@ from weewx_clearskies_api.config.settings import (
     DatabaseSettings,
     HealthSettings,
     LoggingSettings,
-    RateLimitSettings,
     Settings,
 )
 
@@ -29,7 +28,6 @@ def _make_settings(
     api_overrides: dict[str, Any] | None = None,
     health_overrides: dict[str, Any] | None = None,
     log_overrides: dict[str, Any] | None = None,
-    rl_overrides: dict[str, Any] | None = None,
     db_overrides: dict[str, Any] | None = None,
 ) -> Settings:
     """Build a Settings instance with test-friendly defaults."""
@@ -37,7 +35,6 @@ def _make_settings(
         api=ApiSettings({**(api_overrides or {})}),
         health=HealthSettings({**(health_overrides or {})}),
         logging_settings=LoggingSettings({**(log_overrides or {})}),
-        ratelimit=RateLimitSettings({**(rl_overrides or {})}),
         database=DatabaseSettings({**(db_overrides or {})}),
     )
 

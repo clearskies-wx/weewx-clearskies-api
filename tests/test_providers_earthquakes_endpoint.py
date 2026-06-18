@@ -135,7 +135,6 @@ def _make_earthquakes_app(provider: str | None = None) -> FastAPI:
         EarthquakesSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.endpoints.earthquakes import (
@@ -166,7 +165,6 @@ def _make_earthquakes_app(provider: str | None = None) -> FastAPI:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         earthquakes=EarthquakesSettings({"provider": provider} if provider else {}),
     )

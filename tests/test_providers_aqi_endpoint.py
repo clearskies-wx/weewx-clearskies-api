@@ -122,7 +122,6 @@ def _make_aqi_app(provider: str | None = None) -> FastAPI:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -139,7 +138,6 @@ def _make_aqi_app(provider: str | None = None) -> FastAPI:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
     return create_app(settings)
@@ -587,7 +585,6 @@ def _make_aeris_aqi_app(wire_credentials: bool = True) -> FastAPI:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -611,7 +608,6 @@ def _make_aeris_aqi_app(wire_credentials: bool = True) -> FastAPI:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
     return create_app(settings)
@@ -865,7 +861,6 @@ def _make_owm_aqi_app(wire_appid: bool = True) -> FastAPI:
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -887,7 +882,6 @@ def _make_owm_aqi_app(wire_appid: bool = True) -> FastAPI:
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
     return create_app(settings)

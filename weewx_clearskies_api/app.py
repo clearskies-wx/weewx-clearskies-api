@@ -18,11 +18,10 @@ Middleware execution order (outermost → innermost):
     Execution order (comment must stay in sync with middleware/__init__.py):
       0. MetricsMiddleware       — outermost; times total request including request-id gen
       1. RequestIdMiddleware     — establishes request_id for all logs
-      2. BodySizeLimitMiddleware — reject oversized bodies early (before auth/rate)
-      3. ProxyAuthMiddleware     — mark request as trusted BEFORE rate-limit check
-      4. RateLimitMiddleware     — bypass when proxy_trusted is True
-      5. CORSMiddleware          — standard Starlette CORS
-      6. SecurityHeadersMiddleware — inject security headers on every response
+      2. BodySizeLimitMiddleware — reject oversized bodies early (before auth)
+      3. ProxyAuthMiddleware     — mark request as trusted via X-Clearskies-Proxy-Auth
+      4. CORSMiddleware          — standard Starlette CORS
+      5. SecurityHeadersMiddleware — inject security headers on every response
 
     The innermost layer is FastAPI's own router. Error handlers registered
     via register_error_handlers() wrap the router.
@@ -66,7 +65,6 @@ from weewx_clearskies_api.metrics import current_endpoint
 from weewx_clearskies_api.middleware.body_size_limit import BodySizeLimitMiddleware
 from weewx_clearskies_api.middleware.metrics import MetricsMiddleware
 from weewx_clearskies_api.middleware.proxy_auth import ProxyAuthMiddleware
-from weewx_clearskies_api.middleware.rate_limit import RateLimitMiddleware
 from weewx_clearskies_api.middleware.request_id import RequestIdMiddleware
 from weewx_clearskies_api.middleware.security_headers import SecurityHeadersMiddleware
 
@@ -214,22 +212,21 @@ def create_app(settings: Settings) -> FastAPI:
     # executes as the OUTERMOST wrapper (first to handle the incoming request).
     #
     # We want execution order: 0=Metrics (outermost) → 1=RequestId → ...
-    #   → 6=SecurityHeaders (innermost).
+    #   → 5=SecurityHeaders (innermost).
     # So we register in REVERSE: SecurityHeaders first, MetricsMiddleware last.
     #
-    #   1st add_middleware call → SecurityHeadersMiddleware → executes innermost (step 6)
-    #   2nd add_middleware call → CORSMiddleware            → executes step 5
-    #   3rd add_middleware call → RateLimitMiddleware       → executes step 4
-    #   4th add_middleware call → ProxyAuthMiddleware       → executes step 3
-    #   5th add_middleware call → BodySizeLimitMiddleware   → executes step 2
-    #   6th add_middleware call → RequestIdMiddleware       → executes step 1
-    #   7th add_middleware call → MetricsMiddleware         → executes outermost (step 0)
+    #   1st add_middleware call → SecurityHeadersMiddleware → executes innermost (step 5)
+    #   2nd add_middleware call → CORSMiddleware            → executes step 4
+    #   3rd add_middleware call → ProxyAuthMiddleware       → executes step 3
+    #   4th add_middleware call → BodySizeLimitMiddleware   → executes step 2
+    #   5th add_middleware call → RequestIdMiddleware       → executes step 1
+    #   6th add_middleware call → MetricsMiddleware         → executes outermost (step 0)
     # ---------------------------------------------------------------------------
 
-    # 1st add_middleware call → executes innermost (step 6)
+    # 1st add_middleware call → executes innermost (step 5)
     app.add_middleware(SecurityHeadersMiddleware)
 
-    # 2nd add_middleware call → executes step 5 (CORS)
+    # 2nd add_middleware call → executes step 4 (CORS)
     # Default: same-origin only (no allow_origins).
     # Operator extends via [api] cors_origins in api.conf.
     cors_origins = settings.api.cors_origins
@@ -252,26 +249,19 @@ def create_app(settings: Settings) -> FastAPI:
             allow_headers=["*"],
         )
 
-    # 3rd add_middleware call → executes step 4 (rate limit; bypass when proxy_trusted is True)
-    app.add_middleware(
-        RateLimitMiddleware,
-        requests_per_minute=settings.ratelimit.requests_per_minute,
-        window_seconds=settings.ratelimit.window_seconds,
-    )
-
-    # 4th add_middleware call → executes step 3 (proxy auth; sets proxy_trusted before rate-limit)
+    # 3rd add_middleware call → executes step 3 (proxy auth; sets proxy_trusted flag)
     app.add_middleware(ProxyAuthMiddleware)
 
-    # 5th add_middleware call → executes step 2 (body size limit)
+    # 4th add_middleware call → executes step 2 (body size limit)
     app.add_middleware(
         BodySizeLimitMiddleware,
         max_bytes=settings.api.max_request_bytes,
     )
 
-    # 6th add_middleware call → executes step 1 (request-id; establishes request_id for all logs)
+    # 5th add_middleware call → executes step 1 (request-id; establishes request_id for all logs)
     app.add_middleware(RequestIdMiddleware)
 
-    # 7th add_middleware call → executes outermost (step 0; ADR-031 HTTP timing wraps everything)
+    # 6th add_middleware call → executes outermost (step 0; ADR-031 HTTP timing wraps everything)
     app.add_middleware(MetricsMiddleware)
 
     return app

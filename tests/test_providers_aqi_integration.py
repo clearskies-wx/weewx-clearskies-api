@@ -183,7 +183,6 @@ def _wire_integration_stack(
         DatabaseSettings,
         HealthSettings,
         LoggingSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.db.reflection import (  # noqa: PLC0415
@@ -269,7 +268,6 @@ def _wire_integration_stack(
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
     )
 

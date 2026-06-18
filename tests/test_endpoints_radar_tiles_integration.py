@@ -141,7 +141,6 @@ def _make_tile_app(
         HealthSettings,
         LoggingSettings,
         RadarSettings,
-        RateLimitSettings,
         Settings,
     )
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
@@ -171,7 +170,6 @@ def _make_tile_app(
         api=ApiSettings({}),
         health=HealthSettings({}),
         logging_settings=LoggingSettings({}),
-        ratelimit=RateLimitSettings({}),
         database=DatabaseSettings({}),
         radar=RadarSettings({"provider": provider} if provider else {}),
     )
