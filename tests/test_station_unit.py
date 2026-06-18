@@ -693,3 +693,112 @@ class TestConfigobjCommaParsingCompat:
             f"Unquoted station_type with comma must rejoin to 'Davis Vantage Pro2, USA', "
             f"got {info.hardware!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# archive_interval and week_start ingestion from weewx.conf
+# ---------------------------------------------------------------------------
+
+
+class TestArchiveIntervalAndWeekStart:
+    """load_station_metadata reads archive_interval and week_start from weewx.conf."""
+
+    def test_archive_interval_read_from_std_archive(self, tmp_path: Path) -> None:
+        """weewx.conf [StdArchive] archive_interval = 60 → StationInfo.archive_interval = 60."""
+        _reset_station_cache()
+        cfg = _make_configobj(
+            tmp_path,
+            '''
+            [Station]
+                location = "Test Station"
+                latitude = 42.375
+                longitude = -72.519
+                altitude = "300, foot"
+            [StdArchive]
+                archive_interval = 60
+            ''',
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.archive_interval == 60
+
+    def test_archive_interval_defaults_to_300_when_missing(self, tmp_path: Path) -> None:
+        """archive_interval defaults to 300 when [StdArchive] section is absent."""
+        _reset_station_cache()
+        cfg = _make_configobj(
+            tmp_path,
+            '''
+            [Station]
+                location = "Test Station"
+                latitude = 42.375
+                longitude = -72.519
+                altitude = "300, foot"
+            ''',
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.archive_interval == 300
+
+    def test_archive_interval_defaults_when_key_absent_in_std_archive(self, tmp_path: Path) -> None:
+        """archive_interval defaults to 300 when [StdArchive] exists but key is missing."""
+        _reset_station_cache()
+        cfg = _make_configobj(
+            tmp_path,
+            '''
+            [Station]
+                location = "Test Station"
+                latitude = 42.375
+                longitude = -72.519
+                altitude = "300, foot"
+            [StdArchive]
+                record_generation = software
+            ''',
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.archive_interval == 300
+
+    def test_week_start_read_from_station(self, tmp_path: Path) -> None:
+        """weewx.conf [Station] week_start = 0 → StationInfo.week_start = 0 (Monday)."""
+        _reset_station_cache()
+        cfg = _make_configobj(
+            tmp_path,
+            '''
+            [Station]
+                location = "Test Station"
+                latitude = 42.375
+                longitude = -72.519
+                altitude = "300, foot"
+                week_start = 0
+            ''',
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.week_start == 0
+
+    def test_week_start_defaults_to_6_when_missing(self, tmp_path: Path) -> None:
+        """week_start defaults to 6 (Sunday) when key is absent."""
+        _reset_station_cache()
+        cfg = _make_configobj(
+            tmp_path,
+            '''
+            [Station]
+                location = "Test Station"
+                latitude = 42.375
+                longitude = -72.519
+                altitude = "300, foot"
+            ''',
+        )
+        from weewx_clearskies_api.services.station import load_station_metadata
+        info = load_station_metadata(
+            cfg=cfg, api_station_id=None, api_timezone=None, unit_system="US"
+        )
+        assert info.week_start == 6

@@ -728,3 +728,64 @@ def test_is_daytime_false_with_stale_data():
     assert not sky_condition.is_daytime(), (
         "is_daytime() must return False for a reading timestamped 10 minutes ago"
     )
+
+
+# ---------------------------------------------------------------------------
+# Group 7: configure() — archive interval affects is_daytime() threshold
+# ---------------------------------------------------------------------------
+
+
+class TestConfigure:
+    """Tests for configure() — archive interval affects is_daytime() threshold."""
+
+    def test_default_archive_interval_is_300(self) -> None:
+        """After reset(), _archive_interval is 300.0 (default)."""
+        assert sky_condition._archive_interval == 300.0
+
+    def test_configure_sets_archive_interval(self) -> None:
+        """configure(60) sets _archive_interval to 60.0."""
+        sky_condition.configure(archive_interval=60)
+        assert sky_condition._archive_interval == 60.0
+
+    def test_is_daytime_threshold_scales_with_archive_interval(self) -> None:
+        """With 60s archive_interval, is_daytime() threshold is 300s (5 × 60).
+
+        A reading 250s ago → True (within 300s threshold).
+        """
+        import time
+        sky_condition.configure(archive_interval=60)
+        now = time.time()
+        # Add a reading 250 seconds ago — within 5 × 60 = 300s threshold
+        sky_condition._ring.append(sky_condition.MinuteRecord(
+            ts=now - 250, ghi=500.0, max_solar_rad=800.0
+        ))
+        assert sky_condition.is_daytime() is True
+
+    def test_is_daytime_false_beyond_configured_threshold(self) -> None:
+        """With 60s archive_interval, a reading >300s ago → False."""
+        import time
+        sky_condition.configure(archive_interval=60)
+        now = time.time()
+        # Add a reading 350 seconds ago — beyond 5 × 60 = 300s threshold
+        sky_condition._ring.append(sky_condition.MinuteRecord(
+            ts=now - 350, ghi=500.0, max_solar_rad=800.0
+        ))
+        assert sky_condition.is_daytime() is False
+
+    def test_default_300s_interval_allows_1400s_old_reading(self) -> None:
+        """With default 300s archive_interval, threshold is 1500s.
+        A reading 1400s ago → True (within 5 × 300 = 1500s).
+        """
+        import time
+        # Don't call configure() — use default 300s
+        now = time.time()
+        sky_condition._ring.append(sky_condition.MinuteRecord(
+            ts=now - 1400, ghi=500.0, max_solar_rad=800.0
+        ))
+        assert sky_condition.is_daytime() is True
+
+    def test_reset_restores_default_archive_interval(self) -> None:
+        """reset() restores _archive_interval to 300.0."""
+        sky_condition.configure(archive_interval=60)
+        sky_condition.reset()
+        assert sky_condition._archive_interval == 300.0
