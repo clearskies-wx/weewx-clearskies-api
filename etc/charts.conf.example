@@ -80,7 +80,7 @@ tooltip_date_format = "LLL"
 #     barometer, radiation, UV, lightning_strike_count, etc.).
 #   • Remove charts for sensors you don't have — the API will also prune them
 #     automatically, but explicit removal keeps this file tidy.
-#   • gapsize should match your weewx archive_interval (seconds).
+#   • gapsize should be 2× your weewx archive_interval (seconds).
 ###############################################################################
 
 [homepage]
@@ -102,8 +102,9 @@ tooltip_date_format = "LLL"
     tooltip_date_format = "LLL"
 
     # Gap threshold in seconds.  Data gaps wider than this value are rendered
-    # as a break in the line rather than a straight connector.  Match your
-    # weewx archive_interval (typically 300 = 5 minutes).
+    # as a break in the line rather than a straight connector.  Recommended:
+    # 2× your weewx archive_interval.  Default 300 assumes 5-minute (300 s)
+    # archives; change to 120 for 1-minute (60 s) archives.
     gapsize = 300
 
     # ------------------------------------------------------------------
