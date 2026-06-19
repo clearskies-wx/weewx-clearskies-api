@@ -9,7 +9,7 @@ averaged GHI data:
   - Kcs: instantaneous clear-sky index (GHI / maxSolarRad)
   - Km:  mean normalized irradiance over the window
   - Kv:  coarse variability index (30-min) — cumulative absolute
-         first-derivative of GHI deviation from rolling mean
+         first-derivative of clear-sky-detrended GHI
   - Kvf: fine variability index (10-min) — same as Kv, shorter window
 
 Six CAELUS classes mapped to display vocabulary with Km sub-splits:
@@ -37,6 +37,15 @@ Deviations from CAELUS:
   - GHI mirroring omitted (_MIN_SOLAR_RAD guard excludes low-sun periods)
   - Trailing window instead of centered (necessary for real-time)
   - Streaming temporal coherence filter instead of batch patch cleaning
+  - Kv/Kvf detrended by clear-sky model (CAELUS relies on centered windows
+    to suppress the solar geometry signal; our trailing window requires
+    explicit detrending — subtract the predicted maxSolarRad delta from
+    the observed GHI delta before accumulating).  This is standard practice
+    in solar variability research: Stein et al. 2012 (Sandia Variability
+    Index, SAND2012-3464C) and Coimbra et al. 2013 (clear-sky index
+    stationarity) establish that dividing or detrending by a clear-sky
+    model isolates cloud-induced variability from deterministic solar
+    geometry changes.
 
 Reference: Ruiz-Arias & Gueymard (2023), Solar Energy 263, 111895.
 CAELUS source: github.com/jararias/caelus
@@ -318,12 +327,25 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
         km = 0.0
 
     # Kv: coarse variability (30-min window).
-    mean_ghi = sum(all_ghi) / len(all_ghi)
-    deviations = [g - mean_ghi for g in all_ghi]
+    # Detrended by clear-sky model: subtract the predicted change (maxSolarRad
+    # delta) from the observed change (GHI delta) so the natural solar geometry
+    # signal cancels out.  Without this, a clear afternoon's steady GHI decline
+    # produces non-zero Kv that exceeds the CLOUDLESS threshold (0.03).
+    #
+    # CAELUS uses centered rolling windows (batch mode) which partially suppress
+    # the geometry trend.  In real-time streaming we use a trailing window; the
+    # clear-sky detrending compensates for the loss of centering.
+    #
+    # Scientific basis: dividing (or detrending) by clear-sky irradiance to
+    # isolate cloud-induced variability is standard practice in solar energy
+    # research (Stein et al. 2012 — Variability Index, Sandia SAND2012-3464C;
+    # Coimbra et al. 2013 — clear-sky index stationarity).
 
     diff_abs_all: list[float] = []
     for i in range(1, len(_ring)):
-        diff_abs_all.append(abs(deviations[i] - deviations[i - 1]))
+        ghi_delta = _ring[i].ghi - _ring[i - 1].ghi
+        msr_delta = _ring[i].max_solar_rad - _ring[i - 1].max_solar_rad
+        diff_abs_all.append(abs(ghi_delta - msr_delta))
 
     ring_list = list(_ring)
     # Use actual time span as denominator so mixed-resolution backfill data

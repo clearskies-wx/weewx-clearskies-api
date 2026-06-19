@@ -186,6 +186,40 @@ def test_slow_ramp_moderate_variability():
     assert result in valid_labels, f"classify() returned an unrecognised label: {result!r}"
 
 
+def test_afternoon_decline_classifies_clear():
+    """A clear afternoon's declining GHI tracking maxSolarRad classifies as 'Clear'.
+
+    Simulates the real-world scenario: both GHI and maxSolarRad decline
+    together as the sun lowers in the afternoon.  The Kcs ratio stays
+    constant at ~0.926, indicating a clear sky.  Without clear-sky
+    detrending, the raw GHI decline would produce Kv > 0.03 (the
+    CLOUDLESS threshold), causing a false 'Mostly Clear' classification.
+    With detrending, the predicted maxSolarRad decline is subtracted from
+    the observed GHI decline, yielding near-zero Kv.
+
+    GHI declines from 846 to 768 W/m², maxSolarRad from 911 to 830 W/m²
+    (matching real afternoon data observed 2026-06-19).
+    """
+    sky_condition.reset()
+    n_minutes = 30
+    ghi_start, ghi_end = 846.0, 768.0
+    msr_start, msr_end = 911.0, 830.0
+    for minute in range(n_minutes):
+        frac = minute / (n_minutes - 1)
+        ghi = ghi_start + (ghi_end - ghi_start) * frac
+        msr = msr_start + (msr_end - msr_start) * frac
+        for tick in range(12):
+            ts = _BASE_TS + minute * 60 + tick * 5
+            sky_condition.update(ghi, msr, timestamp=ts)
+        sky_condition.classify()
+
+    result = sky_condition.classify()
+    assert result == "Clear", (
+        f"Expected 'Clear' for clear-sky afternoon decline (constant Kcs ~0.926), "
+        f"got {result!r}"
+    )
+
+
 def test_cloud_enhancement_kcs_above_one():
     """GHI exceeding maxSolarRad (cloud-edge focusing) is handled without crash.
 
