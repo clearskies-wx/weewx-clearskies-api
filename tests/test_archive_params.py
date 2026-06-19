@@ -30,7 +30,7 @@ class TestArchiveParamsModel:
 
         params = ArchiveParams()
         assert params.interval == "raw"
-        assert params.limit == 1000
+        assert params.limit is None
         assert params.cursor is None
         assert params.page is None
         assert params.fields is None

@@ -189,7 +189,7 @@ class PageInfo(BaseModel):
     cursor: str | None = None
     next: str | None = None
     previous: str | None = None
-    limit: int
+    limit: int | None = None
     page: int | None = None
     totalPages: int | None = None
     totalRecords: int | None = None

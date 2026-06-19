@@ -327,7 +327,7 @@ def get_archive(
     to_dt: datetime | None,
     interval: str,
     fields: list[str] | None,
-    limit: int,
+    limit: int | None,
     cursor: str | None,
     page: int | None,
     agg: str | None = None,
@@ -366,7 +366,7 @@ def get_archive(
             )
 
     offset = 0
-    if page is not None:
+    if page is not None and limit is not None:
         offset = (page - 1) * limit
 
     if cursor is not None:
@@ -405,24 +405,28 @@ def _fetch_raw(
     registry: ColumnRegistry,
     from_epoch: int,
     to_epoch: int,
-    limit: int,
+    limit: int | None,
     offset: int,
     page: int | None,
     cursor: str | None,
     fields: list[str] | None,
 ) -> tuple[list[ArchiveRecord], PageInfo]:
-    sql = text(
+    base = (
         "SELECT * FROM archive "
         "WHERE dateTime >= :from_ts AND dateTime < :to_ts "
-        "ORDER BY dateTime ASC "
-        "LIMIT :lim OFFSET :off"
+        "ORDER BY dateTime ASC"
     )
-    rows = db.execute(
-        sql, {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit + 1, "off": offset}
-    ).fetchall()
+    params: dict[str, Any] = {"from_ts": from_epoch, "to_ts": to_epoch}
+    if limit is not None:
+        base += " LIMIT :lim OFFSET :off"
+        params["lim"] = limit + 1
+        params["off"] = offset
+    sql = text(base)
+    rows = db.execute(sql, params).fetchall()
 
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    has_more = limit is not None and len(rows) > limit
+    if limit is not None:
+        rows = rows[:limit]
 
     records = [_row_to_archive_record(r, registry) for r in rows]
 
@@ -438,7 +442,7 @@ def _fetch_raw(
     total_pages: int | None = None
     total_records: int | None = None
 
-    if page is not None:
+    if page is not None and limit is not None:
         count_sql = text(
             "SELECT COUNT(*) FROM archive "
             "WHERE dateTime >= :from_ts AND dateTime < :to_ts"
@@ -469,7 +473,7 @@ def _fetch_hourly(
     registry: ColumnRegistry,
     from_epoch: int,
     to_epoch: int,
-    limit: int,
+    limit: int | None,
     offset: int,
     page: int | None,
     cursor: str | None,
@@ -510,7 +514,7 @@ def _fetch_hourly(
 
     # `interval` is a reserved word in MariaDB.
     # Use a quoted alias — backtick quoting is supported by both SQLite and MariaDB.
-    sql = text(
+    base = (
         f"SELECT {bucket_expr} AS hour_bucket, "
         f"MIN(dateTime) AS dateTime, "
         f"MAX(usUnits) AS usUnits, "
@@ -519,15 +523,19 @@ def _fetch_hourly(
         f"FROM archive "
         f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
         f"GROUP BY hour_bucket "
-        f"ORDER BY hour_bucket ASC "
-        f"LIMIT :lim OFFSET :off"
+        f"ORDER BY hour_bucket ASC"
     )
-    rows = db.execute(
-        sql, {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit + 1, "off": offset}
-    ).fetchall()
+    params: dict[str, Any] = {"from_ts": from_epoch, "to_ts": to_epoch}
+    if limit is not None:
+        base += " LIMIT :lim OFFSET :off"
+        params["lim"] = limit + 1
+        params["off"] = offset
+    sql = text(base)
+    rows = db.execute(sql, params).fetchall()
 
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    has_more = limit is not None and len(rows) > limit
+    if limit is not None:
+        rows = rows[:limit]
 
     records = [_row_to_archive_record(r, registry) for r in rows]
 
@@ -540,7 +548,7 @@ def _fetch_hourly(
     total_pages: int | None = None
     total_records: int | None = None
 
-    if page is not None:
+    if page is not None and limit is not None:
         count_sql = text(
             f"SELECT COUNT(*) FROM ("
             f"  SELECT {bucket_expr} AS hour_bucket "
@@ -570,7 +578,7 @@ def _fetch_custom_interval(
     registry: ColumnRegistry,
     from_epoch: int,
     to_epoch: int,
-    limit: int,
+    limit: int | None,
     offset: int,
     page: int | None,
     cursor: str | None,
@@ -623,7 +631,7 @@ def _fetch_custom_interval(
 
     bucket_expr = f"FLOOR(dateTime / {int(bucket_seconds)}) * {int(bucket_seconds)}"
 
-    sql = text(
+    base = (
         f"SELECT {bucket_expr} AS bucket, "
         f"MIN(dateTime) AS dateTime, "
         f"MAX(usUnits) AS usUnits, "
@@ -632,15 +640,19 @@ def _fetch_custom_interval(
         f"FROM archive "
         f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
         f"GROUP BY bucket "
-        f"ORDER BY bucket ASC "
-        f"LIMIT :lim OFFSET :off"
+        f"ORDER BY bucket ASC"
     )
-    rows = db.execute(
-        sql, {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit + 1, "off": offset}
-    ).fetchall()
+    params: dict[str, Any] = {"from_ts": from_epoch, "to_ts": to_epoch}
+    if limit is not None:
+        base += " LIMIT :lim OFFSET :off"
+        params["lim"] = limit + 1
+        params["off"] = offset
+    sql = text(base)
+    rows = db.execute(sql, params).fetchall()
 
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    has_more = limit is not None and len(rows) > limit
+    if limit is not None:
+        rows = rows[:limit]
 
     records = [_row_to_archive_record(r, registry) for r in rows]
 
@@ -670,7 +682,7 @@ def _fetch_custom_interval(
     total_pages: int | None = None
     total_records: int | None = None
 
-    if page is not None:
+    if page is not None and limit is not None:
         count_sql = text(
             f"SELECT COUNT(*) FROM ("
             f"  SELECT {bucket_expr} AS bucket "
@@ -700,7 +712,7 @@ def _fetch_daily(
     registry: ColumnRegistry,
     from_epoch: int,
     to_epoch: int,
-    limit: int,
+    limit: int | None,
     offset: int,
     page: int | None,
     cursor: str | None,
@@ -751,12 +763,12 @@ def _fetch_daily(
     total_pages: int | None = None
     total_records: int | None = None
 
-    if day_rows and len(day_rows) == limit:
+    if limit is not None and day_rows and len(day_rows) == limit:
         last_day_epoch = day_rows[-1].get("dateTime")
         if last_day_epoch is not None:
             next_cursor = encode_cursor(int(last_day_epoch))
 
-    if page is not None:
+    if page is not None and limit is not None:
         # Best-effort count from a representative day table.
         for field_name in aggregable:
             table_name = f"archive_day_{field_name}"
@@ -786,7 +798,7 @@ def _fetch_day_aggregates(
     fields: list[str],
     from_epoch: int,
     to_epoch: int,
-    limit: int,
+    limit: int | None,
     offset: int,
     agg_override: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -815,17 +827,21 @@ def _fetch_day_aggregates(
             col_name = _DAY_AGG_TO_COL.get(agg_col, "sum")
             val_expr = f"`{col_name}`"
 
-        sql = text(
+        base_sql = (
             f"SELECT dateTime, {val_expr} AS val "
             f"FROM `{table_name}` "
             f"WHERE dateTime >= :from_ts AND dateTime < :to_ts "
-            f"ORDER BY dateTime ASC "
-            f"LIMIT :lim OFFSET :off"
+            f"ORDER BY dateTime ASC"
         )
+        sql_params: dict[str, Any] = {"from_ts": from_epoch, "to_ts": to_epoch}
+        if limit is not None:
+            base_sql += " LIMIT :lim OFFSET :off"
+            sql_params["lim"] = limit
+            sql_params["off"] = offset
         try:
             rows = db.execute(
-                sql,
-                {"from_ts": from_epoch, "to_ts": to_epoch, "lim": limit, "off": offset},
+                text(base_sql),
+                sql_params,
             ).fetchall()
         except (OperationalError, ProgrammingError) as exc:
             # Table doesn't exist for this field; skip and try the next one.

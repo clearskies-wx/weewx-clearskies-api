@@ -64,7 +64,7 @@ class ArchiveQueryParams(BaseModel):
     agg_map: str | None = Field(default=None, alias="agg_map")
     fields: str | None = None
     agg: str | None = None
-    limit: int = Field(default=1000, ge=1, le=50000)
+    limit: int | None = Field(default=None, ge=1, le=50000)
     cursor: str | None = None
     page: int | None = Field(default=None, ge=1)
 
