@@ -131,18 +131,18 @@ def _to_fahrenheit(value: float | None, source_unit: str) -> float | None:
     return convert(value, source_unit, "degree_F")
 
 
-_DAY_LABELS: dict[str, str] = {
-    "Clear": "Sunny",
-    "Mostly Clear": "Mostly Sunny",
-}
-
-
 def _to_display_label(sky_label: str | None, is_daytime: bool) -> str | None:
-    """Map sky classification to NWS day/night display vocabulary."""
+    """Map sky classification to day/night display vocabulary.
+
+    Day: Clear→Sunny, Mostly Clear→Mostly Sunny (including composite labels
+    like "Clear, Scattered Clouds" → "Sunny, Scattered Clouds").
+    Night: labels pass through unchanged.
+    """
     if sky_label is None:
         return None
     if is_daytime:
-        return _DAY_LABELS.get(sky_label, sky_label)
+        label = sky_label.replace("Mostly Clear", "Mostly Sunny")
+        return label.replace("Clear", "Sunny")
     return sky_label
 
 

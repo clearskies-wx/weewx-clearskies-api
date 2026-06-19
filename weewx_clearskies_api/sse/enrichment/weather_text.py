@@ -23,12 +23,16 @@ logger = logging.getLogger(__name__)
 def _cloud_pct_to_sky(pct: float | None, *, is_day: bool = False) -> str | None:
     """Map cloud cover percentage to a sky-condition string.
 
+    Used as the night/startup fallback when the solar classifier is unavailable.
+    Cannot produce "Scattered Clouds" composites (no Kv from cloud percentage).
+
     Thresholds (WMO / NWS okta-based approximation):
       ≤ 10 % → "Clear" / "Sunny" (day)
       ≤ 25 % → "Mostly Clear" / "Mostly Sunny" (day)
       ≤ 50 % → "Partly Cloudy"
       ≤ 85 % → "Mostly Cloudy"
-      > 85 % → "Cloudy"
+      ≤ 95 % → "Cloudy"
+      > 95 % → "Overcast"
 
     Returns None when pct is None or not a numeric type.
     """
@@ -42,7 +46,9 @@ def _cloud_pct_to_sky(pct: float | None, *, is_day: bool = False) -> str | None:
         return "Partly Cloudy"
     if pct <= 85:
         return "Mostly Cloudy"
-    return "Cloudy"
+    if pct <= 95:
+        return "Cloudy"
+    return "Overcast"
 
 
 def _derive_weather_code(
@@ -74,10 +80,11 @@ def _derive_weather_code(
       is_foggy=True    → 45
 
     Sky codes (WMO okta-based cloudiness):
-      "Cloudy" / "Mostly Cloudy"      → 3
-      "Partly Cloudy"                 → 2
-      "Mostly Clear" / "Mostly Sunny" → 1
-      "Clear" / "Sunny" / None        → 0
+      "Heavy Overcast" / "Overcast"                               → 4
+      "Cloudy" / "Mostly Cloudy"                                  → 3
+      "Partly Cloudy"                                             → 2
+      "Mostly Clear" / "Mostly Sunny" + Scattered Clouds variants → 1
+      "Clear" / "Sunny" + Scattered Clouds variants / None        → 0
 
     Returns an int WMO code.
     """
@@ -104,11 +111,16 @@ def _derive_weather_code(
         return 61
     if is_foggy:
         return 45
+    if effective_sky in ("Heavy Overcast", "Overcast"):
+        return 4
     if effective_sky in ("Cloudy", "Mostly Cloudy"):
         return 3
     if effective_sky == "Partly Cloudy":
         return 2
-    if effective_sky in ("Mostly Clear", "Mostly Sunny"):
+    if effective_sky is not None and (
+        "Mostly Clear" in effective_sky
+        or "Mostly Sunny" in effective_sky
+    ):
         return 1
     return 0
 

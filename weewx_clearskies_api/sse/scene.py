@@ -5,8 +5,11 @@ sun position.  All three fields are server-side state: the dashboard reads the
 descriptor and selects assets; it does not recompute weather logic.
 
 Sky-bucket mapping (ADR-047 §2):
-  Clear, Mostly Clear, Partly Cloudy  → "clear"
-  Mostly Cloudy, Cloudy, Overcast     → "cloudy"
+  Clear, Mostly Clear, Partly Cloudy,
+    Clear/Scattered Clouds,
+    Mostly Clear/Scattered Clouds     → "clear"
+  Mostly Cloudy, Cloudy, Overcast,
+    Heavy Overcast                    → "cloudy"
   Foggy                               → "cloudy"   (no fog photo)
   none / unknown / startup            → "clear"    (safe fallback)
   (provider) Thunderstorm             → "storm"
@@ -61,12 +64,15 @@ _SNOW_PRECIP_TYPES: frozenset[str] = frozenset({"snow", "sleet", "freezing-rain"
 # Sky-label → bucket table (ADR-047 §2).
 _SKY_LABEL_TO_BUCKET: dict[str, SkyBucket] = {
     "Clear": "clear",
+    "Clear, Scattered Clouds": "clear",
     "Mostly Clear": "clear",
+    "Mostly Clear, Scattered Clouds": "clear",
     "Partly Cloudy": "clear",
     "Mostly Cloudy": "cloudy",
     "Cloudy": "cloudy",
     "Overcast": "cloudy",
-    "Foggy": "cloudy",   # no fog photo — falls back to cloudy
+    "Heavy Overcast": "cloudy",
+    "Foggy": "cloudy",
 }
 
 # ---------------------------------------------------------------------------

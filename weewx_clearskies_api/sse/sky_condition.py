@@ -12,13 +12,14 @@ averaged GHI data:
          first-derivative of GHI deviation from rolling mean
   - Kvf: fine variability index (10-min) — same as Kv, shorter window
 
-Six CAELUS classes mapped to NWS display vocabulary:
+Six CAELUS classes mapped to display vocabulary with Km sub-splits:
   CLOUDLESS          → "Clear"
+  CLOUD_ENHANCEMENT  → "Clear"
   THIN_CLOUDS        → "Mostly Clear"
-  SCATTER_CLOUDS     → "Partly Cloudy"
+  SCATTER_CLOUDS     → Km-dependent: "Clear, Scattered Clouds" / "Mostly Clear,
+                        Scattered Clouds" / "Partly Cloudy" / "Mostly Cloudy"
   THICK_CLOUDS       → "Mostly Cloudy"
-  OVERCAST           → "Cloudy"
-  CLOUD_ENHANCEMENT  → "Partly Cloudy"
+  OVERCAST zone      → Km×Kv sub-split: "Cloudy" / "Overcast" / "Heavy Overcast"
 
 Temporal coherence filter: a new classification must persist for 15
 consecutive minutes before replacing the previous stable label.
@@ -164,8 +165,10 @@ def update(
 def classify() -> str | None:
     """Classify sky condition from the ring buffer.
 
-    Returns one of: "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy",
-    "Cloudy", or None when insufficient data.
+    Returns one of: "Clear", "Clear, Scattered Clouds",
+    "Mostly Clear", "Mostly Clear, Scattered Clouds",
+    "Partly Cloudy", "Mostly Cloudy", "Cloudy", "Overcast",
+    "Heavy Overcast", or None when insufficient data.
     """
     indices = _compute_indices()
     if indices is None:
@@ -350,22 +353,25 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
 def _classify_caelus(
     kcs: float, km: float, kv: float, kvf: float, latest_msr: float,
 ) -> str:
-    """Classify sky condition using the CAELUS decision tree.
+    """Classify sky condition using CAELUS set-based logic.
 
-    Returns one of: "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy",
-    "Cloudy". First-match wins.
+    Three anchor classes are evaluated independently (CLOUD_ENHANCEMENT,
+    CLOUDLESS, OVERCAST).  The "cloudy zone" is the residual — everything
+    not matching an anchor.  Within each zone, Km sub-splits produce the
+    final display label.
+
+    CAELUS source: github.com/jararias/caelus (skytype.py, sky_indices.py).
     """
-    # CLOUD_ENHANCEMENT: sun visible but nearby clouds cause GHI > clear-sky.
-    if (
+    # --- Anchor 1: CLOUD_ENHANCEMENT ---
+    # GHI above clear-sky — sun IS visible, cloud edges scattering extra.
+    clouden = (
         latest_msr > _SZA80_MSR_PROXY
         and kcs > _CLOUDEN_MIN_KCS
         and kv > _CLOUDEN_MIN_KV
         and kvf > _CLOUDEN_MIN_KVF
-    ):
-        return "Partly Cloudy"
+    )
 
-    # CLOUDLESS: stable, high clear-sky index with low variability.
-    # Thresholds relax slightly at high SZA (morning/evening low sun).
+    # --- Anchor 2: CLOUDLESS ---
     if latest_msr > _SZA75_MSR_PROXY:
         cloudless = (
             km > _CLOUDLESS_MIN_KM
@@ -380,16 +386,31 @@ def _classify_caelus(
             and kcs < 1.20
             and kv < _CLOUDLESS_MAX_KV
         )
+
+    # --- Anchor 3: OVERCAST zone ---
+    overcast = km < _OVERCAST_MAX_KM and kv < _OVERCAST_MAX_KV
+
+    # --- Priority: cloud_enhancement > cloudless > overcast > cloudy zone ---
+
+    if clouden:
+        return "Clear"
+
     if cloudless:
         return "Clear"
 
-    # OVERCAST: uniformly low irradiance, low variability.
-    if km < _OVERCAST_MAX_KM and kv < _OVERCAST_MAX_KV:
+    if overcast:
+        # Sub-split by Km (thickness) × Kv (curve shape).
+        if km < 0.15 and kv < _CLOUDLESS_MAX_KV:
+            return "Heavy Overcast"
+        if km < 0.15:
+            return "Overcast"
+        if kv < _CLOUDLESS_MAX_KV:
+            return "Overcast"
         return "Cloudy"
 
-    # Remaining cases fall into the "cloudy zone" — classify by Km and Kv.
+    # --- Cloudy zone residual (not cloudless, not overcast, not clouden) ---
 
-    # THIN_CLOUDS: moderate irradiance, moderate variability.
+    # THIN_CLOUDS: high Km, slight variability — cirrus/haze, uniform layer.
     if (
         km > _THINCLOUDS_MIN_KM
         and kv >= _THINCLOUDS_MIN_KV
@@ -397,7 +418,7 @@ def _classify_caelus(
     ):
         return "Mostly Clear"
 
-    # THICK_CLOUDS: low irradiance, moderate variability.
+    # THICK_CLOUDS: low Km, moderate variability — heavy broken cloud deck.
     if (
         km < _THICKCLOUDS_MAX_KM
         and kv >= _THICKCLOUDS_MIN_KV
@@ -405,8 +426,16 @@ def _classify_caelus(
     ):
         return "Mostly Cloudy"
 
-    # SCATTER_CLOUDS: everything else — broken or variable cloud deck.
-    return "Partly Cloudy"
+    # SCATTER_CLOUDS: catch-all — patchy cumulus, sun in and out.
+    # Km sub-split determines base brightness; "Scattered Clouds" descriptor
+    # only when the sky is predominantly clear.
+    if km > 0.6:
+        return "Clear, Scattered Clouds"
+    if km > 0.5:
+        return "Mostly Clear, Scattered Clouds"
+    if km > 0.4:
+        return "Partly Cloudy"
+    return "Mostly Cloudy"
 
 
 def _apply_coherence_filter(raw_label: str, now: float) -> str | None:

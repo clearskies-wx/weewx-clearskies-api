@@ -56,6 +56,8 @@ def _cloud_pct_to_sky(pct: float | None) -> str | None:
         return "Partly Cloudy"
     if pct <= 85:
         return "Mostly Cloudy"
+    if pct <= 95:
+        return "Cloudy"
     return "Overcast"
 
 
