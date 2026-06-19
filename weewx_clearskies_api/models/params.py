@@ -330,7 +330,7 @@ class MeteorShowersQueryParams(BaseModel):
 
     from_: _datetime_mod.date | None = Field(default=None, alias="from")
     to: _datetime_mod.date | None = None
-    min_radiant_alt: float | None = Field(default=None, alias="min_radiant_alt")
+    min_radiant_alt: float | None = Field(default=None)
 
     @field_validator("from_", "to", mode="before")
     @classmethod
