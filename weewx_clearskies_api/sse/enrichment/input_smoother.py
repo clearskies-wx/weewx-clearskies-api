@@ -84,6 +84,26 @@ def get_smoothed(field: str) -> float | None:
         return None
 
 
+def backfill(records: list[dict[str, float | None]]) -> None:
+    """Seed smoothing buffers from archive records for immediate classification.
+
+    Each record is a dict with field names matching the buffer keys (appTemp,
+    dewpoint, outTemp, windSpeed, windGust, rainRate, heatindex, windchill).
+    Records should be in chronological order.  None values are skipped.
+
+    Called once at startup from __main__.py.  Archive records are already
+    averaged over the archive interval — each becomes one buffer entry.
+    """
+    for record in records:
+        for field, buf in _buffers.items():
+            value = record.get(field)
+            if value is not None:
+                try:
+                    buf.add(float(value))
+                except (TypeError, ValueError):
+                    pass
+
+
 def reset() -> None:
     """Clear all buffers.  For test isolation only."""
     for buf in _buffers.values():

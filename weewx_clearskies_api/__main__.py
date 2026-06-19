@@ -193,6 +193,41 @@ def _backfill_sky_classifier() -> None:
         logger.warning("sky_condition backfill failed", exc_info=True)
 
 
+def _backfill_input_smoother() -> None:
+    """Seed the input smoother buffers from the last 10 min of archive data.
+
+    The longest smoothing window is 10 minutes (appTemp, dewpoint, outTemp,
+    heatindex, windchill).  Pulls all fields the smoother tracks in one query.
+    """
+    from weewx_clearskies_api.sse.enrichment import input_smoother  # noqa: PLC0415
+
+    _FIELDS = ("appTemp", "dewpoint", "outTemp", "windSpeed", "windGust",
+               "rainRate", "heatindex", "windchill")
+    col_list = ", ".join(_FIELDS)
+
+    try:
+        cutoff = int(time.time()) - 600
+        with _SqlAlchemySession(get_engine()) as session:
+            rows = session.execute(
+                _sa_text(
+                    f"SELECT {col_list} FROM archive "
+                    "WHERE dateTime > :cutoff ORDER BY dateTime"
+                ),
+                {"cutoff": cutoff},
+            ).fetchall()
+        if not rows:
+            logger.info("input_smoother backfill: no archive records in last 10 min")
+            return
+        records = [dict(zip(_FIELDS, row)) for row in rows]
+        input_smoother.backfill(records)
+        logger.info(
+            "input_smoother backfill: seeded buffers from %d archive records",
+            len(records),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("input_smoother backfill failed", exc_info=True)
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Clear Skies Weather API")
     parser.add_argument("--tls-cert", type=Path, help="Path to TLS certificate (PEM)")
@@ -911,6 +946,10 @@ def main() -> None:
     # Seed sky classifier ring buffer from archive records (last 30 min) so
     # classify() returns a result immediately instead of None for ~3 minutes.
     _backfill_sky_classifier()
+
+    # Seed input smoother buffers from archive records (last 10 min) so
+    # weatherText includes temperature-comfort and wind immediately on restart.
+    _backfill_input_smoother()
 
     # Use archive_interval as default for trend_time_grace when the operator
     # has not explicitly set it (i.e., settings value equals the hardcoded default).
