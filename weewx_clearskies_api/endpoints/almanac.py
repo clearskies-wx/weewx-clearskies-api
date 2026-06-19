@@ -759,7 +759,9 @@ def get_meteor_showers(
 
     # Cache-check-first guard (ADR-045).  The warmer pre-computes the default
     # rolling window; use the cached result when no override params were given.
-    use_cache = params.from_ is None and params.to is None
+    # min_radiant_alt bypasses the cache because the warmer stores the full
+    # unfiltered list and the filter is applied in compute_meteor_showers().
+    use_cache = params.from_ is None and params.to is None and params.min_radiant_alt is None
     if use_cache:
         try:
             cache_key = f"warmer:almanac:meteor-showers:{today.isoformat()}"
@@ -796,7 +798,8 @@ def get_meteor_showers(
             logger.debug("meteor-showers cache miss or error: from=%s", today.isoformat(), exc_info=True)
 
     showers_raw = almanac_svc.compute_meteor_showers(
-        lat, lon, alt, station_tz=station_tz, from_date=from_date, to_date=to_date
+        lat, lon, alt, station_tz=station_tz, from_date=from_date, to_date=to_date,
+        min_radiant_alt=params.min_radiant_alt,
     )
     showers = [
         MeteorShowerEntry(

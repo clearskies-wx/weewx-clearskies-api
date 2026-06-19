@@ -322,12 +322,15 @@ class MeteorShowersQueryParams(BaseModel):
 
     Default window: today → today + 365 days (rolling).
     Optional from/to override the window.
+    Optional min_radiant_alt filters out showers whose radiant altitude at
+    local midnight on the peak night is below the given threshold (degrees).
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     from_: _datetime_mod.date | None = Field(default=None, alias="from")
     to: _datetime_mod.date | None = None
+    min_radiant_alt: float | None = Field(default=None, alias="min_radiant_alt")
 
     @field_validator("from_", "to", mode="before")
     @classmethod

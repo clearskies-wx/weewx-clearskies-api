@@ -1285,6 +1285,7 @@ def compute_meteor_showers(
     from_date: date | None = None,
     to_date: date | None = None,
     catalog: list | None = None,
+    min_radiant_alt: float | None = None,
 ) -> list[dict]:
     """Compute moon data for all major meteor showers in a rolling date window.
 
@@ -1302,6 +1303,9 @@ def compute_meteor_showers(
             When None, load_catalog() is called to load from the JSON file
             (or fall back to the embedded list). Pass a pre-loaded catalog
             from the cache warmer to avoid re-reading disk on every request.
+        min_radiant_alt: Optional minimum radiant altitude in degrees.
+            Showers whose radiant altitude at local midnight on the peak night
+            is below this threshold are excluded from the results.
 
     Returns:
         List of shower dicts, filtered to peak dates on or after from_date,
@@ -1355,6 +1359,10 @@ def compute_meteor_showers(
             obs_radiant = (earth + location).at(t_midnight).observe(radiant).apparent()  # type: ignore[attr-defined]
             alt_obj, _az, _dist = obs_radiant.altaz()  # type: ignore[attr-defined]
             radiant_alt = round(float(alt_obj.degrees), 1)  # type: ignore[attr-defined]
+
+            # --- Altitude filter ---
+            if min_radiant_alt is not None and radiant_alt < min_radiant_alt:
+                continue
 
             # --- Moon illumination and phase at peak date ---
             # Use ecliptic phase angle at local noon (same as _compute_moon_for_date).
