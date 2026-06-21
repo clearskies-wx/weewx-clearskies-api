@@ -3,9 +3,9 @@
 GET /pages               — dashboard navigation list per ADR-024.
 GET /pages/{slug}/content — operator-authored markdown for a named page.
 
-Returns built-in pages minus operator-hidden ones (from api.conf [pages] hidden).
-Hidden pages are excluded from the navigation response but their content is still
-servable (a hidden page may still have content configured).
+Returns all 9 built-in pages unconditionally. Page visibility filtering
+is the dashboard's responsibility via pages.json (static config served
+by Caddy, read at dashboard boot).
 No query params on either endpoint.
 """
 
@@ -25,29 +25,21 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.services.content import read_page_content_file
-from weewx_clearskies_api.services.pages import get_all_pages, get_visible_pages
+from weewx_clearskies_api.services.pages import get_all_pages
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Module-level hidden-pages list — set at startup from settings.
-_hidden_pages: list[str] = []
-
-
-def wire_hidden_pages(hidden: list[str]) -> None:
-    """Set the operator-configured hidden pages list.  Called from __main__.py."""
-    global _hidden_pages  # noqa: PLW0603
-    _hidden_pages = list(hidden)
-
 
 @router.get("/pages", summary="Dashboard navigation list", tags=["Pages"])
 def get_pages() -> PageListResponse:
-    """Return built-in pages excluding operator-hidden ones.
+    """Return all built-in pages unconditionally.
 
+    Page visibility filtering is the dashboard's responsibility via pages.json.
     Custom pages are empty in 3a-2 (Phase 4 config UI).
     """
-    visible = get_visible_pages(_hidden_pages)
+    all_pages = get_all_pages()
 
     pages = [
         PageMetadata(
@@ -58,7 +50,7 @@ def get_pages() -> PageListResponse:
             builtIn=p.built_in,
             hidden=False,
         )
-        for p in visible
+        for p in all_pages
     ]
 
     return PageListResponse(

@@ -1,20 +1,16 @@
 """Pages service — built-in page list per ADR-024 (3a-2).
 
-The 9 built-in pages are baked as a constant. Operator can hide
-built-in pages via [pages] hidden in api.conf (comma-separated slugs).
-'now' cannot be hidden (ADR-024: "Now cannot be unchecked"); if the
-operator adds it to the hidden list, a WARNING is logged and it's ignored.
+The 9 built-in pages are baked as a constant. Page visibility filtering
+is the dashboard's responsibility via pages.json (static config served
+by Caddy). GET /pages returns all 9 pages unconditionally.
 
 Custom pages are out of scope for 3a-2 (Phase 4 config UI).
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Final
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -49,44 +45,17 @@ _BUILTIN_PAGES: Final[tuple[PageEntry, ...]] = (
     PageEntry(slug="legal", name="Legal", icon="scale", nav_position=9, built_in=True),
 )
 
-_UNHIDEABLE_SLUG = "now"
-
-
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
 
 
 def get_all_pages() -> list[PageEntry]:
-    """Return all built-in pages regardless of operator hidden configuration.
+    """Return all 9 built-in pages unconditionally.
 
-    Used by /pages/{slug}/content to verify a slug exists before serving
-    content, even if the page is operator-hidden.
+    Page visibility filtering is the dashboard's responsibility via
+    pages.json (static config served by Caddy, read by the dashboard
+    at boot). GET /pages returns all pages; the dashboard decides which
+    to show in navigation.
     """
     return list(_BUILTIN_PAGES)
-
-
-def get_visible_pages(hidden_slugs: list[str]) -> list[PageEntry]:
-    """Return built-in pages excluding operator-hidden ones.
-
-    Args:
-        hidden_slugs: Slug strings to hide (from api.conf [pages] hidden).
-
-    Returns:
-        List of visible PageEntry objects in navPosition order.
-    """
-    hidden_set: set[str] = set()
-    for slug in hidden_slugs:
-        slug = slug.strip()
-        if not slug:
-            continue
-        if slug == _UNHIDEABLE_SLUG:
-            logger.warning(
-                "api.conf [pages] hidden contains %r; 'now' cannot be hidden "
-                "(ADR-024: 'Now cannot be unchecked'). Ignoring.",
-                slug,
-            )
-        else:
-            hidden_set.add(slug)
-
-    return [p for p in _BUILTIN_PAGES if p.slug not in hidden_set]

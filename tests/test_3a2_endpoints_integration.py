@@ -189,7 +189,6 @@ def integration_client_3a2(
     from weewx_clearskies_api.db.reflection import SchemaReflector
     from weewx_clearskies_api.db.registry import wire_registry
     from weewx_clearskies_api.db.session import wire_engine
-    from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
     from weewx_clearskies_api.services.content import wire_content_directory
     from weewx_clearskies_api.services.reports import wire_reports_directory
     from weewx_clearskies_api.services.station import load_station_metadata
@@ -210,7 +209,6 @@ def integration_client_3a2(
     load_units_block(weewx_conf_path)
     wire_reports_directory(str(reports_tmp))
     wire_content_directory(str(content_dir))
-    wire_hidden_pages([])  # No hidden pages for default integration tests
 
     # Load weewx_conf ConfigObj for station loader
     weewx_cfg = load_weewx_conf(weewx_conf_path)
@@ -746,7 +744,6 @@ class TestStationIntegration:
         from weewx_clearskies_api.db.reflection import ColumnInfo, ColumnRegistry
         from weewx_clearskies_api.db.registry import wire_registry
         from weewx_clearskies_api.db.session import wire_engine
-        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
@@ -804,7 +801,6 @@ class TestStationIntegration:
             wire_reports_directory(str(reports_tmp))
             content_tmp = tmp_path_factory.mktemp("empty_content_3a2")
             wire_content_directory(str(content_tmp))
-            wire_hidden_pages([])
 
             load_station_metadata(
                 cfg=weewx_cfg,
@@ -862,7 +858,6 @@ class TestStationIntegration:
             wire_registry(registry)
             # Restore content directory so subsequent tests can still find about.md
             wire_content_directory(str(content_dir))
-            wire_hidden_pages([])
             empty_engine.dispose()
 
     def test_station_both_backends_min_max_query_consistent(
@@ -1029,80 +1024,6 @@ class TestPagesIntegration:
             assert "icon" in page
             assert "navPosition" in page
             assert "builtIn" in page
-
-    def test_pages_with_hidden_legal_wired_returns_8_entries(
-        self, seeded_engine: Engine, weewx_conf_path: Path,
-        content_dir: Path, tmp_path_factory: pytest.TempPathFactory,
-    ) -> None:
-        """/pages with wire_hidden_pages(['legal']) → 8 entries; legal absent."""
-        from weewx_clearskies_api.app import create_app
-        from weewx_clearskies_api.config.settings import (
-            ApiSettings,
-            DatabaseSettings,
-            HealthSettings,
-            LoggingSettings,
-            Settings,
-            WeewxSettings,
-        )
-        from weewx_clearskies_api.db.reflection import SchemaReflector
-        from weewx_clearskies_api.db.registry import wire_registry
-        from weewx_clearskies_api.db.session import wire_engine
-        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
-        from weewx_clearskies_api.services.content import wire_content_directory
-        from weewx_clearskies_api.services.reports import wire_reports_directory
-        from weewx_clearskies_api.services.station import (
-            load_station_metadata,
-        )
-        from weewx_clearskies_api.services.station import (
-            reset_cache as reset_station,
-        )
-        from weewx_clearskies_api.services.units import get_target_unit, load_units_block
-        from weewx_clearskies_api.services.units import reset_cache as reset_units
-        from weewx_clearskies_api.services.weewx_conf import load_weewx_conf
-        from weewx_clearskies_api.services.weewx_conf import reset_cache as reset_weewx_conf
-
-        wire_engine(seeded_engine)
-        reset_units()
-        reset_weewx_conf()
-        reset_station()
-        load_units_block(weewx_conf_path)
-        weewx_cfg = load_weewx_conf(weewx_conf_path)
-        reports_tmp = tmp_path_factory.mktemp("reports_pages_hidden_3a2")
-        wire_reports_directory(str(reports_tmp))
-        wire_content_directory(str(content_dir))
-        wire_hidden_pages(["legal"])
-        load_station_metadata(
-            cfg=weewx_cfg, api_station_id=None, api_timezone=None,
-            unit_system=get_target_unit(),
-        )
-        reflector = SchemaReflector(seeded_engine)
-        registry = reflector.reflect()
-        wire_registry(registry)
-
-        if _BACKEND == "mariadb":
-            db = DatabaseSettings({
-                "kind": "mysql", "host": "127.0.0.1",
-                "port": _MARIADB_HOST_PORT, "name": _MARIADB_DB,
-            })
-        else:
-            db = DatabaseSettings({"kind": "sqlite", "path": _SQLITE_SDB_PATH})
-
-        settings = Settings(
-            api=ApiSettings({}), health=HealthSettings({}),
-            logging_settings=LoggingSettings({}),
-            database=db, weewx=WeewxSettings({"config_path": str(weewx_conf_path)}),
-        )
-        app = create_app(settings)
-        try:
-            with TestClient(app, raise_server_exceptions=False) as client:
-                resp = client.get("/api/v1/pages")
-                assert resp.status_code == 200
-                pages = resp.json()["data"]["pages"]
-                slugs = {p["slug"] for p in pages}
-                assert len(pages) == 8, f"Expected 8 pages with legal hidden, got {len(pages)}"
-                assert "legal" not in slugs, "'legal' must be absent when hidden"
-        finally:
-            wire_hidden_pages([])  # Restore
 
     def test_pages_generated_at_has_z_suffix(
         self, integration_client_3a2: TestClient
@@ -1277,7 +1198,6 @@ class TestContentEndpointsIntegration:
         from weewx_clearskies_api.db.reflection import SchemaReflector
         from weewx_clearskies_api.db.registry import wire_registry
         from weewx_clearskies_api.db.session import wire_engine
-        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
@@ -1303,7 +1223,6 @@ class TestContentEndpointsIntegration:
         reports_tmp = tmp_path_factory.mktemp("reports_404_3a2")
         wire_reports_directory(str(reports_tmp))
         wire_content_directory(str(empty_content))
-        wire_hidden_pages([])
         load_station_metadata(
             cfg=weewx_cfg, api_station_id=None, api_timezone=None,
             unit_system=get_target_unit(),
@@ -1354,7 +1273,6 @@ class TestContentEndpointsIntegration:
         from weewx_clearskies_api.db.reflection import SchemaReflector
         from weewx_clearskies_api.db.registry import wire_registry
         from weewx_clearskies_api.db.session import wire_engine
-        from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
         from weewx_clearskies_api.services.content import wire_content_directory
         from weewx_clearskies_api.services.reports import wire_reports_directory
         from weewx_clearskies_api.services.station import (
@@ -1379,7 +1297,6 @@ class TestContentEndpointsIntegration:
         reports_tmp = tmp_path_factory.mktemp("reports_no_leak_3a2")
         wire_reports_directory(str(reports_tmp))
         wire_content_directory(str(no_files_dir))
-        wire_hidden_pages([])
         load_station_metadata(
             cfg=weewx_cfg, api_station_id=None, api_timezone=None,
             unit_system=get_target_unit(),

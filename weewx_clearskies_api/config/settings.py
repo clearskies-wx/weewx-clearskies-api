@@ -251,8 +251,6 @@ class StationSettings:
     timezone: str | None
     #: Default locale for the dashboard (ADR-021). Env var wins over INI.
     default_locale: str
-    #: Comma-separated slugs (or INI list) of built-in pages to hide.
-    hidden_pages: list[str]
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_id = str(section.get("station_id", "")).strip()
@@ -267,11 +265,6 @@ class StationSettings:
             self.default_locale = env_locale
         else:
             self.default_locale = str(section.get("default_locale", "en"))
-
-        raw_hidden = section.get("hidden", [])
-        if isinstance(raw_hidden, str):
-            raw_hidden = [s.strip() for s in raw_hidden.split(",") if s.strip()]
-        self.hidden_pages = list(raw_hidden)
 
     def validate(self) -> None:
         """Raise ValueError if default_locale is not in the supported set (ADR-021)."""
@@ -335,22 +328,6 @@ class ContentSettings:
         self.directory = str(
             section.get("directory", "/etc/weewx-clearskies/content/")
         )
-
-
-class PagesSettings:
-    """[pages] section settings (3a-2).
-
-    Per-page hide control.
-    """
-
-    #: Comma-separated slugs (or INI list) of built-in pages to hide.
-    hidden: list[str]
-
-    def __init__(self, section: dict[str, Any]) -> None:
-        raw_hidden = section.get("hidden", [])
-        if isinstance(raw_hidden, str):
-            raw_hidden = [s.strip() for s in raw_hidden.split(",") if s.strip()]
-        self.hidden = list(raw_hidden)
 
 
 class AlertsSettings:
@@ -1143,7 +1120,6 @@ class Settings:
     station: StationSettings
     almanac: AlmanacSettings
     content: ContentSettings
-    pages: PagesSettings
     alerts: AlertsSettings
     aqi: AQISettings
     aqi_history: AQIHistorySettings
@@ -1176,7 +1152,6 @@ class Settings:
         station: StationSettings | None = None,
         almanac: AlmanacSettings | None = None,
         content: ContentSettings | None = None,
-        pages: PagesSettings | None = None,
         alerts: AlertsSettings | None = None,
         aqi: AQISettings | None = None,
         aqi_history: AQIHistorySettings | None = None,
@@ -1205,7 +1180,6 @@ class Settings:
         self.station = station if station is not None else StationSettings({})
         self.almanac = almanac if almanac is not None else AlmanacSettings({})
         self.content = content if content is not None else ContentSettings({})
-        self.pages = pages if pages is not None else PagesSettings({})
         self.alerts = alerts if alerts is not None else AlertsSettings({})
         self.aqi = aqi if aqi is not None else AQISettings({})
         self.aqi_history = aqi_history if aqi_history is not None else AQIHistorySettings({})
@@ -1333,7 +1307,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
     station_cfg = StationSettings(dict(cfg.get("station", {})))
     almanac_cfg = AlmanacSettings(dict(cfg.get("almanac", {})))
     content_cfg = ContentSettings(dict(cfg.get("content", {})))
-    pages_cfg = PagesSettings(dict(cfg.get("pages", {})))
     alerts_cfg = AlertsSettings(dict(cfg.get("alerts", {})))
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
     aqi_history_cfg = AQIHistorySettings(dict(cfg.get("aqi.history", {})))
@@ -1361,7 +1334,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
         station=station_cfg,
         almanac=almanac_cfg,
         content=content_cfg,
-        pages=pages_cfg,
         alerts=alerts_cfg,
         aqi=aqi_cfg,
         aqi_history=aqi_history_cfg,

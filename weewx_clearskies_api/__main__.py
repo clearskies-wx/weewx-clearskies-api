@@ -78,7 +78,6 @@ from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
 from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire_social_settings
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
-from weewx_clearskies_api.endpoints.pages import wire_hidden_pages
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
 from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
 from weewx_clearskies_api.health import create_health_app
@@ -780,9 +779,6 @@ def main() -> None:
     # Step 6g: Wire content directory.  Non-fatal — missing dir → 404 on
     # /content/* requests.
     wire_content_directory(settings.content.directory)
-
-    # Step 6g: Wire hidden pages list.
-    wire_hidden_pages(settings.pages.hidden)
 
     # Step 6h: Wire cache backend (ADR-017).
     # MemoryCache by default; RedisCache when CLEARSKIES_CACHE_URL is set.
