@@ -264,12 +264,13 @@ class TestAqiCurrentOpenMeteoRegistered:
             f"Expected aqiScale='epa', got {body['data'].get('aqiScale')!r}"
         )
 
-    def test_openmeteo_registered_aqi_category_is_null(self) -> None:
-        """data.aqiCategory = null (dashboard-computed; parsers set None)."""
+    def test_openmeteo_registered_aqi_category_is_enriched(self) -> None:
+        """data.aqiCategory is EPA-enriched from aqi value (ADR-059)."""
         response, _ = self._get_response_with_fixture()
         body = response.json()
-        assert body["data"]["aqiCategory"] is None, (
-            f"Expected aqiCategory=null (dashboard-computed), got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "Moderate", (
+            f"Expected aqiCategory='Moderate' (EPA enrichment for aqi=73), "
+            f"got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_openmeteo_registered_aqi_main_pollutant_is_pm25(self) -> None:

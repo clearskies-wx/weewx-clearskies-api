@@ -869,12 +869,12 @@ class TestToCanonical:
         raw_day = fixture["response"][0]["periods"][0]
         assert bundle.daily[0].uvIndexMax == raw_day.get("uvi")
 
-    def test_daily_narrative_is_none(self) -> None:
-        """narrative is always None for Aeris v0.1 (brief lead-call 20)."""
+    def test_daily_narrative_is_populated(self) -> None:
+        """narrative is populated from weatherPrimary on daily forecast points."""
         from weewx_clearskies_api.providers.forecast.aeris import _to_canonical  # noqa: PLC0415
         h, d, raw = self._build_inputs()
         bundle = _to_canonical(h, d, target_unit="US", daynight_raw=raw)
-        assert all(point.narrative is None for point in bundle.daily)
+        assert all(point.narrative is not None for point in bundle.daily)
 
     def test_metricwx_daily_windSpeedMax_uses_kph_fallback_when_mps_absent(self) -> None:
         """METRICWX + windSpeedMaxMPS absent → KPH÷3.6 fallback (lead-call 13)."""

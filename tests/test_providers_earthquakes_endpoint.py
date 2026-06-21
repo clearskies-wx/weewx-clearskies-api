@@ -224,15 +224,15 @@ class TestBranch1NoProvider:
             f"generatedAt must end with Z, got {body['generatedAt']!r}"
         )
 
-    def test_no_provider_no_units_block(self) -> None:
-        """No provider → NO 'units' block (earthquakes are unit-system-invariant per §2.4)."""
+    def test_no_provider_has_units_block(self) -> None:
+        """No provider → response includes 'units' block with depth/magnitude labels."""
         app = _make_earthquakes_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/api/v1/earthquakes")
         _reset_provider_state()
         body = response.json()
-        assert "units" not in body, (
-            "EarthquakeListResponse must NOT have 'units' field (§2.4 unit-invariant)"
+        assert body["units"] == {"depth": "km", "magnitude": ""}, (
+            f"Expected units block, got {body.get('units')!r}"
         )
 
 
@@ -325,8 +325,8 @@ class TestBranch3ProviderWithFeatures:
         tsunami = response.json()["data"][0]["tsunami"]
         assert tsunami is False, f"Expected tsunami=False (bool), got {tsunami!r}"
 
-    def test_response_has_no_units_block(self) -> None:
-        """EarthquakeListResponse has NO 'units' block (unit-system-invariant per §2.4)."""
+    def test_response_has_units_block(self) -> None:
+        """EarthquakeListResponse includes 'units' block with depth/magnitude labels."""
         app = _make_earthquakes_app(provider="usgs")
         client = TestClient(app, raise_server_exceptions=False)
         data = _load_fixture("usgs_seattle_radius_m2_5.json")
@@ -335,8 +335,8 @@ class TestBranch3ProviderWithFeatures:
             response = client.get("/api/v1/earthquakes")
         _reset_provider_state()
         body = response.json()
-        assert "units" not in body, (
-            "EarthquakeListResponse must NOT have 'units' block (earthquakes are unit-invariant)"
+        assert body["units"] == {"depth": "km", "magnitude": ""}, (
+            f"Expected units block, got {body.get('units')!r}"
         )
 
 

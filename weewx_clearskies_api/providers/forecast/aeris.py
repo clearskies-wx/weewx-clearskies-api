@@ -166,6 +166,8 @@ CAPABILITY = ProviderCapability(
         "tornadoRisk",
         "hailRisk",
         "windRisk",
+        "sunrise",
+        "sunset",
         # ForecastDiscussion — max-surface; populated only on paid-tier responses
         # where summary field is detected at runtime (Q2 user decision 2026-05-08).
         # Free-tier returns bundle.discussion=null.  Auditor note: this is a

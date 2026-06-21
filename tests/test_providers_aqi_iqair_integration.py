@@ -397,8 +397,9 @@ class TestIntegrationIQAirAqiHappyPath:
             response = integration_client.get("/api/v1/aqi/current")
 
         body = response.json()
-        assert body["data"]["aqiCategory"] is None, (
-            f"Expected aqiCategory=None (ADR-013), got {body['data'].get('aqiCategory')!r}"
+        assert body["data"]["aqiCategory"] == "Good", (
+            f"Expected aqiCategory='Good' (EPA enrichment for aqi=10), "
+            f"got {body['data'].get('aqiCategory')!r}"
         )
 
     def test_iqair_aqi_data_main_pollutant_is_pm25(self, integration_client: TestClient) -> None:
