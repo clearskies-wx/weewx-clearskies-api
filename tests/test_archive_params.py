@@ -73,11 +73,11 @@ class TestArchiveParamsModel:
         assert p.limit == 1
 
     def test_limit_maximum_boundary_accepted(self) -> None:
-        """limit=10000 is the maximum allowed value."""
+        """limit=50000 is the maximum allowed value."""
         from weewx_clearskies_api.endpoints.observations import ArchiveParams
 
-        p = ArchiveParams(limit=10000)
-        assert p.limit == 10000
+        p = ArchiveParams(limit=50000)
+        assert p.limit == 50000
 
     def test_limit_below_minimum_rejected(self) -> None:
         """limit=0 is below the allowed minimum → ValidationError."""
@@ -89,13 +89,13 @@ class TestArchiveParamsModel:
             ArchiveParams(limit=0)
 
     def test_limit_above_maximum_rejected(self) -> None:
-        """limit=10001 exceeds the allowed maximum → ValidationError."""
+        """limit=50001 exceeds the allowed maximum → ValidationError."""
         from pydantic import ValidationError
 
         from weewx_clearskies_api.endpoints.observations import ArchiveParams
 
         with pytest.raises(ValidationError):
-            ArchiveParams(limit=10001)
+            ArchiveParams(limit=50001)
 
     def test_cursor_and_page_mutually_exclusive(self) -> None:
         """cursor + page both supplied → ValidationError (mutually exclusive)."""

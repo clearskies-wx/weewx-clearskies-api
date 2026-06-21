@@ -113,8 +113,11 @@ def find_charts_config() -> Path | None:
     if env:
         return Path(env)
     for candidate in _CHARTS_CONFIG_SEARCH_PATH:
-        if candidate.exists():
-            return candidate
+        try:
+            if candidate.exists():
+                return candidate
+        except PermissionError:
+            continue
     return None
 
 

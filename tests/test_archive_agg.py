@@ -149,7 +149,11 @@ def _build_agg_test_engine():
             {"dateTime": _DAY2_T3, "usUnits": 1, "interval": 5,
              "outTemp": _DAY2_TEMPS[2]},
         ])
-        # Insert day-summary rows with known aggregated values
+        # Insert day-summary rows with known aggregated values.
+        # wsum is the weighted sum (value × interval_in_seconds) per weewx semantics.
+        # avg = wsum / sumtime.  interval = 300s, 3 readings/day → sumtime = 900.
+        _day1_wsum = sum(t * 300 for t in _DAY1_TEMPS)  # 60*300 + 65*300 + 70*300 = 58500
+        _day2_wsum = sum(t * 300 for t in _DAY2_TEMPS)  # 72*300 + 80*300 + 85*300 = 71100
         conn.execute(archive_day_outTemp.insert(), [
             {
                 "dateTime": _DAY1_START,
@@ -159,7 +163,7 @@ def _build_agg_test_engine():
                 "maxtime": _DAY1_T3,
                 "sum": _DAY1_AGG["sum"],
                 "count": _DAY1_AGG["count"],
-                "wsum": _DAY1_AGG["sum"],
+                "wsum": _day1_wsum,
                 "sumtime": 900,
                 "avg": _DAY1_AGG["avg"],
             },
@@ -171,7 +175,7 @@ def _build_agg_test_engine():
                 "maxtime": _DAY2_T3,
                 "sum": _DAY2_AGG["sum"],
                 "count": _DAY2_AGG["count"],
-                "wsum": _DAY2_AGG["sum"],
+                "wsum": _day2_wsum,
                 "sumtime": 900,
                 "avg": _DAY2_AGG["avg"],
             },

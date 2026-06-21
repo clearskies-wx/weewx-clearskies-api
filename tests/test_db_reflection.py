@@ -64,7 +64,7 @@ def test_non_stock_columns_are_unmapped() -> None:
     assert "outTemp" in registry.stock
     assert "aqi_value" in registry.unmapped
     assert "custom_sensor" in registry.unmapped
-    assert registry.unmapped["aqi_value"].canonical_name is None
+    assert registry.unmapped["aqi_value"].canonical_name == "aqi_value"
     assert registry.unmapped["aqi_value"].is_stock is False
 
 
@@ -96,9 +96,9 @@ def test_get_canonical_stock() -> None:
 
 
 def test_get_canonical_unmapped() -> None:
-    """get_canonical() returns None for unmapped column."""
+    """get_canonical() returns identity-mapped name for unmapped column."""
     registry = _build_registry(["outTemp", "my_aqi"])
-    assert registry.get_canonical("my_aqi") is None
+    assert registry.get_canonical("my_aqi") == "my_aqi"
 
 
 def test_get_canonical_missing() -> None:

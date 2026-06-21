@@ -142,49 +142,48 @@ def alerts_client_nws() -> Any:
 
 
 class TestNwsSeverityNormalization:
-    """_normalize_severity maps all five CAP values + unknown-default to canonical."""
+    """_normalize_severity derives (severityLevel, severityLabel) from event name suffix (ADR-052)."""
 
-    def test_extreme_maps_to_warning(self) -> None:
+    def test_warning_suffix_maps_to_level_4(self) -> None:
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Extreme") == "warning"
+        assert nws._normalize_severity("Tornado Warning") == (4, "Warning")
 
-    def test_severe_maps_to_watch(self) -> None:
+    def test_watch_suffix_maps_to_level_3(self) -> None:
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Severe") == "watch"
+        assert nws._normalize_severity("Tornado Watch") == (3, "Watch")
 
-    def test_moderate_maps_to_advisory(self) -> None:
+    def test_advisory_suffix_maps_to_level_2(self) -> None:
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Moderate") == "advisory"
+        assert nws._normalize_severity("Wind Advisory") == (2, "Advisory")
 
-    def test_minor_maps_to_advisory(self) -> None:
+    def test_statement_suffix_maps_to_level_1(self) -> None:
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Minor") == "advisory"
+        assert nws._normalize_severity("Special Weather Statement") == (1, "Statement")
 
-    def test_unknown_maps_to_advisory(self) -> None:
+    def test_no_recognized_suffix_defaults_to_level_1_statement(self) -> None:
+        """Event name without recognized suffix → (1, 'Statement') default."""
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Unknown") == "advisory"
+        assert nws._normalize_severity("911 Telephone Outage") == (1, "Statement")
 
-    def test_unknown_cap_string_defaults_to_advisory(self) -> None:
-        """Unknown CAP severity (e.g. 'Critical') → 'advisory' default."""
-        from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        assert nws._normalize_severity("Critical") == "advisory"
-
-    def test_unknown_cap_string_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Unknown CAP severity emits a WARNING log so operator notices NWS schema change."""
+    def test_unrecognized_suffix_emits_warning_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unrecognized event name suffix emits a WARNING log."""
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
         with caplog.at_level(logging.WARNING, logger="weewx_clearskies_api.providers.alerts.nws"):
-            nws._normalize_severity("Critical")
-        assert any("Critical" in record.message for record in caplog.records), (
-            "Expected WARNING log mentioning 'Critical' for unknown CAP severity"
+            nws._normalize_severity("911 Telephone Outage")
+        assert any("911 Telephone Outage" in record.message for record in caplog.records), (
+            "Expected WARNING log mentioning the unrecognized event name"
         )
 
-    def test_severity_map_covers_all_five_cap_values(self) -> None:
-        """_NWS_SEVERITY_MAP covers Extreme, Severe, Moderate, Minor, Unknown."""
+    def test_all_four_suffix_tiers_produce_distinct_levels(self) -> None:
+        """All four event name suffixes produce distinct severity levels."""
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        for cap_value in ("Extreme", "Severe", "Moderate", "Minor", "Unknown"):
-            assert cap_value in nws._NWS_SEVERITY_MAP, (
-                f"_NWS_SEVERITY_MAP missing CAP value {cap_value!r}"
-            )
+        results = {
+            nws._normalize_severity("Tornado Warning"),
+            nws._normalize_severity("Tornado Watch"),
+            nws._normalize_severity("Wind Advisory"),
+            nws._normalize_severity("Special Weather Statement"),
+        }
+        assert len(results) == 4, f"Expected 4 distinct severity tiers, got {results}"
 
 
 # ===========================================================================
@@ -288,13 +287,16 @@ class TestNwsToCanonical:
             f"Expected 'Body only.', got {record.description!r}"
         )
 
-    def test_severity_normalized_in_canonical_record(self) -> None:
-        """Canonical AlertRecord.severity is the normalized string, not the raw CAP value."""
+    def test_severity_derived_from_event_name_in_canonical_record(self) -> None:
+        """Canonical AlertRecord severity is derived from event name suffix (ADR-052)."""
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        props = self._make_props(severity="Extreme")
+        props = self._make_props(event="Tornado Warning")
         record = nws._to_canonical(props)
-        assert record.severity == "warning", (
-            f"Extreme → 'warning', got {record.severity!r}"
+        assert record.severityLevel == 4, (
+            f"'Tornado Warning' → severityLevel=4, got {record.severityLevel!r}"
+        )
+        assert record.severityLabel == "Warning", (
+            f"'Tornado Warning' → severityLabel='Warning', got {record.severityLabel!r}"
         )
 
     def test_effective_time_converted_to_utc_z(self) -> None:
@@ -473,36 +475,36 @@ class TestNwsWireShapePydantic:
 
 
 class TestAlertsQueryParams:
-    """AlertsQueryParams rejects unknowns and invalid severity values."""
+    """AlertsQueryParams rejects unknowns and invalid minLevel values (ADR-052)."""
 
-    def test_valid_severity_advisory_accepted(self) -> None:
+    def test_valid_min_level_1_accepted(self) -> None:
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
-        params = AlertsQueryParams(severity="advisory")
-        assert params.severity == "advisory"
+        params = AlertsQueryParams(minLevel=1)
+        assert params.minLevel == 1
 
-    def test_valid_severity_watch_accepted(self) -> None:
+    def test_valid_min_level_3_accepted(self) -> None:
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
-        params = AlertsQueryParams(severity="watch")
-        assert params.severity == "watch"
+        params = AlertsQueryParams(minLevel=3)
+        assert params.minLevel == 3
 
-    def test_valid_severity_warning_accepted(self) -> None:
+    def test_valid_min_level_4_accepted(self) -> None:
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
-        params = AlertsQueryParams(severity="warning")
-        assert params.severity == "warning"
+        params = AlertsQueryParams(minLevel=4)
+        assert params.minLevel == 4
 
-    def test_missing_severity_is_none(self) -> None:
-        """severity is optional; missing → None (no filter applied)."""
+    def test_missing_min_level_is_none(self) -> None:
+        """minLevel is optional; missing → None (no filter applied)."""
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
         params = AlertsQueryParams()
-        assert params.severity is None
+        assert params.minLevel is None
 
-    def test_invalid_severity_value_raises_validation_error(self) -> None:
-        """Unrecognised severity value is rejected."""
+    def test_invalid_min_level_value_raises_validation_error(self) -> None:
+        """Unrecognised minLevel value is rejected."""
         from pydantic import ValidationError  # noqa: PLC0415
 
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
-            AlertsQueryParams(severity="critical")
+            AlertsQueryParams(minLevel=5)
 
     def test_unknown_query_key_raises_validation_error(self) -> None:
         """extra='forbid' on AlertsQueryParams rejects unknown query keys."""
@@ -510,7 +512,7 @@ class TestAlertsQueryParams:
 
         from weewx_clearskies_api.models.params import AlertsQueryParams  # noqa: PLC0415
         with pytest.raises(ValidationError):
-            AlertsQueryParams(severity="advisory", unknown_key="bad")  # type: ignore[call-arg]
+            AlertsQueryParams(minLevel=1, unknown_key="bad")  # type: ignore[call-arg]
 
 
 # ===========================================================================
@@ -519,77 +521,80 @@ class TestAlertsQueryParams:
 
 
 class TestAlertsSeverityFilter:
-    """Severity filter returns the correct subset of a canonical alert list."""
+    """minLevel filter returns the correct subset of a canonical alert list (ADR-052)."""
 
     def _make_alert_records(self) -> list[Any]:
-        """Build a list of AlertRecord objects with advisory, watch, warning severities."""
+        """Build a list of AlertRecord objects with severityLevel 1, 3, 4."""
         from weewx_clearskies_api.models.responses import AlertRecord  # noqa: PLC0415
         return [
             AlertRecord(
-                id="urn:advisory.001",
-                headline="Advisory alert",
+                id="urn:statement.001",
+                headline="Statement alert",
                 effective="2026-05-07T17:00:00Z",
-                severity="advisory",
-                event="Wind Advisory",
+                event="Special Weather Statement",
                 source="nws",
+                severityLevel=1,
+                severityLabel="Statement",
             ),
             AlertRecord(
                 id="urn:watch.001",
                 headline="Watch alert",
                 effective="2026-05-07T17:00:00Z",
-                severity="watch",
                 event="Tornado Watch",
                 source="nws",
+                severityLevel=3,
+                severityLabel="Watch",
             ),
             AlertRecord(
                 id="urn:warning.001",
                 headline="Warning alert",
                 effective="2026-05-07T17:00:00Z",
-                severity="warning",
                 event="Tornado Warning",
                 source="nws",
+                severityLevel=4,
+                severityLabel="Warning",
             ),
         ]
 
-    def test_advisory_filter_returns_all_alerts(self) -> None:
-        """severity=advisory returns all alerts (advisory is minimum severity)."""
-        from weewx_clearskies_api.endpoints.alerts import _filter_by_severity  # noqa: PLC0415
+    def test_min_level_1_returns_all_alerts(self) -> None:
+        """minLevel=1 returns all alerts (statement is minimum level)."""
+        from weewx_clearskies_api.endpoints.alerts import _filter_by_min_level  # noqa: PLC0415
         alerts = self._make_alert_records()
-        result = _filter_by_severity(alerts, "advisory")
+        result = _filter_by_min_level(alerts, 1)
         assert len(result) == 3, (
-            f"severity=advisory should return all 3 alerts, got {len(result)}"
+            f"minLevel=1 should return all 3 alerts, got {len(result)}"
         )
 
-    def test_watch_filter_returns_watch_and_warning(self) -> None:
-        """severity=watch returns watch + warning (not advisory)."""
-        from weewx_clearskies_api.endpoints.alerts import _filter_by_severity  # noqa: PLC0415
+    def test_min_level_3_returns_watch_and_warning(self) -> None:
+        """minLevel=3 returns watch + warning (not statement)."""
+        from weewx_clearskies_api.endpoints.alerts import _filter_by_min_level  # noqa: PLC0415
         alerts = self._make_alert_records()
-        result = _filter_by_severity(alerts, "watch")
+        result = _filter_by_min_level(alerts, 3)
         assert len(result) == 2, (
-            f"severity=watch should return 2 alerts (watch+warning), got {len(result)}"
+            f"minLevel=3 should return 2 alerts (watch+warning), got {len(result)}"
         )
-        returned_severities = {a.severity for a in result}
-        assert "advisory" not in returned_severities, (
-            "severity=watch must exclude advisory alerts"
+        returned_levels = {a.severityLevel for a in result}
+        assert 1 not in returned_levels, (
+            "minLevel=3 must exclude level-1 (statement) alerts"
         )
-        assert "watch" in returned_severities
-        assert "warning" in returned_severities
+        assert 3 in returned_levels
+        assert 4 in returned_levels
 
-    def test_warning_filter_returns_only_warnings(self) -> None:
-        """severity=warning returns only warning alerts."""
-        from weewx_clearskies_api.endpoints.alerts import _filter_by_severity  # noqa: PLC0415
+    def test_min_level_4_returns_only_warnings(self) -> None:
+        """minLevel=4 returns only warning alerts."""
+        from weewx_clearskies_api.endpoints.alerts import _filter_by_min_level  # noqa: PLC0415
         alerts = self._make_alert_records()
-        result = _filter_by_severity(alerts, "warning")
+        result = _filter_by_min_level(alerts, 4)
         assert len(result) == 1, (
-            f"severity=warning should return 1 alert, got {len(result)}"
+            f"minLevel=4 should return 1 alert, got {len(result)}"
         )
-        assert result[0].severity == "warning"
+        assert result[0].severityLevel == 4
 
     def test_none_filter_returns_all_alerts(self) -> None:
-        """severity=None (no filter) returns all alerts."""
-        from weewx_clearskies_api.endpoints.alerts import _filter_by_severity  # noqa: PLC0415
+        """minLevel=None (no filter) returns all alerts."""
+        from weewx_clearskies_api.endpoints.alerts import _filter_by_min_level  # noqa: PLC0415
         alerts = self._make_alert_records()
-        result = _filter_by_severity(alerts, None)
+        result = _filter_by_min_level(alerts, None)
         assert len(result) == 3
 
 
@@ -656,9 +661,10 @@ class TestMemoryCache:
             id="urn:oid:test.cache",
             headline="Cache test",
             effective="2026-05-07T17:00:00Z",
-            severity="advisory",
             event="Wind Advisory",
             source="nws",
+            severityLevel=2,
+            severityLabel="Advisory",
         )
         # fetch() stores model_dump() dicts, not AlertRecord objects
         cache = MemoryCache()
@@ -722,10 +728,11 @@ class TestRedisCache:
             id="urn:oid:redis.test",
             headline="Redis round-trip test",
             effective="2026-05-07T17:00:00Z",
-            severity="watch",
             event="Tornado Watch",
             source="nws",
             senderName="NWS Tulsa OK",
+            severityLevel=3,
+            severityLabel="Watch",
         )
         redis_cache.set("alerts:redis", [record.model_dump()], ttl_seconds=60)
         result = redis_cache.get("alerts:redis")
@@ -734,8 +741,8 @@ class TestRedisCache:
         assert result[0]["id"] == "urn:oid:redis.test", (
             "JSON round-trip must preserve the id field"
         )
-        assert result[0]["severity"] == "watch", (
-            "JSON round-trip must preserve normalised severity"
+        assert result[0]["severityLevel"] == 3, (
+            "JSON round-trip must preserve severityLevel"
         )
 
     def test_connection_refused_at_construction_raises(self) -> None:
@@ -1063,10 +1070,12 @@ class TestNwsModuleFetch:
             )
             result = nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
         assert len(result) == 2, f"Expected 2 alerts, got {len(result)}"
-        # Verify severity mapping is correct — both alerts in fixture are Minor/Moderate → advisory
         for alert_record in result:
-            assert alert_record.severity in ("advisory", "watch", "warning"), (
-                f"canonical severity must be advisory/watch/warning, got {alert_record.severity!r}"
+            assert alert_record.severityLevel is not None, (
+                "canonical severityLevel must be set for NWS alerts"
+            )
+            assert alert_record.severityLevel in (1, 2, 3, 4), (
+                f"severityLevel must be 1-4, got {alert_record.severityLevel!r}"
             )
 
     def test_fetch_description_instruction_concatenated(self) -> None:
@@ -1138,8 +1147,8 @@ class TestNwsModuleFetch:
             with pytest.raises(QuotaExhausted):
                 nws.fetch(lat=47.6062, lon=-122.3321, user_agent_contact="test@example.com")
 
-    def test_fetch_extreme_severity_maps_to_warning(self) -> None:
-        """fetch() with Extreme severity alert returns canonical 'warning' severity AlertRecord."""
+    def test_fetch_extreme_fixture_produces_severity_levels(self) -> None:
+        """fetch() with extreme severity fixture returns alerts with valid severityLevel."""
         import httpx  # noqa: PLC0415
         import respx  # noqa: PLC0415
 
@@ -1150,10 +1159,11 @@ class TestNwsModuleFetch:
                 return_value=httpx.Response(200, json=fixture)
             )
             result = nws.fetch(lat=35.4, lon=-97.2, user_agent_contact="test@example.com")
-        warning_alerts = [a for a in result if a.severity == "warning"]
-        assert len(warning_alerts) >= 1, (
-            "At least one 'warning' alert expected from Extreme severity fixture"
-        )
+        assert len(result) >= 1, "Expected at least one alert from extreme fixture"
+        for alert in result:
+            assert alert.severityLevel is not None, (
+                "severityLevel must be set for NWS alerts"
+            )
 
 
 # ===========================================================================
@@ -1217,9 +1227,9 @@ class TestCapabilityRegistry:
         assert len(cap.auth_required) == 0, "NWS is keyless; auth_required must be empty"
 
     def test_nws_capability_supplied_fields_include_core_alert_fields(self) -> None:
-        """NWS CAPABILITY declares id, headline, description, severity, event, effective."""
+        """NWS CAPABILITY declares id, headline, description, severityLevel, event, effective."""
         from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
-        core = {"id", "headline", "description", "severity", "event", "effective"}
+        core = {"id", "headline", "description", "severityLevel", "severityLabel", "event", "effective"}
         supplied = set(nws.CAPABILITY.supplied_canonical_fields)
         missing = core - supplied
         assert not missing, (
@@ -1433,9 +1443,10 @@ class TestAlertsEndpointWithNWS:
             id="urn:oid:cached.001",
             headline="Cached alert",
             effective="2026-05-07T17:00:00Z",
-            severity="advisory",
             event="Test Event",
             source="nws",
+            severityLevel=2,
+            severityLabel="Advisory",
         )
         cache_key = nws._build_cache_key(42.375, -72.519)
         get_cache().set(cache_key, [record.model_dump()], ttl_seconds=300)
