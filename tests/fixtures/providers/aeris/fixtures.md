@@ -61,6 +61,37 @@ Sidecar documentation per 3b-1 fixture-capture discipline.
   Both `response[0].summary` and `response[0].periods[0].summary` are tested; impl team should
   detect both paths per lead-call 14.
 
+## xcast_forecasts_hourly.json
+
+- **Capture date:** 2026-06-20
+- **Endpoint:** `GET /xcast/forecasts/33.6568,-117.9827?filter=1hr&limit=24`
+- **Lat/Lon:** 33.6568 N, 117.9827 W (Huntington Beach, CA)
+- **Aeris account tier:** PWS contributor (xcast included)
+- **Period count:** 24 (1 day of hourly periods)
+- **Capture note:** Real live capture. Response is wire-compatible with standard `/forecasts`
+  hourly periods. Two additional fields per period: `tempConfidenceLimit` and
+  `windConfidenceLimit`. Both are `null` in this fixture because there are no Xcast
+  sensors near this location. When Xcast sensors are deployed nearby, these fields
+  contain `{"upper": <float>, "lower": <float>}` confidence bounds.
+- **Redaction:** No credentials in response body.
+
+### Wire-shape notes
+
+- All fields from standard `/forecasts?filter=1hr` are present with identical names.
+- `tempConfidenceLimit` and `windConfidenceLimit` appended at end of each period object.
+- `loc` snaps to a slightly different grid point (33.691, -118.010 vs 33.657, -117.983
+  for standard) — xcast uses its own spatial grid.
+- `interval` field is `"1hr"` (same as standard hourly).
+- Temperature values differ from standard (e.g., tempC: 20.36 vs 19.8 at same hour) —
+  ML enhancement is active even without local sensors.
+
+### Xcast daynight limitation (verified 2026-06-20)
+
+The `/xcast/forecasts` endpoint ignores `filter=daynight`. When `filter=daynight` is
+requested, xcast returns hourly periods anyway (`interval: "1hr"`). Consequence: the
+module uses xcast for hourly calls only; daynight calls always use the standard
+`/forecasts` endpoint. No `xcast_forecasts_daynight.json` fixture is needed.
+
 ## error_401_invalid_credentials.json
 
 - **Type:** Synthetic (based on Aeris API documentation §"HTTP status codes" + §"Common error codes")
