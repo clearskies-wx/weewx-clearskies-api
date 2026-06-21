@@ -31,7 +31,6 @@ Startup sequence (ADR-012):
     6d. wire ephemeris        — loads de421.bsp for almanac (fatal if not available).
     6e. wire reports dir      — non-fatal; empty /reports on missing dir.
     6f. wire content dir      — non-fatal; 404 /content/* on missing dir.
-    6g. wire hidden pages     — pages excluded from /pages response.
     6h. wire cache            — construct MemoryCache or RedisCache (fail-closed).
     6i. wire providers        — register configured provider CAPABILITY declarations.
     6j. wire alerts settings  — pass settings to alerts endpoint.

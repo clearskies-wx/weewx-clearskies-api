@@ -53,7 +53,7 @@ First public release.
 
 **Config and capabilities**
 - `GET /api/v1/capabilities` — provider capability declarations for configured providers
-- `GET /api/v1/pages` — visible page list (respects `[pages] hidden`)
+- `GET /api/v1/pages` — all 9 built-in pages unconditionally (page visibility filtering is the dashboard's responsibility via `pages.json`)
 - `GET /api/v1/charts/groups` — chart group config
 - `GET /api/v1/content/about` — operator about-page markdown
 - `GET /api/v1/content/legal` — operator legal-page markdown
