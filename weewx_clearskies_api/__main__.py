@@ -940,7 +940,12 @@ def main() -> None:
 
     # Wire archive_interval to sky classifier and temperature comfort hold.
     _station_for_enrichment = get_station_info()
-    sky_condition.configure(archive_interval=_station_for_enrichment.archive_interval)
+    sky_condition.configure(
+        archive_interval=_station_for_enrichment.archive_interval,
+        latitude=_station_for_enrichment.latitude,
+        longitude=_station_for_enrichment.longitude,
+        altitude=_station_for_enrichment.altitude,
+    )
     temperature_comfort.configure(archive_interval=_station_for_enrichment.archive_interval)
 
     # Seed sky classifier ring buffer from archive records (last 30 min) so

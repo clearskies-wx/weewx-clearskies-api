@@ -33,8 +33,12 @@ Startup backfill: archive records can seed the ring buffer for immediate
 
 Deviations from CAELUS:
   - maxSolarRad used as clear-sky reference (CAELUS uses ghicda)
-  - Solar zenith angle approximated via maxSolarRad thresholds
-  - GHI mirroring omitted (_MIN_SOLAR_RAD guard excludes low-sun periods)
+  - Solar zenith angle computed via Skyfield (station coords from configure())
+  - GHI mirroring adapted from CAELUS mirror_ghi_with_pandas() — synthetic
+    pre-sunrise entries extend the Km baseline at sunrise using cos(zenith)
+    interpolation.  Only affects Km; Kv/Kvf use real ring data only.
+  - SZA < 85° guard: classify() returns _last_stable_label when solar
+    elevation < 5°, preventing classification at low sun angles.
   - Trailing window instead of centered (necessary for real-time)
   - Streaming temporal coherence filter instead of batch patch cleaning
   - Kv/Kvf detrended by clear-sky model (CAELUS relies on centered windows
@@ -56,8 +60,11 @@ the buffer must persist across requests. Use reset() in tests.
 
 from __future__ import annotations
 
+import bisect
+import math
 import time
 from collections import deque
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
@@ -97,6 +104,10 @@ _OVERCAST_MAX_KV: float = 0.10
 _SZA80_MSR_PROXY: float = 100.0   # maxSolarRad > 100 ≈ SZA < 80°
 _SZA75_MSR_PROXY: float = 200.0   # maxSolarRad > 200 ≈ SZA < 75°
 
+# SZA guard threshold (degrees elevation). When solar elevation < this value
+# (SZA > 85°), classify() returns the last stable label instead of classifying.
+_SZA_GUARD_ELEVATION: float = 5.0
+
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
@@ -123,6 +134,13 @@ _last_stable_label: str | None = None
 
 # Archive interval — set by configure() at startup; default matches weewx default.
 _archive_interval: float = 300.0
+
+# Station coordinates and cached Skyfield observer — set by configure().
+# None until configure() is called with lat/lon/altitude.
+_station_lat: float | None = None
+_station_lon: float | None = None
+_station_alt: float | None = None
+_skyfield_observer: object | None = None  # skyfield VectorSum (earth + location)
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +196,18 @@ def classify() -> str | None:
     "Mostly Clear", "Mostly Clear, Scattered Clouds",
     "Partly Cloudy", "Mostly Cloudy", "Cloudy", "Overcast",
     "Heavy Overcast", or None when insufficient data.
+
+    When solar elevation < 5° (SZA > 85°) and station coordinates are
+    configured, returns _last_stable_label without classifying.
     """
+    # SZA guard: skip classification when sun is too low on the horizon.
+    # Uses the cached Skyfield observer built at configure() time.
+    if _skyfield_observer is not None:
+        now_ts = _ring[-1].ts if _ring else time.time()
+        elevation = _compute_solar_elevation(now_ts)
+        if elevation is not None and elevation < _SZA_GUARD_ELEVATION:
+            return _last_stable_label
+
     indices = _compute_indices()
     if indices is None:
         return _last_stable_label
@@ -190,16 +219,39 @@ def classify() -> str | None:
     return _apply_coherence_filter(raw_label, now)
 
 
-def configure(archive_interval: int) -> None:
-    """Set the archive interval for freshness thresholds.
+def configure(
+    archive_interval: int,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    altitude: float | None = None,
+) -> None:
+    """Set the archive interval and optional station coordinates.
 
     Called once at startup from __main__.py after load_station_metadata().
     The is_daytime() freshness threshold scales to 5× the archive interval
     so that a station with 60-second archives uses 300 s and a station with
     300-second archives uses 1500 s.
+
+    When latitude, longitude, and altitude are all provided, pre-builds the
+    Skyfield observer position used for GHI mirroring and the SZA guard.
+    If any coordinate is None, mirroring and the SZA guard are disabled.
     """
     global _archive_interval  # noqa: PLW0603
+    global _station_lat, _station_lon, _station_alt, _skyfield_observer  # noqa: PLW0603
     _archive_interval = float(archive_interval)
+
+    if latitude is not None and longitude is not None and altitude is not None:
+        _station_lat = float(latitude)
+        _station_lon = float(longitude)
+        _station_alt = float(altitude)
+        _skyfield_observer = _build_skyfield_observer(
+            _station_lat, _station_lon, _station_alt
+        )
+    else:
+        _station_lat = None
+        _station_lon = None
+        _station_alt = None
+        _skyfield_observer = None
 
 
 def is_daytime() -> bool:
@@ -216,6 +268,7 @@ def is_daytime() -> bool:
 def reset() -> None:
     """Clear all state. For test isolation only."""
     global _was_daytime, _last_minute_ts, _last_stable_label, _archive_interval
+    global _station_lat, _station_lon, _station_alt, _skyfield_observer  # noqa: PLW0603
     _ring.clear()
     _minute_acc.clear()
     _last_minute_ts = 0.0
@@ -223,6 +276,10 @@ def reset() -> None:
     _classification_history.clear()
     _last_stable_label = None
     _archive_interval = 300.0
+    _station_lat = None
+    _station_lon = None
+    _station_alt = None
+    _skyfield_observer = None
 
 
 def backfill(records: list[tuple[float, float, float]]) -> None:
@@ -276,6 +333,174 @@ def backfill(records: list[tuple[float, float, float]]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_skyfield_observer(lat: float, lon: float, alt_m: float) -> object | None:
+    """Build and return a Skyfield observer vector for the given coordinates.
+
+    Returns None if the ephemeris is not available (e.g., during unit tests
+    that do not load de421.bsp).
+    """
+    try:
+        from weewx_clearskies_api.services.almanac import get_ts_eph  # noqa: PLC0415
+        from skyfield.api import wgs84  # noqa: PLC0415
+
+        ts, eph = get_ts_eph()
+        location = wgs84.latlon(lat, lon, elevation_m=alt_m)  # type: ignore[call-arg]
+        earth = eph["earth"]  # type: ignore[index]
+        sun = eph["sun"]  # type: ignore[index]
+        observer = earth + location  # type: ignore[operator]
+        # Store sun reference alongside observer as a 2-tuple for _compute_solar_elevation.
+        return (observer, sun, ts)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _compute_solar_elevation(unix_ts: float) -> float | None:
+    """Return solar elevation in degrees for the cached observer at unix_ts.
+
+    Returns None if the observer is not built or ephemeris computation fails.
+    cos(zenith) = sin(elevation); positive elevation means sun is above horizon.
+    """
+    if _skyfield_observer is None:
+        return None
+    try:
+        observer, sun, ts = _skyfield_observer  # type: ignore[misc]
+        dt = datetime.fromtimestamp(unix_ts, tz=UTC)
+        t = ts.utc(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)  # type: ignore[attr-defined]
+        apparent = observer.at(t).observe(sun).apparent()  # type: ignore[attr-defined]
+        alt_obj, _az, _dist = apparent.altaz()  # type: ignore[attr-defined]
+        return float(alt_obj.degrees)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cos_zenith_for_ts(unix_ts: float) -> float | None:
+    """Return cos(zenith) = sin(elevation) for a given Unix timestamp.
+
+    Returns None when the observer is unavailable.
+    """
+    elev = _compute_solar_elevation(unix_ts)
+    if elev is None:
+        return None
+    return math.sin(math.radians(elev))
+
+
+def _interp_linear(xs: list[float], ys: list[float], x: float) -> float | None:
+    """Linear interpolation at x from sorted (xs, ys) pairs.
+
+    Returns None when xs is empty or x is outside the range (no extrapolation).
+    xs must be sorted ascending.
+    """
+    if not xs:
+        return None
+    if x <= xs[0]:
+        return None
+    if x >= xs[-1]:
+        return None
+    idx = bisect.bisect_right(xs, x) - 1
+    x0, x1 = xs[idx], xs[idx + 1]
+    y0, y1 = ys[idx], ys[idx + 1]
+    if x1 == x0:
+        return y0
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+def _mirror_for_km(
+    ring_entries: list[MinuteRecord],
+) -> list[tuple[float, float]]:
+    """Generate (ghi, max_solar_rad) pairs for Km computation with GHI mirroring.
+
+    At sunrise, the 30-minute trailing window contains only a few minutes of
+    post-sunrise data.  Under overcast, the diffuse radiation at low sun angles
+    is a disproportionately high fraction of the small clear-sky reference,
+    inflating Km.  Mirroring extends the window backward using cos(zenith)
+    interpolation so that Km sees a longer, more representative baseline.
+
+    Algorithm (adapted from CAELUS mirror_ghi_with_pandas()):
+    - Compute cos(zenith) for each ring entry.
+    - Post-sunrise entries: cos_z > 0 (real data, sun above horizon).
+    - Pre-sunrise entries: cos_z <= 0 (synthetic needed).
+    - For each pre-sunrise entry, query the post-sunrise (cos_z, GHI) curve
+      at -cos_z (the symmetric morning angle), then negate the result to
+      maintain sign convention.
+    - Mirrored entry denominator uses the maxSolarRad of the post-sunrise
+      entry at the same mirrored cos_z — NOT zero — so mean(maxSolarRad) is
+      not diluted by zeros.  This avoids Km instability from near-zero
+      denominators while still extending the effective baseline.
+
+    If station coordinates are not configured, or fewer than 2 post-sunrise
+    entries exist, returns the real ring entries unchanged.
+
+    Only used by _compute_indices() for Km.  Kv/Kvf always use the raw ring.
+    """
+    if _skyfield_observer is None:
+        return [(r.ghi, r.max_solar_rad) for r in ring_entries]
+
+    # Compute cos(zenith) for every ring entry.
+    cosz_list: list[float | None] = [_cos_zenith_for_ts(r.ts) for r in ring_entries]
+
+    # Separate post-sunrise (cos_z > 0) from pre-sunrise (cos_z <= 0).
+    post_cosz: list[float] = []
+    post_ghi: list[float] = []
+    post_msr: list[float] = []
+    pre_indices: list[int] = []
+
+    for i, (entry, cz) in enumerate(zip(ring_entries, cosz_list)):
+        if cz is None:
+            # Can't determine; treat as real entry.
+            continue
+        if cz > 0.0:
+            post_cosz.append(cz)
+            post_ghi.append(entry.ghi)
+            post_msr.append(entry.max_solar_rad)
+        else:
+            pre_indices.append(i)
+
+    # Need at least 2 post-sunrise points for interpolation.
+    if len(post_cosz) < 2 or not pre_indices:
+        return [(r.ghi, r.max_solar_rad) for r in ring_entries]
+
+    # Sort post-sunrise data by cos_z ascending for bisect interpolation.
+    sorted_pairs = sorted(zip(post_cosz, post_ghi, post_msr))
+    sorted_cosz = [p[0] for p in sorted_pairs]
+    sorted_ghi = [p[1] for p in sorted_pairs]
+    sorted_msr = [p[2] for p in sorted_pairs]
+
+    # Build result: start with all real entries.
+    result: list[tuple[float, float]] = [
+        (r.ghi, r.max_solar_rad) for r in ring_entries
+    ]
+
+    # Replace pre-sunrise entries with mirrored synthetic entries where possible.
+    for idx in pre_indices:
+        cz = cosz_list[idx]
+        if cz is None:
+            continue
+        # Mirror cos_z: for a pre-sunrise entry at -|cos_z|, look up the
+        # post-sunrise curve at +|cos_z| (symmetric angle).
+        mirror_cz = -cz  # cz <= 0, so mirror_cz >= 0
+
+        mirrored_ghi = _interp_linear(sorted_cosz, sorted_ghi, mirror_cz)
+        mirrored_msr = _interp_linear(sorted_cosz, sorted_msr, mirror_cz)
+
+        if mirrored_ghi is None or mirrored_msr is None:
+            # mirror_cz outside interpolatable range; keep real entry.
+            continue
+
+        # Negate GHI to follow CAELUS sign convention for pre-sunrise synthetic
+        # data, then take absolute value for the Km ratio.  Under overcast,
+        # mirrored_ghi is small (low real post-sunrise GHI), so abs keeps Km low.
+        # Use the interpolated maxSolarRad (not zero) to avoid diluting the
+        # mean(maxSolarRad) denominator.
+        synthetic_ghi = abs(mirrored_ghi)
+        synthetic_msr = abs(mirrored_msr)
+
+        if synthetic_msr > 0:
+            result[idx] = (synthetic_ghi, synthetic_msr)
+        # else: maxSolarRad still zero at that angle; keep real entry.
+
+    return result
+
+
 def _maybe_flush_minute(timestamp: float) -> None:
     """Flush the sub-minute accumulator to the ring if a minute boundary passed."""
     if not _minute_acc:
@@ -304,6 +529,10 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
     """Compute (Kcs, Km, Kv, Kvf, latest_msr) from the ring buffer.
 
     Returns None when ring has < 3 entries (startup guard).
+
+    Km is computed from mirrored (ghi, max_solar_rad) pairs when station
+    coordinates are available — see _mirror_for_km().  Kv and Kvf always
+    use the raw ring buffer (real measurements only).
     """
     if len(_ring) < 3:
         return None
@@ -317,12 +546,16 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
     else:
         kcs = 0.0
 
-    # Km: mean normalized irradiance over the full ring.
-    all_ghi = [r.ghi for r in _ring]
-    all_msr = [r.max_solar_rad for r in _ring]
-    mean_msr = sum(all_msr) / len(all_msr)
-    if mean_msr > 0:
-        km = max(sum(all_ghi) / len(all_ghi) / mean_msr, 0.0)
+    # Km: mean normalized irradiance over the full ring, with GHI mirroring.
+    # _mirror_for_km() returns (ghi, msr) pairs where pre-sunrise entries
+    # may be replaced by synthetic mirrored values for a stable Km baseline.
+    ring_list = list(_ring)
+    km_pairs = _mirror_for_km(ring_list)
+    km_ghi = [p[0] for p in km_pairs]
+    km_msr = [p[1] for p in km_pairs]
+    km_mean_msr = sum(km_msr) / len(km_msr)
+    if km_mean_msr > 0:
+        km = max(sum(km_ghi) / len(km_ghi) / km_mean_msr, 0.0)
     else:
         km = 0.0
 
@@ -340,6 +573,9 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
     # isolate cloud-induced variability is standard practice in solar energy
     # research (Stein et al. 2012 — Variability Index, Sandia SAND2012-3464C;
     # Coimbra et al. 2013 — clear-sky index stationarity).
+    #
+    # Kv/Kvf always use the raw ring (not mirrored) — variability metrics
+    # must reflect only real measurement fluctuations.
 
     diff_abs_all: list[float] = []
     for i in range(1, len(_ring)):
@@ -347,7 +583,6 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
         msr_delta = _ring[i].max_solar_rad - _ring[i - 1].max_solar_rad
         diff_abs_all.append(abs(ghi_delta - msr_delta))
 
-    ring_list = list(_ring)
     # Use actual time span as denominator so mixed-resolution backfill data
     # (e.g., 5-minute archive intervals) produces correct Kv values.
     ring_span = max(ring_list[-1].ts - ring_list[0].ts, 60.0)
