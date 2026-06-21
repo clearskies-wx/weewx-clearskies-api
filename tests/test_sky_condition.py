@@ -311,21 +311,17 @@ def test_thick_clouds_classification():
 
 
 def test_scatter_clouds_classification():
-    """Large GHI oscillation around a firmly mid-range mean falls to SCATTER_CLOUDS.
+    """Large GHI oscillation around a mid-range mean falls to SCATTER_CLOUDS.
 
-    Alternating GHI between 600 and 210 W/m², msr=900.
-    Mean = 405 W/m², Km ≈ 0.45 ∈ (0.40, 0.50).  Deviation amplitude = 195 W/m².
-    Kv ≈ 195 / 1800 * 29 ≈ 3.15 — far outside THIN_CLOUDS and THICK_CLOUDS.
-    Falls through to SCATTER_CLOUDS; Km sub-split: 0.40 < Km < 0.50 → 'Partly Cloudy'.
+    Alternating GHI between 700 and 470 W/m², msr=900.
+    Mean ≈ 585 W/m², Km ≈ 0.65 ∈ (0.52, 0.85).  Deviation amplitude = 115 W/m².
+    Kv elevated — outside THIN_CLOUDS and THICK_CLOUDS.
+    Falls through to SCATTER_CLOUDS; K-C sub-split: 0.52 < Km < 0.85 → 'Partly Cloudy'.
 
-    GHI values (600 / 210) are chosen so Km stays firmly in the (0.40, 0.50)
-    range regardless of which minute was last flushed:
-      15 bins of 600 + 14 bins of 210 → mean ≈ 412 → Km ≈ 0.458  (even last)
-      15 bins of 600 + 15 bins of 210 → mean = 405 → Km = 0.450  (odd last)
-    Both produce a stable raw label of 'Partly Cloudy', allowing the coherence
-    filter to commit after 15 consecutive matching minutes.
+    Thresholds from Kasten-Czeplak (1980): Km 0.52 ≈ 7 oktas (BKN),
+    Km 0.85 ≈ 4 oktas (SCT).  Km 0.65 ≈ 6 oktas (BKN) = "Partly Cloudy".
     """
-    _feed_alternating_ghi(ghi_high=600.0, ghi_low=210.0, msr=900.0, minutes=30)
+    _feed_alternating_ghi(ghi_high=700.0, ghi_low=470.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
     assert result == "Partly Cloudy", (
         f"Expected 'Partly Cloudy' for SCATTER_CLOUDS conditions, got {result!r}"
@@ -1313,11 +1309,11 @@ def test_all_six_caelus_classes_still_produce_labels():
     assert result_thin is not None, "THIN_CLOUDS: classify() returned None with station coords"
     assert result_thin in valid_labels
 
-    # SCATTER_CLOUDS: alternating 600/210 W/m² → stable Km ≈ 0.45 → 'Partly Cloudy'.
-    # Values chosen so Km stays in (0.40, 0.50) regardless of last flushed minute.
+    # SCATTER_CLOUDS: alternating 700/470 W/m² → Km ≈ 0.65 → 'Partly Cloudy'.
+    # K-C: Km 0.65 ≈ 6 oktas (BKN), within the 0.52–0.85 "Partly Cloudy" range.
     sky_condition.reset()
     _configure_nyc()
-    _feed_alternating_ghi(ghi_high=600.0, ghi_low=210.0, msr=900.0, minutes=30)
+    _feed_alternating_ghi(ghi_high=700.0, ghi_low=470.0, msr=900.0, minutes=30)
     result_scatter = sky_condition.classify()
     assert result_scatter is not None, (
         "SCATTER_CLOUDS: classify() returned None with station coords"

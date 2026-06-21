@@ -684,13 +684,15 @@ def _classify_caelus(
         return "Mostly Cloudy"
 
     # SCATTER_CLOUDS: catch-all — patchy cumulus, sun in and out.
-    # Km sub-split determines base brightness; "Scattered Clouds" descriptor
-    # only when the sky is predominantly clear.
-    if km > 0.6:
+    # Km sub-split boundaries derived from Kasten-Czeplak (1980):
+    #   Km = 1 - 0.75 × (N/8)^3.4
+    #   Km 0.97 ≈ 2 oktas (FEW), Km 0.85 ≈ 4 oktas (SCT), Km 0.52 ≈ 7 oktas (BKN)
+    # "Scattered Clouds" descriptor only when sky is predominantly clear.
+    if km > 0.97:
         return "Clear, Scattered Clouds"
-    if km > 0.5:
+    if km > 0.85:
         return "Mostly Clear, Scattered Clouds"
-    if km > 0.4:
+    if km > 0.52:
         return "Partly Cloudy"
     return "Mostly Cloudy"
 
