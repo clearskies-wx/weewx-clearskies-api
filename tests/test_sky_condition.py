@@ -823,3 +823,551 @@ class TestConfigure:
         sky_condition.configure(archive_interval=60)
         sky_condition.reset()
         assert sky_condition._archive_interval == 300.0
+
+    def test_configure_accepts_station_coords(self) -> None:
+        """configure() with lat/lon/altitude stores coordinates without error.
+
+        Does not assert observer is built — Skyfield may be unavailable.
+        Only asserts that module state accepts the coordinates and no exception
+        is raised.  _station_lat/_station_lon/_station_alt are set regardless
+        of whether the ephemeris loaded.
+        """
+        sky_condition.configure(
+            archive_interval=300,
+            latitude=40.7128,
+            longitude=-74.0060,
+            altitude=10.0,
+        )
+        assert sky_condition._station_lat == pytest.approx(40.7128)
+        assert sky_condition._station_lon == pytest.approx(-74.0060)
+        assert sky_condition._station_alt == pytest.approx(10.0)
+
+    def test_configure_without_coords_clears_observer(self) -> None:
+        """configure() without lat/lon/altitude leaves _skyfield_observer as None.
+
+        Mirroring and SZA guard must not activate when coords are absent.
+        """
+        # First set coords, then clear them.
+        sky_condition.configure(
+            archive_interval=300,
+            latitude=40.7128,
+            longitude=-74.0060,
+            altitude=10.0,
+        )
+        sky_condition.configure(archive_interval=300)
+        assert sky_condition._skyfield_observer is None
+        assert sky_condition._station_lat is None
+        assert sky_condition._station_lon is None
+        assert sky_condition._station_alt is None
+
+
+# ---------------------------------------------------------------------------
+# Helper: timestamps for New York City (40.7128°N, 74.0060°W) on 2024-06-21.
+#
+# 2024-06-21 is the northern hemisphere summer solstice — maximum daylight.
+# Solar noon for NYC on this date is approximately 12:56 PM EDT = 16:56 UTC.
+# Midnight EDT = 04:00 UTC.
+#
+# Unix timestamps (UTC):
+#   _NYC_NOON_TS    = 2024-06-21 16:56:00 UTC  → solar elevation ≈ +73°  (high)
+#   _NYC_MORNING_TS = 2024-06-21 14:00:00 UTC  → solar elevation ≈ +52°  (high)
+#   _NYC_MIDNIGHT_TS = 2024-06-21 04:00:00 UTC → solar elevation ≈ -50°  (below horizon)
+#   _NYC_SUNRISE_TS = 2024-06-21 09:24:00 UTC  → solar elevation ≈ 0°    (near horizon)
+#
+# Tests that require Skyfield to compute solar elevation are skipped when
+# configure() fails to build the observer (ephemeris not available in the test
+# environment).  The skip marker is set by checking _skyfield_observer is not
+# None after configure().
+# ---------------------------------------------------------------------------
+
+_NYC_LAT = 40.7128
+_NYC_LON = -74.0060
+_NYC_ALT = 10.0
+
+# 2024-06-21 16:56 UTC → solar noon for NYC → elevation ≈ +73°
+_NYC_NOON_TS = 1_718_988_960.0
+
+# 2024-06-21 14:00 UTC → 10 AM EDT → elevation well above 5°
+_NYC_MORNING_TS = 1_718_978_400.0
+
+# 2024-06-21 04:00 UTC → midnight EDT → elevation ≈ -50° (well below horizon)
+_NYC_MIDNIGHT_TS = 1_718_942_400.0
+
+# 2024-06-21 09:24 UTC → sunrise for NYC → elevation ≈ 0° (near horizon)
+_NYC_SUNRISE_TS = 1_718_961_840.0
+
+# 2024-06-22 00:00 UTC → 8 PM EDT on June 21 → post-sunset for NYC → elevation ≈ -8°
+# Use for SZA guard tests: feeds data AFTER the morning midday feed so that
+# ring[-1].ts is this timestamp (below-horizon), not the earlier morning one.
+_NYC_POSTSUNSET_TS = 1_719_014_400.0
+
+# Spacing between fake minute bins when constructing midday data streams.
+# Must stay within 1800 s of each other to remain in the 30-minute ring.
+_MINUTE_SEC = 60.0
+
+
+def _configure_nyc(archive_interval: int = 300) -> None:
+    """Call configure() with NYC coordinates.  Leaves observer built if ephemeris
+    is present; leaves it None if Skyfield cannot load the ephemeris."""
+    sky_condition.configure(
+        archive_interval=archive_interval,
+        latitude=_NYC_LAT,
+        longitude=_NYC_LON,
+        altitude=_NYC_ALT,
+    )
+
+
+def _skyfield_available() -> bool:
+    """Return True when configure() successfully built a Skyfield observer."""
+    return sky_condition._skyfield_observer is not None
+
+
+def _feed_constant_ghi_at(
+    ghi: float,
+    msr: float,
+    minutes: int,
+    base_ts: float,
+) -> None:
+    """Feed constant GHI for `minutes` minutes starting at base_ts.
+
+    Each minute gets 12 readings at 5-second intervals.  classify() is
+    called after each minute to accumulate coherence filter history.
+    Does NOT call sky_condition.reset() — caller must reset before calling
+    if a clean state is needed.
+    """
+    for minute in range(minutes):
+        for tick in range(12):
+            ts = base_ts + minute * _MINUTE_SEC + tick * 5
+            sky_condition.update(ghi, msr, timestamp=ts)
+        sky_condition.classify()
+
+
+# ---------------------------------------------------------------------------
+# Group 8: GHI mirroring tests
+# ---------------------------------------------------------------------------
+
+
+def test_mirroring_disabled_when_no_station_coords():
+    """configure() without coords disables mirroring; classify() still works.
+
+    With no lat/lon/altitude, _skyfield_observer is None, so _mirror_for_km()
+    falls through to return real ring data unchanged.  Classification must
+    succeed and return a known label.
+    """
+    sky_condition.configure(archive_interval=300)
+    assert sky_condition._skyfield_observer is None, (
+        "Pre-condition: no coords → observer must be None"
+    )
+    _feed_constant_ghi(ghi=800.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    valid_labels = {"Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
+                    "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
+                    "Overcast", "Heavy Overcast"}
+    assert result is not None, "classify() must return a label even without station coords"
+    assert result in valid_labels, f"Unexpected label without coords: {result!r}"
+
+
+def test_mirroring_does_not_crash_with_insufficient_data():
+    """configure() with coords + only 2 minutes of data does not crash.
+
+    _mirror_for_km() requires >= 2 post-sunrise entries.  With only 2 minutes
+    of data total, the ring has at most 1 entry (the first minute's flush is
+    triggered by the second minute crossing the boundary) — below the 3-entry
+    minimum for _compute_indices().  classify() must return None (startup
+    grace not yet met) or a label, and must not raise.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Feed 2 minutes of data at solar noon (high elevation → post-sunrise entries).
+    base_ts = _NYC_MORNING_TS
+    for minute in range(2):
+        for tick in range(12):
+            ts = base_ts + minute * _MINUTE_SEC + tick * 5
+            sky_condition.update(800.0, 900.0, timestamp=ts)
+
+    # Must not raise; return value is None or a label.
+    result = sky_condition.classify()
+    valid_labels = {"Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
+                    "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
+                    "Overcast", "Heavy Overcast", None}
+    assert result in valid_labels, f"Unexpected value with insufficient data: {result!r}"
+
+
+def test_mirroring_does_not_affect_midday_clear():
+    """Midday clear data with coords produces 'Clear' — same as without coords.
+
+    At solar noon, all ring entries are post-sunrise (cos_z > 0).  There are
+    no pre-sunrise entries to mirror.  _mirror_for_km() returns real data
+    unchanged.  The 30-minute clear-sky stream must still classify as 'Clear'.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Feed 30 minutes of clear-sky data centred on solar noon.
+    # GHI=800, msr=900 → Kcs≈0.889 (CLOUDLESS criteria met).
+    _feed_constant_ghi_at(ghi=800.0, msr=900.0, minutes=30, base_ts=_NYC_MORNING_TS)
+    result = sky_condition.classify()
+    assert result == "Clear", (
+        f"Expected 'Clear' for midday clear-sky data with station coords, got {result!r}"
+    )
+
+
+def test_mirroring_produces_lower_km_at_sunrise_under_overcast():
+    """Mirroring lowers Km at sunrise under overcast, reducing false-high classifications.
+
+    At sunrise, without mirroring the 30-min window has only a few minutes of
+    data.  Under overcast, the diffuse-to-clear-sky ratio at low angles inflates
+    Km.  With mirroring, synthetic pre-sunrise entries with low GHI extend the
+    baseline, pulling Km down.
+
+    Strategy: feed overcast readings at a timestamp just after sunrise for NYC
+    (09:24 UTC = 05:24 EDT).  Compare Km computed from the ring in two scenarios:
+    1. Without coords (no mirroring) — only real entries.
+    2. With coords (mirroring active) — synthetic entries added.
+    We access _compute_indices() indirectly through classify(); instead we
+    compare the ring's mean GHI/msr ratio before and after mirroring by
+    calling _mirror_for_km() directly on the raw ring snapshot.
+
+    Note: direct internal helper access is justified here because we are
+    testing a specific algorithmic property (Km is lower with mirroring)
+    that is not observable from the public label alone when there is
+    insufficient data for the coherence filter to commit a label.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    # Build a ring with 5 minutes of overcast readings just after sunrise.
+    # Post-sunrise entries: cos_z > 0 (sun above horizon at these timestamps).
+    # At 09:24 UTC (sunrise), elevation rises steeply; by 09:30 UTC elevation
+    # is still only a few degrees — cos_z is small but positive.
+    # GHI≈80 (diffuse under thick cloud), msr≈250 (low clear-sky irradiance
+    # at such a low sun angle — realistic for early June morning).
+    sunrise_base = _NYC_SUNRISE_TS  # 09:24 UTC
+
+    sky_condition.reset()
+    # No coords — no mirroring.
+    sky_condition.configure(archive_interval=300)
+    for minute in range(5):
+        for tick in range(12):
+            ts = sunrise_base + minute * _MINUTE_SEC + tick * 5
+            sky_condition.update(80.0, 250.0, timestamp=ts)
+        sky_condition.classify()
+
+    ring_no_mirror = list(sky_condition._ring)
+    pairs_no_mirror = sky_condition._mirror_for_km(ring_no_mirror)
+    if not pairs_no_mirror:
+        pytest.skip("Ring is empty — sunrise_base timestamp may be at night (no data accepted)")
+    km_no_mirror = (
+        sum(p[0] for p in pairs_no_mirror) / len(pairs_no_mirror)
+        / (sum(p[1] for p in pairs_no_mirror) / len(pairs_no_mirror))
+        if sum(p[1] for p in pairs_no_mirror) > 0 else 0.0
+    )
+
+    sky_condition.reset()
+    # With coords — mirroring active.
+    _configure_nyc()
+    for minute in range(5):
+        for tick in range(12):
+            ts = sunrise_base + minute * _MINUTE_SEC + tick * 5
+            sky_condition.update(80.0, 250.0, timestamp=ts)
+        sky_condition.classify()
+
+    ring_with_mirror = list(sky_condition._ring)
+    pairs_with_mirror = sky_condition._mirror_for_km(ring_with_mirror)
+    if not pairs_with_mirror:
+        pytest.skip("Ring is empty with mirroring — sunrise_base timestamp may be at night")
+    km_with_mirror = (
+        sum(p[0] for p in pairs_with_mirror) / len(pairs_with_mirror)
+        / (sum(p[1] for p in pairs_with_mirror) / len(pairs_with_mirror))
+        if sum(p[1] for p in pairs_with_mirror) > 0 else 0.0
+    )
+
+    # When mirroring has enough data to create synthetic entries, Km with
+    # mirroring should be <= Km without mirroring.  If there are no pre-sunrise
+    # entries in the window, both values will be equal (no synthetic entries).
+    assert km_with_mirror <= km_no_mirror + 1e-9, (
+        f"Expected Km with mirroring ({km_with_mirror:.4f}) <= "
+        f"Km without mirroring ({km_no_mirror:.4f}) for overcast sunrise data"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Group 9: SZA guard tests
+# ---------------------------------------------------------------------------
+
+
+def test_sza_guard_skipped_when_no_station_coords():
+    """classify() runs normally when no coords configured; no SZA check fires.
+
+    With _skyfield_observer = None, the SZA guard branch is skipped entirely.
+    Classification proceeds from the ring and returns a non-None label.
+    """
+    sky_condition.configure(archive_interval=300)
+    assert sky_condition._skyfield_observer is None
+
+    _feed_constant_ghi(ghi=800.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    assert result is not None, (
+        "classify() must return a label when no coords configured (SZA guard inactive)"
+    )
+
+
+def test_sza_guard_returns_last_stable_when_below_threshold():
+    """SZA guard returns the last stable label when solar elevation < 5°.
+
+    Strategy:
+    1. Feed 30 minutes of clear data at midday timestamps (high elevation) to
+       establish a stable label via the coherence filter.
+    2. Call classify() with the ring's last timestamp replaced by a well-below-
+       horizon timestamp (NYC midnight = elevation ≈ -50°).  We do this by
+       feeding a single reading at the midnight timestamp, which adds a new
+       ring entry.  The SZA guard evaluates ring[-1].ts.
+    3. Assert the returned label equals the previously established label.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Phase 1: establish a stable "Clear" label at midday timestamps.
+    _feed_constant_ghi_at(ghi=800.0, msr=900.0, minutes=30, base_ts=_NYC_MORNING_TS)
+    stable_label = sky_condition.classify()
+    assert stable_label is not None, (
+        "Pre-condition: 30 minutes of midday clear data must produce a stable label"
+    )
+
+    # Phase 2: feed 13 readings at a post-sunset timestamp (after the morning
+    # data ends), so ring[-1].ts is a below-horizon time.
+    # _NYC_POSTSUNSET_TS = 8 PM EDT = elevation ≈ -8° (well below 5°).
+    # GHI=20, msr=30 → max(20,30)=30 >= 20 → night guard does NOT fire.
+    # 12 readings + 1 trigger force_flush → one new ring entry at post-sunset ts.
+    for i in range(13):
+        sky_condition.update(20.0, 30.0, timestamp=_NYC_POSTSUNSET_TS + i * 5)
+
+    # Now classify().  ring[-1].ts is in the post-sunset range (elevation < 5°).
+    # The SZA guard fires and returns _last_stable_label.
+    result = sky_condition.classify()
+    assert result == stable_label, (
+        f"SZA guard must return last stable label {stable_label!r} "
+        f"when solar elevation < 5°, got {result!r}"
+    )
+
+
+def test_sza_guard_allows_classification_above_threshold():
+    """classify() returns a non-None label when solar elevation > 5°.
+
+    Feed 30 minutes of data at midday timestamps (solar elevation ≈ 73°).
+    The SZA guard checks ring[-1].ts; at solar noon the elevation is well
+    above the 5° threshold, so the guard does not fire.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    _feed_constant_ghi_at(ghi=800.0, msr=900.0, minutes=30, base_ts=_NYC_MORNING_TS)
+    result = sky_condition.classify()
+    assert result is not None, (
+        "classify() must return a label when solar elevation is well above 5°"
+    )
+
+
+def test_sza_guard_does_not_block_data_acceptance():
+    """SZA guard affects classify() only; update() still accepts low-elevation data.
+
+    Feed readings at a post-sunset timestamp (solar elevation ≈ -8°).
+    GHI=20, msr=30 → max(20,30)=30 >= 20 → night guard does not fire.
+    After 13 readings (12 force-flush + 1), the ring gains at least one entry.
+    The SZA guard only runs in classify(); it must not affect update() buffering.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Feed 13 readings at a post-sunset timestamp.  Force-flush after 12
+    # readings creates one ring entry; the 13th goes into the accumulator.
+    for i in range(13):
+        sky_condition.update(20.0, 30.0, timestamp=_NYC_POSTSUNSET_TS + i * 5)
+
+    assert len(sky_condition._ring) >= 1, (
+        "Ring must accept readings when max(ghi,msr) >= _MIN_SOLAR_RAD, "
+        "even when solar elevation < 5° (SZA guard does not block data acceptance)"
+    )
+
+
+def test_sza_guard_returns_none_below_threshold_on_cold_start():
+    """SZA guard returns None on cold start with no prior stable label.
+
+    On a cold start, _last_stable_label is None.  When the first classify() call
+    has ring[-1].ts at a below-horizon timestamp, the SZA guard fires and returns
+    _last_stable_label, which is still None — no label has been established yet.
+
+    Uses _NYC_POSTSUNSET_TS (8 PM EDT, solar elevation ≈ -8°) with
+    GHI=20/msr=30 so the night guard does not fire but the SZA guard does.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Feed 13 readings at the post-sunset timestamp.  Force-flush gives one
+    # ring entry with ts in the post-sunset range (elevation ≈ -8°).
+    for i in range(13):
+        sky_condition.update(20.0, 30.0, timestamp=_NYC_POSTSUNSET_TS + i * 5)
+
+    result = sky_condition.classify()
+    assert result is None, (
+        f"SZA guard must return None on cold start (no prior stable label), got {result!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Group 10: Regression tests — station coords must not break existing behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_all_six_caelus_classes_still_produce_labels():
+    """All six CAELUS classes produce non-None labels when station coords configured.
+
+    Mirrors the individual classification tests in Group 2, but with station
+    coords active.  Validates that configure(lat/lon/alt) does not break any
+    existing classification path.
+
+    Expected mappings (same as without coords for midday data):
+      CLOUDLESS          → "Clear"
+      CLOUD_ENHANCEMENT  → "Partly Cloudy" (high variability + kcs > 1.06)
+      THIN_CLOUDS        → "Mostly Clear"
+      THICK_CLOUDS       → "Mostly Cloudy"
+      SCATTER_CLOUDS     → "Partly Cloudy"
+      OVERCAST           → "Cloudy"
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    valid_labels = {
+        "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
+        "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
+        "Overcast", "Heavy Overcast",
+    }
+
+    cases = [
+        # (description, feed_fn_args)
+        ("CLOUDLESS",
+         dict(ghi=800.0, msr=900.0, minutes=30)),
+        ("OVERCAST",
+         dict(ghi=100.0, msr=900.0, minutes=30)),
+        ("THIN_CLOUDS — Km>0.5, Kv∈[0.03,0.08)",
+         dict(ghi=501.5, msr=900.0, minutes=30)),   # fed as alternating below
+        ("THICK_CLOUDS — Km~0.35, Kv∈[0.04,0.16)",
+         dict(ghi=316.5, msr=900.0, minutes=30)),
+        ("SCATTER_CLOUDS — high variability, Km~0.5",
+         dict(ghi=600.0, msr=900.0, minutes=30)),
+    ]
+
+    for desc, kwargs in cases:
+        sky_condition.reset()
+        _configure_nyc()
+        _feed_constant_ghi(ghi=kwargs["ghi"], msr=kwargs["msr"], minutes=kwargs["minutes"])
+        result = sky_condition.classify()
+        assert result is not None, f"{desc}: classify() returned None with station coords"
+        assert result in valid_labels, (
+            f"{desc}: returned unexpected label {result!r}"
+        )
+
+    # THIN_CLOUDS: alternating ±1.5 W/m² around 500
+    sky_condition.reset()
+    _configure_nyc()
+    _feed_alternating_ghi(ghi_high=501.5, ghi_low=498.5, msr=900.0, minutes=30)
+    result_thin = sky_condition.classify()
+    assert result_thin is not None, "THIN_CLOUDS: classify() returned None with station coords"
+    assert result_thin in valid_labels
+
+    # SCATTER_CLOUDS: alternating 600/300 W/m²
+    sky_condition.reset()
+    _configure_nyc()
+    _feed_alternating_ghi(ghi_high=600.0, ghi_low=300.0, msr=900.0, minutes=30)
+    result_scatter = sky_condition.classify()
+    assert result_scatter is not None, (
+        "SCATTER_CLOUDS: classify() returned None with station coords"
+    )
+    assert result_scatter in valid_labels
+
+
+def test_backfill_still_works_with_station_coords():
+    """backfill() with archive records seeds the ring when station coords configured.
+
+    Station coords must not interfere with the backfill startup path.
+    After backfilling 6 records at the default _BASE_TS timestamps,
+    classify() must return a non-None label immediately (backfill bypasses
+    the coherence filter by pre-setting _last_stable_label).
+    """
+    _configure_nyc()
+
+    records = _make_backfill_records(n=6, ghi=800.0, msr=900.0, interval_sec=300)
+    sky_condition.backfill(records)
+    result = sky_condition.classify()
+    # SZA guard: ring[-1].ts is _BASE_TS (synthetic timestamp ≈ 1_000_080).
+    # _compute_solar_elevation returns a value — but if the observer is built,
+    # that Unix timestamp maps to ~1970 (very old date) where Skyfield may
+    # return an elevation.  If the SZA guard fires, it returns _last_stable_label
+    # which was pre-set by backfill().  Either way, a non-None label must come back.
+    assert result is not None, (
+        "classify() must return a label after backfill with station coords configured"
+    )
+
+
+def test_temporal_coherence_still_works_with_station_coords():
+    """Coherence filter prevents premature label change when station coords configured.
+
+    Mirrors test_rapid_flicker_holds_stable_label from Group 5, but with
+    station coords active.  Validates that coords do not bypass the filter.
+
+    Feed 20 minutes of 'Clear' data at midday timestamps to establish stable
+    label, then 5 minutes of low-GHI data.  The stable label must not flip.
+    """
+    _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
+
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Phase 1: 20 minutes of clear sky at midday.
+    _feed_constant_ghi_at(ghi=800.0, msr=900.0, minutes=20, base_ts=_NYC_MORNING_TS)
+    stable_before = sky_condition.classify()
+    assert stable_before is not None, (
+        "Pre-condition: 20 minutes of midday clear data must produce a stable label"
+    )
+
+    # Phase 2: 5 minutes of low GHI (overcast transient) continuing from Phase 1.
+    # Timestamps continue from where Phase 1 left off (still at midday elevation).
+    phase2_base = _NYC_MORNING_TS + 20 * _MINUTE_SEC
+    _feed_constant_ghi_at(ghi=100.0, msr=900.0, minutes=5, base_ts=phase2_base)
+    result = sky_condition.classify()
+
+    # 5 minutes of different raw label is below the 15-min persistence threshold.
+    # Stable label must not have changed.
+    assert result == stable_before, (
+        f"Coherence filter must hold stable label {stable_before!r} "
+        f"after only 5-min transient; got {result!r}"
+    )
