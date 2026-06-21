@@ -86,9 +86,13 @@ _FIXTURES_DIR = Path(__file__).parent / "fixtures" / "providers" / "aeris"
 
 
 def _load_fixture(name: str) -> dict[str, Any]:
-    """Load a JSON fixture file from tests/fixtures/providers/aeris/."""
+    """Load a JSON fixture file from tests/fixtures/providers/aeris/.
+
+    Uses utf-8-sig encoding to transparently handle fixtures with or without
+    a UTF-8 BOM (e.g. xcast_forecasts_hourly.json has a BOM from its source).
+    """
     path = _FIXTURES_DIR / name
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         return json.loads(fh.read())
 
 
@@ -936,6 +940,7 @@ class TestFetchCacheMissAndHit:
                 target_unit="US",
                 client_id=_TEST_CLIENT_ID,
                 client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
             # Check call count inside context where calls are tracked
             assert mock.calls.call_count == 2
@@ -947,7 +952,7 @@ class TestFetchCacheMissAndHit:
         assert bundle.discussion is None   # free-tier fixture
 
         # Cache was populated
-        cache_key = aeris._build_cache_key(_LAT, _LON, "US")
+        cache_key = aeris._build_cache_key(_LAT, _LON, "US", forecast_model="standard")
         cached = get_cache().get(cache_key)
         assert cached is not None
 
@@ -966,6 +971,7 @@ class TestFetchCacheMissAndHit:
             aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
 
         # Second call — should hit cache with zero HTTP calls
@@ -973,6 +979,7 @@ class TestFetchCacheMissAndHit:
             bundle = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
             assert mock2.calls.call_count == 0   # No calls on cache hit
 
@@ -992,6 +999,7 @@ class TestFetchCacheMissAndHit:
             bundle1 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
 
         # Cache-hit call
@@ -999,6 +1007,7 @@ class TestFetchCacheMissAndHit:
             bundle2 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
 
         assert bundle1.discussion is None
@@ -1018,6 +1027,7 @@ class TestFetchCacheMissAndHit:
             bundle1 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
 
         assert bundle1.discussion is not None
@@ -1027,6 +1037,7 @@ class TestFetchCacheMissAndHit:
             bundle2 = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
         assert bundle2.discussion is not None
         assert bundle2.discussion.source == "aeris"
@@ -1047,6 +1058,7 @@ class TestFetchMissingCredentials:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=None, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
             assert mock.calls.call_count == 0
 
@@ -1061,6 +1073,7 @@ class TestFetchMissingCredentials:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=None,
+                    forecast_model="standard",
                 )
             assert mock.calls.call_count == 0
 
@@ -1075,6 +1088,7 @@ class TestFetchMissingCredentials:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=None, client_secret=None,
+                    forecast_model="standard",
                 )
             assert mock.calls.call_count == 0
 
@@ -1089,6 +1103,7 @@ class TestFetchMissingCredentials:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id="", client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
             assert mock.calls.call_count == 0
 
@@ -1111,6 +1126,7 @@ class TestFetchErrorPaths:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
 
     def test_429_on_hourly_call_raises_quota_exhausted(self) -> None:
@@ -1128,6 +1144,7 @@ class TestFetchErrorPaths:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
 
     def test_5xx_on_hourly_call_raises_transient_network_error(self) -> None:
@@ -1146,6 +1163,7 @@ class TestFetchErrorPaths:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
 
     def test_success_false_envelope_raises_provider_protocol_error(self) -> None:
@@ -1170,6 +1188,7 @@ class TestFetchErrorPaths:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
 
     def test_warn_location_response_returns_empty_bundle(self) -> None:
@@ -1189,6 +1208,7 @@ class TestFetchErrorPaths:
             bundle = aeris.fetch(
                 lat=_LAT, lon=_LON, target_unit="US",
                 client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
             )
 
         # Empty bundle returned — NOT an exception
@@ -1219,6 +1239,7 @@ class TestFetchErrorPaths:
                 aeris.fetch(
                     lat=_LAT, lon=_LON, target_unit="US",
                     client_id=_TEST_CLIENT_ID, client_secret=_TEST_CLIENT_SECRET,
+                    forecast_model="standard",
                 )
 
 
@@ -1470,3 +1491,225 @@ class TestBuildCacheKey:
         key = _build_cache_key(47.6062, -122.3321, "US")
         assert len(key) == 64
         assert all(c in "0123456789abcdef" for c in key)
+
+
+# ===========================================================================
+# 11. TestForecastModelSelection — xcast/standard model selection (ADR-063)
+# ===========================================================================
+
+# xcast URL constant for respx mocking
+_AERIS_XCAST_HOURLY_URL = f"https://data.api.xweather.com/xcast/forecasts/{_LOCATION}"
+
+
+class TestForecastModelSelection:
+    """Tests for xcast/standard model selection in fetch() (ADR-063)."""
+
+    def test_xcast_model_uses_xcast_path_for_hourly(self) -> None:
+        """forecast_model='xcast' routes hourly call to /xcast/forecasts, daynight to /forecasts."""
+        _reset_provider_state()
+        hourly_data = _load_fixture("forecasts_hourly.json")
+        daynight_data = _load_fixture("forecasts_daynight.json")
+
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
+
+        with respx.mock(assert_all_called=False) as mock:
+            # xcast path for hourly
+            mock.get(
+                _AERIS_XCAST_HOURLY_URL,
+                params={"filter": "1hr"},
+            ).mock(return_value=httpx.Response(200, json=hourly_data))
+            # standard path for daynight (xcast ignores filter=daynight)
+            mock.get(
+                _AERIS_DAYNIGHT_URL,
+                params={"filter": "daynight"},
+            ).mock(return_value=httpx.Response(200, json=daynight_data))
+
+            bundle = aeris.fetch(
+                lat=_LAT,
+                lon=_LON,
+                target_unit="US",
+                client_id=_TEST_CLIENT_ID,
+                client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="xcast",
+            )
+            assert mock.calls.call_count == 2
+            # Confirm the xcast URL was called for hourly (check inside context while calls live)
+            called_urls = [str(call.request.url).split("?")[0] for call in mock.calls]
+            assert _AERIS_XCAST_HOURLY_URL in called_urls, (
+                f"Expected xcast URL in calls: {called_urls}"
+            )
+
+        assert bundle.source == "aeris"
+        assert len(bundle.hourly) == 24
+
+    def test_standard_model_uses_standard_path_for_both(self) -> None:
+        """forecast_model='standard' routes both hourly and daynight to /forecasts."""
+        _reset_provider_state()
+        hourly_data = _load_fixture("forecasts_hourly.json")
+        daynight_data = _load_fixture("forecasts_daynight.json")
+
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(
+                _AERIS_HOURLY_URL,
+                params={"filter": "1hr"},
+            ).mock(return_value=httpx.Response(200, json=hourly_data))
+            mock.get(
+                _AERIS_DAYNIGHT_URL,
+                params={"filter": "daynight"},
+            ).mock(return_value=httpx.Response(200, json=daynight_data))
+
+            bundle = aeris.fetch(
+                lat=_LAT,
+                lon=_LON,
+                target_unit="US",
+                client_id=_TEST_CLIENT_ID,
+                client_secret=_TEST_CLIENT_SECRET,
+                forecast_model="standard",
+            )
+            assert mock.calls.call_count == 2
+            # Both calls went to the standard /forecasts/ path (no /xcast/ prefix)
+            called_urls = [str(call.request.url).split("?")[0] for call in mock.calls]
+            for url in called_urls:
+                assert "/xcast/" not in url, (
+                    f"Standard model should not call xcast URL, but got: {url}"
+                )
+
+        assert bundle.source == "aeris"
+
+    def test_default_model_is_xcast(self) -> None:
+        """fetch() without forecast_model param defaults to 'xcast' (ADR-063)."""
+        _reset_provider_state()
+        hourly_data = _load_fixture("forecasts_hourly.json")
+        daynight_data = _load_fixture("forecasts_daynight.json")
+
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
+
+        with respx.mock(assert_all_called=False) as mock:
+            # Register xcast route for hourly — default should call this
+            mock.get(
+                _AERIS_XCAST_HOURLY_URL,
+                params={"filter": "1hr"},
+            ).mock(return_value=httpx.Response(200, json=hourly_data))
+            # Standard route for daynight
+            mock.get(
+                _AERIS_DAYNIGHT_URL,
+                params={"filter": "daynight"},
+            ).mock(return_value=httpx.Response(200, json=daynight_data))
+
+            # Call without forecast_model — should default to "xcast"
+            bundle = aeris.fetch(
+                lat=_LAT,
+                lon=_LON,
+                target_unit="US",
+                client_id=_TEST_CLIENT_ID,
+                client_secret=_TEST_CLIENT_SECRET,
+            )
+            assert mock.calls.call_count == 2
+            # Verify hourly call went to xcast URL (check inside context while calls live)
+            called_urls = [str(call.request.url).split("?")[0] for call in mock.calls]
+            assert _AERIS_XCAST_HOURLY_URL in called_urls, (
+                f"Default model should use xcast URL; got: {called_urls}"
+            )
+
+        assert bundle.source == "aeris"
+
+    def test_cache_key_differs_by_model(self) -> None:
+        """Different forecast_model values produce different cache keys."""
+        from weewx_clearskies_api.providers.forecast.aeris import _build_cache_key  # noqa: PLC0415
+        key_std = _build_cache_key(_LAT, _LON, "US", forecast_model="standard")
+        key_xcast = _build_cache_key(_LAT, _LON, "US", forecast_model="xcast")
+        assert key_std != key_xcast
+
+
+# ===========================================================================
+# 12. TestXcastConfidenceLimits — confidence limit fields (ADR-063)
+# ===========================================================================
+
+
+class TestXcastConfidenceLimits:
+    """Tests for xcast confidence limit fields (ADR-063)."""
+
+    def test_hourly_period_with_null_confidence_limits_validates(self) -> None:
+        """xcast fixture period validates against _AerisHourlyPeriod; confidence fields are None."""
+        from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
+            _AerisHourlyPeriod,
+        )
+        fixture = _load_fixture("xcast_forecasts_hourly.json")
+        raw_period = fixture["response"][0]["periods"][0]
+        period = _AerisHourlyPeriod.model_validate(raw_period)
+        # xcast fixture has null confidence limits where no sensors are deployed
+        assert period.tempConfidenceLimit is None
+        assert period.windConfidenceLimit is None
+        # Core fields are still present
+        assert period.dateTimeISO is not None
+        assert period.tempC is not None or period.tempF is not None
+
+    def test_hourly_period_with_populated_confidence_limits_validates(self) -> None:
+        """Synthetic period with non-null confidence limits validates; fields are dicts."""
+        from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
+            _AerisHourlyPeriod,
+        )
+        fixture = _load_fixture("xcast_forecasts_hourly.json")
+        # Copy the first period and inject confidence limits
+        period_data = dict(fixture["response"][0]["periods"][0])
+        period_data["tempConfidenceLimit"] = {"upper": 22.5, "lower": 18.2}
+        period_data["windConfidenceLimit"] = {"upper": 15.0, "lower": 11.0}
+
+        period = _AerisHourlyPeriod.model_validate(period_data)
+        assert period.tempConfidenceLimit is not None
+        assert isinstance(period.tempConfidenceLimit, dict)
+        assert period.tempConfidenceLimit["upper"] == 22.5
+        assert period.tempConfidenceLimit["lower"] == 18.2
+        assert period.windConfidenceLimit is not None
+        assert isinstance(period.windConfidenceLimit, dict)
+        assert period.windConfidenceLimit["upper"] == 15.0
+
+    def test_standard_fixture_has_no_confidence_fields(self) -> None:
+        """Standard /forecasts fixture period has no confidence limit fields (both None)."""
+        from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
+            _AerisHourlyPeriod,
+        )
+        fixture = _load_fixture("forecasts_hourly.json")
+        raw_period = fixture["response"][0]["periods"][0]
+        period = _AerisHourlyPeriod.model_validate(raw_period)
+        # Standard fixture doesn't include these fields — model defaults to None
+        assert period.tempConfidenceLimit is None
+        assert period.windConfidenceLimit is None
+
+    def test_extras_contain_confidence_limits_when_present(self) -> None:
+        """_hourly_period_to_point() populates extras with confidence limits when non-null."""
+        from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
+            _AerisHourlyPeriod,
+            _hourly_period_to_point,
+        )
+        fixture = _load_fixture("xcast_forecasts_hourly.json")
+        period_data = dict(fixture["response"][0]["periods"][0])
+        # Inject non-null confidence limits
+        period_data["tempConfidenceLimit"] = {"upper": 22.5, "lower": 18.2}
+        period_data["windConfidenceLimit"] = {"upper": 15.0, "lower": 11.0}
+
+        period = _AerisHourlyPeriod.model_validate(period_data)
+        point = _hourly_period_to_point(period, "US")
+
+        assert "tempConfidenceLimit" in point.extras
+        assert "windConfidenceLimit" in point.extras
+        assert point.extras["tempConfidenceLimit"] == {"upper": 22.5, "lower": 18.2}
+        assert point.extras["windConfidenceLimit"] == {"upper": 15.0, "lower": 11.0}
+
+    def test_extras_empty_when_confidence_limits_null(self) -> None:
+        """_hourly_period_to_point() does NOT include confidence keys in extras when null."""
+        from weewx_clearskies_api.providers.forecast.aeris import (  # noqa: PLC0415
+            _AerisHourlyPeriod,
+            _hourly_period_to_point,
+        )
+        fixture = _load_fixture("forecasts_hourly.json")
+        raw_period = fixture["response"][0]["periods"][0]
+        period = _AerisHourlyPeriod.model_validate(raw_period)
+        # Standard fixture — confidence limits are None
+        point = _hourly_period_to_point(period, "US")
+
+        # Confidence limit keys must not appear in extras when values are null
+        assert "tempConfidenceLimit" not in point.extras
+        assert "windConfidenceLimit" not in point.extras
