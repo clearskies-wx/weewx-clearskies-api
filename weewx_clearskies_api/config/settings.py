@@ -835,6 +835,9 @@ class ForecastSettings:
     #: PWS station ID isn't strictly a secret but is co-located with the apiKey
     #: for operational simplicity (all Wunderground config in env vars together).
     wunderground_pws_station_id: str | None
+    #: Aeris forecast model: "standard" or "xcast" (ML-enhanced).
+    #: Read from [forecast] section of api.conf. Default "xcast" (ADR-063).
+    aeris_forecast_model: str
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -866,13 +869,23 @@ class ForecastSettings:
         raw_wu_pws = os.environ.get("WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID", "").strip()
         self.wunderground_pws_station_id = raw_wu_pws if raw_wu_pws else None
 
+        # Aeris forecast model — from INI (not a secret; config-time operator choice).
+        # Default "xcast" per ADR-063. Normalise to lowercase; unknown values fall back to "xcast".
+        raw_model = str(section.get("aeris_forecast_model", "xcast")).strip().lower()
+        self.aeris_forecast_model = raw_model if raw_model in ("standard", "xcast") else "xcast"
+
     def validate(self) -> None:
-        """Raise ValueError on invalid provider id."""
+        """Raise ValueError on invalid provider id or forecast model."""
         valid_providers = {"openmeteo", "nws", "aeris", "openweathermap", "wunderground"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[forecast] provider {self.provider!r} not in {valid_providers}. "
                 "Supported values: 'openmeteo', 'nws', 'aeris', 'openweathermap', 'wunderground'."
+            )
+        if self.aeris_forecast_model not in ("standard", "xcast"):
+            raise ValueError(
+                f"[forecast] aeris_forecast_model {self.aeris_forecast_model!r} not valid. "
+                "Supported values: 'standard', 'xcast'."
             )
 
 

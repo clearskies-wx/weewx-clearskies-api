@@ -168,6 +168,7 @@ def wire_nws_user_agent_contact(contact: str | None) -> None:
 
 _aeris_client_id: str | None = None
 _aeris_client_secret: str | None = None
+_aeris_forecast_model: str = "xcast"
 
 
 def wire_aeris_credentials(client_id: str | None, client_secret: str | None) -> None:
@@ -182,6 +183,18 @@ def wire_aeris_credentials(client_id: str | None, client_secret: str | None) -> 
     global _aeris_client_id, _aeris_client_secret  # noqa: PLW0603
     _aeris_client_id = client_id
     _aeris_client_secret = client_secret
+
+
+def wire_aeris_forecast_model(model: str) -> None:
+    """Store Aeris forecast model selection at startup.
+
+    Called from wire_forecast_settings() after settings load. "xcast" selects
+    the ML-enhanced /xcast/forecasts endpoint for hourly data; "standard"
+    uses the regular /forecasts endpoint. Daynight always uses /forecasts
+    regardless of this setting (xcast ignores filter=daynight).
+    """
+    global _aeris_forecast_model  # noqa: PLW0603
+    _aeris_forecast_model = model
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +268,9 @@ def wire_forecast_settings(settings: object) -> None:
     aeris_id = getattr(forecast_settings, "aeris_client_id", None)
     aeris_secret = getattr(forecast_settings, "aeris_client_secret", None)
     wire_aeris_credentials(aeris_id, aeris_secret)
+
+    aeris_model = getattr(forecast_settings, "aeris_forecast_model", "xcast")
+    wire_aeris_forecast_model(aeris_model)
 
     owm_appid = getattr(forecast_settings, "openweathermap_appid", None)
     wire_openweathermap_credentials(owm_appid)
@@ -390,6 +406,7 @@ def get_forecast(
             target_unit=target_unit,
             client_id=_aeris_client_id,
             client_secret=_aeris_client_secret,
+            forecast_model=_aeris_forecast_model,
         )
     elif provider_id == "openweathermap":
         from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415

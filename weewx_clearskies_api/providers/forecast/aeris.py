@@ -59,6 +59,14 @@ ForecastDiscussion (brief Q2 runtime detection, user decision 2026-05-08):
   CAPABILITY.supplied_canonical_fields declares headline + body as max-surface;
   runtime population is conditional (user-accepted capability-vs-runtime drift).
 
+Forecast model selection (ADR-063):
+  Operator selects "standard" or "xcast" model via aeris_forecast_model in
+  api.conf [forecast]. Default: "xcast". When xcast is selected, the hourly
+  call uses /xcast/forecasts (ML-enhanced temp/wind). The daynight call always
+  uses /forecasts because xcast doesn't support filter=daynight. Confidence
+  limits (tempConfidenceLimit, windConfidenceLimit) pass through in extras
+  when non-null.
+
 Rate limiter (ADR-038 §3):
   RateLimiter("aeris-forecast", max_calls=5, window_seconds=1) as "be polite"
   guard. Per-call acquire before each of the two outbound calls per cache miss.
@@ -106,6 +114,7 @@ PROVIDER_ID = "aeris"
 DOMAIN = "forecast"
 AERIS_BASE_URL = "https://data.api.xweather.com"
 AERIS_FORECASTS_PATH = "/forecasts"
+AERIS_XCAST_FORECASTS_PATH = "/xcast/forecasts"
 AERIS_OBSERVATIONS_PATH = "/observations"
 AERIS_CONVECTIVE_PATH = "/convective/outlook"
 DEFAULT_FORECAST_TTL_SECONDS = 1800   # 30 min per ADR-017
@@ -174,7 +183,10 @@ CAPABILITY = ProviderCapability(
         "or bundle id (see docs/reference/api-docs/aeris.md §Authentication). "
         "Forecast discussion populated when paid-tier summary field is present; "
         "free-tier returns bundle.discussion=null. Coverage per Aeris's "
-        "authoritative answer; warn_location responses return empty bundle."
+        "authoritative answer; warn_location responses return empty bundle. "
+        "Operator can select forecast model: 'standard' (/forecasts) or "
+        "'xcast' (/xcast/forecasts, ML-enhanced temp/wind, default). "
+        "Config key: aeris_forecast_model in [forecast] section of api.conf."
     ),
 )
 
@@ -273,6 +285,10 @@ class _AerisHourlyPeriod(BaseModel):
     weatherPrimary: str | None = None
     uvi: float | None = None
     isDay: bool | None = None
+    # Xcast ML-enhanced confidence limits — present only on /xcast/forecasts responses.
+    # null where no Xcast sensors are deployed. Not present on standard /forecasts.
+    tempConfidenceLimit: dict[str, float] | None = None
+    windConfidenceLimit: dict[str, float] | None = None
 
 
 class _AerisDayNightPeriod(BaseModel):
@@ -460,13 +476,17 @@ def _client_for() -> ProviderHTTPClient:
 # ---------------------------------------------------------------------------
 
 
-def _build_cache_key(lat: float, lon: float, target_unit: str) -> str:
-    """Build a deterministic cache key for (provider_id, endpoint, {lat, lon, unit}).
+def _build_cache_key(
+    lat: float, lon: float, target_unit: str, forecast_model: str = "standard"
+) -> str:
+    """Build a deterministic cache key for (provider_id, endpoint, {lat, lon, unit, model}).
 
     endpoint="forecast_bundle" covers the two upstream calls (hourly + daynight)
     per brief §cache integration. Lat/lon rounded to 4 decimal places per ADR-017.
     target_unit included so US and METRIC/METRICWX get separate cache entries
     (module picks different field names per unit system at ingest time).
+    forecast_model included so "standard" and "xcast" get separate cache entries
+    (they call different upstream URLs; mixing them would return wrong data).
     """
     payload = json.dumps(
         {
@@ -476,6 +496,7 @@ def _build_cache_key(lat: float, lon: float, target_unit: str) -> str:
                 "latitude": round(lat, 4),
                 "longitude": round(lon, 4),
                 "target_unit": target_unit,
+                "forecast_model": forecast_model,
             },
         },
         sort_keys=True,
@@ -603,6 +624,14 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         wind_gust = period.windGustKPH
         precip_amount = period.precipMM
 
+    # Pass xcast confidence limits through extras when non-null.
+    # These are present only on /xcast/forecasts responses; null where no sensors deployed.
+    extras: dict[str, Any] = {}
+    if period.tempConfidenceLimit is not None:
+        extras["tempConfidenceLimit"] = period.tempConfidenceLimit
+    if period.windConfidenceLimit is not None:
+        extras["windConfidenceLimit"] = period.windConfidenceLimit
+
     return HourlyForecastPoint(
         validTime=valid_time,
         outTemp=temp,
@@ -617,6 +646,7 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         weatherCode=period.weatherPrimaryCoded,
         weatherText=period.weather,
         source=PROVIDER_ID,
+        extras=extras,
     )
 
 
@@ -891,8 +921,12 @@ def _fetch_hourly(
     lon: float,
     client_id: str,
     client_secret: str,
+    forecasts_path: str = AERIS_FORECASTS_PATH,
 ) -> _AerisHourlyResponse:
-    """GET /forecasts/{lat},{lon}?filter=1hr and validate wire shape.
+    """GET {forecasts_path}/{lat},{lon}?filter=1hr and validate wire shape.
+
+    forecasts_path: AERIS_FORECASTS_PATH ("/forecasts") for standard model,
+      AERIS_XCAST_FORECASTS_PATH ("/xcast/forecasts") for ML-enhanced xcast model.
 
     Raises:
         KeyInvalid: HTTP 401 (invalid credentials).
@@ -901,7 +935,7 @@ def _fetch_hourly(
         TransientNetworkError: Network failure / 5xx after retries (from ProviderHTTPClient).
     """
     location = f"{round(lat, 4)},{round(lon, 4)}"
-    url = f"{AERIS_BASE_URL}{AERIS_FORECASTS_PATH}/{location}"
+    url = f"{AERIS_BASE_URL}{forecasts_path}/{location}"
     params = {
         "filter": "1hr",
         "limit": str(HOURLY_LIMIT),
@@ -1150,6 +1184,7 @@ def fetch(
     target_unit: str,
     client_id: str | None,
     client_secret: str | None,
+    forecast_model: str = "xcast",
 ) -> ForecastBundle:
     """Call Aeris /forecasts (1hr + daynight) and return canonical ForecastBundle.
 
@@ -1160,11 +1195,17 @@ def fetch(
     Cache-first: check cache before making outbound HTTP calls.
     Cache stores post-normalization ForecastBundle as model_dump(mode="json")
     dict; reconstructed via ForecastBundle.model_validate() on cache hit.
-    Cache key includes target_unit so US and metric systems get separate entries.
+    Cache key includes target_unit so US and metric systems get separate entries,
+    and forecast_model so "standard" and "xcast" get separate cache entries.
 
     Slice-after-cache pattern (ADR-017):
     The FULL bundle is stored in cache regardless of the requested hours/days.
     The endpoint handler slices to the requested count AFTER cache lookup.
+
+    Forecast model selection (ADR-063):
+    When forecast_model="xcast", hourly call uses /xcast/forecasts (ML-enhanced
+    temp/wind). Daynight call always uses /forecasts because xcast ignores the
+    filter=daynight parameter and returns hourly data instead.
 
     Args:
         lat: Station latitude from services/station.py StationInfo.
@@ -1175,6 +1216,9 @@ def fetch(
             None if operator hasn't configured it.
         client_secret: Aeris client_secret from env var
             WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET. None if not configured.
+        forecast_model: "xcast" (default) for ML-enhanced temp/wind via
+            /xcast/forecasts, or "standard" for /forecasts. Set from
+            aeris_forecast_model in api.conf [forecast] section (ADR-063).
 
     Returns:
         ForecastBundle — single canonical Pydantic model.
@@ -1198,7 +1242,13 @@ def fetch(
             domain=DOMAIN,
         )
 
-    cache_key = _build_cache_key(lat, lon, target_unit)
+    # Resolve forecast model to hourly path.
+    # Daynight always uses standard /forecasts — xcast ignores filter=daynight.
+    hourly_path = (
+        AERIS_XCAST_FORECASTS_PATH if forecast_model == "xcast" else AERIS_FORECASTS_PATH
+    )
+
+    cache_key = _build_cache_key(lat, lon, target_unit, forecast_model=forecast_model)
     cached = get_cache().get(cache_key)
     if cached is not None:
         logger.debug(
@@ -1207,6 +1257,11 @@ def fetch(
         )
         return ForecastBundle.model_validate(cached)
 
+    logger.info(
+        "Aeris forecast using %s model (hourly path: %s)",
+        forecast_model, hourly_path,
+        extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+    )
     logger.debug(
         "Cache miss for Aeris forecast; calling API (two calls: 1hr + daynight)",
         extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
@@ -1222,8 +1277,10 @@ def fetch(
 
     client = _client_for()
 
-    # Call 1: hourly periods
-    hourly_wire = _fetch_hourly(client, lat, lon, client_id, client_secret)
+    # Call 1: hourly periods — uses xcast path when forecast_model="xcast"
+    hourly_wire = _fetch_hourly(
+        client, lat, lon, client_id, client_secret, forecasts_path=hourly_path
+    )
 
     # Call 2: daynight periods + raw dict for discussion detection
     daynight_wire, daynight_raw = _fetch_daynight(client, lat, lon, client_id, client_secret)
