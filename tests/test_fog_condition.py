@@ -503,10 +503,13 @@ def test_coherence_pruning_removes_entries_older_than_900s(monkeypatch):
 
     Record 5 'Foggy' entries at timestamps older than 900s from 'now'.
     After calling detect_fog_mist with current timestamp, those old entries
-    should have been pruned.
+    should have been pruned.  old_base must be far enough back that ALL 5
+    entries (spaced 60s apart: +0, +60, +120, +180, +240) fall before the
+    cutoff at _BASE_TS - 900 = 999100.  With old_base = 998000, entries
+    are at 998000..998240, all well below 999100.
     """
     fog_condition.reset()
-    old_base = _BASE_TS - 1000.0  # 1000s before base — outside the 900s window
+    old_base = _BASE_TS - 2000.0  # 2000s before base — all entries outside the 900s window
     _fill_history_with(monkeypatch, "Foggy", count=5, base_ts=old_base)
 
     # Now call detect at _BASE_TS — old entries are outside the 900s window.

@@ -232,22 +232,28 @@ class TestPMChannel:
         assert result == "Hazy", "pm25=15.0 in dry conditions must confirm PM channel"
 
     def test_pm25_at_humid_condition_below_35_not_confirmed(self) -> None:
-        """pm25=20.0, T-Td=3°F (≤ 4°F) humid → not confirmed (needs > 35 µg/m³).
+        """pm25=20.0, T-Td=4°F (≤ 4°F), RH≈88% → not confirmed (needs > 35 µg/m³).
 
         At T-Td ≤ 4°F, the humid disambiguation branch requires pm25 > 35.
-        The dry branch (rh < 80%) also won't fire because at T-Td=3°F, RH is high.
+        The dry branch (rh < 80%) also won't fire because RH ≈ 88% (> 80%).
+        Temperature pair chosen so RH is in [80%, 90%] — high enough that dry
+        branch fails, but below 90% Gate 4 (which defers to fog).
         """
-        # T=75°F, Td=72°F → T-Td=3°F → humid; RH ≈ 86% (>80%, dry branch fails)
-        result = _detect(pm25=20.0, pm10=None, out_temp=75.0, dewpoint=72.0)
+        # T=80°F, Td=76°F → T-Td=4°F → humid; RH ≈ 88%
+        result = _detect(pm25=20.0, pm10=None, out_temp=80.0, dewpoint=76.0)
         assert result is None, (
-            "pm25=20.0 in humid conditions (T-Td=3°F) must not confirm PM (needs > 35)"
+            "pm25=20.0 in humid conditions (T-Td=4°F) must not confirm PM (needs > 35)"
         )
 
     def test_pm25_above_humid_threshold_confirms_pm_channel(self) -> None:
-        """pm25=40.0, T-Td=3°F (≤ 4°F) → humid threshold exceeded, PM confirmed."""
-        result = _detect(pm25=40.0, pm10=None, out_temp=75.0, dewpoint=72.0)
+        """pm25=40.0, T-Td=4°F (≤ 4°F), RH≈88% → humid threshold exceeded, PM confirmed.
+
+        Temperature pair chosen so RH lands in [80%, 90%]: high enough that the
+        dry branch (rh < 80%) fails, but below the 90% RH gate that defers to fog.
+        """
+        result = _detect(pm25=40.0, pm10=None, out_temp=80.0, dewpoint=76.0)
         assert result == "Hazy", (
-            "pm25=40.0 in humid conditions (T-Td=3°F) must confirm PM channel (> 35)"
+            "pm25=40.0 in humid conditions (T-Td=4°F, RH≈88%) must confirm PM channel (> 35)"
         )
 
     def test_pm10_above_threshold_confirms_pm_channel(self) -> None:

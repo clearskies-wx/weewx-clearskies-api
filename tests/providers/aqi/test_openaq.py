@@ -116,6 +116,7 @@ def _reset_provider_state() -> None:
     _reset_http_client_for_tests()
     _reset_sensor_state_for_tests()
     _openaq._rate_limiter._calls.clear()
+    _openaq._rate_limiter._max_calls = 100
     wire_cache_from_env()
 
 
