@@ -128,6 +128,20 @@ path = /var/lib/weewx/weewx.sdb
 # "off" — no weatherText field on observations
 # engine = auto
 
+# Haze detection toggle (ADR-067). Set to false to disable entirely.
+# haze_detection = true
+
+# AQI provider override for haze PM confirmation. Inherits from [aqi] if absent.
+# haze_aqi_provider =
+
+# Auto-calibration tuning (ADR-068).
+# calibration_percentile = 0.92    # range: 0.90-0.95
+# calibration_window_days = 90     # range: 30-365
+# calibration_min_samples = 22     # range: 10-100
+
+# Hygroscopic correction exponent gamma (Hanel 1976). Advanced override.
+# gamma = 0.45                     # range: 0.1-1.0
+
 
 [cache_warmer]
 # Background pre-computation of slow endpoints (ADR-045).

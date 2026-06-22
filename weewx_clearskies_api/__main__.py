@@ -975,7 +975,22 @@ def main() -> None:
     # Auto-calibration baseline (ADR-068): load persisted state before registering
     # the processor so the baseline is active before any packets arrive.
     from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
+    from weewx_clearskies_api.sse import haze_condition  # noqa: PLC0415
     auto_calibration.load_persisted()
+
+    # Haze configuration wiring (api.conf [conditions])
+    conditions = settings.conditions
+    if not conditions.haze_detection:
+        haze_condition.set_enabled(False)
+        logger.info("Haze detection disabled via [conditions] haze_detection = false")
+    else:
+        haze_condition.set_gamma(conditions.gamma)
+        auto_calibration.configure(
+            percentile=conditions.calibration_percentile,
+            window_days=conditions.calibration_window_days,
+            min_samples=conditions.calibration_min_samples,
+        )
+
     register_processor(auto_calibration.process_packet)
 
     # Step 7d: Register endpoint enrichments.

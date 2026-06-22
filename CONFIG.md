@@ -308,6 +308,39 @@ iframe_url = https://radar.weather.gov/station/KLOT/standard
 
 ---
 
+## [conditions] — conditions text engine and haze detection
+
+| Key | Default | Description |
+|---|---|---|
+| `engine` | `auto` | Conditions text blending mode: `auto` (blend local sensor data with provider), `provider` (verbatim provider text), or `off` (weatherText is always absent). |
+| `haze_detection` | `true` | Enable or disable haze detection (ADR-067). When `false`, the haze channel is inactive and no "Hazy" label is ever emitted. |
+| `haze_aqi_provider` | _(inherits from `[aqi]`)_ | Override the AQI provider used for haze PM confirmation. If absent or empty, the provider configured in `[aqi]` is used. |
+| `calibration_percentile` | `0.92` | Percentile target for the auto-calibration clean-sky Kcs baseline (ADR-068). A ±2.5 pp band is derived from this value. Range: 0.90–0.95. |
+| `calibration_window_days` | `90` | Primary rolling window in days for clean-sky sample collection. The 180-day fallback window is fixed. Range: 30–365. |
+| `calibration_min_samples` | `22` | Minimum qualifying clean-sky samples before haze detection activates. Range: 10–100. |
+| `gamma` | `0.45` | Hygroscopic correction exponent γ (Hanel 1976). Advanced override. Range: 0.1–1.0. |
+
+**Example — disable haze detection:**
+
+```ini
+[conditions]
+engine = auto
+haze_detection = false
+```
+
+**Example — advanced calibration tuning:**
+
+```ini
+[conditions]
+engine = auto
+calibration_percentile = 0.93
+calibration_window_days = 60
+calibration_min_samples = 15
+gamma = 0.5
+```
+
+---
+
 ## Environment variables — all secrets
 
 Summary of all environment variables. Place these in `/etc/weewx-clearskies/secrets.env` (mode 0600):

@@ -44,6 +44,10 @@ from math import exp
 # Module-level state
 # ---------------------------------------------------------------------------
 
+# Haze detection enabled flag.  Set to False via set_enabled() when the
+# operator sets [conditions] haze_detection = false in api.conf.
+_enabled: bool = True
+
 # Temporary fixed clean-sky baseline.  CLOUDLESS class Kcs > 0.85; 0.90 is a
 # conservative estimate that sits above the cloudless threshold.  Phase 6 will
 # replace this with a station-specific learned value (90th–95th percentile of
@@ -96,6 +100,16 @@ _HAZE_ELIGIBLE_SKY_SUBSTRINGS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
+def set_enabled(value: bool) -> None:
+    """Enable or disable haze detection.
+
+    Called from __main__.py when the operator sets
+    [conditions] haze_detection = false in api.conf.
+    """
+    global _enabled  # noqa: PLW0603
+    _enabled = value
+
+
 def detect_haze(
     *,
     kcs: float | None,
@@ -129,6 +143,9 @@ def detect_haze(
         'Hazy' if both channels confirm and temporal coherence is satisfied,
         None otherwise.
     """
+    if not _enabled:
+        return None
+
     global _last_rain_end, _was_raining  # noqa: PLW0603
 
     now = time.time()
@@ -303,7 +320,8 @@ def set_gamma(value: float) -> None:
 
 def reset() -> None:
     """Clear all module-level state.  For test isolation only."""
-    global _clean_kcs_baseline, _gamma, _last_rain_end, _was_raining  # noqa: PLW0603
+    global _enabled, _clean_kcs_baseline, _gamma, _last_rain_end, _was_raining  # noqa: PLW0603
+    _enabled = True
     _clean_kcs_baseline = 0.90
     _gamma = 0.45
     _last_rain_end = 0.0

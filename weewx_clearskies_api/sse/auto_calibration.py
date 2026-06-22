@@ -102,6 +102,38 @@ _was_raining: bool = False
 # ---------------------------------------------------------------------------
 
 
+def configure(
+    *,
+    percentile: float = 0.92,
+    window_days: int = 90,
+    min_samples: int = 22,
+) -> None:
+    """Apply operator-configurable calibration parameters.
+
+    Called once at startup from __main__.py with values from api.conf
+    [conditions] section.  Overwrites the module-level constants that
+    drive baseline computation.
+
+    Args:
+        percentile:   Target percentile for clean-sky Kcs baseline.  A ±2.5pp
+                      band is derived from this single value (e.g. 0.92 →
+                      [89th, 94th] percentile range).  Must be in [0.90, 0.95].
+        window_days:  Primary rolling window in days for sample collection.
+                      Must be in [30, 365].  The fallback window stays at 180 d.
+        min_samples:  Minimum clean-sky samples required to activate haze
+                      detection.  Must be in [10, 100].
+    """
+    global _PERCENTILE_LOW, _PERCENTILE_HIGH, _MIN_SAMPLES_ACTIVE  # noqa: PLW0603
+    global _WINDOW_DAYS_PRIMARY, _WINDOW_PRIMARY_SECS  # noqa: PLW0603
+    # Map operator percentile (single value like 0.92) to a percentile range.
+    # e.g. 0.92 → low = int(0.895 * 100) = 89, high = int(0.945 * 100) = 94
+    _PERCENTILE_LOW = int((percentile - 0.025) * 100)
+    _PERCENTILE_HIGH = int((percentile + 0.025) * 100)
+    _MIN_SAMPLES_ACTIVE = min_samples
+    _WINDOW_DAYS_PRIMARY = window_days
+    _WINDOW_PRIMARY_SECS = window_days * 86400.0
+
+
 def process_packet(packet: dict) -> None:  # type: ignore[type-arg]
     """Packet-tap processor: collect clean-sky Kcs samples and update baseline.
 

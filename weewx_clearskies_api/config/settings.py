@@ -994,10 +994,11 @@ class TlsSettings:
 
 
 class ConditionsSettings:
-    """[conditions] section settings (Phase 0B).
+    """[conditions] section settings (Phase 0B / ADR-067 / ADR-068).
 
     Controls the current conditions text blending engine that populates
-    the weatherText field on Observation responses.
+    the weatherText field on Observation responses, and haze detection
+    parameters introduced in Phase 8 (ADR-067/068).
 
     engine values:
       "auto"     — blends local sensor data with provider conditions (default).
@@ -1008,18 +1009,69 @@ class ConditionsSettings:
     #: Blending engine mode: "auto" | "provider" | "off".
     engine: str
 
+    #: Enable or disable haze detection (ADR-067).
+    haze_detection: bool
+
+    #: AQI provider override for haze PM data (inherits from [aqi] if not set).
+    haze_aqi_provider: str | None
+
+    #: Auto-calibration percentile target (ADR-068).  Single value; the
+    #: module derives a ±2.5pp band around this value.  Range: [0.90, 0.95].
+    calibration_percentile: float
+
+    #: Rolling window length in days for clean-sky sample collection.
+    #: Range: [30, 365].
+    calibration_window_days: int
+
+    #: Minimum clean-sky samples required to activate haze detection.
+    #: Range: [10, 100].
+    calibration_min_samples: int
+
+    #: Hygroscopic correction exponent γ (Hanel 1976 / Tang 1996).
+    #: Advanced operator override.  Range: [0.1, 1.0].
+    gamma: float
+
     _VALID_ENGINES: frozenset[str] = frozenset({"auto", "provider", "off"})
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.engine = str(section.get("engine", "auto")).strip()
+        # Haze detection toggle (ADR-067)
+        self.haze_detection = _bool(section.get("haze_detection", True))
+        # AQI provider override for haze PM data
+        self.haze_aqi_provider = section.get("haze_aqi_provider") or None
+        # Auto-calibration tuning (ADR-068)
+        self.calibration_percentile = float(section.get("calibration_percentile", 0.92))
+        self.calibration_window_days = int(section.get("calibration_window_days", 90))
+        self.calibration_min_samples = int(section.get("calibration_min_samples", 22))
+        # Hygroscopic correction exponent (advanced — operator override of Hanel default)
+        self.gamma = float(section.get("gamma", 0.45))
 
     def validate(self) -> None:
-        """Raise ValueError on invalid engine value."""
+        """Raise ValueError on invalid engine or haze calibration values."""
         if self.engine not in self._VALID_ENGINES:
             raise ValueError(
                 f"[conditions] engine {self.engine!r} not in "
                 f"{sorted(self._VALID_ENGINES)}. "
                 "Supported values: 'auto', 'provider', 'off'."
+            )
+        if not (0.90 <= self.calibration_percentile <= 0.95):
+            raise ValueError(
+                f"[conditions] calibration_percentile {self.calibration_percentile!r} "
+                "must be in [0.90, 0.95]."
+            )
+        if not (30 <= self.calibration_window_days <= 365):
+            raise ValueError(
+                f"[conditions] calibration_window_days {self.calibration_window_days!r} "
+                "must be in [30, 365]."
+            )
+        if not (10 <= self.calibration_min_samples <= 100):
+            raise ValueError(
+                f"[conditions] calibration_min_samples {self.calibration_min_samples!r} "
+                "must be in [10, 100]."
+            )
+        if not (0.1 <= self.gamma <= 1.0):
+            raise ValueError(
+                f"[conditions] gamma {self.gamma!r} must be in [0.1, 1.0]."
             )
 
 
