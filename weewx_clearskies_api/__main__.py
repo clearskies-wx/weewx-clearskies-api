@@ -963,7 +963,7 @@ def main() -> None:
         trend_time_grace=_effective_trend_grace,
     )
 
-    # Register packet-tap processors (order: smoother → PM → UV → sky → wind → lightning → scene).
+    # Register packet-tap processors (order: smoother → PM → UV → sky → wind → lightning → scene → calibration).
     register_processor(input_smoother.process_packet)
     register_processor(pm_feed.feed_to_smoother)
     register_processor(uv_smoother.accumulate_uv)
@@ -971,6 +971,12 @@ def main() -> None:
     register_processor(wind_rolling_window.process_packet)
     register_processor(lightning_strike_buffer.process_packet)
     register_processor(scene_packet_tap.inject_scene_into_packet)
+
+    # Auto-calibration baseline (ADR-068): load persisted state before registering
+    # the processor so the baseline is active before any packets arrive.
+    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
+    auto_calibration.load_persisted()
+    register_processor(auto_calibration.process_packet)
 
     # Step 7d: Register endpoint enrichments.
     from weewx_clearskies_api.sse.endpoint_enrichment import register_enrichment  # noqa: PLC0415
