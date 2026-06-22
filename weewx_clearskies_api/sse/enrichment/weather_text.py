@@ -12,7 +12,9 @@ from weewx_clearskies_api.sse.conditions_text import _precip_label, build_weathe
 from weewx_clearskies_api.sse.enrichment.input_smoother import get_smoothed
 from weewx_clearskies_api.sse.fog_condition import detect_fog_mist
 from weewx_clearskies_api.sse.haze_condition import detect_haze
+from weewx_clearskies_api.sse.observation_model import build_observation
 from weewx_clearskies_api.sse.sky_condition import classify as sky_classify
+from weewx_clearskies_api.sse.text_generator import generate_standard, generate_verbose
 
 logger = logging.getLogger(__name__)
 
@@ -281,15 +283,13 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
 
 
 def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
-    """Inject ``weatherText`` and ``weatherCode`` into a /current response envelope.
+    """Inject weather text fields and code into a /current response envelope.
 
-    Calls compose_weather_text() for the composed string and writes it
-    into the observation sub-dict (``data["data"]["weatherText"]``) so
-    weatherText is co-located with all other observation fields rather than
-    floating at the envelope top level.
-
-    Also derives and writes ``weatherCode`` (WMO present-weather integer) into
-    ``data["data"]["weatherCode"]``.
+    Writes into ``data["data"]``:
+    - ``weatherText`` — terse (backward-compatible compound form)
+    - ``weatherCode`` — WMO present-weather integer
+    - ``weatherTextStandard`` — NWS one-sentence-per-component format
+    - ``weatherTextVerbose`` — full narrative format
 
     Placement logic:
     - When ``data["data"]`` is a dict, writes into that sub-dict.
@@ -415,13 +415,31 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         else:
             data["weatherCode"] = weather_code
 
+        # Standard and verbose text generation (ADR-070, API-MANUAL §8).
+        # Build the structured observation model, then generate the two
+        # additional verbosity levels.  Terse (weatherText) stays as-is above.
+        _observation = build_observation(obs_data)
+        _standard = generate_standard(_observation)
+        _verbose = generate_verbose(_observation)
+
+        if isinstance(obs, dict):
+            obs["weatherTextStandard"] = _standard
+            obs["weatherTextVerbose"] = _verbose
+        else:
+            data["weatherTextStandard"] = _standard
+            data["weatherTextVerbose"] = _verbose
+
     except Exception:  # noqa: BLE001
         logger.exception("weather_text enrichment failed")
         obs = data.get("data")
         if isinstance(obs, dict):
             obs.setdefault("weatherText", None)
             obs.setdefault("weatherCode", None)
+            obs.setdefault("weatherTextStandard", None)
+            obs.setdefault("weatherTextVerbose", None)
         else:
             data.setdefault("weatherText", None)
             data.setdefault("weatherCode", None)
+            data.setdefault("weatherTextStandard", None)
+            data.setdefault("weatherTextVerbose", None)
     return data
