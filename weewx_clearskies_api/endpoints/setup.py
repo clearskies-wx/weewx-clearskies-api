@@ -241,6 +241,9 @@ class ProviderConfig(BaseModel):
     nws_user_agent_contact: str | None = None
     #: Radar iframe embed URL (non-secret; written to api.conf [radar] section).
     iframe_url: str | None = None
+    #: Aeris forecast model selection: "standard" or "xcast" (ADR-063).
+    #: Written to api.conf [forecast] aeris_forecast_model.
+    aeris_forecast_model: str | None = None
 
 
 class BrandingApplyConfig(BaseModel):
@@ -651,6 +654,10 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             # Radar iframe URL (non-secret; stored in api.conf per settings.py).
             if pc.iframe_url and section == "radar":
                 cfg[section]["iframe_url"] = pc.iframe_url
+
+            # Aeris forecast model (ADR-063; non-secret).
+            if pc.aeris_forecast_model and section == "forecast":
+                cfg[section]["aeris_forecast_model"] = pc.aeris_forecast_model
 
     # [branding] — optional; only written when wizard sends this block.
     if apply.branding is not None:
