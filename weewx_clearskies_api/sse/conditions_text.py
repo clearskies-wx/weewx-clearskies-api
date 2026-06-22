@@ -172,6 +172,7 @@ def build_weather_text(
     snow_rate: float | None = None,
     pm25: float | None = None,
     pm10: float | None = None,
+    haze_label: str | None = None,
 ) -> str:
     """Build the full weatherText string (ADR-044 §9 amendment, 2026-05-28).
 
@@ -210,6 +211,12 @@ def build_weather_text(
         dewpoint_unit:   Unit of dewpoint (default "degree_F").
         provider_sky:    Provider weather text, used as fallback when the
                          local solar analysis produces None.
+        haze_label:      'Hazy' when haze is detected (from haze_condition
+                         module), or None.  Appended to the sky component
+                         as a compound qualifier (terse: "Sunny, Hazy").
+                         Only applied when the effective sky is a clear-sky
+                         label (Clear, Sunny, Mostly Clear/Sunny, Scattered
+                         Clouds, Partly Cloudy) — never to cloudy/overcast.
 
     Returns:
         Composed conditions text, e.g. "Warm and Humid, Partly Cloudy, with Light Rain",
@@ -242,6 +249,26 @@ def build_weather_text(
     else:
         effective_sky = provider_sky
     effective_sky = _to_display_label(effective_sky, is_day)
+
+    # Haze qualifier: append ", Hazy" after the sky label when haze is detected
+    # and the effective sky is a clear-ish label.  "Hazy and Overcast" is
+    # invalid per API-MANUAL §haze detection — the clear-sky-only constraint
+    # is enforced both in haze_condition.detect_haze() and here as a belt-
+    # and-suspenders guard.
+    #
+    # Terse format (current default): "Sunny, Hazy"
+    # Standard/verbose (future): "Sunny. Hazy." (NWS convention)
+    if haze_label is not None and effective_sky is not None:
+        _sky_lower = effective_sky.lower()
+        _haze_eligible = (
+            "clear" in _sky_lower
+            or "sunny" in _sky_lower
+            or "scattered clouds" in _sky_lower
+            or "partly cloudy" in _sky_lower
+        )
+        if _haze_eligible:
+            effective_sky = f"{effective_sky}, {haze_label}"
+
     parts.append(effective_sky)
 
     # 3. Wind (Beaufort label). All Beaufort values including 0 (Calm) are

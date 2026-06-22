@@ -254,6 +254,21 @@ def configure(
         _skyfield_observer = None
 
 
+def get_solar_elevation() -> float | None:
+    """Return current solar elevation in degrees, or None if unavailable."""
+    if not _ring:
+        return None
+    return _compute_solar_elevation(_ring[-1].ts)
+
+
+def get_current_kcs() -> float | None:
+    """Return the current Kcs (GHI / maxSolarRad), or None if unavailable."""
+    indices = _compute_indices()
+    if indices is None:
+        return None
+    return indices[0]
+
+
 def is_daytime() -> bool:
     """Return True when the buffer has a recent daytime reading."""
     if not _ring and not _minute_acc:

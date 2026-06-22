@@ -10,6 +10,7 @@ import logging
 import weewx_clearskies_api.sse.sky_condition as _sky_module
 from weewx_clearskies_api.sse.conditions_text import _precip_label, build_weather_text
 from weewx_clearskies_api.sse.enrichment.input_smoother import get_smoothed
+from weewx_clearskies_api.sse.haze_condition import detect_haze
 from weewx_clearskies_api.sse.sky_condition import classify as sky_classify
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,11 @@ def _derive_weather_code(
     effective_sky: str | None,
     rain_label: str | None,
     is_foggy: bool,
+    is_hazy: bool = False,
 ) -> int:
     """Map current conditions state to a WMO present-weather code (subset).
 
-    Priority order: precipitation > fog > sky.
+    Priority order: precipitation > fog > haze > sky.
 
     Snow codes (WMO group 7x):
       "Heavy Snow"     → 75
@@ -78,6 +80,9 @@ def _derive_weather_code(
 
     Fog code (WMO 45):
       is_foggy=True    → 45
+
+    Haze code (WMO 05):
+      is_hazy=True     → 5
 
     Sky codes (WMO okta-based cloudiness):
       "Heavy Overcast" / "Overcast"                               → 4
@@ -111,6 +116,8 @@ def _derive_weather_code(
         return 61
     if is_foggy:
         return 45
+    if is_hazy:
+        return 5
     if effective_sky in ("Heavy Overcast", "Overcast"):
         return 4
     if effective_sky in ("Cloudy", "Mostly Cloudy"):
@@ -174,6 +181,20 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     ):
         _provider_sky = "Foggy"
 
+    # Haze detection: two-channel confirmation (Kcs deficit + PM).
+    # detect_haze() returns 'Hazy' when both channels fire and temporal
+    # coherence is satisfied, None otherwise.
+    _haze_label = detect_haze(
+        kcs=_sky_module.get_current_kcs(),
+        solar_elevation=_sky_module.get_solar_elevation(),
+        sky_label=sky_classify(),
+        pm25=get_smoothed("pollutantPM25"),
+        pm10=get_smoothed("pollutantPM10"),
+        out_temp=_out_temp,
+        dewpoint=_dewpoint,
+        rain_rate=get_smoothed("rainRate"),
+    )
+
     _precip_type = obs_data.get("precipType") if obs_data else None
     _snow_rate = get_smoothed("snowRate")
 
@@ -197,6 +218,7 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         snow_rate=_snow_rate,
         pm25=get_smoothed("pollutantPM25"),
         pm10=get_smoothed("pollutantPM10"),
+        haze_label=_haze_label,
     )
 
 
@@ -268,10 +290,26 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             precip_type=_precip_type2, snow_rate=_snow_rate2,
         )
 
+        # Re-run haze detection with the same inputs used in compose_weather_text().
+        # detect_haze() is stateful (updates _haze_history); calling it twice in
+        # rapid succession is safe because the temporal coherence filter is idempotent
+        # on the same timestamp — the second call just reads the same window.
+        _haze_label_code = detect_haze(
+            kcs=_sky_module.get_current_kcs(),
+            solar_elevation=_sky_module.get_solar_elevation(),
+            sky_label=sky_classify(),
+            pm25=get_smoothed("pollutantPM25"),
+            pm10=get_smoothed("pollutantPM10"),
+            out_temp=_out_temp,
+            dewpoint=_dewpoint,
+            rain_rate=get_smoothed("rainRate"),
+        )
+
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,
             rain_label=_rain_label,
             is_foggy=(_provider_sky == "Foggy"),
+            is_hazy=(_haze_label_code is not None),
         )
 
         if isinstance(obs, dict):
