@@ -210,10 +210,11 @@ class TestWireToCanonicalHappyPath:
     def _setup_resolved_state(self) -> None:
         """Inject module-level resolved sensor state matching the fixture."""
         import weewx_clearskies_api.providers.aqi.openaq as _openaq  # noqa: PLC0415
-        _openaq._resolved_location_id = _FIXTURE_LOCATION_ID
-        _openaq._resolved_location_name = _FIXTURE_LOCATION_NAME
-        _openaq._resolved_sensor_pm25_id = _FIXTURE_PM25_SENSOR_ID
-        _openaq._resolved_sensor_pm10_id = _FIXTURE_PM10_SENSOR_ID
+        _openaq._resolved_pm25_location_id = _FIXTURE_LOCATION_ID
+        _openaq._resolved_pm25_location_name = _FIXTURE_LOCATION_NAME
+        _openaq._resolved_pm25_sensor_id = _FIXTURE_PM25_SENSOR_ID
+        _openaq._resolved_pm10_location_id = _FIXTURE_LOCATION_ID
+        _openaq._resolved_pm10_sensor_id = _FIXTURE_PM10_SENSOR_ID
 
     def setup_method(self) -> None:
         _reset_provider_state()
