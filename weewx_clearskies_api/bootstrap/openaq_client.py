@@ -327,7 +327,10 @@ def _fetch_sensor_measurements_paginated(
         data = _api_get(path, params=params)
         meta = data.get("meta", {})
         results = data.get("results", [])
-        total_found = meta.get("found", 0)
+        try:
+            total_found = int(meta.get("found", 0))
+        except (TypeError, ValueError):
+            total_found = 0
 
         # Parse each measurement record.
         for item in results:
