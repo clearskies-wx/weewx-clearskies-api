@@ -62,6 +62,13 @@ _gamma: float = 0.45
 # Reference RH for the f(RH) correction (dry baseline, dimensionless fraction).
 _RH_REF: float = 0.40
 
+# Minimum Kcs deficit at reference RH before haze is considered.
+# 0.03 = 3% below baseline.  Above consumer pyranometer noise floor
+# (Lindfors 2013: ±20% uncertainty for pyranometer-derived AOD vs AERONET).
+# f(RH) scales this up at high humidity: at RH=80% threshold≈0.049,
+# at RH=89% threshold≈0.064 (with default γ=0.45).
+_DEFICIT_THRESHOLD: float = 0.03
+
 # Rolling history of (unix_timestamp, is_hazy) pairs for the 15-minute
 # temporal coherence filter.  Entries older than 900 s are pruned on each
 # call to detect_haze().
@@ -271,26 +278,27 @@ def detect_haze(
 
     deficit = _clean_kcs_baseline - kcs
     if deficit <= 0.0:
-        # Current Kcs meets or exceeds the clean-sky baseline — no extinction.
         _record_history(now, is_hazy=False)
         return None
 
-    # f(RH) hygroscopic correction factor.
-    # At higher humidity the same PM mass produces more extinction due to
-    # hygroscopic swelling of aerosol particles.  The correction scales the
-    # effective extinction — at higher RH, a smaller PM burden is needed for
-    # the same visibility impact.  For now we verify the deficit is positive
-    # (any deficit + PM confirmation = haze). The exact deficit threshold
-    # will be tuned in Phase 6 when the baseline is calibrated.
+    # f(RH) hygroscopic correction (Hanel 1976 / Tang 1996).
+    # At higher humidity, aerosol particles absorb water and swell,
+    # producing more extinction per unit mass.  This inflates the Kcs
+    # deficit even from clean-air background aerosol.  The correction
+    # scales the deficit threshold UP at high humidity to distinguish
+    # real haze extinction from humidity-inflated clean-air scattering.
     if rh is not None and 0.0 < rh < 100.0:
         rh_frac = rh / 100.0
-        # f_rh will be > 1.0 when rh_frac > RH_ref (high humidity amplifies
-        # extinction per unit mass), and < 1.0 at very low humidity.
         f_rh = ((1.0 - rh_frac) / (1.0 - _RH_REF)) ** (-_gamma)
     else:
-        f_rh = 1.0  # noqa: F841 — reserved for Phase 6 deficit threshold scaling
+        f_rh = 1.0
 
-    # Both channels have confirmed. Record the positive detection.
+    adjusted_threshold = _DEFICIT_THRESHOLD * f_rh
+    if deficit <= adjusted_threshold:
+        _record_history(now, is_hazy=False)
+        return None
+
+    # Both channels confirmed and deficit exceeds f(RH)-adjusted threshold.
     _record_history(now, is_hazy=True)
 
     # ------------------------------------------------------------------
@@ -318,12 +326,20 @@ def set_gamma(value: float) -> None:
     _gamma = float(value)
 
 
+def set_deficit_threshold(value: float) -> None:
+    """Set the minimum Kcs deficit threshold at reference RH."""
+    global _DEFICIT_THRESHOLD  # noqa: PLW0603
+    _DEFICIT_THRESHOLD = float(value)
+
+
 def reset() -> None:
     """Clear all module-level state.  For test isolation only."""
-    global _enabled, _clean_kcs_baseline, _gamma, _last_rain_end, _was_raining  # noqa: PLW0603
+    global _enabled, _clean_kcs_baseline, _gamma, _DEFICIT_THRESHOLD  # noqa: PLW0603
+    global _last_rain_end, _was_raining  # noqa: PLW0603
     _enabled = True
     _clean_kcs_baseline = 0.90
     _gamma = 0.45
+    _DEFICIT_THRESHOLD = 0.03
     _last_rain_end = 0.0
     _was_raining = False
     _haze_history.clear()
