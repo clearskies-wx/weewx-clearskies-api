@@ -24,6 +24,7 @@ ruff: noqa: N815  (canonical field names are weewx camelCase per ADR-010)
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -196,6 +197,18 @@ def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
                 updates["snowRate"] = provider_conditions.snowRate
             if observation.precipType is None and provider_conditions.precipType is not None:
                 updates["precipType"] = provider_conditions.precipType
+
+            # Push provider weather text for nighttime haze deferral (ADR-071).
+            # Done after field blending so a failed blend does not suppress
+            # the weather-text push.  Lazy import mirrors the pm_feed pattern.
+            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+                set_latest_weather_text,
+            )
+            set_latest_weather_text(
+                weather_text=provider_conditions.weatherText,
+                timestamp=time.time(),
+            )
+
             if updates:
                 return observation.model_copy(update=updates)
 

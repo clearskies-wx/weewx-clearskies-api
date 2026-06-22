@@ -221,6 +221,21 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     # Merge haze signals: either source may trigger "Hazy".
     _effective_haze_label: str | None = _haze_label if (_haze_label is not None) else ("Hazy" if _fog_is_hazy else None)
 
+    # Nighttime provider deferral (API-MANUAL §8 nighttime mode, ADR-071):
+    # When it's nighttime, local haze detection is inactive (el ≤ 10°).
+    # Check provider weather text for haze/smoke indicators.  Fog/mist
+    # continues from local detection unaffected; this block only fires when
+    # no haze label has been established yet.
+    if not _is_day and _effective_haze_label is None:
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text,
+        )
+        _pw_text, _pw_age = get_provider_weather_text()
+        if _pw_text is not None:
+            _pw_lower = _pw_text.lower()
+            if any(kw in _pw_lower for kw in ("haze", "hazy", "smoke", "smoky")):
+                _effective_haze_label = "Hazy"
+
     _precip_type = obs_data.get("precipType") if obs_data else None
     _snow_rate = get_smoothed("snowRate")
 
@@ -358,6 +373,18 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
 
         # Merge haze signals from both detection paths.
         _is_hazy_code = (_haze_label_code is not None) or _fog_is_hazy2
+
+        # Nighttime provider deferral (API-MANUAL §8 nighttime mode, ADR-071):
+        # Mirror the same logic used in compose_weather_text() for code derivation.
+        if not _sky_module.is_daytime() and not _is_hazy_code:
+            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+                get_provider_weather_text,
+            )
+            _pw_text2, _pw_age2 = get_provider_weather_text()
+            if _pw_text2 is not None:
+                _pw_lower2 = _pw_text2.lower()
+                if any(kw in _pw_lower2 for kw in ("haze", "hazy", "smoke", "smoky")):
+                    _is_hazy_code = True
 
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,
