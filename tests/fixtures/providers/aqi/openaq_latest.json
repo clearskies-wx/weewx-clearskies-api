@@ -1,0 +1,146 @@
+{
+  "meta": {
+    "name": "openaq-api",
+    "website": "/",
+    "page": 1,
+    "limit": 100,
+    "found": 3
+  },
+  "results": [
+    {
+      "sensorsId": 678,
+      "value": 12.5,
+      "parameter": {
+        "id": 2,
+        "name": "pm25",
+        "units": "µg/m³",
+        "displayName": "PM2.5"
+      },
+      "datetime": {
+        "utc": "2026-06-22T10:00:00Z",
+        "local": "2026-06-22T03:00:00-07:00"
+      },
+      "coordinates": {
+        "latitude": 47.5776,
+        "longitude": -122.3118
+      },
+      "summary": {
+        "min": 8.2,
+        "q02": 8.5,
+        "q25": 10.1,
+        "median": 12.0,
+        "q75": 14.2,
+        "q98": 18.5,
+        "max": 20.1,
+        "avg": 12.3,
+        "sd": 2.1
+      },
+      "coverage": {
+        "expectedCount": 1,
+        "expectedInterval": "PT1H",
+        "observedCount": 1,
+        "observedInterval": "PT1H",
+        "percentComplete": 100.0,
+        "percentCoverage": 100.0,
+        "datetimeFrom": {
+          "utc": "2026-06-22T09:00:00Z",
+          "local": "2026-06-22T02:00:00-07:00"
+        },
+        "datetimeTo": {
+          "utc": "2026-06-22T10:00:00Z",
+          "local": "2026-06-22T03:00:00-07:00"
+        }
+      }
+    },
+    {
+      "sensorsId": 679,
+      "value": 18.3,
+      "parameter": {
+        "id": 1,
+        "name": "pm10",
+        "units": "µg/m³",
+        "displayName": "PM10"
+      },
+      "datetime": {
+        "utc": "2026-06-22T10:00:00Z",
+        "local": "2026-06-22T03:00:00-07:00"
+      },
+      "coordinates": {
+        "latitude": 47.5776,
+        "longitude": -122.3118
+      },
+      "summary": {
+        "min": 14.0,
+        "q02": 14.5,
+        "q25": 16.0,
+        "median": 17.8,
+        "q75": 19.5,
+        "q98": 22.0,
+        "max": 24.5,
+        "avg": 18.1,
+        "sd": 2.5
+      },
+      "coverage": {
+        "expectedCount": 1,
+        "expectedInterval": "PT1H",
+        "observedCount": 1,
+        "observedInterval": "PT1H",
+        "percentComplete": 100.0,
+        "percentCoverage": 100.0,
+        "datetimeFrom": {
+          "utc": "2026-06-22T09:00:00Z",
+          "local": "2026-06-22T02:00:00-07:00"
+        },
+        "datetimeTo": {
+          "utc": "2026-06-22T10:00:00Z",
+          "local": "2026-06-22T03:00:00-07:00"
+        }
+      }
+    },
+    {
+      "sensorsId": 680,
+      "value": 0.043,
+      "parameter": {
+        "id": 3,
+        "name": "o3",
+        "units": "ppm",
+        "displayName": "O3"
+      },
+      "datetime": {
+        "utc": "2026-06-22T10:00:00Z",
+        "local": "2026-06-22T03:00:00-07:00"
+      },
+      "coordinates": {
+        "latitude": 47.5776,
+        "longitude": -122.3118
+      },
+      "summary": {
+        "min": 0.030,
+        "q02": 0.031,
+        "q25": 0.038,
+        "median": 0.042,
+        "q75": 0.048,
+        "q98": 0.055,
+        "max": 0.060,
+        "avg": 0.042,
+        "sd": 0.005
+      },
+      "coverage": {
+        "expectedCount": 1,
+        "expectedInterval": "PT1H",
+        "observedCount": 1,
+        "observedInterval": "PT1H",
+        "percentComplete": 100.0,
+        "percentCoverage": 100.0,
+        "datetimeFrom": {
+          "utc": "2026-06-22T09:00:00Z",
+          "local": "2026-06-22T02:00:00-07:00"
+        },
+        "datetimeTo": {
+          "utc": "2026-06-22T10:00:00Z",
+          "local": "2026-06-22T03:00:00-07:00"
+        }
+      }
+    }
+  ]
+}
