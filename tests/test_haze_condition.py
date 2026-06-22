@@ -250,10 +250,12 @@ class TestPMChannel:
 
         Temperature pair chosen so RH lands in [80%, 90%]: high enough that the
         dry branch (rh < 80%) fails, but below the 90% RH gate that defers to fog.
+        At RH≈88%, f(RH)≈2.06, so the f(RH)-adjusted deficit threshold is ~0.062.
+        kcs=0.80 gives deficit=0.10 which exceeds 0.062.
         """
-        result = _detect(pm25=40.0, pm10=None, out_temp=80.0, dewpoint=76.0)
+        result = _detect(pm25=40.0, pm10=None, out_temp=80.0, dewpoint=76.0, kcs=0.80)
         assert result == "Hazy", (
-            "pm25=40.0 in humid conditions (T-Td=4°F, RH≈88%) must confirm PM channel (> 35)"
+            "pm25=40.0 in humid conditions (T-Td=4°F, RH≈88%) with deficit=0.10 must confirm"
         )
 
     def test_pm10_above_threshold_confirms_pm_channel(self) -> None:
@@ -305,10 +307,17 @@ class TestKcsChannel:
         result = _detect(kcs=0.85)
         assert result == "Hazy", "kcs=0.85 below baseline 0.90 must confirm Kcs channel"
 
-    def test_kcs_just_below_baseline_confirms_channel(self) -> None:
-        """kcs=0.8999 (just below baseline 0.90) → deficit = 0.0001 > 0, Kcs confirmed."""
+    def test_kcs_just_below_baseline_below_deficit_threshold(self) -> None:
+        """kcs=0.8999 → deficit=0.0001, below f(RH)-adjusted threshold (~0.031) → None."""
         result = _detect(kcs=0.8999)
-        assert result == "Hazy", "kcs=0.8999 just below baseline must confirm Kcs channel"
+        assert result is None, (
+            "kcs=0.8999 deficit 0.0001 is below the f(RH)-adjusted threshold (~0.031)"
+        )
+
+    def test_kcs_well_below_baseline_confirms_channel(self) -> None:
+        """kcs=0.85 → deficit=0.05, above f(RH)-adjusted threshold (~0.031) → Hazy."""
+        result = _detect(kcs=0.85)
+        assert result == "Hazy", "kcs=0.85 deficit 0.05 exceeds f(RH)-adjusted threshold"
 
 
 # ===========================================================================
@@ -522,12 +531,12 @@ class TestConfiguration:
         assert _detect() == "Hazy", "set_enabled(True) must re-enable haze detection"
 
     def test_set_baseline_raises_threshold(self) -> None:
-        """set_baseline(0.95) → kcs=0.93 now below baseline, confirms channel."""
+        """set_baseline(0.95) → kcs=0.85 deficit=0.10 exceeds f(RH)-adjusted threshold."""
         haze_condition.set_baseline(0.95)
-        # kcs=0.93 < baseline 0.95 → deficit = 0.02 > 0
-        result = _detect(kcs=0.93)
+        # kcs=0.85 < baseline 0.95 → deficit = 0.10 > ~0.031
+        result = _detect(kcs=0.85)
         assert result == "Hazy", (
-            "After set_baseline(0.95), kcs=0.93 must confirm Kcs channel (deficit > 0)"
+            "After set_baseline(0.95), kcs=0.85 deficit=0.10 must exceed threshold"
         )
 
     def test_set_baseline_default_0_90_rejected_by_kcs_0_91(self) -> None:

@@ -174,7 +174,7 @@ class TestGenerateStandardComponents:
             wind_direction=180.0,
         )
         result = generate_standard(obs)
-        assert result == "Sunny. Temperature near 72. South winds around 8 mph."
+        assert result == "Sunny. Temperature near 72°F. South winds around 8 mph."
 
     def test_clear_night_observation(self) -> None:
         """Clear night sky + temp + wind → output uses 'Clear' not 'Sunny'."""
@@ -186,7 +186,7 @@ class TestGenerateStandardComponents:
             wind_direction=90.0,
         )
         result = generate_standard(obs)
-        assert result == "Clear. Temperature near 55. East winds around 6 mph."
+        assert result == "Clear. Temperature near 55°F. East winds around 6 mph."
 
     def test_sky_with_precipitation_label(self) -> None:
         """sky_label + precipitation_label → 'Mostly Cloudy with Light Rain.'"""
@@ -301,13 +301,13 @@ class TestGenerateStandardComponents:
         """Only temperature set → 'Temperature near {T}.'"""
         obs = Observation(temperature=68.0)
         result = generate_standard(obs)
-        assert result == "Temperature near 68."
+        assert result == "Temperature near 68°F."
 
     def test_temperature_rounds_to_nearest_integer(self) -> None:
         """temperature=72.6 → rounds to 73 in output."""
         obs = Observation(temperature=72.6)
         result = generate_standard(obs)
-        assert result == "Temperature near 73."
+        assert result == "Temperature near 73°F."
 
     def test_wind_without_direction_omits_direction_word(self) -> None:
         """wind_speed=10 + wind_direction=None → 'Winds around 10 mph.' (no direction label)."""
