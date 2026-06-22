@@ -1173,6 +1173,9 @@ def main() -> None:
     )
     temperature_comfort.configure(archive_interval=_station_for_enrichment.archive_interval)
 
+    from weewx_clearskies_api.sse import text_generator  # noqa: PLC0415
+    text_generator.configure(unit_system=_station_for_enrichment.unit_system)
+
     # Seed sky classifier ring buffer from archive records (last 30 min) so
     # classify() returns a result immediately instead of None for ~3 minutes.
     _backfill_sky_classifier()
