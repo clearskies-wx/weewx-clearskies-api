@@ -927,6 +927,7 @@ def main() -> None:
         lightning_strike_buffer,
         scene_packet_tap,
         barometer_trend,
+        pm_feed,
     )
     from weewx_clearskies_api.sse.packet_tap import register_processor  # noqa: PLC0415
 
@@ -962,8 +963,9 @@ def main() -> None:
         trend_time_grace=_effective_trend_grace,
     )
 
-    # Register packet-tap processors (order: smoother → UV → sky → wind → lightning → scene).
+    # Register packet-tap processors (order: smoother → PM → UV → sky → wind → lightning → scene).
     register_processor(input_smoother.process_packet)
+    register_processor(pm_feed.feed_to_smoother)
     register_processor(uv_smoother.accumulate_uv)
     register_processor(sky_tap.update_from_packet)
     register_processor(wind_rolling_window.process_packet)

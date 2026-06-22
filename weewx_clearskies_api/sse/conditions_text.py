@@ -170,6 +170,8 @@ def build_weather_text(
     provider_sky: str | None = None,
     precip_type: str | None = None,
     snow_rate: float | None = None,
+    pm25: float | None = None,
+    pm10: float | None = None,
 ) -> str:
     """Build the full weatherText string (ADR-044 §9 amendment, 2026-05-28).
 

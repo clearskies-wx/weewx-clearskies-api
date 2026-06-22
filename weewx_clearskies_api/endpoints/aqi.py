@@ -45,6 +45,7 @@ Units block (LC lead-call in brief §per-endpoint spec):
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -396,6 +397,18 @@ def get_aqi_current(
         if record.aqiScale in ("epa", "airnow"):
             from weewx_clearskies_api.providers.aqi._units import epa_category  # noqa: PLC0415
             record = record.model_copy(update={"aqiCategory": epa_category(record.aqi)})
+
+    # Feed PM2.5/PM10 into the enrichment pipeline for haze detection (ADR-067).
+    # Only observed-data providers are eligible (ADR-066 is_observed_source).
+    if record is not None:
+        from weewx_clearskies_api.sse.enrichment.pm_feed import set_latest_pm  # noqa: PLC0415
+        _cap = next((p for p in aqi_providers if p.provider_id == provider_id), None)
+        set_latest_pm(
+            pm25=record.pollutantPM25,
+            pm10=record.pollutantPM10,
+            timestamp=time.time(),
+            is_observed=_cap.is_observed_source if _cap else False,
+        )
 
     return AQIResponse(
         data=record,

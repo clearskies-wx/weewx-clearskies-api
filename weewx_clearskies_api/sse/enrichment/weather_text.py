@@ -195,6 +195,8 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         provider_sky=_provider_sky,
         precip_type=_precip_type,
         snow_rate=_snow_rate,
+        pm25=get_smoothed("pollutantPM25"),
+        pm10=get_smoothed("pollutantPM10"),
     )
 
 

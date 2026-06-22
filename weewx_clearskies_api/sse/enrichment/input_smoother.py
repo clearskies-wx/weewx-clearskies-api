@@ -13,14 +13,16 @@ from weewx_clearskies_api.sse.field_utils import strip_suffix
 
 # Buffer capacities (samples at ~5-second interval per ADR-044 §8)
 _buffers: dict[str, RingBuffer] = {
-    "appTemp":   RingBuffer(120),  # 10 min
-    "dewpoint":  RingBuffer(120),  # 10 min
-    "outTemp":   RingBuffer(120),  # 10 min
-    "windSpeed": RingBuffer(60),   # 5 min
-    "windGust":  RingBuffer(60),   # 5 min
-    "rainRate":  RingBuffer(24),   # 2 min
-    "heatindex": RingBuffer(120),  # 10 min
-    "windchill": RingBuffer(120),  # 10 min
+    "appTemp":        RingBuffer(120),  # 10 min
+    "dewpoint":       RingBuffer(120),  # 10 min
+    "outTemp":        RingBuffer(120),  # 10 min
+    "windSpeed":      RingBuffer(60),   # 5 min
+    "windGust":       RingBuffer(60),   # 5 min
+    "rainRate":       RingBuffer(24),   # 2 min
+    "heatindex":      RingBuffer(120),  # 10 min
+    "windchill":      RingBuffer(120),  # 10 min
+    "pollutantPM25":  RingBuffer(720),  # 60 min — fed by pm_feed tap, not loop packets
+    "pollutantPM10":  RingBuffer(720),  # 60 min — fed by pm_feed tap, not loop packets
 }
 
 # Minimum number of samples before get_smoothed() returns a value.
@@ -82,6 +84,18 @@ def get_smoothed(field: str) -> float | None:
         return buf.mean()
     except ValueError:
         return None
+
+
+def add_sample(field: str, value: float) -> None:
+    """Add a single sample to the named buffer.
+
+    No-op if the field is not tracked.  Used by pm_feed to inject AQI
+    provider data into the smoothing pipeline without going through
+    process_packet() (PM data does not arrive in loop packets).
+    """
+    buf = _buffers.get(field)
+    if buf is not None:
+        buf.add(value)
 
 
 def backfill(records: list[dict[str, float | None]]) -> None:
