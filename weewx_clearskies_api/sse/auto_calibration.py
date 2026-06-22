@@ -77,7 +77,7 @@ _WINDOW_FALLBACK_SECS: float = _WINDOW_DAYS_FALLBACK * 86400.0
 # "Overcast", "Heavy Overcast".
 # ---------------------------------------------------------------------------
 
-_CLEAN_SKY_SUBSTRINGS: tuple[str, ...] = ("Clear", "Sunny", "Scattered")
+_CLEAN_SKY_SUBSTRINGS: tuple[str, ...] = ("Clear", "Sunny")
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -192,17 +192,20 @@ def process_packet(packet: dict) -> None:  # type: ignore[type-arg]
 
     # ------------------------------------------------------------------
     # Gate 4: Clean PM concentrations.
-    # Both channels must be below EPA "Good" breakpoints.  If either PM
-    # channel is missing (provider not configured), skip — we cannot
-    # confirm a clean atmosphere without PM data.
+    # PM2.5 is the primary channel — must be present and below the EPA
+    # "Good" breakpoint (12 µg/m³).  PM10 is checked when available but
+    # is not required: many OpenAQ stations provide PM2.5 only.
     # ------------------------------------------------------------------
     pm25 = input_smoother.get_smoothed("pollutantPM25")
     pm10 = input_smoother.get_smoothed("pollutantPM10")
 
-    if pm25 is None or pm10 is None:
+    if pm25 is None:
         return
 
-    if pm25 >= _PM25_CLEAN or pm10 >= _PM10_CLEAN:
+    if pm25 >= _PM25_CLEAN:
+        return
+
+    if pm10 is not None and pm10 >= _PM10_CLEAN:
         return
 
     # ------------------------------------------------------------------
