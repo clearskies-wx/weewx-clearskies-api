@@ -59,10 +59,11 @@ def _derive_weather_code(
     rain_label: str | None,
     fog_mist_state: str | None,
     is_hazy: bool = False,
+    out_temp: float | None = None,
 ) -> int:
     """Map current conditions state to a WMO present-weather code (subset).
 
-    Priority order: precipitation > fog > mist > haze > sky.
+    Priority order: precipitation > fog (rime or plain) > mist > haze > sky.
 
     Snow codes (WMO group 7x):
       "Heavy Snow"     → 75
@@ -79,8 +80,12 @@ def _derive_weather_code(
       "Moderate Rain"  → 63
       "Light Rain"     → 61
 
+    Rime fog code (WMO 48):
+      fog_mist_state == "Foggy" AND out_temp <= 32.0 °F → 48
+      (depositing rime fog: supercooled fog droplets deposit ice on surfaces)
+
     Fog code (WMO 45):
-      fog_mist_state == "Foggy" → 45
+      fog_mist_state == "Foggy" AND (out_temp > 32.0 °F OR out_temp is None) → 45
 
     Mist code (WMO 10):
       fog_mist_state == "Misty" → 10
@@ -94,6 +99,15 @@ def _derive_weather_code(
       "Partly Cloudy"                                             → 2
       "Mostly Clear" / "Mostly Sunny" + Scattered Clouds variants → 1
       "Clear" / "Sunny" + Scattered Clouds variants / None        → 0
+
+    Args:
+        effective_sky: Sky condition string from the solar classifier or provider.
+        rain_label: Precipitation label from _precip_label().
+        fog_mist_state: "Foggy", "Misty", or None from detect_fog_mist().
+        is_hazy: True when haze detection has fired.
+        out_temp: Outside temperature in °F (smoothed).  Used to distinguish
+                  depositing rime fog (code 48, ≤ 32 °F) from plain fog (code 45).
+                  When None, rime fog is not emitted and plain fog (45) is used.
 
     Returns an int WMO code.
     """
@@ -119,6 +133,8 @@ def _derive_weather_code(
     if rain_label == "Light Rain":
         return 61
     if fog_mist_state == "Foggy":
+        if out_temp is not None and out_temp <= 32.0:
+            return 48  # depositing rime fog (ADR-070)
         return 45
     if fog_mist_state == "Misty":
         return 10
@@ -391,6 +407,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             rain_label=_rain_label,
             fog_mist_state=_fog_mist_state2,
             is_hazy=_is_hazy_code,
+            out_temp=_out_temp,
         )
 
         if isinstance(obs, dict):
