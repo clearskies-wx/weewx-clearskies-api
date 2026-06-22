@@ -2,7 +2,7 @@
 
 Matches historical OpenAQ PM2.5 records against the weewx archive, computes
 the clear-sky clearness index (Kcs = radiation / maxSolarRad) for each
-qualifying record, and seeds the auto-calibration _samples list.
+qualifying record, and seeds the auto-calibration monthly sample bins.
 
 Read-only archive access: this module never INSERTs, UPDATEs, or DELETEs
 from the weewx archive.  All writes go through auto_calibration.persist()
@@ -18,6 +18,8 @@ Clean-sky sample criteria (must all pass):
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -54,9 +56,11 @@ def run_bootstrap(
            - maxSolarRad > 100 W/m²
            - rainRate = 0 or NULL
            - Kcs > 0.3
-      6. Append qualifying (timestamp, kcs) to auto_calibration._samples.
+      6. Append qualifying (timestamp, kcs) to the appropriate monthly bin in
+         auto_calibration._monthly_samples, keyed by local calendar month.
 
-    After all records: recompute baseline and persist to calibration.json.
+    After all records: sort each month bin, recompute per-month baselines,
+    recompute flat fallback, notify haze_condition, and persist.
 
     Args:
         engine:       SQLAlchemy engine pointing at the weewx archive (read-only).
@@ -66,7 +70,7 @@ def run_bootstrap(
         station_alt_m: Station altitude (metres above sea level).
 
     Returns:
-        Summary dict with counters and final calibration state.
+        Summary dict with counters, per-month sample counts, and calibration state.
     """
     counters = {
         "total_pm_records": len(pm_records),
@@ -79,6 +83,9 @@ def run_bootstrap(
         "skipped_pm_high": 0,
         "clean_sky_samples": 0,
     }
+
+    # Get station timezone for month binning.
+    tz = ZoneInfo(auto_calibration._timezone_name)  # noqa: SLF001
 
     for pm_rec in pm_records:
         ts = pm_rec.timestamp_utc
@@ -154,36 +161,45 @@ def run_bootstrap(
             counters["skipped_kcs_low"] += 1
             continue
 
-        # All criteria met — add sample.
-        auto_calibration._samples.append((float(arch_ts), kcs))  # noqa: SLF001
+        # All criteria met — bin sample by local calendar month.
+        local_month = datetime.fromtimestamp(float(arch_ts), tz=tz).month
+        auto_calibration._monthly_samples[local_month].append((float(arch_ts), kcs))  # noqa: SLF001
         counters["clean_sky_samples"] += 1
 
-    # Sort samples chronologically (we appended in PM-record order, which may
-    # not be perfectly aligned with archive timestamps after matching).
-    auto_calibration._samples.sort(key=lambda x: x[0])  # noqa: SLF001
+    # Sort each month bin chronologically after import.
+    for m in range(1, 13):
+        auto_calibration._monthly_samples[m].sort(key=lambda x: x[0])  # noqa: SLF001
 
-    # Recompute baseline from accumulated samples.
-    new_baseline = auto_calibration.compute_baseline()
-    if new_baseline is not None:
-        auto_calibration._current_baseline = new_baseline  # noqa: SLF001
+    # Recompute per-month baselines.
+    for m in range(1, 13):
+        auto_calibration._monthly_baselines[m] = auto_calibration.compute_monthly_baseline(m)  # noqa: SLF001
+
+    # Recompute flat fallback.
+    auto_calibration._flat_baseline_update()  # noqa: SLF001
+
+    # Notify haze_condition with current baseline.
+    current = auto_calibration.get_current_baseline()
+    if current is not None:
         from weewx_clearskies_api.sse import haze_condition  # noqa: PLC0415
-        haze_condition.set_baseline(new_baseline)
-        logger.info(
-            "Bootstrap calibration baseline set: Kcs=%.4f from %d samples",
-            new_baseline,
-            counters["clean_sky_samples"],
-        )
+        haze_condition.set_baseline(current)
+
+    cal_state = auto_calibration.get_calibration_state()
+    logger.info(
+        "Bootstrap import complete: %d clean-sky samples across %d/12 months calibrated",
+        counters["clean_sky_samples"],
+        cal_state["months_calibrated"],
+    )
 
     # Persist to disk.
     auto_calibration.persist()
 
-    # Build final calibration state for the summary.
-    cal_state = auto_calibration.get_calibration_state()
+    # Build per-month sample counts for the summary.
+    per_month_counts = {m: len(auto_calibration._monthly_samples[m]) for m in range(1, 13)}  # noqa: SLF001
 
     return {
         **counters,
-        "calibration_state": cal_state["state"],
-        "baseline_kcs": cal_state["baseline_kcs"],
+        "per_month_counts": per_month_counts,
+        "months_calibrated": cal_state["months_calibrated"],
         "persist_path": auto_calibration._PERSIST_PATH,  # noqa: SLF001
     }
 

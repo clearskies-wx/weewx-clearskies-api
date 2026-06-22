@@ -244,18 +244,7 @@ def _parse_args() -> argparse.Namespace:
         "bootstrap",
         help="Import PM2.5 history from OpenAQ to seed calibration baseline (ADR-068 T8.1)",
     )
-    boot_parser.add_argument(
-        "--years",
-        type=int,
-        default=2,
-        help="Years of PM2.5 history to pull from OpenAQ (default: 2)",
-    )
-    boot_parser.add_argument(
-        "--max-distance-km",
-        type=float,
-        default=25.0,
-        help="Maximum distance to the PM2.5 monitor in km (default: 25.0)",
-    )
+
 
     args = parser.parse_args()
 
@@ -676,11 +665,10 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
     print("OpenAQ bootstrap")
 
     # Step 1: Find nearest PM2.5 monitor.
-    years = args.years
-    max_dist_km = args.max_distance_km
+    years = 3
 
     print(f"  Station location: ({lat:.4f}, {lon:.4f}), altitude {alt_m:.0f} m")
-    print(f"  Searching for nearest PM2.5 monitor within {max_dist_km:.0f} km...")
+    print(f"  Searching for nearest PM2.5 monitor within 25 km...")
     try:
         sensor_id, monitor_lat, monitor_lon, location_name = find_nearest_pm25_sensor(lat, lon)
     except RuntimeError as exc:
@@ -696,7 +684,7 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
     date_to = now_utc.date().isoformat()
     date_from = (now_utc - timedelta(days=years * 365)).date().isoformat()
 
-    print(f"  Pulling {years} year(s) of history ({date_from} to {date_to})...")
+    print(f"  Pulling up to 3 years of history ({date_from} to {date_to})...")
     try:
         pm_records = fetch_historical_pm25(
             sensor_id=sensor_id,
@@ -1204,11 +1192,74 @@ def main() -> None:
     register_processor(lightning_strike_buffer.process_packet)
     register_processor(scene_packet_tap.inject_scene_into_packet)
 
-    # Auto-calibration baseline (ADR-068): load persisted state before registering
-    # the processor so the baseline is active before any packets arrive.
+    # Auto-calibration baseline (ADR-068): wire station metadata, load persisted
+    # state, and auto-bootstrap from OpenAQ if not fully calibrated.
     from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
     from weewx_clearskies_api.sse import haze_condition  # noqa: PLC0415
+
+    # Wire station metadata into calibration module.
+    _station_for_cal = _station_for_enrichment
+    auto_calibration.set_timezone(_station_for_cal.timezone)
+    auto_calibration.set_station_type(_station_for_cal.hardware)
+
+    # Check column registry for pyranometer (radiation column).
+    _has_rad = "radiation" in registry.stock or "radiation" in registry.unmapped
+    auto_calibration.set_has_radiation(_has_rad)
+
+    # Load persisted calibration state.
     auto_calibration.load_persisted()
+
+    # Station type change check.
+    if auto_calibration.check_station_type_change(_station_for_cal.hardware):
+        logger.warning(
+            "Station hardware type changed since last calibration. "
+            "Consider resetting calibration via the admin UI."
+        )
+
+    # Auto-bootstrap: if OpenAQ key present + not fully calibrated + has radiation.
+    _openaq_key = os.environ.get("WEEWX_CLEARSKIES_OPENAQ_API_KEY", "").strip()
+    _cal_state = auto_calibration.get_calibration_state()
+    if _openaq_key and _cal_state["months_calibrated"] < 12 and _has_rad:
+        logger.info(
+            "Auto-bootstrap: %d/12 months calibrated, starting OpenAQ import...",
+            _cal_state["months_calibrated"],
+        )
+        try:
+            from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+            from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
+            from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
+                fetch_historical_pm25,
+                find_nearest_pm25_sensor,
+            )
+            _now_utc = datetime.now(UTC)
+            _date_to = _now_utc.date().isoformat()
+            _date_from = (_now_utc - timedelta(days=3 * 365)).date().isoformat()
+            _sensor_id, _, _, _ = find_nearest_pm25_sensor(
+                lat=_station_for_cal.latitude,
+                lon=_station_for_cal.longitude,
+            )
+            _pm_records = fetch_historical_pm25(
+                sensor_id=_sensor_id,
+                date_from=_date_from,
+                date_to=_date_to,
+            )
+            if _pm_records:
+                _bs_summary = run_bootstrap(
+                    engine=get_engine(),
+                    pm_records=_pm_records,
+                    station_lat=_station_for_cal.latitude,
+                    station_lon=_station_for_cal.longitude,
+                    station_alt_m=_station_for_cal.altitude,
+                )
+                logger.info(
+                    "Auto-bootstrap complete: %d clean-sky samples, %d/12 months calibrated",
+                    _bs_summary["clean_sky_samples"],
+                    auto_calibration.get_calibration_state()["months_calibrated"],
+                )
+            else:
+                logger.info("Auto-bootstrap: no PM2.5 records found nearby")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Auto-bootstrap failed (non-fatal): %s", exc)
 
     # Haze configuration wiring (api.conf [conditions])
     conditions = settings.conditions
@@ -1217,11 +1268,6 @@ def main() -> None:
         logger.info("Haze detection disabled via [conditions] haze_detection = false")
     else:
         haze_condition.set_gamma(conditions.gamma)
-        auto_calibration.configure(
-            percentile=conditions.calibration_percentile,
-            window_days=conditions.calibration_window_days,
-            min_samples=conditions.calibration_min_samples,
-        )
 
     register_processor(auto_calibration.process_packet)
 
