@@ -1,30 +1,25 @@
 """Unit tests for weewx_clearskies_api.sse.auto_calibration (ADR-068).
 
-Validates:
-  - _percentile() linear interpolation helper
-  - _percentile_midpoint() p90/p95 midpoint computation
-  - compute_baseline() primary 90-day window, 180-day fallback, and pruning
-  - get_calibration_state() state transitions and sample counts
-  - configure() operator parameter mapping
+Validates the monthly-normals model introduced in ADR-068:
+  - _percentile() linear interpolation helper (unchanged from v1)
+  - compute_monthly_baseline() per-month 92nd-percentile computation
+  - get_calibration_state() state transitions (no-data / bootstrapping /
+    partial / fully-calibrated) and per-month list structure
+  - Drift detection via _check_drift()
+  - Station type tracking via set_station_type() / check_station_type_change()
+  - Flat fallback baseline via _compute_flat_baseline() / get_current_baseline()
   - process_packet() gate sequence via mocked dependencies
-  - load_persisted() and persist() via filesystem mocks
+  - persist() / load_persisted() in v2 format via tmp_path
+  - v1 → v2 migration: flat sample list distributed into monthly buckets
+  - Timezone-aware month binning
 
-Module-level state is intentional in auto_calibration.py; the autouse fixture
-calls reset() before every test to provide clean isolation.
-
-Window note
------------
-compute_baseline() calls time.time() internally to establish the cutoff for
-the 90-day and 180-day windows.  Tests that populate _samples must inject
-timestamps relative to a known "now", controlled by monkeypatching time.time.
-The _inject_samples() helper adds samples at timestamps that are within the
-specified window relative to a frozen "now".
+Module-level state is intentional in auto_calibration.py; the autouse
+fixture calls reset() before every test to provide clean isolation.
 """
 
 from __future__ import annotations
 
 import json
-import time as _time_module
 
 import pytest
 
@@ -45,23 +40,19 @@ def _reset_auto_cal():
 
 
 # ---------------------------------------------------------------------------
-# Constants matching the module's defaults (after reset)
+# Constants
 # ---------------------------------------------------------------------------
 
-_WINDOW_90D_SECS = 90 * 86400.0
-_WINDOW_180D_SECS = 180 * 86400.0
-_MIN_SAMPLES_ACTIVE = 22
-_MIN_SAMPLES_FALLBACK = 15
+# A realistic epoch (2027-01-14 ~13:26:40 UTC).  Large enough that
+# _FROZEN_NOW - _RAIN_HOLDOFF is still positive, so the rain-holdoff gate
+# is always satisfied when _last_rain_time defaults to 0 after reset().
+_FROZEN_NOW = 1_800_000_000.0
 
-# Representative "clean" Kcs values for a clear, clean-air afternoon.
-_CLEAN_KCS = [
-    0.88, 0.89, 0.90, 0.91, 0.92, 0.87, 0.89, 0.90, 0.91, 0.93,
-    0.88, 0.89, 0.91, 0.92, 0.88, 0.90, 0.91, 0.89, 0.92, 0.90,
-    0.93, 0.88,  # 22 total — meets _MIN_SAMPLES_ACTIVE
-]
+# Matches _MIN_SAMPLES_PER_MONTH in the module.
+_MIN_SAMPLES = 30
 
-# Frozen "now" for tests that need deterministic windows.
-_FROZEN_NOW = 1_800_000.0
+# 30 realistic clean-sky Kcs values (clear afternoon at a good station).
+_CLEAN_KCS = [0.88 + (i % 10) * 0.005 for i in range(30)]
 
 
 # ---------------------------------------------------------------------------
@@ -69,33 +60,24 @@ _FROZEN_NOW = 1_800_000.0
 # ---------------------------------------------------------------------------
 
 
-def _inject_samples(
+def _inject_monthly_samples(
+    month: int,
     kcs_values: list[float],
-    within_days: float,
-    now: float = _FROZEN_NOW,
+    base_ts: float = _FROZEN_NOW,
 ) -> None:
-    """Directly append (timestamp, kcs) samples to auto_calibration._samples.
+    """Directly populate auto_calibration._monthly_samples[month].
 
-    Distributes samples evenly across the window so they all lie within
-    `within_days` days of `now`.  Samples are appended to the internal list
-    in chronological order.
-
-    Does NOT call process_packet() — bypasses all gates so tests can exercise
-    compute_baseline() in isolation.
+    Timestamps are 1 hour apart, ending at base_ts.
+    Does NOT call process_packet() — bypasses all gates so tests can
+    exercise compute_monthly_baseline() and get_calibration_state() directly.
     """
-    window_secs = within_days * 86400.0
-    count = len(kcs_values)
     for i, kcs in enumerate(kcs_values):
-        # Spread evenly within the window; newest sample at (now - 1s).
-        if count == 1:
-            ts = now - 1.0
-        else:
-            ts = now - window_secs + (window_secs / count) * (i + 1)
-        auto_calibration._samples.append((ts, kcs))
+        ts = base_ts - len(kcs_values) * 3600 + i * 3600  # 1 hour apart
+        auto_calibration._monthly_samples[month].append((ts, kcs))
 
 
 # ===========================================================================
-# Group 1: _percentile() linear interpolation
+# Group 1: _percentile() linear interpolation  (UNCHANGED from v1 — keep as-is)
 # ===========================================================================
 
 
@@ -141,7 +123,7 @@ class TestPercentileHelper:
         assert result == pytest.approx(0.935)
 
     def test_four_values_at_percentile_95(self) -> None:
-        """Percentile 95 of [0.80, 0.85, 0.90, 0.95] → ≈ 0.9625.
+        """Percentile 95 of [0.80, 0.85, 0.90, 0.95] → ≈ 0.9425.
 
         idx = 0.95 * (4-1) = 2.85
         interp = 0.90 + 0.85 * (0.95 - 0.90) = 0.90 + 0.0425 = 0.9425
@@ -157,311 +139,331 @@ class TestPercentileHelper:
 
 
 # ===========================================================================
-# Group 2: _percentile_midpoint()
+# Group 2: compute_monthly_baseline()
 # ===========================================================================
 
 
-class TestPercentileMidpoint:
-    """_percentile_midpoint() returns the midpoint of p90 and p95."""
+class TestComputeMonthlyBaseline:
+    """compute_monthly_baseline() returns 92nd-percentile Kcs or None."""
 
-    def test_uniform_values_midpoint_is_value(self) -> None:
-        """All identical values → p90 = p95 = value → midpoint = value."""
-        values = [0.90] * 30
-        result = auto_calibration._percentile_midpoint(values)
+    def test_empty_month_returns_none(self) -> None:
+        """No samples for a month → None."""
+        result = auto_calibration.compute_monthly_baseline(6)
+        assert result is None
+
+    def test_below_30_samples_returns_none(self) -> None:
+        """29 samples → None (requires >= 30)."""
+        _inject_monthly_samples(3, [0.90] * 29)
+        result = auto_calibration.compute_monthly_baseline(3)
+        assert result is None
+
+    def test_exactly_30_samples_returns_float(self) -> None:
+        """Exactly 30 samples → returns a float (threshold is met)."""
+        _inject_monthly_samples(3, _CLEAN_KCS)  # _CLEAN_KCS has exactly 30 values
+        result = auto_calibration.compute_monthly_baseline(3)
+        assert result is not None
+        assert isinstance(result, float)
+
+    def test_50_samples_returns_float_in_plausible_range(self) -> None:
+        """50 realistic Kcs samples → baseline in [0.80, 1.05]."""
+        kcs_50 = [0.88 + (i % 10) * 0.005 for i in range(50)]
+        _inject_monthly_samples(7, kcs_50)
+        result = auto_calibration.compute_monthly_baseline(7)
+        assert result is not None
+        assert 0.80 <= result <= 1.05, (
+            f"Baseline {result} outside plausible range [0.80, 1.05]"
+        )
+
+    def test_wrong_months_samples_excluded(self) -> None:
+        """Month 1 samples do not affect month 2's baseline."""
+        _inject_monthly_samples(1, _CLEAN_KCS)  # 30 samples in month 1
+        result = auto_calibration.compute_monthly_baseline(2)
+        assert result is None, (
+            "Month 2 baseline must be None — month 1's samples must not bleed over"
+        )
+
+    def test_92nd_percentile_is_near_top_of_distribution(self) -> None:
+        """92nd percentile of uniform 0.90 samples is 0.90."""
+        _inject_monthly_samples(5, [0.90] * 30)
+        result = auto_calibration.compute_monthly_baseline(5)
         assert result == pytest.approx(0.90)
 
-    def test_known_values_midpoint(self) -> None:
-        """Known sorted values → verify midpoint computation.
-
-        Uses [0.80, 0.85, 0.90, 0.95] with default _PERCENTILE_LOW=90, _PERCENTILE_HIGH=95.
-        p90 = 0.935 (from TestPercentileHelper test_four_values_at_percentile_90)
-        p95 = 0.9425
-        midpoint = (0.935 + 0.9425) / 2 = 0.93875
-        """
-        values = [0.80, 0.85, 0.90, 0.95]
-        result = auto_calibration._percentile_midpoint(values)
-        assert result == pytest.approx(0.93875)
-
-    def test_midpoint_does_not_depend_on_input_order(self) -> None:
-        """_percentile_midpoint() sorts internally — order must not affect result."""
-        forward = [0.80, 0.85, 0.90, 0.95]
-        backward = [0.95, 0.90, 0.85, 0.80]
-        assert auto_calibration._percentile_midpoint(forward) == pytest.approx(
-            auto_calibration._percentile_midpoint(backward)
-        )
-
-    def test_midpoint_with_realistic_kcs_values(self) -> None:
-        """22 realistic clean-sky Kcs values produce a baseline in [0.85, 1.0]."""
-        result = auto_calibration._percentile_midpoint(_CLEAN_KCS)
-        assert 0.85 <= result <= 1.0, (
-            f"Expected baseline in [0.85, 1.0] for realistic Kcs values, got {result}"
-        )
-
 
 # ===========================================================================
-# Group 3: compute_baseline()
-# ===========================================================================
-
-
-class TestComputeBaseline:
-    """compute_baseline() primary window, fallback, empty, and pruning cases."""
-
-    def test_empty_samples_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No samples → compute_baseline() returns None."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        result = auto_calibration.compute_baseline()
-        assert result is None, "Empty sample list must return None"
-
-    def test_below_min_samples_primary_and_fallback_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """< 22 samples in 90d AND < 15 in 180d → bootstrapping, returns None."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        # Inject 10 samples within 90 days (below both thresholds).
-        _inject_samples([0.90] * 10, within_days=60.0)
-        result = auto_calibration.compute_baseline()
-        assert result is None, (
-            "10 samples in 90d window (< 22) must not activate baseline"
-        )
-
-    def test_22_samples_in_90d_returns_baseline(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """22 samples within 90 days → primary window active, returns baseline float."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        _inject_samples(_CLEAN_KCS, within_days=89.0)  # 22 samples, within 90d
-        result = auto_calibration.compute_baseline()
-        assert result is not None, "22 samples in 90d must activate baseline"
-        assert isinstance(result, float), "compute_baseline() must return a float"
-        assert 0.80 <= result <= 1.05, (
-            f"Expected baseline in plausible range [0.80, 1.05], got {result}"
-        )
-
-    def test_below_22_in_90d_but_15_in_180d_uses_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """< 22 in 90d but ≥ 15 in 180d → fallback window used, returns baseline."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        # Inject 5 samples in the 90d window and 15 more in the 91-180d range.
-        _inject_samples([0.90] * 5, within_days=89.0)
-        # 15 additional samples between 91 and 170 days old.
-        window_secs = 170 * 86400.0
-        count = 15
-        for i in range(count):
-            ts = _FROZEN_NOW - window_secs + (window_secs / count) * (i + 1)
-            auto_calibration._samples.append((ts, 0.88))
-        result = auto_calibration.compute_baseline()
-        assert result is not None, (
-            "5 samples in 90d + 15 in 90-180d range must use fallback window"
-        )
-
-    def test_stale_samples_outside_180d_not_counted(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Samples older than 180d are pruned by process_packet() and not counted."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        # Inject 20 samples that are 200 days old (outside 180d fallback window).
-        stale_ts = _FROZEN_NOW - 200 * 86400.0
-        for i in range(20):
-            auto_calibration._samples.append((stale_ts + i, 0.90))
-        # These are outside the 180d window — should not be counted.
-        result = auto_calibration.compute_baseline()
-        assert result is None, (
-            "20 samples outside 180d fallback window must not produce a baseline"
-        )
-
-    def test_50_samples_produces_well_calibrated_baseline(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """50 samples within 90 days → well-calibrated state, returns baseline."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        _inject_samples([0.88 + (i % 10) * 0.005 for i in range(50)], within_days=89.0)
-        result = auto_calibration.compute_baseline()
-        assert result is not None, "50 samples in 90d must produce a baseline"
-
-    def test_baseline_value_increases_with_higher_kcs_samples(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Higher Kcs values produce a higher baseline (monotone relationship)."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-
-        auto_calibration.reset()
-        _inject_samples([0.80] * 22, within_days=89.0)
-        baseline_low = auto_calibration.compute_baseline()
-
-        auto_calibration.reset()
-        _inject_samples([0.95] * 22, within_days=89.0)
-        baseline_high = auto_calibration.compute_baseline()
-
-        assert baseline_low is not None and baseline_high is not None
-        assert baseline_high > baseline_low, (
-            "Higher Kcs samples must produce a higher computed baseline"
-        )
-
-
-# ===========================================================================
-# Group 4: get_calibration_state()
+# Group 3: get_calibration_state() — state transitions
 # ===========================================================================
 
 
 class TestGetCalibrationState:
-    """State transitions: bootstrapping → calibrated → well-calibrated."""
+    """State transitions: no-data → bootstrapping → partial → fully-calibrated."""
 
-    def test_no_samples_bootstrapping(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No samples → state='bootstrapping', counts=0, baseline_kcs=None."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+    def test_no_samples_no_data(self) -> None:
+        """No samples → overall_state='no-data', months_calibrated=0."""
         state = auto_calibration.get_calibration_state()
-        assert state["state"] == "bootstrapping"
-        assert state["sample_count_90d"] == 0
-        assert state["sample_count_180d"] == 0
-        assert state["baseline_kcs"] is None
+        assert state["overall_state"] == "no-data"
+        assert state["months_calibrated"] == 0
 
-    def test_10_samples_bootstrapping(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """10 samples in 90d window (< 22) → state='bootstrapping'."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        _inject_samples([0.90] * 10, within_days=89.0)
+    def test_some_samples_below_threshold_bootstrapping(self) -> None:
+        """29 samples in one month (< 30) → 'bootstrapping', months_calibrated=0."""
+        _inject_monthly_samples(4, [0.90] * 29)
         state = auto_calibration.get_calibration_state()
-        assert state["state"] == "bootstrapping"
-        assert state["sample_count_90d"] == 10
+        assert state["overall_state"] == "bootstrapping"
+        assert state["months_calibrated"] == 0
 
-    def test_22_samples_calibrated(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """22 samples in 90d window → state='calibrated'."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        _inject_samples(_CLEAN_KCS, within_days=89.0)  # exactly 22 samples
+    def test_one_month_calibrated_partial(self) -> None:
+        """One month with >= 30 samples → 'partial', months_calibrated=1."""
+        _inject_monthly_samples(4, _CLEAN_KCS)
+        auto_calibration._monthly_baselines[4] = auto_calibration.compute_monthly_baseline(4)
         state = auto_calibration.get_calibration_state()
-        assert state["state"] == "calibrated", (
-            f"Expected 'calibrated' with 22 samples, got {state['state']!r}"
-        )
-        assert state["sample_count_90d"] == 22
+        assert state["overall_state"] == "partial"
+        assert state["months_calibrated"] == 1
 
-    def test_51_samples_well_calibrated(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """51 samples in 90d window → state='well-calibrated'."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        _inject_samples([0.90] * 51, within_days=89.0)
+    def test_all_12_months_calibrated_fully_calibrated(self) -> None:
+        """All 12 months with >= 30 samples → 'fully-calibrated', months_calibrated=12."""
+        for m in range(1, 13):
+            _inject_monthly_samples(m, _CLEAN_KCS)
+            auto_calibration._monthly_baselines[m] = auto_calibration.compute_monthly_baseline(m)
         state = auto_calibration.get_calibration_state()
-        assert state["state"] == "well-calibrated", (
-            f"Expected 'well-calibrated' with 51 samples, got {state['state']!r}"
-        )
-        assert state["sample_count_90d"] == 51
+        assert state["overall_state"] == "fully-calibrated"
+        assert state["months_calibrated"] == 12
 
-    def test_sample_count_180d_includes_older_samples(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """sample_count_180d includes samples from the 91-180 day range."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        # 5 samples in the 90d window.
-        _inject_samples([0.90] * 5, within_days=89.0)
-        # 10 samples between 100 and 170 days old.
-        for i in range(10):
-            ts = _FROZEN_NOW - (100 + i * 7) * 86400.0
-            auto_calibration._samples.append((ts, 0.88))
+    def test_per_month_list_has_12_entries(self) -> None:
+        """per_month list always has exactly 12 entries."""
         state = auto_calibration.get_calibration_state()
-        assert state["sample_count_90d"] == 5
-        assert state["sample_count_180d"] >= 10, (
-            "sample_count_180d must include samples from 90-180 day range"
-        )
+        assert len(state["per_month"]) == 12
 
-    def test_last_updated_none_before_persist(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """last_updated=None when no persist() has been called (_last_persist_time=0)."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+    def test_per_month_entries_have_correct_keys(self) -> None:
+        """Each per_month entry has the required keys."""
+        required_keys = {"month", "name", "sample_count", "baseline_kcs", "is_calibrated"}
         state = auto_calibration.get_calibration_state()
-        assert state["last_updated"] is None, (
-            "last_updated must be None when no persist() has been called"
-        )
+        for entry in state["per_month"]:
+            assert required_keys.issubset(entry.keys()), (
+                f"per_month entry missing keys: {required_keys - entry.keys()!r}"
+            )
 
-    def test_baseline_kcs_reflects_current_baseline(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """After process_packet() sets a baseline, get_calibration_state() reflects it."""
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-        # Manually set the internal baseline (simulates process_packet() output).
-        auto_calibration._current_baseline = 0.912
+    def test_per_month_month_numbers_are_1_through_12(self) -> None:
+        """per_month entries are in order, with month numbers 1–12."""
         state = auto_calibration.get_calibration_state()
-        assert state["baseline_kcs"] == pytest.approx(0.912)
+        months = [e["month"] for e in state["per_month"]]
+        assert months == list(range(1, 13))
+
+    def test_station_type_reflected_in_state(self) -> None:
+        """set_station_type() value appears in get_calibration_state()."""
+        auto_calibration.set_station_type("Vantage")
+        state = auto_calibration.get_calibration_state()
+        assert state["station_type"] == "Vantage"
+
+    def test_station_type_none_by_default(self) -> None:
+        """station_type is None before set_station_type() is called."""
+        state = auto_calibration.get_calibration_state()
+        assert state["station_type"] is None
+
+    def test_flat_baseline_in_state(self) -> None:
+        """flat_baseline in state reflects _flat_baseline module variable."""
+        auto_calibration._flat_baseline = 0.905
+        state = auto_calibration.get_calibration_state()
+        assert state["flat_baseline"] == pytest.approx(0.905)
+
+    def test_flat_baseline_none_when_no_data(self) -> None:
+        """flat_baseline is None with no samples."""
+        state = auto_calibration.get_calibration_state()
+        assert state["flat_baseline"] is None
+
+    def test_sample_count_reflected_in_per_month(self) -> None:
+        """sample_count in per_month entry matches number of injected samples."""
+        _inject_monthly_samples(8, [0.90] * 15)
+        state = auto_calibration.get_calibration_state()
+        aug_entry = state["per_month"][7]  # month 8 is index 7
+        assert aug_entry["sample_count"] == 15
+
+    def test_is_calibrated_false_below_threshold(self) -> None:
+        """is_calibrated=False when month has fewer than 30 samples."""
+        _inject_monthly_samples(2, [0.90] * 10)
+        state = auto_calibration.get_calibration_state()
+        feb_entry = state["per_month"][1]  # month 2 is index 1
+        assert feb_entry["is_calibrated"] is False
+
+    def test_is_calibrated_true_after_threshold(self) -> None:
+        """is_calibrated=True when month has >= 30 samples and baseline is set."""
+        _inject_monthly_samples(2, _CLEAN_KCS)
+        auto_calibration._monthly_baselines[2] = auto_calibration.compute_monthly_baseline(2)
+        state = auto_calibration.get_calibration_state()
+        feb_entry = state["per_month"][1]
+        assert feb_entry["is_calibrated"] is True
+        assert feb_entry["baseline_kcs"] is not None
 
 
 # ===========================================================================
-# Group 5: configure()
+# Group 4: Drift detection
 # ===========================================================================
 
 
-class TestConfigure:
-    """configure() maps operator parameters to module constants."""
+class TestDriftDetection:
+    """_check_drift() returns warning dict or None."""
 
-    def test_configure_percentile_0_92_maps_to_89_94(self) -> None:
-        """configure(percentile=0.92) → _PERCENTILE_LOW=89, _PERCENTILE_HIGH=94.
+    def test_no_baseline_returns_none(self) -> None:
+        """No baseline for the month → no drift warning."""
+        _inject_monthly_samples(3, [0.90] * 15)
+        # _monthly_baselines[3] stays None
+        result = auto_calibration._check_drift(3)
+        assert result is None
 
-        0.92 - 0.025 = 0.895 → int(0.895 * 100) = 89
-        0.92 + 0.025 = 0.945 → int(0.945 * 100) = 94
-        """
-        auto_calibration.configure(percentile=0.92)
-        assert auto_calibration._PERCENTILE_LOW == 89
-        assert auto_calibration._PERCENTILE_HIGH == 94
+    def test_fewer_than_10_recent_samples_returns_none(self) -> None:
+        """Fewer than 10 samples → not enough recent data for drift check."""
+        _inject_monthly_samples(3, [0.90] * 9)
+        auto_calibration._monthly_baselines[3] = 0.90  # set a baseline manually
+        result = auto_calibration._check_drift(3)
+        assert result is None
 
-    def test_configure_percentile_0_90_maps_to_87_92(self) -> None:
-        """configure(percentile=0.90) → _PERCENTILE_LOW=87, _PERCENTILE_HIGH=92.
+    def test_recent_mean_close_to_baseline_no_warning(self) -> None:
+        """Recent mean within 0.05 of baseline → no drift warning."""
+        # 10 samples near 0.90, baseline 0.90 → divergence ≈ 0
+        _inject_monthly_samples(3, [0.90] * 10)
+        auto_calibration._monthly_baselines[3] = 0.90
+        result = auto_calibration._check_drift(3)
+        assert result is None
 
-        0.90 - 0.025 = 0.875 → int(0.875 * 100) = 87
-        0.90 + 0.025 = 0.925 → int(0.925 * 100) = 92
-        """
-        auto_calibration.configure(percentile=0.90)
-        assert auto_calibration._PERCENTILE_LOW == 87
-        assert auto_calibration._PERCENTILE_HIGH == 92
+    def test_recent_mean_diverged_returns_warning(self) -> None:
+        """Recent mean > 0.05 from baseline → warning with correct fields."""
+        # 10 recent samples averaging ~0.80, baseline is 0.92
+        _inject_monthly_samples(3, [0.80] * 10)
+        auto_calibration._monthly_baselines[3] = 0.92
+        result = auto_calibration._check_drift(3)
+        assert result is not None, "Expected drift warning when recent mean diverged > 0.05"
+        assert "month" in result
+        assert "baseline" in result
+        assert "recent_mean" in result
+        assert "divergence" in result
+        assert result["month"] == 3
+        assert result["divergence"] > 0.05
 
-    def test_configure_window_days_changes_primary_window(self) -> None:
-        """configure(window_days=60) → _WINDOW_DAYS_PRIMARY=60, _WINDOW_PRIMARY_SECS=5184000."""
-        auto_calibration.configure(window_days=60)
-        assert auto_calibration._WINDOW_DAYS_PRIMARY == 60
-        assert auto_calibration._WINDOW_PRIMARY_SECS == pytest.approx(60 * 86400.0)
+    def test_drift_warning_fields_are_rounded(self) -> None:
+        """Drift warning values are rounded to 4 decimal places."""
+        _inject_monthly_samples(6, [0.80] * 10)
+        auto_calibration._monthly_baselines[6] = 0.9199
+        result = auto_calibration._check_drift(6)
+        assert result is not None
+        # Verify precision — each value should have at most 4 decimal places
+        for key in ("baseline", "recent_mean", "divergence"):
+            val = result[key]
+            assert round(val, 4) == val, f"{key}={val} has more than 4 decimal places"
 
-    def test_configure_min_samples_changes_activation_threshold(self) -> None:
-        """configure(min_samples=30) → _MIN_SAMPLES_ACTIVE=30."""
-        auto_calibration.configure(min_samples=30)
-        assert auto_calibration._MIN_SAMPLES_ACTIVE == 30
-
-    def test_configure_defaults_unchanged_when_not_specified(self) -> None:
-        """configure() with no args applies default percentile=0.92, window=90, min=22."""
-        auto_calibration.configure()
-        # Default: percentile=0.92 → LOW=89, HIGH=94
-        assert auto_calibration._PERCENTILE_LOW == 89
-        assert auto_calibration._PERCENTILE_HIGH == 94
-        assert auto_calibration._MIN_SAMPLES_ACTIVE == 22
-        assert auto_calibration._WINDOW_DAYS_PRIMARY == 90
-
-    def test_configure_window_days_affects_baseline_cutoff(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """configure(window_days=30) with 22 samples in 30d → baseline active.
-
-        With default 90d window, samples 35 days old would be in the primary window.
-        After configure(30), samples 35 days old are outside the new 30d window.
-        """
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-
-        # Inject 22 samples that are 35 days old — within default 90d but outside 30d.
-        ts_35d_ago = _FROZEN_NOW - 35 * 86400.0
-        for i in range(22):
-            auto_calibration._samples.append((ts_35d_ago + i * 60, 0.90))
-
-        # With default 90d window, these should be in the primary window.
-        baseline_default = auto_calibration.compute_baseline()
-        assert baseline_default is not None, "22 samples at 35d should be in 90d window"
-
-        # After configure(30d), the same samples are outside the primary window.
-        auto_calibration.configure(window_days=30)
-        baseline_narrow = auto_calibration.compute_baseline()
-        # 22 samples at 35d old are outside the 30d window.
-        # Fallback (180d) has 22 samples, which is ≥ 15 → fallback activates.
-        # The fallback window is fixed at 180d per the module.
-        assert baseline_narrow is not None, (
-            "22 samples at 35d are in 180d fallback window, baseline should activate via fallback"
+    def test_drift_warnings_appear_in_calibration_state(self) -> None:
+        """Drift warnings surface through get_calibration_state()."""
+        _inject_monthly_samples(6, [0.80] * 10)
+        auto_calibration._monthly_baselines[6] = 0.92
+        state = auto_calibration.get_calibration_state()
+        warnings = state["drift_warnings"]
+        assert isinstance(warnings, list)
+        assert any(w["month"] == 6 for w in warnings), (
+            "Drift warning for month 6 must appear in get_calibration_state()"
         )
 
 
 # ===========================================================================
-# Group 6: process_packet() — gate sequence via mocks
+# Group 5: Station type tracking
+# ===========================================================================
+
+
+class TestStationTypeTracking:
+    """set_station_type() + check_station_type_change() contract."""
+
+    def test_same_type_returns_false(self) -> None:
+        """Type unchanged → check_station_type_change() returns False."""
+        auto_calibration.set_station_type("Vantage")
+        result = auto_calibration.check_station_type_change("Vantage")
+        assert result is False
+
+    def test_different_type_returns_true(self) -> None:
+        """Type changed from 'Vantage' to 'Davis' → returns True."""
+        auto_calibration.set_station_type("Vantage")
+        result = auto_calibration.check_station_type_change("Davis")
+        assert result is True
+
+    def test_stored_none_current_string_returns_false(self) -> None:
+        """Stored type is None → returns False even with a non-None current type."""
+        auto_calibration.set_station_type(None)
+        result = auto_calibration.check_station_type_change("Vantage")
+        assert result is False
+
+    def test_stored_string_current_none_returns_false(self) -> None:
+        """Current type is None → returns False (cannot confirm change)."""
+        auto_calibration.set_station_type("Vantage")
+        result = auto_calibration.check_station_type_change(None)
+        assert result is False
+
+    def test_both_none_returns_false(self) -> None:
+        """Both stored and current are None → returns False."""
+        auto_calibration.set_station_type(None)
+        result = auto_calibration.check_station_type_change(None)
+        assert result is False
+
+    def test_set_station_type_updates_module_state(self) -> None:
+        """set_station_type() updates _station_type_at_load."""
+        auto_calibration.set_station_type("FineOffset")
+        assert auto_calibration._station_type_at_load == "FineOffset"
+
+
+# ===========================================================================
+# Group 6: Flat fallback baseline
+# ===========================================================================
+
+
+class TestFlatFallbackBaseline:
+    """_compute_flat_baseline() and get_current_baseline() fallback behaviour."""
+
+    def test_fewer_than_30_total_returns_none(self) -> None:
+        """< 30 total samples across all months → flat baseline is None."""
+        _inject_monthly_samples(1, [0.90] * 10)
+        _inject_monthly_samples(2, [0.90] * 10)
+        result = auto_calibration._compute_flat_baseline()
+        assert result is None
+
+    def test_30_plus_across_months_returns_float(self) -> None:
+        """30+ samples across months → flat baseline is a float."""
+        _inject_monthly_samples(1, [0.90] * 20)
+        _inject_monthly_samples(7, [0.90] * 15)  # 35 total
+        result = auto_calibration._compute_flat_baseline()
+        assert result is not None
+        assert isinstance(result, float)
+        assert 0.80 <= result <= 1.05
+
+    def test_get_current_baseline_returns_monthly_when_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """get_current_baseline() returns monthly baseline when that month is calibrated."""
+        # Freeze "now" to a known timestamp in January (UTC).
+        # _FROZEN_NOW = 1_800_000_000.0 → 2027-01-14, which is January.
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        auto_calibration._monthly_baselines[1] = 0.912
+        auto_calibration._flat_baseline = 0.888
+
+        result = auto_calibration.get_current_baseline()
+        assert result == pytest.approx(0.912)
+
+    def test_get_current_baseline_falls_back_to_flat(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """get_current_baseline() falls back to flat when current month has no baseline."""
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        # Month 1 (January) has no baseline; flat_baseline is set.
+        auto_calibration._monthly_baselines[1] = None
+        auto_calibration._flat_baseline = 0.888
+
+        result = auto_calibration.get_current_baseline()
+        assert result == pytest.approx(0.888)
+
+    def test_get_current_baseline_none_when_no_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """get_current_baseline() is None when no data exists at all."""
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        result = auto_calibration.get_current_baseline()
+        assert result is None
+
+
+# ===========================================================================
+# Group 7: process_packet() — gate sequence via mocks
 # ===========================================================================
 
 
@@ -477,9 +479,14 @@ class TestProcessPacket:
         pm25: float | None = 5.0,
         pm10: float | None = 10.0,
         kcs: float | None = 0.90,
-        now: float = _FROZEN_NOW + _WINDOW_90D_SECS,  # past rain holdoff
+        now: float = _FROZEN_NOW,
     ) -> None:
-        """Patch all external dependencies so process_packet() can run cleanly."""
+        """Patch all external dependencies so process_packet() can run cleanly.
+
+        _FROZEN_NOW is large relative to _RAIN_HOLDOFF (1800s), so the
+        rain-holdoff gate is satisfied as long as _last_rain_time is 0
+        (the post-reset default).
+        """
         from weewx_clearskies_api.sse.enrichment import input_smoother
         from weewx_clearskies_api.sse import sky_condition
 
@@ -499,243 +506,301 @@ class TestProcessPacket:
         monkeypatch.setattr(sky_condition, "classify", lambda: sky_label)
         monkeypatch.setattr(sky_condition, "get_current_kcs", lambda: kcs)
 
-    def test_clean_packet_collects_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """All gates pass + clean PM → Kcs sample is appended to _samples."""
-        self._patch_all_gates(monkeypatch)
-        auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 1, (
-            "Clean packet must append exactly one Kcs sample"
+    def _total_samples(self) -> int:
+        """Count all samples across all months."""
+        return sum(
+            len(auto_calibration._monthly_samples[m]) for m in range(1, 13)
         )
-        assert auto_calibration._samples[0][1] == pytest.approx(0.90)
 
-    def test_rain_gate_suppresses_sample_collection(
+    def test_clean_packet_adds_sample_to_correct_month(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """All gates pass → Kcs sample is added to the correct month bucket.
+
+        _FROZEN_NOW maps to January 2027 in UTC, so the sample goes to month 1.
+        """
+        auto_calibration._timezone_name = "UTC"
+        self._patch_all_gates(monkeypatch)
+        auto_calibration.process_packet({})
+
+        assert self._total_samples() == 1, "Clean packet must append exactly one sample"
+        # Verify it landed in month 1 (January) with expected Kcs value.
+        assert len(auto_calibration._monthly_samples[1]) == 1
+        assert auto_calibration._monthly_samples[1][0][1] == pytest.approx(0.90)
+
+    def test_rain_gate_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rain active → Gate 1 fires, no sample collected."""
         self._patch_all_gates(monkeypatch, rain_rate=0.1)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "Active rain must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "Active rain must suppress Kcs sample collection"
 
-    def test_low_elevation_gate_suppresses_sample_collection(
+    def test_low_elevation_gate_suppresses_sample(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """solar_elevation ≤ 10° → Gate 2 fires, no sample collected."""
+        """solar_elevation <= 10° → Gate 2 fires, no sample collected."""
         self._patch_all_gates(monkeypatch, elevation=5.0)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "Low solar elevation must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "Low solar elevation must suppress sample"
 
-    def test_none_elevation_suppresses_sample_collection(
+    def test_none_elevation_suppresses_sample(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """solar_elevation=None → Gate 2 fires, no sample collected."""
         self._patch_all_gates(monkeypatch, elevation=None)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "None solar elevation must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "None solar elevation must suppress sample"
 
-    def test_cloudy_sky_suppresses_sample_collection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Cloudy sky label → Gate 3 fires (no clean substring), no sample collected."""
+    def test_cloudy_sky_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Cloudy sky label → Gate 3 fires (no 'Clear'/'Sunny' substring)."""
         self._patch_all_gates(monkeypatch, sky_label="Cloudy")
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "Cloudy sky must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "Cloudy sky must suppress sample collection"
 
-    def test_none_sky_label_suppresses_sample_collection(
+    def test_none_sky_label_suppresses_sample(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """sky_label=None → Gate 3 fires (cannot verify sky), no sample collected."""
+        """sky_label=None (startup) → Gate 3 fires, no sample collected."""
         self._patch_all_gates(monkeypatch, sky_label=None)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "None sky label (startup) must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "None sky label must suppress sample"
 
-    def test_dirty_pm25_suppresses_sample_collection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """PM2.5 ≥ 12 µg/m³ → Gate 4 fires (dirty air), no sample collected."""
+    def test_dirty_pm25_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PM2.5 >= 12 µg/m³ → Gate 4 fires (dirty air), no sample collected."""
         self._patch_all_gates(monkeypatch, pm25=15.0)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "PM2.5 ≥ 12 µg/m³ must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "PM2.5 >= 12 must suppress sample"
 
-    def test_dirty_pm10_suppresses_sample_collection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """PM10 ≥ 50 µg/m³ → Gate 4 fires (dirty air), no sample collected."""
+    def test_dirty_pm10_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """PM10 >= 50 µg/m³ → Gate 4 fires (dirty air), no sample collected."""
         self._patch_all_gates(monkeypatch, pm10=55.0)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "PM10 ≥ 50 µg/m³ must suppress Kcs sample collection"
-        )
+        assert self._total_samples() == 0, "PM10 >= 50 must suppress sample"
 
-    def test_none_pm_suppresses_sample_collection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """pm25=None or pm10=None → Gate 4 fires, no sample collected.
-
-        Cannot confirm clean atmosphere without both PM channels.
-        """
-        self._patch_all_gates(monkeypatch, pm25=None, pm10=None)
+    def test_none_pm25_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """pm25=None → Gate 4 fires (cannot confirm clean air)."""
+        self._patch_all_gates(monkeypatch, pm25=None)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "None PM data must suppress Kcs sample collection (cannot confirm clean air)"
-        )
+        assert self._total_samples() == 0, "None PM2.5 must suppress sample"
 
-    def test_none_kcs_suppresses_sample_collection(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_none_kcs_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """kcs=None → no Kcs value available, sample not appended."""
         self._patch_all_gates(monkeypatch, kcs=None)
         auto_calibration.process_packet({})
-        assert len(auto_calibration._samples) == 0, (
-            "None Kcs must suppress sample collection"
-        )
+        assert self._total_samples() == 0, "None Kcs must suppress sample"
 
-    def test_baseline_update_calls_haze_condition_set_baseline(
+    def test_no_radiation_skips_if_no_kcs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """After 22+ samples, process_packet() calls haze_condition.set_baseline()."""
+        """_has_radiation=False and get_current_kcs()=None → return early, no sample."""
+        auto_calibration.set_has_radiation(False)
+        self._patch_all_gates(monkeypatch, kcs=None)
+        auto_calibration.process_packet({})
+        assert self._total_samples() == 0, (
+            "No radiation + no Kcs data must return early with no sample"
+        )
+
+    def test_no_radiation_but_kcs_available_flips_flag_and_collects(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_has_radiation=False but get_current_kcs() returns a value → flip True, collect sample."""
+        auto_calibration.set_has_radiation(False)
+        auto_calibration._timezone_name = "UTC"
+        self._patch_all_gates(monkeypatch, kcs=0.90)
+        auto_calibration.process_packet({})
+        assert auto_calibration._has_radiation is True, (
+            "Radiation flag must be flipped to True when Kcs data appears"
+        )
+        assert self._total_samples() == 1, (
+            "After radiation flag flips, sample must be collected in the same packet"
+        )
+
+    def test_30_samples_triggers_haze_condition_set_baseline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After 30+ samples in the current month, process_packet() calls haze_condition.set_baseline()."""
         from weewx_clearskies_api.sse import haze_condition
 
         set_baseline_calls: list[float] = []
 
         def _record_set_baseline(value: float) -> None:
             set_baseline_calls.append(value)
-            haze_condition._clean_kcs_baseline = value
 
         monkeypatch.setattr(haze_condition, "set_baseline", _record_set_baseline)
 
-        # Inject 21 samples directly (bypass process_packet() gates for speed).
-        now = _FROZEN_NOW + _WINDOW_90D_SECS
-        for i in range(21):
-            auto_calibration._samples.append((now - (21 - i) * 60, 0.90))
+        # Inject 29 samples directly into month 1 (January, matching _FROZEN_NOW in UTC).
+        auto_calibration._timezone_name = "UTC"
+        for i in range(29):
+            ts = _FROZEN_NOW - (30 - i) * 60
+            auto_calibration._monthly_samples[1].append((ts, 0.90))
 
-        # The 22nd sample via process_packet() should trigger baseline update.
-        self._patch_all_gates(monkeypatch, now=now)
+        # The 30th sample via process_packet() pushes the month over the threshold.
+        self._patch_all_gates(monkeypatch)
         auto_calibration.process_packet({})
 
         assert len(set_baseline_calls) >= 1, (
-            "process_packet() must call haze_condition.set_baseline() after 22nd sample"
+            "process_packet() must call haze_condition.set_baseline() after 30th sample"
         )
         assert set_baseline_calls[-1] > 0.0, "Baseline value must be positive"
 
 
 # ===========================================================================
-# Group 7: load_persisted() and persist() — filesystem mocks
+# Group 8: Persistence — v2 format
 # ===========================================================================
 
 
-class TestPersistence:
-    """Filesystem-based persistence via tmp file and atomic rename."""
+class TestPersistenceV2:
+    """persist() / load_persisted() round-trip in v2 format via tmp_path."""
 
-    def test_persist_writes_valid_json(
+    def test_persist_writes_valid_json_with_version_2(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        """persist() writes a valid JSON file at the configured path."""
+        """persist() writes a valid JSON file with version=2 and expected top-level keys."""
         persist_path = tmp_path / "calibration.json"
         monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
 
-        auto_calibration._samples = [(_FROZEN_NOW - 100, 0.90), (_FROZEN_NOW - 50, 0.92)]
-        auto_calibration._current_baseline = 0.91
+        _inject_monthly_samples(1, _CLEAN_KCS)
+        auto_calibration._monthly_baselines[1] = 0.912
+        auto_calibration._flat_baseline = 0.908
+        auto_calibration.set_station_type("Vantage")
 
         auto_calibration.persist()
 
         assert persist_path.exists(), "persist() must create the calibration file"
         data = json.loads(persist_path.read_text(encoding="utf-8"))
-        assert "samples" in data
-        assert "baseline_kcs" in data
-        assert data["baseline_kcs"] == pytest.approx(0.91)
-        assert len(data["samples"]) == 2
 
-    def test_load_persisted_restores_samples_and_baseline(
+        assert data["version"] == 2
+        assert "monthly_samples" in data
+        assert "monthly_baselines" in data
+        assert "flat_baseline" in data
+        assert "station_type" in data
+
+    def test_persist_monthly_samples_structure(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        """load_persisted() restores samples and baseline from a valid JSON file."""
+        """monthly_samples has keys '1'-'12'; month 3 has the injected samples."""
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+
+        _inject_monthly_samples(3, _CLEAN_KCS)
+        auto_calibration.persist()
+
+        data = json.loads(persist_path.read_text(encoding="utf-8"))
+        monthly = data["monthly_samples"]
+        assert set(monthly.keys()) == {str(m) for m in range(1, 13)}
+        assert len(monthly["3"]) == 30, "Month 3 must have 30 persisted samples"
+        assert monthly["1"] == [], "Month 1 must be empty"
+
+    def test_persist_records_flat_baseline_and_station_type(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """flat_baseline and station_type are written correctly."""
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+
+        auto_calibration._flat_baseline = 0.905
+        auto_calibration.set_station_type("WS-2000")
+        auto_calibration.persist()
+
+        data = json.loads(persist_path.read_text(encoding="utf-8"))
+        assert data["flat_baseline"] == pytest.approx(0.905)
+        assert data["station_type"] == "WS-2000"
+
+    def test_load_persisted_v2_restores_state(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """load_persisted() restores v2 monthly samples, station_type, and recomputes baselines.
+
+        Note: flat_baseline is NOT restored verbatim from disk — load_persisted()
+        always recomputes it from the loaded samples via _flat_baseline_update().
+        The persisted value is ignored after load.  The test verifies the
+        recomputed baseline is a valid float in the plausible range.
+        """
         from weewx_clearskies_api.sse import haze_condition
 
         persist_path = tmp_path / "calibration.json"
         monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
         monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-
-        # Write a fixture file with 3 recent samples and a baseline.
-        samples = [
-            [_FROZEN_NOW - 100 * 86400.0 + i * 3600, 0.89 + i * 0.005]
-            for i in range(3)
-        ]
-        persist_path.write_text(
-            json.dumps({"samples": samples, "baseline_kcs": 0.905}),
-            encoding="utf-8",
-        )
-
-        # Track haze_condition.set_baseline() calls.
-        set_baseline_calls: list[float] = []
-
-        def _record(val: float) -> None:
-            set_baseline_calls.append(val)
-
-        monkeypatch.setattr(haze_condition, "set_baseline", _record)
-
-        auto_calibration.load_persisted()
-
-        assert len(auto_calibration._samples) == 3, (
-            "load_persisted() must restore all valid samples"
-        )
-        assert auto_calibration._current_baseline == pytest.approx(0.905)
-        assert len(set_baseline_calls) == 1, (
-            "load_persisted() must call haze_condition.set_baseline() with restored baseline"
-        )
-
-    def test_load_persisted_prunes_stale_samples(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        """load_persisted() discards samples older than 180 days."""
-        persist_path = tmp_path / "calibration.json"
-        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
-
-        stale_ts = _FROZEN_NOW - 200 * 86400.0  # 200 days ago, outside 180d window
-        fresh_ts = _FROZEN_NOW - 30 * 86400.0   # 30 days ago, within 180d window
-        persist_path.write_text(
-            json.dumps({
-                "samples": [[stale_ts, 0.88], [fresh_ts, 0.90]],
-                "baseline_kcs": None,
-            }),
-            encoding="utf-8",
-        )
-
-        from weewx_clearskies_api.sse import haze_condition
         monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
 
+        samples_m1 = [[_FROZEN_NOW - (30 - i) * 3600, 0.90] for i in range(30)]
+        data = {
+            "version": 2,
+            "monthly_samples": {str(m): (samples_m1 if m == 1 else []) for m in range(1, 13)},
+            "monthly_baselines": {str(m): (0.912 if m == 1 else None) for m in range(1, 13)},
+            "flat_baseline": 0.908,
+            "station_type": "Vantage",
+        }
+        persist_path.write_text(json.dumps(data), encoding="utf-8")
+
         auto_calibration.load_persisted()
 
-        assert len(auto_calibration._samples) == 1, (
-            "load_persisted() must prune samples older than 180 days"
+        assert len(auto_calibration._monthly_samples[1]) == 30, (
+            "load_persisted() must restore month 1's 30 samples"
         )
-        assert auto_calibration._samples[0][0] == pytest.approx(fresh_ts)
+        # Baselines are recomputed from loaded samples, not taken verbatim from disk.
+        assert auto_calibration._monthly_baselines[1] is not None, (
+            "Month 1 baseline must be recomputed from 30 loaded samples"
+        )
+        # flat_baseline is recomputed from all months' samples (not the persisted value).
+        assert auto_calibration._flat_baseline is not None, (
+            "Flat baseline must be recomputed from loaded samples"
+        )
+        assert 0.80 <= auto_calibration._flat_baseline <= 1.05, (
+            f"Recomputed flat baseline {auto_calibration._flat_baseline} outside plausible range"
+        )
+        assert auto_calibration._station_type_at_load == "Vantage"
+
+    def test_load_persisted_prunes_samples_older_than_3_years(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """load_persisted() discards samples outside the 3-year window."""
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        window_secs = 3 * 365.25 * 86400.0
+        stale_ts = _FROZEN_NOW - window_secs - 86400.0  # just outside 3-year window
+        fresh_ts = _FROZEN_NOW - 30 * 86400.0            # 30 days old — well inside
+
+        data = {
+            "version": 2,
+            "monthly_samples": {
+                str(m): (
+                    [[stale_ts, 0.88], [fresh_ts, 0.90]] if m == 6 else []
+                )
+                for m in range(1, 13)
+            },
+            "monthly_baselines": {str(m): None for m in range(1, 13)},
+            "flat_baseline": None,
+            "station_type": None,
+        }
+        persist_path.write_text(json.dumps(data), encoding="utf-8")
+
+        auto_calibration.load_persisted()
+
+        # Only the fresh sample should survive pruning.
+        assert len(auto_calibration._monthly_samples[6]) == 1, (
+            "Stale sample outside 3-year window must be pruned"
+        )
+        assert auto_calibration._monthly_samples[6][0][0] == pytest.approx(fresh_ts)
 
     def test_load_persisted_missing_file_starts_fresh(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        """load_persisted() with a missing file → starts fresh (no samples, no baseline)."""
+        """load_persisted() with a missing file → starts fresh."""
         persist_path = tmp_path / "nonexistent_calibration.json"
         monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
 
         auto_calibration.load_persisted()
 
-        assert len(auto_calibration._samples) == 0
-        assert auto_calibration._current_baseline is None
+        total = sum(len(auto_calibration._monthly_samples[m]) for m in range(1, 13))
+        assert total == 0
+        assert all(
+            auto_calibration._monthly_baselines[m] is None for m in range(1, 13)
+        )
 
     def test_load_persisted_invalid_json_starts_fresh(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -744,22 +809,246 @@ class TestPersistence:
         persist_path = tmp_path / "calibration.json"
         persist_path.write_text("not valid json at all }{", encoding="utf-8")
         monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
 
         auto_calibration.load_persisted()  # must not raise
 
-        assert len(auto_calibration._samples) == 0
-        assert auto_calibration._current_baseline is None
+        total = sum(len(auto_calibration._monthly_samples[m]) for m in range(1, 13))
+        assert total == 0
+        assert auto_calibration._flat_baseline is None
 
     def test_persist_failure_non_fatal(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """persist() to an unwritable path logs a warning but does not raise."""
-        # Use a path under a nonexistent parent directory.
         bad_path = "/nonexistent_root_dir_clearskies_test/calibration.json"
         monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", bad_path)
-        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
 
-        auto_calibration._samples = [(_FROZEN_NOW - 100, 0.90)]
         # Must not raise.
         auto_calibration.persist()
+
+
+# ===========================================================================
+# Group 9: v1 → v2 migration
+# ===========================================================================
+
+
+class TestV1ToV2Migration:
+    """load_persisted() with v1 format distributes samples into monthly buckets."""
+
+    def test_v1_samples_distributed_by_month(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """v1 flat samples list is distributed into per-month buckets via timestamp."""
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        # Station is UTC; use a timestamp in January 2025.
+        auto_calibration.set_timezone("UTC")
+        jan_ts = 1_737_000_000.0   # 2025-01-16 ~05:20 UTC
+        jul_ts = 1_751_500_000.0   # 2025-07-02 ~22:06 UTC
+
+        v1_data = {
+            "samples": [
+                [jan_ts, 0.91],
+                [jul_ts, 0.88],
+            ],
+            "baseline_kcs": 0.905,
+        }
+        persist_path.write_text(json.dumps(v1_data), encoding="utf-8")
+
+        auto_calibration.load_persisted()
+
+        assert len(auto_calibration._monthly_samples[1]) == 1, (
+            "January sample must be in month 1"
+        )
+        assert len(auto_calibration._monthly_samples[7]) == 1, (
+            "July sample must be in month 7"
+        )
+
+    def test_v1_migration_immediately_persists_v2(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """After v1 migration, the file is immediately rewritten in v2 format."""
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        auto_calibration.set_timezone("UTC")
+        v1_data = {"samples": [[_FROZEN_NOW - 1000, 0.90]], "baseline_kcs": 0.90}
+        persist_path.write_text(json.dumps(v1_data), encoding="utf-8")
+
+        auto_calibration.load_persisted()
+
+        data = json.loads(persist_path.read_text(encoding="utf-8"))
+        assert data.get("version") == 2, (
+            "File must be rewritten in v2 format immediately after v1 migration"
+        )
+        assert "monthly_samples" in data
+
+    def test_v1_migration_uses_station_timezone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """v1 migration bins samples by local month using the configured timezone.
+
+        2025-01-31 22:00 UTC:
+          - UTC timezone → January (month 1)
+          - Pacific/Auckland (UTC+13) → 2025-02-01 11:00 NZDT → February (month 2)
+        """
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        # 2025-01-31 22:00:00 UTC → UTC=January; Auckland (UTC+13)=February 01.
+        ts_utc = 1_738_360_800.0
+
+        # With UTC timezone, this sample is January.
+        auto_calibration.set_timezone("UTC")
+        v1_data = {"samples": [[ts_utc, 0.90]], "baseline_kcs": None}
+        persist_path.write_text(json.dumps(v1_data), encoding="utf-8")
+        auto_calibration.load_persisted()
+        jan_count_utc = len(auto_calibration._monthly_samples[1])
+        feb_count_utc = len(auto_calibration._monthly_samples[2])
+
+        auto_calibration.reset()
+
+        # With Pacific/Auckland (UTC+13), same timestamp is February 1 locally.
+        auto_calibration.set_timezone("Pacific/Auckland")
+        persist_path.write_text(json.dumps(v1_data), encoding="utf-8")
+        auto_calibration.load_persisted()
+        jan_count_auckland = len(auto_calibration._monthly_samples[1])
+        feb_count_auckland = len(auto_calibration._monthly_samples[2])
+
+        assert jan_count_utc == 1 and feb_count_utc == 0, (
+            "UTC: 2025-01-31 22:00 UTC must bin to January"
+        )
+        assert jan_count_auckland == 0 and feb_count_auckland == 1, (
+            "Pacific/Auckland (UTC+13): 2025-01-31 22:00 UTC → 2025-02-01 11:00 → bins to February"
+        )
+
+
+# ===========================================================================
+# Group 10: Timezone-aware month binning in process_packet()
+# ===========================================================================
+
+
+class TestTimezoneAwareMonthBinning:
+    """process_packet() bins samples into the correct local calendar month."""
+
+    def _patch_gates_at_ts(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        ts: float,
+        kcs: float = 0.90,
+    ) -> None:
+        """Patch gates to return clean conditions at a specific timestamp."""
+        from weewx_clearskies_api.sse.enrichment import input_smoother
+        from weewx_clearskies_api.sse import sky_condition
+
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: ts)
+
+        def _get_smoothed(key: str) -> float | None:
+            if key == "rainRate":
+                return 0.0
+            if key == "pollutantPM25":
+                return 5.0
+            if key == "pollutantPM10":
+                return 10.0
+            return None
+
+        monkeypatch.setattr(input_smoother, "get_smoothed", _get_smoothed)
+        monkeypatch.setattr(sky_condition, "get_solar_elevation", lambda: 45.0)
+        monkeypatch.setattr(sky_condition, "classify", lambda: "Clear")
+        monkeypatch.setattr(sky_condition, "get_current_kcs", lambda: kcs)
+
+    def test_sample_bins_to_january_in_utc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sample at Jan 15 noon UTC with timezone='UTC' bins to month 1."""
+        from weewx_clearskies_api.sse import haze_condition
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        # 2025-01-15 12:00:00 UTC
+        ts = 1_736_942_400.0
+        auto_calibration.set_timezone("UTC")
+        self._patch_gates_at_ts(monkeypatch, ts)
+        auto_calibration.process_packet({})
+
+        assert len(auto_calibration._monthly_samples[1]) == 1, (
+            "Sample at Jan 15 12:00 UTC must bin to month 1 when timezone is UTC"
+        )
+
+    def test_late_jan_utc_sample_bins_to_feb_in_new_york(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Jan 31 23:50 UTC with timezone='America/New_York' → local Feb 1 → bins to month 2."""
+        from weewx_clearskies_api.sse import haze_condition
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        # 2025-01-31 23:50:00 UTC → 2025-02-01 04:50 in UTC+5 is wrong;
+        # America/New_York in winter is UTC-5 → 2025-01-31 18:50 local.
+        # Actually UTC-5: 23:50 UTC - 5h = 18:50 EST = still January.
+        # Need a timestamp that crosses midnight locally.
+        # Jan 31 23:50 UTC-5 would be: UTC = Feb 01 04:50.
+        # So use ts for 2025-02-01 04:50:00 UTC.
+        ts = 1_738_382_400.0  # 2025-02-01 04:50:00 UTC → 2025-01-31 23:50 EST (Jan)
+        # Hmm — let's pick something unambiguous.
+        # 2025-02-01 05:00:00 UTC = 2025-02-01 00:00 EST — right at midnight, February.
+        ts = 1_738_386_000.0  # 2025-02-01 05:00:00 UTC = 2025-02-01 00:00 EST
+
+        auto_calibration.set_timezone("America/New_York")
+        self._patch_gates_at_ts(monkeypatch, ts)
+        auto_calibration.process_packet({})
+
+        assert len(auto_calibration._monthly_samples[2]) == 1, (
+            "2025-02-01 05:00 UTC is Feb 01 00:00 EST → must bin to month 2"
+        )
+        assert len(auto_calibration._monthly_samples[1]) == 0, (
+            "January bucket must be empty for this timestamp in EST"
+        )
+
+    def test_same_utc_timestamp_bins_differently_by_timezone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same UTC timestamp bins to different months depending on timezone.
+
+        2025-01-31 22:00 UTC:
+          - UTC → January (month 1)
+          - America/Sao_Paulo (UTC-3) → Jan 31 19:00 local → January (month 1)
+          - Pacific/Auckland (UTC+13) → Feb 01 11:00 local → February (month 2)
+        """
+        from weewx_clearskies_api.sse import haze_condition
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        ts = 1_738_360_800.0  # 2025-01-31 22:00:00 UTC
+
+        # UTC → January
+        auto_calibration.set_timezone("UTC")
+        self._patch_gates_at_ts(monkeypatch, ts)
+        auto_calibration.process_packet({})
+        jan_count_utc = len(auto_calibration._monthly_samples[1])
+        feb_count_utc = len(auto_calibration._monthly_samples[2])
+        auto_calibration.reset()
+
+        # Pacific/Auckland (UTC+13) → Feb 01 11:00 → February
+        auto_calibration.set_timezone("Pacific/Auckland")
+        self._patch_gates_at_ts(monkeypatch, ts)
+        auto_calibration.process_packet({})
+        jan_count_auckland = len(auto_calibration._monthly_samples[1])
+        feb_count_auckland = len(auto_calibration._monthly_samples[2])
+
+        assert jan_count_utc == 1 and feb_count_utc == 0, (
+            "UTC: 2025-01-31 22:00 UTC must be January"
+        )
+        assert jan_count_auckland == 0 and feb_count_auckland == 1, (
+            "Pacific/Auckland UTC+13: 2025-01-31 22:00 UTC → Feb 01 11:00 NZDT → February"
+        )
