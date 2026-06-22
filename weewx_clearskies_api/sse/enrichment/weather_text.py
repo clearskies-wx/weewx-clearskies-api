@@ -254,6 +254,36 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
             if any(kw in _pw_lower for kw in ("haze", "hazy", "smoke", "smoky")):
                 _effective_haze_label = "Hazy"
 
+    # Missing-pyranometer deferral (ADR-068 v2): daytime but no Kcs data
+    # means the station lacks a pyranometer.  Local haze detection (Channel 1)
+    # cannot fire without Kcs, so defer to provider weather text for
+    # haze/smoke indicators — same mechanism as nighttime deferral.
+    if _is_day and _effective_haze_label is None and _sky_module.get_current_kcs() is None:
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text as _get_pwt_rad,
+        )
+        _pw_text_rad, _pw_age_rad = _get_pwt_rad()
+        if _pw_text_rad is not None:
+            _pw_lower_rad = _pw_text_rad.lower()
+            if any(kw in _pw_lower_rad for kw in ("haze", "hazy", "smoke", "smoky")):
+                _effective_haze_label = "Hazy"
+
+    # Missing-hygrometer deferral (ADR-068 v2): no dewpoint means local
+    # fog/mist detection cannot fire (it requires dewpoint for the
+    # temperature-depression algorithm).  Defer to provider weather text
+    # for fog/mist indicators.
+    if _fog_mist_label is None and _dewpoint is None:
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text as _get_pwt_fog,
+        )
+        _pw_text_fog, _pw_age_fog = _get_pwt_fog()
+        if _pw_text_fog is not None:
+            _pw_lower_fog = _pw_text_fog.lower()
+            if "fog" in _pw_lower_fog:
+                _fog_mist_label = "Foggy"
+            elif "mist" in _pw_lower_fog:
+                _fog_mist_label = "Misty"
+
     _precip_type = obs_data.get("precipType") if obs_data else None
     _snow_rate = get_smoothed("snowRate")
 
@@ -401,6 +431,34 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
                 _pw_lower2 = _pw_text2.lower()
                 if any(kw in _pw_lower2 for kw in ("haze", "hazy", "smoke", "smoky")):
                     _is_hazy_code = True
+
+        # Missing-pyranometer deferral (ADR-068 v2): mirror compose_weather_text().
+        if _sky_module.is_daytime() and not _is_hazy_code and _sky_module.get_current_kcs() is None:
+            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+                get_provider_weather_text as _get_pwt_rad2,
+            )
+            _pw_text_rad2, _pw_age_rad2 = _get_pwt_rad2()
+            if _pw_text_rad2 is not None:
+                _pw_lower_rad2 = _pw_text_rad2.lower()
+                if any(kw in _pw_lower_rad2 for kw in ("haze", "hazy", "smoke", "smoky")):
+                    _is_hazy_code = True
+
+        # Missing-hygrometer deferral (ADR-068 v2): mirror compose_weather_text().
+        # When _dewpoint is None, fog/mist detection cannot fire.  Defer to
+        # provider weather text to supply fog/mist state for code derivation.
+        if _fog_mist_state2 is None and _dewpoint is None:
+            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+                get_provider_weather_text as _get_pwt_fog2,
+            )
+            _pw_text_fog2, _pw_age_fog2 = _get_pwt_fog2()
+            if _pw_text_fog2 is not None:
+                _pw_lower_fog2 = _pw_text_fog2.lower()
+                if "fog" in _pw_lower_fog2:
+                    _fog_mist_state2 = "Foggy"
+                    _effective_sky = "Foggy"
+                elif "mist" in _pw_lower_fog2:
+                    _fog_mist_state2 = "Misty"
+                    _effective_sky = "Misty"
 
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,

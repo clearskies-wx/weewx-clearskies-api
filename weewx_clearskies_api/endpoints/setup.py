@@ -1553,3 +1553,47 @@ async def restart(request: Request, background_tasks: BackgroundTasks) -> Restar
 
     background_tasks.add_task(_deferred_sigterm)
     return RestartResponse(status="restarting")
+
+
+@router.get("/calibration-state")
+async def calibration_state(request: Request) -> dict:  # type: ignore[type-arg]
+    """Per-month calibration data for admin UI.
+
+    Returns the current auto-calibration state as populated by the monthly
+    Kcs baseline algorithm (ADR-068).  Each month entry shows the sample
+    count, computed percentile, and activation status.
+
+    Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
+    """
+    if not _check_proxy_auth(request):
+        raise HTTPException(status_code=403, detail="Proxy secret required")
+    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
+    return auto_calibration.get_calibration_state()
+
+
+@router.post("/calibration-reset")
+async def calibration_reset(request: Request) -> dict:  # type: ignore[type-arg]
+    """Clear calibration data and mark for re-bootstrap on next restart.
+
+    Resets in-memory calibration state and deletes the persisted
+    calibration.json file.  On the next API restart, the auto-bootstrap
+    routine will rebuild calibration from the full historical DB.
+
+    Does NOT trigger an inline re-bootstrap — restart the API after calling
+    this endpoint to complete the reset cycle.
+
+    Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
+    """
+    if not _check_proxy_auth(request):
+        raise HTTPException(status_code=403, detail="Proxy secret required")
+    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
+    auto_calibration.reset()
+    # Delete persisted calibration file so next restart starts fresh.
+    from pathlib import Path  # noqa: PLC0415
+    cal_path = Path(auto_calibration._PERSIST_PATH)
+    if cal_path.exists():
+        try:
+            cal_path.unlink()
+        except OSError:
+            pass  # Best-effort: log not required, reset() cleared in-memory state
+    return {"success": True, "message": "Calibration reset. Re-bootstrap will run on next restart."}

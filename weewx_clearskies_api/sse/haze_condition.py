@@ -25,10 +25,10 @@ Temporal coherence filter:
   only reported when ≥ 50% of entries in the window show is_hazy=True.
   Prevents label flicker at aerosol-concentration boundaries.
 
-Phase milestones:
-  Phase 6: set_baseline() will replace the fixed _clean_kcs_baseline with a
-            learned 90th–95th percentile of locally measured clean-sky Kcs.
-  Phase 8: set_gamma() will be wired to operator config in api.conf.
+Phase milestones (completed):
+  Phase 6: set_baseline() is called by the auto-calibration module (ADR-068)
+            with a learned monthly-normal clean-sky Kcs percentile.
+  Phase 8: set_gamma() is wired to the [conditions] gamma key in api.conf.
 
 Module-level state is intentional — the API is a single-process service.
 Use reset() for test isolation.
@@ -318,7 +318,7 @@ def set_baseline(value: float) -> None:
 def set_gamma(value: float) -> None:
     """Set the f(RH) hygroscopic correction exponent.
 
-    Phase 8 will wire this to api.conf for operator configurability.
+    Wired to the [conditions] gamma key in api.conf (Phase 8, ADR-068).
     γ range: 0.12 (mineral dust) to 1.52 (sea salt) per Hanel 1976 / Tang 1996.
     Default 0.45 is composition-unknown (moderate).
     """
