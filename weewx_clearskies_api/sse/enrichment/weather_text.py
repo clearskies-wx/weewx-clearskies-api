@@ -10,6 +10,7 @@ import logging
 import weewx_clearskies_api.sse.sky_condition as _sky_module
 from weewx_clearskies_api.sse.conditions_text import _precip_label, build_weather_text
 from weewx_clearskies_api.sse.enrichment.input_smoother import get_smoothed
+from weewx_clearskies_api.sse.fog_condition import detect_fog_mist
 from weewx_clearskies_api.sse.haze_condition import detect_haze
 from weewx_clearskies_api.sse.sky_condition import classify as sky_classify
 
@@ -56,12 +57,12 @@ def _derive_weather_code(
     *,
     effective_sky: str | None,
     rain_label: str | None,
-    is_foggy: bool,
+    fog_mist_state: str | None,
     is_hazy: bool = False,
 ) -> int:
     """Map current conditions state to a WMO present-weather code (subset).
 
-    Priority order: precipitation > fog > haze > sky.
+    Priority order: precipitation > fog > mist > haze > sky.
 
     Snow codes (WMO group 7x):
       "Heavy Snow"     → 75
@@ -79,7 +80,10 @@ def _derive_weather_code(
       "Light Rain"     → 61
 
     Fog code (WMO 45):
-      is_foggy=True    → 45
+      fog_mist_state == "Foggy" → 45
+
+    Mist code (WMO 10):
+      fog_mist_state == "Misty" → 10
 
     Haze code (WMO 05):
       is_hazy=True     → 5
@@ -114,8 +118,10 @@ def _derive_weather_code(
         return 63
     if rain_label == "Light Rain":
         return 61
-    if is_foggy:
+    if fog_mist_state == "Foggy":
         return 45
+    if fog_mist_state == "Misty":
+        return 10
     if is_hazy:
         return 5
     if effective_sky in ("Heavy Overcast", "Overcast"):
@@ -170,16 +176,33 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         else None
     )
 
-    # Fog override: when outTemp − dewpoint ≤ 1 °F the air is near-saturated;
-    # replace any cloud-cover-derived sky label with "Foggy".
+    # Fog/mist detection: multi-parameter algorithm (ADR-069).
+    # detect_fog_mist() returns 'Foggy', 'Misty', 'Hazy', or None.
+    # 'Hazy' from this module means PM2.5 disambiguation (near-saturated air
+    # with elevated particulates); it is merged with the haze_label pathway.
     _out_temp = get_smoothed("outTemp")
     _dewpoint = get_smoothed("dewpoint")
-    if (
-        _out_temp is not None
-        and _dewpoint is not None
-        and (_out_temp - _dewpoint) <= 1.0
-    ):
-        _provider_sky = "Foggy"
+    _rain_rate = get_smoothed("rainRate")
+    _fog_mist_result = detect_fog_mist(
+        out_temp=_out_temp,
+        dewpoint=_dewpoint,
+        wind_speed=get_smoothed("windSpeed"),
+        rain_rate=_rain_rate,
+        kcs=_sky_module.get_current_kcs(),
+        is_daytime=_sky_module.is_daytime(),
+        pm25=get_smoothed("pollutantPM25"),
+    )
+
+    # Separate fog/mist label from PM-disambiguation hazy result.
+    # When fog_condition returns 'Hazy', treat it like haze_condition's result
+    # (feeds into haze_label pathway).  fog_mist_label carries only
+    # 'Foggy' or 'Misty' (or None).
+    if _fog_mist_result == "Hazy":
+        _fog_mist_label: str | None = None
+        _fog_is_hazy = True
+    else:
+        _fog_mist_label = _fog_mist_result
+        _fog_is_hazy = False
 
     # Haze detection: two-channel confirmation (Kcs deficit + PM).
     # detect_haze() returns 'Hazy' when both channels fire and temporal
@@ -192,15 +215,18 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         pm10=get_smoothed("pollutantPM10"),
         out_temp=_out_temp,
         dewpoint=_dewpoint,
-        rain_rate=get_smoothed("rainRate"),
+        rain_rate=_rain_rate,
     )
+
+    # Merge haze signals: either source may trigger "Hazy".
+    _effective_haze_label: str | None = _haze_label if (_haze_label is not None) else ("Hazy" if _fog_is_hazy else None)
 
     _precip_type = obs_data.get("precipType") if obs_data else None
     _snow_rate = get_smoothed("snowRate")
 
     return build_weather_text(
         sky=sky_classify(),
-        rain_rate=get_smoothed("rainRate"),
+        rain_rate=_rain_rate,
         rain_rate_unit="inch_per_hour",
         wind_speed=get_smoothed("windSpeed"),
         wind_speed_unit="mile_per_hour",
@@ -218,7 +244,8 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         snow_rate=_snow_rate,
         pm25=get_smoothed("pollutantPM25"),
         pm10=get_smoothed("pollutantPM10"),
-        haze_label=_haze_label,
+        haze_label=_effective_haze_label,
+        fog_mist_label=_fog_mist_label,
     )
 
 
@@ -258,27 +285,51 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             _cloud_raw2.get("value") if isinstance(_cloud_raw2, dict) else _cloud_raw2
         )
         _is_day_code = _sky_module.is_daytime()
-        _provider_sky: str | None = (
+        _provider_sky2: str | None = (
             _cloud_pct_to_sky(_cloud_pct, is_day=_is_day_code)
             if isinstance(_cloud_pct, (int, float))
             else None
         )
         _out_temp = get_smoothed("outTemp")
         _dewpoint = get_smoothed("dewpoint")
-        if (
-            _out_temp is not None
-            and _dewpoint is not None
-            and (_out_temp - _dewpoint) <= 1.0
-        ):
-            _provider_sky = "Foggy"
+        _rain_rate2 = get_smoothed("rainRate")
+
+        # Fog/mist detection for weather code derivation (ADR-069).
+        # detect_fog_mist() is stateful (updates _fog_history); calling it
+        # twice in rapid succession is safe — the coherence filter is
+        # idempotent on the same timestamp.
+        _fog_mist_result2 = detect_fog_mist(
+            out_temp=_out_temp,
+            dewpoint=_dewpoint,
+            wind_speed=get_smoothed("windSpeed"),
+            rain_rate=_rain_rate2,
+            kcs=_sky_module.get_current_kcs(),
+            is_daytime=_sky_module.is_daytime(),
+            pm25=get_smoothed("pollutantPM25"),
+        )
+
+        # Separate fog/mist from PM-disambiguation hazy result.
+        if _fog_mist_result2 == "Hazy":
+            _fog_mist_state2: str | None = None
+            _fog_is_hazy2 = True
+        else:
+            _fog_mist_state2 = _fog_mist_result2
+            _fog_is_hazy2 = False
 
         # Determine effective sky the same way build_weather_text() does:
         # solar classifier during daytime, provider_sky at night / on startup.
+        # When fog/mist is detected, fog_mist_label becomes the sky label in
+        # build_weather_text(); reflect that here for code derivation.
         _sky_from_solar = sky_classify()
         if _sky_from_solar is not None and _sky_module.is_daytime():
             _effective_sky = _sky_from_solar
         else:
-            _effective_sky = _provider_sky
+            _effective_sky = _provider_sky2
+
+        # When fog/mist is active, the effective_sky for code purposes is the
+        # fog/mist label itself (it replaces the sky component in the text).
+        if _fog_mist_state2 is not None:
+            _effective_sky = _fog_mist_state2
 
         _precip_type2 = obs_data.get("precipType") if obs_data else None
         _snow_rate_raw = obs_data.get("snowRate") if obs_data else None
@@ -286,7 +337,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             _snow_rate_raw.get("value") if isinstance(_snow_rate_raw, dict) else _snow_rate_raw
         )
         _rain_label = _precip_label(
-            get_smoothed("rainRate"), "inch_per_hour",
+            _rain_rate2, "inch_per_hour",
             precip_type=_precip_type2, snow_rate=_snow_rate2,
         )
 
@@ -302,14 +353,17 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
             pm10=get_smoothed("pollutantPM10"),
             out_temp=_out_temp,
             dewpoint=_dewpoint,
-            rain_rate=get_smoothed("rainRate"),
+            rain_rate=_rain_rate2,
         )
+
+        # Merge haze signals from both detection paths.
+        _is_hazy_code = (_haze_label_code is not None) or _fog_is_hazy2
 
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,
             rain_label=_rain_label,
-            is_foggy=(_provider_sky == "Foggy"),
-            is_hazy=(_haze_label_code is not None),
+            fog_mist_state=_fog_mist_state2,
+            is_hazy=_is_hazy_code,
         )
 
         if isinstance(obs, dict):
