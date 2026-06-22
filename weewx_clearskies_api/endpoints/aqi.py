@@ -252,6 +252,25 @@ def wire_aqi_settings(settings: object) -> None:
     # For any unrecognized provider: no wiring attempt (capability registry catches this at startup).
 
 
+_POLLUTANT_FIELDS = (
+    "pollutantPM25", "pollutantPM10",
+    "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
+    "pollutantNO", "pollutantNH3",
+)
+
+
+def _round_pollutants(reading: AQIReading) -> AQIReading:
+    """Round pollutant concentration floats to 1 decimal place for display."""
+    updates: dict[str, float] = {}
+    for field in _POLLUTANT_FIELDS:
+        val = getattr(reading, field, None)
+        if val is not None:
+            updates[field] = round(val, 1)
+    if updates:
+        return reading.model_copy(update=updates)
+    return reading
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -410,6 +429,13 @@ def get_aqi_current(
             is_observed=_cap.is_observed_source if _cap else False,
         )
 
+    # Round pollutant concentrations to 1 decimal place for display.
+    # Raw floats from ppb→µg/m³ conversion produce noise (e.g. 74.6012269938);
+    # AQI reporting uses 1 decimal in µg/m³.  Rounding at the response boundary
+    # keeps provider-layer values precise for sub-AQI computation.
+    if record is not None:
+        record = _round_pollutants(record)
+
     return AQIResponse(
         data=record,
         units=units,
@@ -473,7 +499,7 @@ def get_aqi_history_endpoint(
                 from weewx_clearskies_api.providers.aqi._units import epa_category  # noqa: PLC0415
                 reading = reading.model_copy(update={"aqiCategory": epa_category(reading.aqi)})
         enriched_readings.append(reading)
-    readings = enriched_readings
+    readings = [_round_pollutants(r) for r in enriched_readings]
 
     return AQIHistoryResponse(
         data=readings,
