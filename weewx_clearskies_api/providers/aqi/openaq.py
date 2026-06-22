@@ -1,12 +1,15 @@
 """OpenAQ v3 AQI provider module (ADR-066, ADR-038).
 
 Five responsibilities per ADR-038 §2:
-  1. Outbound API calls — two endpoints:
+  1. Outbound API calls — up to four endpoints per fetch cycle:
        a. GET https://api.openaq.org/v3/locations?coordinates={lat},{lon}&radius=25000
-          — Resolves nearest PM2.5 sensor once, caches sensor/location IDs in
-          module-level state for the process lifetime.
+          — Resolves nearest PM2.5 sensor (step 1, first call only).
+          If PM10 not co-located, a second identical request scans all returned
+          locations for a PM10 sensor (step 2, first call only).
        b. GET https://api.openaq.org/v3/locations/{locationId}/latest
-          — Fetches latest sensor measurements on each cache miss.
+          — Fetches latest sensor measurements from the PM2.5 station.
+          If PM10 is on a DIFFERENT station, a second /latest call fetches from
+          the PM10 station and its pm10 value overrides the primary result.
   2. Response parsing — wire-shape Pydantic models for the OpenAQ meta+results
      envelope (LC5).  extra="ignore" on all models (OpenAQ carries many fields
      canonical AQIReading does not consume: coordinates, isMobile, isAnalysis,
@@ -16,9 +19,10 @@ Five responsibilities per ADR-038 §2:
        - aqiScale = None
        - aqiCategory = None
        - aqiMainPollutant = None
-       - aqiLocation = location name resolved in step 1a
+       - aqiLocation = PM2.5 station name resolved in step 1a
        - pollutantPM25 = value for parameter "pm25" in µg/m³
-       - pollutantPM10 = value for parameter "pm10" in µg/m³ (if available)
+       - pollutantPM10 = value for parameter "pm10" in µg/m³ (if available,
+         may come from a separate nearby station)
        - All gas fields (O3, NO2, SO2, CO) = None
        - observedAt = measurement datetime UTC Z form (from datetime.utc field)
        - source = "openaq"
@@ -34,11 +38,13 @@ OpenAQ is a header-keyed provider (ADR-006):
   Credentials NOT in the cache key (LC7 — privacy/leakage concern).
 
 Module-level sensor resolution (once per process):
-  _resolved_location_id: int | None — OpenAQ locationId for nearest station
-  _resolved_location_name: str | None — station name for aqiLocation
-  _resolved_sensor_pm25_id: int | None — sensorsId for PM2.5 sensor
-  _resolved_sensor_pm10_id: int | None — sensorsId for PM10 sensor (may be None)
-  Resolved on first fetch() call via GET /v3/locations?coordinates=... .
+  _resolved_pm25_location_id: int | None — OpenAQ locationId for PM2.5 station
+  _resolved_pm25_location_name: str | None — PM2.5 station name for aqiLocation
+  _resolved_pm25_sensor_id: int | None — sensorsId for PM2.5 sensor
+  _resolved_pm10_location_id: int | None — OpenAQ locationId for PM10 station
+    (may equal _resolved_pm25_location_id if co-located, or differ)
+  _resolved_pm10_sensor_id: int | None — sensorsId for PM10 sensor (may be None)
+  Resolved on first fetch() call via _resolve_sensors().
   Reset by _reset_sensor_state_for_tests() in test context.
 
 Cache layer (ADR-017 / LC3 / LC6 / LC7):
@@ -50,7 +56,8 @@ Cache layer (ADR-017 / LC3 / LC6 / LC7):
   Reconstruction on hit: AQIReading.model_validate(cached_dict).
 
 Rate limiter (LC8):
-  max_calls=1, window_seconds=1 (60 req/min free tier).
+  max_calls=2, window_seconds=1 (60 req/min free tier; paired calls in resolution
+  and fetch phases need 2 slots per second without hitting QuotaExhausted).
 
 Wire shape — GET /v3/locations (nearest station search):
   {
@@ -222,20 +229,21 @@ class _OpenAQLocationsResponse(BaseModel):
 # Module-level sensor resolution state
 # ---------------------------------------------------------------------------
 
-_resolved_location_id: int | None = None
-_resolved_location_name: str | None = None
-_resolved_sensor_pm25_id: int | None = None
-_resolved_sensor_pm10_id: int | None = None
+_resolved_pm25_location_id: int | None = None
+_resolved_pm25_location_name: str | None = None
+_resolved_pm25_sensor_id: int | None = None
+_resolved_pm10_location_id: int | None = None
+_resolved_pm10_sensor_id: int | None = None
 
 # ---------------------------------------------------------------------------
-# Rate limiter (LC8 — 60 req/min free tier → 1 req/s)
+# Rate limiter (LC8 — 60 req/min free tier; 2 slots/s for paired calls)
 # ---------------------------------------------------------------------------
 
 _rate_limiter = RateLimiter(
     name="openaq-aqi",
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
-    max_calls=1,
+    max_calls=2,
     window_seconds=1,
 )
 
@@ -290,45 +298,27 @@ def _build_cache_key(lat: float, lon: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_nearest_sensor(
+def _fetch_locations_wire(
     *,
     lat: float,
     lon: float,
     api_key: str,
     client: ProviderHTTPClient,
-) -> bool:
-    """Find nearest PM2.5 sensor and populate module-level state.
+) -> _OpenAQLocationsResponse:
+    """Call GET /v3/locations and return parsed wire response.
 
-    Calls GET /v3/locations?coordinates={lat},{lon}&radius=25000.
-    Iterates results to find the first location with a PM2.5 sensor.
-    Also captures a PM10 sensor from the same location if present.
-
-    Sets module-level globals: _resolved_location_id, _resolved_location_name,
-    _resolved_sensor_pm25_id, _resolved_sensor_pm10_id.
-
-    Args:
-        lat: Station latitude.
-        lon: Station longitude.
-        api_key: OpenAQ API key (X-API-Key header).
-        client: ProviderHTTPClient to use for the request.
-
-    Returns:
-        True if a PM2.5 sensor was found; False otherwise.
+    Acquires a rate-limiter slot before calling.  L2 carry-forward: canonical
+    taxonomy exceptions propagate bare — not caught here.
 
     Raises:
         ProviderProtocolError: Response JSON validation failed.
-        KeyInvalid: 401/403 from provider (raised by ProviderHTTPClient).
-        QuotaExhausted: 429 from provider (raised by ProviderHTTPClient).
-        TransientNetworkError: Network failure after retries.
+        KeyInvalid / QuotaExhausted / TransientNetworkError: from ProviderHTTPClient.
     """
-    global _resolved_location_id, _resolved_location_name  # noqa: PLW0603
-    global _resolved_sensor_pm25_id, _resolved_sensor_pm10_id  # noqa: PLW0603
-
     url = OPENAQ_BASE_URL + OPENAQ_LOCATIONS_PATH
     params = {
         "coordinates": f"{round(lat, 6)},{round(lon, 6)}",
         "radius": str(_SEARCH_RADIUS_METERS),
-        "limit": "10",  # Nearest 10 locations; we scan for PM2.5
+        "limit": "10",  # Nearest 10 locations; we scan for PM2.5/PM10
     }
     headers = {"X-API-Key": api_key}
 
@@ -339,7 +329,7 @@ def _resolve_nearest_sensor(
     response = client.get(url, params=params, headers=headers)
 
     try:
-        wire = _OpenAQLocationsResponse.model_validate(response.json())
+        return _OpenAQLocationsResponse.model_validate(response.json())
     except (ValidationError, ValueError) as exc:
         logger.error(
             "OpenAQ locations response validation failed: %s. "
@@ -354,8 +344,17 @@ def _resolve_nearest_sensor(
             domain=DOMAIN,
         ) from exc
 
-    # Scan results for a location with a PM2.5 sensor.
-    for location in wire.results:
+
+def _scan_for_pm25(
+    locations: list[_OpenAQLocation],
+) -> tuple[_OpenAQLocation, int, int | None] | None:
+    """Scan a list of locations for the first one with a PM2.5 sensor.
+
+    Returns:
+        (location, pm25_sensor_id, pm10_sensor_id_or_None) for the first
+        location that has a PM2.5 sensor, or None if none found.
+    """
+    for location in locations:
         pm25_id: int | None = None
         pm10_id: int | None = None
         for sensor in location.sensors:
@@ -365,31 +364,144 @@ def _resolve_nearest_sensor(
             elif sensor_name in ("pm10",):
                 pm10_id = sensor.id
         if pm25_id is not None:
-            _resolved_location_id = location.id
-            _resolved_location_name = location.name
-            _resolved_sensor_pm25_id = pm25_id
-            _resolved_sensor_pm10_id = pm10_id
-            logger.info(
-                "OpenAQ: resolved nearest PM2.5 sensor: location_id=%s name=%r "
-                "pm25_sensor=%s pm10_sensor=%s for lat=%s lon=%s",
-                location.id,
-                location.name,
-                pm25_id,
-                pm10_id,
-                round(lat, 4),
-                round(lon, 4),
-                extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
-            )
-            return True
+            return location, pm25_id, pm10_id
+    return None
 
-    logger.warning(
-        "OpenAQ: no PM2.5 sensor found within %dm of lat=%s lon=%s",
-        _SEARCH_RADIUS_METERS,
-        round(lat, 4),
-        round(lon, 4),
-        extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
-    )
-    return False
+
+def _scan_for_pm10(
+    locations: list[_OpenAQLocation],
+) -> tuple[_OpenAQLocation, int] | None:
+    """Scan a list of locations for the first one with a PM10 sensor.
+
+    Returns:
+        (location, pm10_sensor_id) for the first location that has a PM10
+        sensor, or None if none found.
+    """
+    for location in locations:
+        for sensor in location.sensors:
+            sensor_name = sensor.name.lower().replace(".", "").replace("-", "")
+            if sensor_name in ("pm10",):
+                return location, sensor.id
+    return None
+
+
+def _resolve_sensors(
+    *,
+    lat: float,
+    lon: float,
+    api_key: str,
+    client: ProviderHTTPClient,
+) -> bool:
+    """Find nearest PM2.5 sensor, and separately find PM10 if not co-located.
+
+    Two-pass resolution:
+      Pass 1: GET /v3/locations — scan results for the first location with
+        a PM2.5 sensor.  If that same location also has PM10, PM10 is captured
+        here and no second query is needed.
+      Pass 2 (only if PM10 not found in pass 1): GET /v3/locations again —
+        scan ALL returned locations (not just the PM2.5 one) for ANY station
+        that has a PM10 sensor.  Uses the same query parameters (same result
+        set in practice; second call avoids re-using a stale wire object).
+
+    PM2.5 is mandatory — returns False if not found (caller raises
+    GeographicallyUnsupported).  PM10 is optional — if not found, the
+    _resolved_pm10_* state vars remain None and no error is raised.
+
+    Sets module-level globals:
+      _resolved_pm25_location_id, _resolved_pm25_location_name,
+      _resolved_pm25_sensor_id, _resolved_pm10_location_id,
+      _resolved_pm10_sensor_id.
+
+    Args:
+        lat: Station latitude.
+        lon: Station longitude.
+        api_key: OpenAQ API key (X-API-Key header).
+        client: ProviderHTTPClient to use for requests.
+
+    Returns:
+        True if a PM2.5 sensor was found; False otherwise.
+
+    Raises:
+        ProviderProtocolError: Response JSON validation failed.
+        KeyInvalid: 401/403 from provider (raised by ProviderHTTPClient).
+        QuotaExhausted: 429 from provider (raised by ProviderHTTPClient).
+        TransientNetworkError: Network failure after retries.
+    """
+    global _resolved_pm25_location_id, _resolved_pm25_location_name  # noqa: PLW0603
+    global _resolved_pm25_sensor_id  # noqa: PLW0603
+    global _resolved_pm10_location_id, _resolved_pm10_sensor_id  # noqa: PLW0603
+
+    # Pass 1: find PM2.5 station (and PM10 if co-located).
+    wire1 = _fetch_locations_wire(lat=lat, lon=lon, api_key=api_key, client=client)
+
+    pm25_result = _scan_for_pm25(wire1.results)
+    if pm25_result is None:
+        logger.warning(
+            "OpenAQ: no PM2.5 sensor found within %dm of lat=%s lon=%s",
+            _SEARCH_RADIUS_METERS,
+            round(lat, 4),
+            round(lon, 4),
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+        return False
+
+    pm25_location, pm25_sensor_id, pm10_sensor_id_coloc = pm25_result
+    _resolved_pm25_location_id = pm25_location.id
+    _resolved_pm25_location_name = pm25_location.name
+    _resolved_pm25_sensor_id = pm25_sensor_id
+
+    if pm10_sensor_id_coloc is not None:
+        # PM10 co-located on the same station — no second query needed.
+        _resolved_pm10_location_id = pm25_location.id
+        _resolved_pm10_sensor_id = pm10_sensor_id_coloc
+        logger.info(
+            "OpenAQ: resolved PM2.5 at station %r (id=%s, sensor=%s), "
+            "PM10 co-located (sensor=%s) for lat=%s lon=%s",
+            pm25_location.name,
+            pm25_location.id,
+            pm25_sensor_id,
+            pm10_sensor_id_coloc,
+            round(lat, 4),
+            round(lon, 4),
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+        return True
+
+    # Pass 2: PM10 not co-located — search same radius for any PM10 station.
+    wire2 = _fetch_locations_wire(lat=lat, lon=lon, api_key=api_key, client=client)
+
+    pm10_result = _scan_for_pm10(wire2.results)
+    if pm10_result is not None:
+        pm10_location, pm10_sensor_id = pm10_result
+        _resolved_pm10_location_id = pm10_location.id
+        _resolved_pm10_sensor_id = pm10_sensor_id
+        logger.info(
+            "OpenAQ: resolved PM2.5 at station %r (id=%s, sensor=%s), "
+            "PM10 at separate station %r (id=%s, sensor=%s) for lat=%s lon=%s",
+            pm25_location.name,
+            pm25_location.id,
+            pm25_sensor_id,
+            pm10_location.name,
+            pm10_location.id,
+            pm10_sensor_id,
+            round(lat, 4),
+            round(lon, 4),
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+    else:
+        logger.info(
+            "OpenAQ: resolved PM2.5 at station %r (id=%s, sensor=%s), "
+            "PM10 not found within %dm radius for lat=%s lon=%s",
+            pm25_location.name,
+            pm25_location.id,
+            pm25_sensor_id,
+            _SEARCH_RADIUS_METERS,
+            round(lat, 4),
+            round(lon, 4),
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -432,17 +544,27 @@ def _wire_to_canonical(
     results: list[_OpenAQLatestResult],
     *,
     location_name: str | None,
+    pm10_override: float | None = None,
 ) -> AQIReading | None:
     """Translate /latest results to canonical AQIReading.
 
-    Scans results[] for pm25 and pm10 entries matching _resolved_sensor_pm25_id
-    and _resolved_sensor_pm10_id. Uses the pm25 result's datetime for observedAt.
+    Scans results[] for pm25 and pm10 entries matching _resolved_pm25_sensor_id
+    and _resolved_pm10_sensor_id.  Uses the pm25 result's datetime for observedAt.
+
+    When pm10_override is provided (PM10 from a separate station), it takes
+    precedence over any PM10 value found in results[].  This allows fetch() to
+    merge values from two separate /latest calls.
+
+    Args:
+        results: /latest result entries from the PM2.5 station.
+        location_name: Station name for aqiLocation (always from PM2.5 station).
+        pm10_override: PM10 concentration from a separate PM10 station, or None.
 
     Returns:
         Canonical AQIReading or None if no PM2.5 value found.
     """
     pm25_value: float | None = None
-    pm10_value: float | None = None
+    pm10_value_coloc: float | None = None
     observed_at: str | None = None
 
     for result in results:
@@ -450,14 +572,21 @@ def _wire_to_canonical(
         is_pm25 = param_name in ("pm25", "pm2_5", "pm2.5")
         is_pm10 = param_name in ("pm10",)
 
-        if is_pm25 and result.sensorsId == _resolved_sensor_pm25_id:
+        if is_pm25 and result.sensorsId == _resolved_pm25_sensor_id:
             if result.value is not None:
                 pm25_value = result.value
             observed_at = _parse_datetime(result.datetime)
 
-        elif is_pm10 and _resolved_sensor_pm10_id is not None and result.sensorsId == _resolved_sensor_pm10_id:
+        elif (
+            is_pm10
+            and _resolved_pm10_sensor_id is not None
+            and result.sensorsId == _resolved_pm10_sensor_id
+            # Only capture co-located PM10 here; separate-station PM10 arrives
+            # via pm10_override so we don't double-assign from stale sensor id.
+            and _resolved_pm10_location_id == _resolved_pm25_location_id
+        ):
             if result.value is not None:
-                pm10_value = result.value
+                pm10_value_coloc = result.value
 
     # If no PM2.5 value, no useful reading.
     if pm25_value is None:
@@ -470,6 +599,9 @@ def _wire_to_canonical(
             extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
         )
         return None
+
+    # pm10_override (from separate station) takes precedence over co-located value.
+    pm10_value = pm10_override if pm10_override is not None else pm10_value_coloc
 
     return AQIReading(
         aqi=None,
@@ -556,10 +688,10 @@ def fetch(
 
     client = http_client or _client_for()
 
-    # Step 1 (first call only): resolve nearest PM2.5 sensor.
+    # Step 1 (first call only): resolve PM2.5 and PM10 sensors.
     # Module-level state is populated once and reused for subsequent calls.
-    if _resolved_location_id is None:
-        found = _resolve_nearest_sensor(lat=lat, lon=lon, api_key=api_key, client=client)
+    if _resolved_pm25_location_id is None:
+        found = _resolve_sensors(lat=lat, lon=lon, api_key=api_key, client=client)
         if not found:
             # No PM2.5 sensor within radius — geographic limitation.
             # Cache sentinel so re-polls within TTL don't hammer the locations endpoint.
@@ -575,9 +707,9 @@ def fetch(
                 domain=DOMAIN,
             )
 
-    # Step 2: fetch latest measurements from resolved location.
-    url = OPENAQ_BASE_URL + OPENAQ_LATEST_PATH_TMPL.format(
-        location_id=_resolved_location_id,
+    # Step 2: fetch latest measurements from the PM2.5 station.
+    url_pm25 = OPENAQ_BASE_URL + OPENAQ_LATEST_PATH_TMPL.format(
+        location_id=_resolved_pm25_location_id,
     )
     headers = {"X-API-Key": api_key}
 
@@ -586,16 +718,16 @@ def fetch(
     # L2 carry-forward: client.get() raises canonical taxonomy with all
     # attributes set.  Do NOT catch and re-raise as a new canonical exception
     # (silently drops retry_after_seconds per 3b-4 audit F1 rule).
-    response = client.get(url, headers=headers)
+    response_pm25 = client.get(url_pm25, headers=headers)
 
     try:
-        wire = _OpenAQLatestResponse.model_validate(response.json())
+        wire_pm25 = _OpenAQLatestResponse.model_validate(response_pm25.json())
     except (ValidationError, ValueError) as exc:
         logger.error(
             "OpenAQ /latest response validation failed: %s. "
             "Response body (first 2000 chars): %.2000s",
             exc,
-            response.text,
+            response_pm25.text,
             extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
         )
         raise ProviderProtocolError(
@@ -604,10 +736,10 @@ def fetch(
             domain=DOMAIN,
         ) from exc
 
-    if not wire.results:
+    if not wire_pm25.results:
         logger.info(
-            "OpenAQ /latest: empty results for location_id=%s lat=%s lon=%s",
-            _resolved_location_id,
+            "OpenAQ /latest: empty results for PM2.5 location_id=%s lat=%s lon=%s",
+            _resolved_pm25_location_id,
             round(lat, 4),
             round(lon, 4),
             extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
@@ -619,16 +751,56 @@ def fetch(
         )
         return None
 
+    # Step 3: if PM10 is on a DIFFERENT station, fetch its latest separately.
+    pm10_override: float | None = None
+    if (
+        _resolved_pm10_location_id is not None
+        and _resolved_pm10_location_id != _resolved_pm25_location_id
+    ):
+        url_pm10 = OPENAQ_BASE_URL + OPENAQ_LATEST_PATH_TMPL.format(
+            location_id=_resolved_pm10_location_id,
+        )
+        _rate_limiter.acquire()
+        # L2 carry-forward: propagate bare — no re-wrap.
+        response_pm10 = client.get(url_pm10, headers=headers)
+        try:
+            wire_pm10 = _OpenAQLatestResponse.model_validate(response_pm10.json())
+        except (ValidationError, ValueError) as exc:
+            logger.error(
+                "OpenAQ /latest (PM10 station) response validation failed: %s. "
+                "Response body (first 2000 chars): %.2000s",
+                exc,
+                response_pm10.text,
+                extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+            )
+            raise ProviderProtocolError(
+                f"OpenAQ /latest (PM10 station) response validation failed: {exc}",
+                provider_id=PROVIDER_ID,
+                domain=DOMAIN,
+            ) from exc
+
+        # Extract PM10 value from the separate station's results.
+        for result in wire_pm10.results:
+            param_name = result.parameter.name.lower().replace(".", "").replace("-", "")
+            if (
+                param_name in ("pm10",)
+                and result.sensorsId == _resolved_pm10_sensor_id
+                and result.value is not None
+            ):
+                pm10_override = result.value
+                break
+
     record = _wire_to_canonical(
-        wire.results,
-        location_name=_resolved_location_name,
+        wire_pm25.results,
+        location_name=_resolved_pm25_location_name,
+        pm10_override=pm10_override,
     )
 
     if record is None:
         # No PM2.5 value in results, or missing datetime.
         logger.info(
             "OpenAQ /latest: no usable PM2.5 reading for location_id=%s lat=%s lon=%s",
-            _resolved_location_id,
+            _resolved_pm25_location_id,
             round(lat, 4),
             round(lon, 4),
             extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
@@ -667,9 +839,11 @@ def _reset_http_client_for_tests() -> None:
 
 def _reset_sensor_state_for_tests() -> None:
     """Reset module-level sensor resolution state. Used in tests only."""
-    global _resolved_location_id, _resolved_location_name  # noqa: PLW0603
-    global _resolved_sensor_pm25_id, _resolved_sensor_pm10_id  # noqa: PLW0603
-    _resolved_location_id = None
-    _resolved_location_name = None
-    _resolved_sensor_pm25_id = None
-    _resolved_sensor_pm10_id = None
+    global _resolved_pm25_location_id, _resolved_pm25_location_name  # noqa: PLW0603
+    global _resolved_pm25_sensor_id  # noqa: PLW0603
+    global _resolved_pm10_location_id, _resolved_pm10_sensor_id  # noqa: PLW0603
+    _resolved_pm25_location_id = None
+    _resolved_pm25_location_name = None
+    _resolved_pm25_sensor_id = None
+    _resolved_pm10_location_id = None
+    _resolved_pm10_sensor_id = None
