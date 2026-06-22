@@ -228,9 +228,45 @@ def _backfill_input_smoother() -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Clear Skies Weather API")
-    parser.add_argument("--tls-cert", type=Path, help="Path to TLS certificate (PEM)")
-    parser.add_argument("--tls-key", type=Path, help="Path to TLS private key (PEM)")
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+
+    # serve subcommand (default when no subcommand given)
+    serve_parser = subparsers.add_parser("serve", help="Start the API server (default)")
+    serve_parser.add_argument(
+        "--tls-cert", type=Path, help="Path to TLS certificate (PEM)"
+    )
+    serve_parser.add_argument(
+        "--tls-key", type=Path, help="Path to TLS private key (PEM)"
+    )
+
+    # bootstrap subcommand — seeds auto-calibration from OpenAQ historical data.
+    boot_parser = subparsers.add_parser(
+        "bootstrap",
+        help="Import PM2.5 history from OpenAQ to seed calibration baseline (ADR-068 T8.1)",
+    )
+    boot_parser.add_argument(
+        "--years",
+        type=int,
+        default=2,
+        help="Years of PM2.5 history to pull from OpenAQ (default: 2)",
+    )
+    boot_parser.add_argument(
+        "--max-distance-km",
+        type=float,
+        default=25.0,
+        help="Maximum distance to the PM2.5 monitor in km (default: 25.0)",
+    )
+
+    args = parser.parse_args()
+
+    # When invoked with no subcommand, default to "serve" with no TLS overrides
+    # so that existing invocations (python -m weewx_clearskies_api) keep working.
+    if args.command is None:
+        args.command = "serve"
+        args.tls_cert = None
+        args.tls_key = None
+
+    return args
 
 
 def _is_loopback(host: str) -> bool:
@@ -549,6 +585,193 @@ def _wire_providers_from_config(settings: Settings) -> None:
     wire_providers(declarations)
 
 
+def _run_bootstrap(args: argparse.Namespace) -> None:
+    """Execute the OpenAQ bootstrap subcommand.
+
+    Startup sequence:
+      1. Bootstrap logging (INFO).
+      2. Load settings (api.conf → DB connection info, station lat/lon/alt).
+      3. Build the SQLAlchemy engine (read-only, no write-probe).
+      4. Load station metadata from weewx.conf.
+      5. Find nearest PM2.5 sensor via OpenAQ.
+      6. Fetch historical PM2.5 data.
+      7. Match against weewx archive and seed calibration samples.
+      8. Print human-readable summary and exit.
+
+    Args:
+        args: Parsed CLI args from _parse_args() with command="bootstrap".
+              Relevant fields: args.years, args.max_distance_km.
+    """
+    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+    from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
+    from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
+        fetch_historical_pm25,
+        find_nearest_pm25_sensor,
+    )
+    from weewx_clearskies_api.services.station import (  # noqa: PLC0415
+        get_station_info,
+        load_station_metadata,
+    )
+    from weewx_clearskies_api.services.weewx_conf import (  # noqa: PLC0415
+        WeewxConfLoadError,
+        load_weewx_conf,
+    )
+
+    setup_logging("INFO")
+    settings = load_settings()
+
+    if not settings.configured:
+        print(
+            "ERROR: No api.conf found (setup mode). "
+            "Complete the setup wizard before running bootstrap."
+        )
+        sys.exit(1)
+
+    # Build read-only DB engine.
+    engine = build_engine(settings.database)
+
+    # Load station metadata so we have lat/lon/alt.
+    try:
+        weewx_cfg = load_weewx_conf(settings.weewx.config_path)
+    except WeewxConfLoadError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    # Derive target unit string for station metadata (same logic as main()).
+    _temp_target = (
+        settings.units.groups.get("group_temperature", "")
+        if settings.units.groups
+        else ""
+    )
+    if _temp_target == "degree_F":
+        _target_unit_str = "US"
+    elif _temp_target == "degree_C":
+        _rain_target = (
+            settings.units.groups.get("group_rain", "")
+            if settings.units.groups
+            else ""
+        )
+        _target_unit_str = "METRICWX" if _rain_target == "mm" else "METRIC"
+    else:
+        _target_unit_str = "US"
+
+    try:
+        load_station_metadata(
+            cfg=weewx_cfg,
+            api_station_id=settings.station.station_id,
+            api_timezone=settings.station.timezone,
+            unit_system=_target_unit_str,
+            api_default_locale=settings.station.default_locale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR loading station metadata: {exc}")
+        sys.exit(1)
+
+    station_info = get_station_info()
+    lat = station_info.latitude
+    lon = station_info.longitude
+    alt_m = station_info.altitude
+
+    print("OpenAQ bootstrap")
+
+    # Step 1: Find nearest PM2.5 monitor.
+    years = args.years
+    max_dist_km = args.max_distance_km
+
+    print(f"  Station location: ({lat:.4f}, {lon:.4f}), altitude {alt_m:.0f} m")
+    print(f"  Searching for nearest PM2.5 monitor within {max_dist_km:.0f} km...")
+    try:
+        sensor_id, monitor_lat, monitor_lon, location_name = find_nearest_pm25_sensor(lat, lon)
+    except RuntimeError as exc:
+        print(f"  ERROR: {exc}")
+        sys.exit(1)
+
+    # Compute monitor distance for display.
+    dist_km = _haversine_km(lat, lon, monitor_lat, monitor_lon)
+    print(f'  Nearest PM2.5 monitor: "{location_name}" ({dist_km:.1f} km away)')
+
+    # Step 2: Fetch historical data.
+    now_utc = datetime.now(UTC)
+    date_to = now_utc.date().isoformat()
+    date_from = (now_utc - timedelta(days=years * 365)).date().isoformat()
+
+    print(f"  Pulling {years} year(s) of history ({date_from} to {date_to})...")
+    try:
+        pm_records = fetch_historical_pm25(
+            sensor_id=sensor_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except RuntimeError as exc:
+        print(f"  ERROR: {exc}")
+        sys.exit(1)
+
+    print(f"  Retrieved {len(pm_records):,} PM2.5 records")
+
+    if not pm_records:
+        print("  No PM2.5 records found. Bootstrap cannot proceed.")
+        sys.exit(1)
+
+    # Step 3: Match against archive and seed calibration.
+    print("  Matching against weewx archive...")
+    try:
+        summary = run_bootstrap(
+            engine=engine,
+            pm_records=pm_records,
+            station_lat=lat,
+            station_lon=lon,
+            station_alt_m=alt_m,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  ERROR during bootstrap: {exc}")
+        sys.exit(1)
+
+    # Step 4: Print summary.
+    print("  Results:")
+    print(f"    Archive matched:          {summary['archive_matched']:>8,}")
+    print(f"    Clean-sky samples:        {summary['clean_sky_samples']:>8,}")
+    print(f"    Skipped (no archive):     {summary['skipped_no_archive']:>8,}")
+    print(f"    Skipped (no radiation):   {summary['skipped_no_radiation']:>8,}")
+    print(f"    Skipped (maxSolar low):   {summary['skipped_max_solar_low']:>8,}")
+    print(f"    Skipped (rain):           {summary['skipped_rain']:>8,}")
+    print(f"    Skipped (Kcs low):        {summary['skipped_kcs_low']:>8,}")
+    print(f"    Skipped (PM too high):    {summary['skipped_pm_high']:>8,}")
+
+    state = summary["calibration_state"]
+    baseline = summary["baseline_kcs"]
+    n = summary["clean_sky_samples"]
+
+    if baseline is not None:
+        print(
+            f"  Calibration state: {state} "
+            f"({n} samples, baseline Kcs = {baseline:.3f})"
+        )
+    else:
+        print(
+            f"  Calibration state: {state} "
+            f"({n} samples — not enough for baseline, need 22+)"
+        )
+
+    print(f"  Saved to {summary['persist_path']}")
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Compute great-circle distance between two points in km (Haversine formula)."""
+    import math  # noqa: PLC0415
+
+    r = 6371.0  # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return r * 2 * math.asin(math.sqrt(a))
+
+
 def main() -> None:
     """Main entry point.
 
@@ -582,6 +805,12 @@ def main() -> None:
     """
     # Step 0: Parse CLI args before logging so --help works cleanly.
     args = _parse_args()
+
+    # Dispatch: if the operator ran "clearskies-api bootstrap ...", run the
+    # bootstrap workflow and exit without starting the server.
+    if args.command == "bootstrap":
+        _run_bootstrap(args)
+        return
 
     # Step 1: Bootstrap logging before anything else so config errors appear
     # as JSON (ADR-029).
