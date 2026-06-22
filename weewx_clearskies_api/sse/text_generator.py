@@ -11,16 +11,63 @@ Both public functions take an Observation instance (from observation_model)
 and return a string or None when insufficient data is available.
 
 GFE threshold tables are defined in US units (mph, °F) per AWIPS-II GFE
-text formatter conventions.  Rendered output is currently US units only.
+text formatter conventions.  Rendered output is converted to the operator's
+configured unit system (US / Metric / MetricWX) at the point of output
+rendering only; all Observation values and internal comparisons remain in
+US units throughout.
 
-TODO: Unit conversion to operator's configured system (Metric, MetricWX)
-is a future task.  When implemented, the GFE thresholds in mph/°F serve
-as the reference; converted values are rendered in operator units throughout.
+Unit system configuration:
+  Call configure(unit_system) at startup (from __main__.py) to set the
+  rendering unit system.  Valid values: "US", "METRIC", "METRICWX".
+  Default is "US" (no conversion).
 """
 
 from __future__ import annotations
 
 from weewx_clearskies_api.sse.observation_model import Observation
+
+# ---------------------------------------------------------------------------
+# Unit system configuration
+# ---------------------------------------------------------------------------
+
+_unit_system: str = "US"
+
+
+def configure(unit_system: str) -> None:
+    """Set the rendering unit system for all text output.
+
+    Must be called at startup before any text generation occurs.
+    Valid values: "US", "METRIC", "METRICWX".
+
+    Args:
+        unit_system: The operator's configured unit system string.
+            "US"       — °F, mph (no conversion)
+            "METRIC"   — °C, km/h
+            "METRICWX" — °C, m/s
+    """
+    global _unit_system  # noqa: PLW0603
+    _unit_system = unit_system
+
+
+# ---------------------------------------------------------------------------
+# Unit conversion helpers
+# ---------------------------------------------------------------------------
+
+
+def _f_to_c(f: float) -> float:
+    """Convert Fahrenheit to Celsius."""
+    return (f - 32.0) * 5.0 / 9.0
+
+
+def _mph_to_kmh(mph: float) -> float:
+    """Convert miles per hour to kilometres per hour."""
+    return mph * 1.60934
+
+
+def _mph_to_ms(mph: float) -> float:
+    """Convert miles per hour to metres per second."""
+    return mph * 0.44704
+
 
 # ---------------------------------------------------------------------------
 # GFE sky coverage bucket thresholds (cloud cover %)
@@ -155,40 +202,61 @@ def _present_weather_sentence(obs: Observation) -> str | None:
 def _temperature_sentence_standard(obs: Observation) -> str | None:
     """Build the temperature sentence for standard level.
 
-    Format: "Temperature near {T}."
-    T is rounded to the nearest integer (°F).
+    Format:
+      US:              "Temperature near {T}°F."
+      METRIC/METRICWX: "Temperature near {T}°C."
+
+    T is rounded to the nearest integer in the operator's configured unit.
+    The unit label is always present so output is unambiguous regardless of
+    which system is in use.
 
     Returns None when temperature is not available.
     """
     if obs.temperature is None:
         return None
+    if _unit_system in ("METRIC", "METRICWX"):
+        t = round(_f_to_c(obs.temperature))
+        return f"Temperature near {t}°C."
     t = round(obs.temperature)
-    return f"Temperature near {t}."
+    return f"Temperature near {t}°F."
 
 
 def _wind_sentence_standard(obs: Observation) -> str | None:
     """Build the wind sentence for standard level.
 
-    Thresholds (mph, GFE):
-      < 5  → "Calm winds."
-      >= 5 → "{Direction} winds around {speed} mph."
+    Calm threshold (GFE): < 5 mph — compared in US units (input is always mph).
+
+    Output by unit system:
+      US:       "{Direction} winds around {speed} mph."
+      METRIC:   "{Direction} winds around {speed} km/h."
+      METRICWX: "{Direction} winds around {speed} m/s."
 
     Returns None when wind data is not available.
     """
     if obs.wind_speed is None:
         return None
 
-    speed = obs.wind_speed
+    speed_mph = obs.wind_speed
 
-    if speed < 5.0:
+    # Calm threshold comparison is always in mph (Observation values are US units).
+    if speed_mph < 5.0:
         return "Calm winds."
 
     direction = _wind_direction_label(obs.wind_direction)
-    speed_int = round(speed)
+
+    if _unit_system == "METRIC":
+        speed_int = round(_mph_to_kmh(speed_mph))
+        unit_label = "km/h"
+    elif _unit_system == "METRICWX":
+        speed_int = round(_mph_to_ms(speed_mph))
+        unit_label = "m/s"
+    else:
+        speed_int = round(speed_mph)
+        unit_label = "mph"
 
     if direction is not None:
-        return f"{direction} winds around {speed_int} mph."
-    return f"Winds around {speed_int} mph."
+        return f"{direction} winds around {speed_int} {unit_label}."
+    return f"Winds around {speed_int} {unit_label}."
 
 
 def _sky_narrative_verbose(obs: Observation) -> str | None:
@@ -243,10 +311,15 @@ def _sky_narrative_verbose(obs: Observation) -> str | None:
         sky_clause = None
 
     if temp is not None:
-        t = round(temp)
+        if _unit_system in ("METRIC", "METRICWX"):
+            t = round(_f_to_c(temp))
+            unit_label = "°C"
+        else:
+            t = round(temp)
+            unit_label = "°F"
         if sky_clause is not None:
-            return f"Currently {t}°F {sky_clause}."
-        return f"Currently {t}°F."
+            return f"Currently {t}{unit_label} {sky_clause}."
+        return f"Currently {t}{unit_label}."
 
     if sky_clause is not None:
         return sky_clause.capitalize() + "."
@@ -257,11 +330,17 @@ def _sky_narrative_verbose(obs: Observation) -> str | None:
 def _dewpoint_sentence_verbose(obs: Observation) -> str | None:
     """Build the dew point sentence for verbose level.
 
-    Format: "Dew point {Td}°F."
+    Format:
+      US:              "Dew point {Td}°F."
+      METRIC/METRICWX: "Dew point {Td}°C."
+
     Returns None when dewpoint is not available.
     """
     if obs.dewpoint is None:
         return None
+    if _unit_system in ("METRIC", "METRICWX"):
+        td = round(_f_to_c(obs.dewpoint))
+        return f"Dew point {td}°C."
     td = round(obs.dewpoint)
     return f"Dew point {td}°F."
 
@@ -269,35 +348,50 @@ def _dewpoint_sentence_verbose(obs: Observation) -> str | None:
 def _wind_sentence_verbose(obs: Observation) -> str | None:
     """Build the wind sentence for verbose level.
 
-    Thresholds (mph, GFE):
-      < 5  → "Calm winds."
-      >= 5 → "{Direction} winds around {speed} mph."
-             with optional "with gusts up to {gust} mph."
-             when gust > sustained + 10 mph
+    Calm threshold (GFE): < 5 mph — compared in US units (input is always mph).
+    Gust threshold: gust > sustained + 10 mph — compared in US units.
+
+    Output by unit system:
+      US:       "{Direction} winds around {speed} mph [with gusts up to {gust} mph]."
+      METRIC:   "{Direction} winds around {speed} km/h [with gusts up to {gust} km/h]."
+      METRICWX: "{Direction} winds around {speed} m/s [with gusts up to {gust} m/s]."
 
     Returns None when wind data is not available.
     """
     if obs.wind_speed is None:
         return None
 
-    speed = obs.wind_speed
+    speed_mph = obs.wind_speed
 
-    if speed < 5.0:
+    # Calm threshold comparison is always in mph (Observation values are US units).
+    if speed_mph < 5.0:
         return "Calm winds."
 
     direction = _wind_direction_label(obs.wind_direction)
-    speed_int = round(speed)
+
+    if _unit_system == "METRIC":
+        speed_int = round(_mph_to_kmh(speed_mph))
+        unit_label = "km/h"
+        gust_convert = _mph_to_kmh
+    elif _unit_system == "METRICWX":
+        speed_int = round(_mph_to_ms(speed_mph))
+        unit_label = "m/s"
+        gust_convert = _mph_to_ms
+    else:
+        speed_int = round(speed_mph)
+        unit_label = "mph"
+        gust_convert = lambda x: x  # noqa: E731
 
     # Build base wind phrase
     if direction is not None:
-        base = f"{direction} winds around {speed_int} mph"
+        base = f"{direction} winds around {speed_int} {unit_label}"
     else:
-        base = f"Winds around {speed_int} mph"
+        base = f"Winds around {speed_int} {unit_label}"
 
-    # Append gust qualifier when significant
-    if obs.wind_gust is not None and obs.wind_gust > speed + 10.0:
-        gust_int = round(obs.wind_gust)
-        return f"{base} with gusts up to {gust_int} mph."
+    # Append gust qualifier when significant (threshold comparison in mph).
+    if obs.wind_gust is not None and obs.wind_gust > speed_mph + 10.0:
+        gust_int = round(gust_convert(obs.wind_gust))
+        return f"{base} with gusts up to {gust_int} {unit_label}."
 
     return f"{base}."
 
