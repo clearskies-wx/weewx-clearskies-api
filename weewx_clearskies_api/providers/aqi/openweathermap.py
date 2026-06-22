@@ -77,6 +77,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import warnings
 from typing import List
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -93,6 +94,20 @@ from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+warnings.warn(
+    "OpenWeatherMap AQI provider is deprecated (ADR-066). "
+    "OWM returns SILAM model predictions, not observed PM data. "
+    "Migrate to Aeris or AirNow for haze-eligible AQI. "
+    "This module will be removed in the next major version.",
+    DeprecationWarning,
+    stacklevel=1,
+)
+logger.warning(
+    "OpenWeatherMap AQI provider is DEPRECATED (ADR-066). "
+    "Returns model predictions, not observed measurements. "
+    "Not eligible for haze confirmation. Migrate to Aeris or AirNow.",
+)
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -153,8 +168,12 @@ CAPABILITY = ProviderCapability(
         "aqiLocation is PARTIAL-DOMAIN (no location label on wire at any tier). "
         "pollutantNO (no) and pollutantNH3 (nh3) passed through as µg/m³ per ADR-059 "
         "(previously dropped — ADR-059 stops dropping pollutant data). "
-        "Gas pollutants (O3, NO2, SO2, CO) passed through as µg/m³ (raw provider values)."
+        "Gas pollutants (O3, NO2, SO2, CO) passed through as µg/m³ (raw provider values). "
+        "DEPRECATED (ADR-066): OWM AQI uses the SILAM atmospheric dispersion model — "
+        "returns predicted PM, not observed measurements. Not eligible for haze "
+        "confirmation. Will be removed in next major version. Migrate to Aeris or AirNow."
     ),
+    is_observed_source=False,  # ADR-066: SILAM model output, not observed measurements
 )
 
 # ---------------------------------------------------------------------------

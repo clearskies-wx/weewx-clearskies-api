@@ -191,8 +191,12 @@ CAPABILITY = ProviderCapability(
         "aqiMainPollutant derived client-side from per-pollutant sub-AQIs. "
         "pollutantNO (nitrogen_monoxide) is global. "
         "pollutantNH3 (ammonia) is Europe-only — null outside Europe. "
-        "Per-gas concentrations passed through as µg/m³ (raw provider values)."
+        "Per-gas concentrations passed through as µg/m³ (raw provider values). "
+        "MODEL-BASED DATA: Open-Meteo returns CAMS atmospheric composition model "
+        "forecasts, not observed measurements. PM2.5/PM10 from this provider are NOT "
+        "eligible for haze confirmation (ADR-066)."
     ),
+    is_observed_source=False,  # ADR-066: CAMS model output, not observed measurements
 )
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,8 @@ class ProviderCapability:
     wms_layer_name: str | None = None         # WMS layer name
     tile_content_type: str | None = None      # "image/png" for radar providers
     iframe_url: str | None = None             # operator-supplied iframe URL (iframe provider only)
+    # ADR-066: observed vs model data classification for AQI providers
+    is_observed_source: bool = True           # True for observed-data providers; False for model-based (Open-Meteo, OWM)
 
 
 # ---------------------------------------------------------------------------
