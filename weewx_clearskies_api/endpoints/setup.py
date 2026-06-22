@@ -355,6 +355,9 @@ class ApplyRequest(BaseModel):
     #: [[labels]], [[ordinates]].  This is the single unit authority (T2A.5).
     #: Old wizard versions that do not send this field are unaffected (None → skip).
     units: UnitsApplyConfig | None = None
+    #: OpenAQ API key for calibration bootstrap and AQI provider.  Written to
+    #: secrets.env as WEEWX_CLEARSKIES_OPENAQ_API_KEY.
+    openaq_api_key: str | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -456,6 +459,7 @@ class CurrentConfigResponse(BaseModel):
     units: CurrentConfigUnitsSection | None = None
     column_mapping: dict[str, str] | None = None
     column_units: dict[str, str] | None = None
+    openaq_api_key: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1139,10 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         if body.proxy_secret:
             existing["WEEWX_CLEARSKIES_PROXY_SECRET"] = body.proxy_secret
 
+        # OpenAQ API key (calibration bootstrap + AQI provider).
+        if body.openaq_api_key:
+            existing["WEEWX_CLEARSKIES_OPENAQ_API_KEY"] = body.openaq_api_key
+
         _write_secrets_env(secrets_path, existing)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write secrets.env during setup apply: %s", type(exc).__name__)
@@ -1410,6 +1418,9 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         if isinstance(cu_section, dict) and cu_section:
             col_units = {str(k): str(v) for k, v in cu_section.items() if v}
 
+    # --- OpenAQ API key (bootstrap + AQI provider) ---
+    openaq_key = secrets.get("WEEWX_CLEARSKIES_OPENAQ_API_KEY") or None
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -1420,6 +1431,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         units=units_config,
         column_mapping=col_mapping,
         column_units=col_units,
+        openaq_api_key=openaq_key,
     )
 
 
