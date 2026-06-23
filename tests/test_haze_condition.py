@@ -719,10 +719,7 @@ class TestSkyLabelEligibility:
         "Sunny",
         "Mostly Clear",
         "Mostly Sunny",
-        "Scattered Clouds",
         "Partly Cloudy",
-        "Clear, Scattered Clouds",
-        "Mostly Clear, Scattered Clouds",
     ])
     def test_eligible_sky_label_allows_detection(self, sky_label: str) -> None:
         """Sky labels with eligible substrings must pass the sky gate."""

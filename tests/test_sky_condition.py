@@ -239,113 +239,131 @@ def test_cloud_enhancement_kcs_above_one():
     result = sky_condition.classify()
     valid_labels = {
         "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
-        "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
         "Overcast", "Heavy Overcast", None,
     }
     assert result in valid_labels, f"Unexpected return value with Kcs > 1.0: {result!r}"
 
 
 # ---------------------------------------------------------------------------
-# Group 2: Classification — one test per CAELUS class
+# Group 2: Classification — one test per Kv-first branch (ADR-073)
 # ---------------------------------------------------------------------------
 
 
-def test_cloudless_classification():
-    """Stable constant high GHI for 30 minutes classifies as 'Clear'.
+def test_uniform_clear():
+    """Constant high GHI → uniform branch → "Clear".
 
-    GHI=800, msr=900 → Kcs ≈ 0.889 ∈ [0.85, 1.15], Km ≈ 0.889 > 0.6,
-    Kv = 0 < 0.03, msr=900 > 200 (SZA75 proxy for midday).
-    30 minutes of classify() calls builds 27+ history entries spanning
-    > 900 s, satisfying the full 15-minute stability window.
+    GHI=800, msr=900 → Km ≈ 0.889 > 0.85, Kcs ≈ 0.889 > 0.80,
+    Kv ≈ 0 < 0.05 (uniform). → "Clear".
     """
     _feed_constant_ghi(ghi=800.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
-    assert result == "Clear", f"Expected 'Clear' for CLOUDLESS conditions, got {result!r}"
+    assert result == "Clear", f"Expected 'Clear' for uniform high GHI, got {result!r}"
 
 
-def test_overcast_classification():
-    """Constant low GHI for 30 minutes classifies in the OVERCAST zone.
+def test_uniform_overcast():
+    """Constant moderate GHI → uniform branch → "Overcast".
 
-    GHI=100, msr=900 → Km ≈ 0.111 < 0.3 (_OVERCAST_MAX_KM), Kv = 0 < 0.10.
-    OVERCAST branch fires.  Phase 1 sub-splits OVERCAST by Km×Kv:
-      Km < 0.15, Kv < _CLOUDLESS_MAX_KV (0.03) → "Heavy Overcast".
+    GHI=500, msr=900 → Km ≈ 0.556, Kv ≈ 0 < 0.05 (uniform).
+    Km > 0.35 → "Overcast" (not Heavy Overcast).
+    """
+    _feed_constant_ghi(ghi=500.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    assert result == "Overcast", f"Expected 'Overcast' for uniform moderate GHI, got {result!r}"
+
+
+def test_uniform_heavy_overcast():
+    """Constant very low GHI → uniform branch → "Heavy Overcast".
+
+    GHI=100, msr=900 → Km ≈ 0.111 ≤ 0.35, Kv ≈ 0 < 0.05 (uniform).
+    → "Heavy Overcast".
     """
     _feed_constant_ghi(ghi=100.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
-    overcast_labels = {"Cloudy", "Overcast", "Heavy Overcast"}
-    assert result in overcast_labels, (
-        f"Expected an OVERCAST-zone label for constant low GHI, got {result!r}"
+    assert result == "Heavy Overcast", (
+        f"Expected 'Heavy Overcast' for uniform very low GHI, got {result!r}"
     )
 
 
-def test_thin_clouds_classification():
-    """Small GHI oscillation around a high mean classifies as 'Mostly Clear'.
+def test_variable_mostly_clear():
+    """High-mean alternating GHI → variable branch → "Mostly Clear".
 
-    Alternating GHI between 501.5 and 498.5 W/m², msr=900.
-    Mean = 500 W/m², deviation amplitude = 1.5 W/m².
-    Kv ≈ 1.5 / 30 = 0.050 ∈ [0.03, 0.08).
-    Km ≈ 500 / 900 ≈ 0.556 > 0.5.
-    → THIN_CLOUDS → 'Mostly Clear'.
+    Alternating GHI 850/700, msr=900. Mean ≈ 775, Km ≈ 0.861 > 0.85.
+    Alternation produces Kv >> 0.05 (variable). → "Mostly Clear".
     """
-    _feed_alternating_ghi(ghi_high=501.5, ghi_low=498.5, msr=900.0, minutes=30)
+    _feed_alternating_ghi(ghi_high=850.0, ghi_low=700.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
     assert result == "Mostly Clear", (
-        f"Expected 'Mostly Clear' for THIN_CLOUDS conditions, got {result!r}"
+        f"Expected 'Mostly Clear' for variable high-mean GHI, got {result!r}"
     )
 
 
-def test_thick_clouds_classification():
-    """Small GHI oscillation around a moderate-low mean classifies as 'Mostly Cloudy'.
+def test_variable_partly_cloudy():
+    """Mid-high mean alternating GHI → variable branch → "Partly Cloudy".
 
-    Alternating GHI between 316.5 and 313.5 W/m², msr=900.
-    Mean = 315 W/m², deviation amplitude = 1.5 W/m².
-    Kv ≈ 1.5 / 30 = 0.050 ∈ [0.04, 0.16).
-    Km ≈ 315 / 900 ≈ 0.350, in (0.3, 0.4) — OVERCAST excluded (Km > 0.3).
-    → THICK_CLOUDS → 'Mostly Cloudy'.
-    """
-    _feed_alternating_ghi(ghi_high=316.5, ghi_low=313.5, msr=900.0, minutes=30)
-    result = sky_condition.classify()
-    assert result == "Mostly Cloudy", (
-        f"Expected 'Mostly Cloudy' for THICK_CLOUDS conditions, got {result!r}"
-    )
-
-
-def test_scatter_clouds_classification():
-    """Large GHI oscillation around a mid-range mean falls to SCATTER_CLOUDS.
-
-    Alternating GHI between 700 and 470 W/m², msr=900.
-    Mean ≈ 585 W/m², Km ≈ 0.65 ∈ (0.52, 0.85).  Deviation amplitude = 115 W/m².
-    Kv elevated — outside THIN_CLOUDS and THICK_CLOUDS.
-    Falls through to SCATTER_CLOUDS; K-C sub-split: 0.52 < Km < 0.85 → 'Partly Cloudy'.
-
-    Thresholds from Kasten-Czeplak (1980): Km 0.52 ≈ 7 oktas (BKN),
-    Km 0.85 ≈ 4 oktas (SCT).  Km 0.65 ≈ 6 oktas (BKN) = "Partly Cloudy".
+    Alternating GHI 700/470, msr=900. Mean ≈ 585, Km ≈ 0.65.
+    0.60 < 0.65 ≤ 0.85. Kv >> 0.05 (variable). → "Partly Cloudy".
     """
     _feed_alternating_ghi(ghi_high=700.0, ghi_low=470.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
     assert result == "Partly Cloudy", (
-        f"Expected 'Partly Cloudy' for SCATTER_CLOUDS conditions, got {result!r}"
+        f"Expected 'Partly Cloudy' for variable mid-high mean, got {result!r}"
     )
 
 
-def test_cloud_enhancement_classification():
-    """High constant GHI (above msr) triggers CLOUD_ENHANCEMENT → 'Clear'.
+def test_variable_mostly_cloudy():
+    """Mid-low mean alternating GHI → variable branch → "Mostly Cloudy".
 
-    GHI=960 W/m², msr=900 — GHI consistently exceeds msr (cloud-edge focusing).
-    Kcs = 960/900 ≈ 1.067 > 1.06 (_CLOUDEN_MIN_KCS).
-    Constant GHI → Kv = 0 — does NOT satisfy CLOUD_ENHANCEMENT (needs Kv > 0.20).
-    Falls through: Km ≈ 1.067 > 0.6, Kcs ∈ [0.85, 1.15] → CLOUDLESS → 'Clear'.
+    Alternating GHI 500/350, msr=900. Mean ≈ 425, Km ≈ 0.472.
+    0.40 < 0.472 ≤ 0.60. Kv >> 0.05 (variable). → "Mostly Cloudy".
+    """
+    _feed_alternating_ghi(ghi_high=500.0, ghi_low=350.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    assert result == "Mostly Cloudy", (
+        f"Expected 'Mostly Cloudy' for variable mid-low mean, got {result!r}"
+    )
 
-    Note: CLOUD_ENHANCEMENT requires both Kcs > 1.06 AND high Kv/Kvf (rapid
-    transits with cloud edges).  The Phase 1 implementation maps CLOUD_ENHANCEMENT
-    to 'Clear' (sun is definitively visible during enhancement events).
-    This test validates that GHI slightly above msr with zero variability
-    classifies as 'Clear' and does not raise.
+
+def test_variable_cloudy():
+    """Low mean alternating GHI → variable branch → "Cloudy".
+
+    Alternating GHI 400/200, msr=900. Mean ≈ 300, Km ≈ 0.333.
+    Km ≤ 0.40. Kv >> 0.05 (variable). → "Cloudy".
+    """
+    _feed_alternating_ghi(ghi_high=400.0, ghi_low=200.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    assert result == "Cloudy", (
+        f"Expected 'Cloudy' for variable low mean, got {result!r}"
+    )
+
+
+def test_cloud_enhancement():
+    """Constant GHI above msr with zero variability → uniform "Clear".
+
+    GHI=960, msr=900 → Kcs ≈ 1.067 > 1.06. But Kv ≈ 0 < 0.20.
+    Cloud enhancement requires BOTH Kcs > 1.06 AND Kv > 0.20.
+    Constant data fails the Kv gate → falls to uniform branch.
+    Km ≈ 1.067 > 0.85, Kcs > 0.80 → "Clear".
     """
     _feed_constant_ghi(ghi=960.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
     assert result == "Clear", (
-        f"Expected 'Clear' for constant GHI>msr (Kcs>1 CLOUDLESS path), got {result!r}"
+        f"Expected 'Clear' for constant GHI>msr (fails enhancement Kv gate), got {result!r}"
+    )
+
+
+def test_marine_layer_classifies_overcast():
+    """Motivating scenario for the Kv-first redesign (ADR-073).
+
+    Marine layer: uniform coverage, moderate transmittance.
+    GHI=550, msr=900 → Km ≈ 0.611, Kv ≈ 0 < 0.05 (uniform).
+    Old CAELUS tree: Km 0.611 > 0.3 (not OVERCAST), falls to
+    SCATTER_CLOUDS → "Mostly Cloudy" (WRONG).
+    New Kv-first tree: Kv < 0.05 (uniform), Km > 0.35 → "Overcast" (CORRECT).
+    """
+    _feed_constant_ghi(ghi=550.0, msr=900.0, minutes=30)
+    result = sky_condition.classify()
+    assert result == "Overcast", (
+        f"Marine layer at Km~0.6 should be 'Overcast', got {result!r}"
     )
 
 
@@ -686,7 +704,6 @@ def test_kcs_clamped_at_max():
     sky_condition.reset()
     valid_labels = {
         "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
-        "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
         "Overcast", "Heavy Overcast", None,
     }
     for minute in range(30):
@@ -968,7 +985,6 @@ def test_mirroring_disabled_when_no_station_coords():
     _feed_constant_ghi(ghi=800.0, msr=900.0, minutes=30)
     result = sky_condition.classify()
     valid_labels = {"Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
-                    "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
                     "Overcast", "Heavy Overcast"}
     assert result is not None, "classify() must return a label even without station coords"
     assert result in valid_labels, f"Unexpected label without coords: {result!r}"
@@ -1000,7 +1016,6 @@ def test_mirroring_does_not_crash_with_insufficient_data():
     # Must not raise; return value is None or a label.
     result = sky_condition.classify()
     valid_labels = {"Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
-                    "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
                     "Overcast", "Heavy Overcast", None}
     assert result in valid_labels, f"Unexpected value with insufficient data: {result!r}"
 
@@ -1252,20 +1267,11 @@ def test_sza_guard_returns_none_below_threshold_on_cold_start():
 # ---------------------------------------------------------------------------
 
 
-def test_all_six_caelus_classes_still_produce_labels():
-    """All six CAELUS classes produce non-None labels when station coords configured.
+def test_all_kv_first_branches_produce_labels():
+    """All Kv-first branches produce non-None labels with station coords.
 
-    Mirrors the individual classification tests in Group 2, but with station
-    coords active.  Validates that configure(lat/lon/alt) does not break any
-    existing classification path.
-
-    Expected mappings (same as without coords for midday data, Phase 1 labels):
-      CLOUDLESS          → "Clear"
-      CLOUD_ENHANCEMENT  → "Clear" (sun visible; Phase 1 changed from "Partly Cloudy")
-      THIN_CLOUDS        → "Mostly Clear"
-      THICK_CLOUDS       → "Mostly Cloudy"
-      SCATTER_CLOUDS     → "Partly Cloudy" (stable Km ≈ 0.45 via 600/210 alternating)
-      OVERCAST           → OVERCAST-zone label ("Cloudy"/"Overcast"/"Heavy Overcast")
+    Validates that configure(lat/lon/alt) does not break any classification
+    path. Covers all 7 labels plus the cloud enhancement path.
     """
     _configure_nyc()
     if not _skyfield_available():
@@ -1273,52 +1279,46 @@ def test_all_six_caelus_classes_still_produce_labels():
 
     valid_labels = {
         "Clear", "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy",
-        "Clear, Scattered Clouds", "Mostly Clear, Scattered Clouds",
         "Overcast", "Heavy Overcast",
     }
 
     cases = [
-        # (description, feed_fn_args)
-        ("CLOUDLESS",
+        # (description, feed_fn, feed_args)
+        ("uniform clear",
          dict(ghi=800.0, msr=900.0, minutes=30)),
-        ("OVERCAST",
+        ("uniform overcast",
+         dict(ghi=500.0, msr=900.0, minutes=30)),
+        ("uniform heavy overcast",
          dict(ghi=100.0, msr=900.0, minutes=30)),
-        ("THIN_CLOUDS — Km>0.5, Kv∈[0.03,0.08)",
-         dict(ghi=501.5, msr=900.0, minutes=30)),   # fed as alternating below
-        ("THICK_CLOUDS — Km~0.35, Kv∈[0.04,0.16)",
-         dict(ghi=316.5, msr=900.0, minutes=30)),
-        ("SCATTER_CLOUDS — high variability, Km~0.5",
-         dict(ghi=600.0, msr=900.0, minutes=30)),
+    ]
+    alternating_cases = [
+        ("variable mostly clear",
+         dict(ghi_high=850.0, ghi_low=700.0, msr=900.0, minutes=30)),
+        ("variable partly cloudy",
+         dict(ghi_high=700.0, ghi_low=470.0, msr=900.0, minutes=30)),
+        ("variable mostly cloudy",
+         dict(ghi_high=500.0, ghi_low=350.0, msr=900.0, minutes=30)),
+        ("variable cloudy",
+         dict(ghi_high=400.0, ghi_low=200.0, msr=900.0, minutes=30)),
     ]
 
     for desc, kwargs in cases:
         sky_condition.reset()
         _configure_nyc()
-        _feed_constant_ghi(ghi=kwargs["ghi"], msr=kwargs["msr"], minutes=kwargs["minutes"])
+        _feed_constant_ghi(**kwargs)
         result = sky_condition.classify()
-        assert result is not None, f"{desc}: classify() returned None with station coords"
         assert result in valid_labels, (
-            f"{desc}: returned unexpected label {result!r}"
+            f"{desc}: expected a valid label, got {result!r}"
         )
 
-    # THIN_CLOUDS: alternating ±1.5 W/m² around 500
-    sky_condition.reset()
-    _configure_nyc()
-    _feed_alternating_ghi(ghi_high=501.5, ghi_low=498.5, msr=900.0, minutes=30)
-    result_thin = sky_condition.classify()
-    assert result_thin is not None, "THIN_CLOUDS: classify() returned None with station coords"
-    assert result_thin in valid_labels
-
-    # SCATTER_CLOUDS: alternating 700/470 W/m² → Km ≈ 0.65 → 'Partly Cloudy'.
-    # K-C: Km 0.65 ≈ 6 oktas (BKN), within the 0.52–0.85 "Partly Cloudy" range.
-    sky_condition.reset()
-    _configure_nyc()
-    _feed_alternating_ghi(ghi_high=700.0, ghi_low=470.0, msr=900.0, minutes=30)
-    result_scatter = sky_condition.classify()
-    assert result_scatter is not None, (
-        "SCATTER_CLOUDS: classify() returned None with station coords"
-    )
-    assert result_scatter in valid_labels
+    for desc, kwargs in alternating_cases:
+        sky_condition.reset()
+        _configure_nyc()
+        _feed_alternating_ghi(**kwargs)
+        result = sky_condition.classify()
+        assert result in valid_labels, (
+            f"{desc}: expected a valid label, got {result!r}"
+        )
 
 
 def test_backfill_still_works_with_station_coords():
