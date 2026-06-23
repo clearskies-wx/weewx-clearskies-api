@@ -79,17 +79,27 @@ _SKY_GET_ELEV = "weewx_clearskies_api.sse.sky_condition.get_solar_elevation"
 # ---------------------------------------------------------------------------
 
 
+def _smoothed_with_dewpoint(field: str) -> float | None:
+    """Return a non-None dewpoint so the missing-hygrometer deferral doesn't fire."""
+    if field == "dewpoint":
+        return 60.0
+    return None
+
+
 def _compose(
     *,
     fog_mist_result: str | None,
     provider_text: str | None,
     provider_age: float | None,
     obs_data: dict | None = None,
+    has_dewpoint: bool = True,
 ) -> str:
     """Call compose_weather_text() with cross-check inputs under full mock control.
 
     Everything except the fog/provider cross-check is pinned to neutral values:
-    - No smoothed sensor readings (all None → no temp-comfort, no wind, no precip).
+    - Smoothed readings return None except dewpoint (prevents the missing-
+      hygrometer deferral from adopting provider fog text).  Set *has_dewpoint*
+      to False to simulate a station with no hygrometer.
     - Nighttime (no solar haze path).
     - No Kcs (no solar classifier output).
     - sky_classify() returns None (no sky label from solar).
@@ -104,11 +114,12 @@ def _compose(
     mock_obs = MagicMock(return_value=MagicMock())
     mock_std = MagicMock(return_value=None)
     mock_verb = MagicMock(return_value=None)
+    smoothed_side_effect = _smoothed_with_dewpoint if has_dewpoint else (lambda _: None)
 
     with (
         patch(_DETECT_FOG_MIST, return_value=fog_mist_result),
         patch(_GET_PROVIDER_TEXT, return_value=(provider_text, provider_age)),
-        patch(_GET_SMOOTHED, return_value=None),
+        patch(_GET_SMOOTHED, side_effect=smoothed_side_effect),
         patch(_SKY_CLASSIFY, return_value=None),
         patch(_DETECT_HAZE, return_value=None),
         patch(_SKY_IS_DAYTIME, return_value=False),
