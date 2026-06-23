@@ -105,6 +105,10 @@ _last_persist_time: float = 0.0
 _last_rain_time: float = 0.0
 _was_raining: bool = False
 
+# Selected OpenAQ sensor info (set after successful bootstrap or operator override).
+# Keys: sensor_id, name, distance_km, lat, lon.
+_openaq_sensor: dict | None = None
+
 
 # ---------------------------------------------------------------------------
 # Public API — setters
@@ -127,6 +131,22 @@ def set_has_radiation(has: bool) -> None:
     """Set whether the station has a pyranometer."""
     global _has_radiation  # noqa: PLW0603
     _has_radiation = has
+
+
+def set_openaq_sensor(info: dict | None) -> None:
+    """Store the selected OpenAQ sensor info.
+
+    Args:
+        info: Dict with keys sensor_id, name, distance_km, lat, lon; or None
+              to clear the stored sensor.
+    """
+    global _openaq_sensor  # noqa: PLW0603
+    _openaq_sensor = info
+
+
+def get_openaq_sensor() -> dict | None:
+    """Return the stored OpenAQ sensor info, or None if no sensor selected."""
+    return _openaq_sensor
 
 
 def check_station_type_change(current_type: str | None) -> bool:
@@ -373,6 +393,7 @@ def get_calibration_state() -> dict:  # type: ignore[type-arg]
             w for m in range(1, 13) if (w := _check_drift(m)) is not None
         ],
         "station_type": _station_type_at_load,
+        "openaq_sensor": _openaq_sensor,
     }
 
 
@@ -393,7 +414,7 @@ def load_persisted() -> None:
     On file-missing or parse error: logs a warning and starts fresh.
     """
     global _monthly_samples, _monthly_baselines, _flat_baseline  # noqa: PLW0603
-    global _station_type_at_load  # noqa: PLW0603
+    global _station_type_at_load, _openaq_sensor  # noqa: PLW0603
 
     path = Path(_PERSIST_PATH)
     if not path.exists():
@@ -456,6 +477,21 @@ def load_persisted() -> None:
         raw_st = data.get("station_type")
         if raw_st is not None:
             _station_type_at_load = str(raw_st)
+
+        # Load persisted OpenAQ sensor info (added in Phase 9).
+        # Old calibration.json files without these keys leave _openaq_sensor = None.
+        raw_sensor_id = data.get("openaq_sensor_id")
+        if raw_sensor_id is not None:
+            try:
+                _openaq_sensor = {
+                    "sensor_id": int(raw_sensor_id),
+                    "name": str(data.get("openaq_sensor_name", "")),
+                    "distance_km": float(data.get("openaq_sensor_distance_km", 0)),
+                    "lat": float(data.get("openaq_sensor_lat", 0)),
+                    "lon": float(data.get("openaq_sensor_lon", 0)),
+                }
+            except (TypeError, ValueError):
+                _openaq_sensor = None
 
     else:
         # ------------------------------------------------------------------
@@ -548,6 +584,12 @@ def persist() -> None:
         "flat_baseline": _flat_baseline,
         "station_type": _station_type_at_load,
     }
+    if _openaq_sensor:
+        data["openaq_sensor_id"] = _openaq_sensor.get("sensor_id")
+        data["openaq_sensor_name"] = _openaq_sensor.get("name")
+        data["openaq_sensor_distance_km"] = _openaq_sensor.get("distance_km")
+        data["openaq_sensor_lat"] = _openaq_sensor.get("lat")
+        data["openaq_sensor_lon"] = _openaq_sensor.get("lon")
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -572,6 +614,7 @@ def reset() -> None:
     global _monthly_samples, _monthly_baselines, _flat_baseline  # noqa: PLW0603
     global _station_type_at_load, _has_radiation, _timezone_name  # noqa: PLW0603
     global _last_persist_time, _last_rain_time, _was_raining  # noqa: PLW0603
+    global _openaq_sensor  # noqa: PLW0603
     _monthly_samples = {m: [] for m in range(1, 13)}
     _monthly_baselines = {m: None for m in range(1, 13)}
     _flat_baseline = None
@@ -581,6 +624,7 @@ def reset() -> None:
     _last_persist_time = 0.0
     _last_rain_time = 0.0
     _was_raining = False
+    _openaq_sensor = None
 
 
 # ---------------------------------------------------------------------------

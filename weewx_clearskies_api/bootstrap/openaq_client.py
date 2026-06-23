@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
+from datetime import date as _date
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -31,6 +33,9 @@ _RATE_LIMIT_SLEEP = 1.0  # 1 second between requests (safe at 60/min)
 # PM value sanity bounds.
 _PM_MIN = 0.0
 _PM_MAX = 999.0
+
+# Minimum data span in days for a sensor to qualify for auto-bootstrap.
+_MIN_DATA_SPAN_DAYS = 365
 
 
 @dataclass(slots=True)
@@ -114,102 +119,261 @@ def _api_get(path: str, params: dict | None = None) -> dict:
         ) from exc
 
 
-def find_nearest_pm25_sensor(
-    lat: float, lon: float
-) -> tuple[int, float, float, str]:
-    """Find the nearest PM2.5 sensor within 25 km of the given coordinates.
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Compute great-circle distance between two points in km (Haversine formula)."""
+    r = 6371.0  # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return r * 2 * math.asin(math.sqrt(a))
 
-    Queries GET /v3/locations?coordinates={lat},{lon}&radius=25000.
-    Filters results for PM2.5 sensors (parameter name contains "pm25" or
-    "pm2.5", case-insensitive).
 
-    Iterates all location results and all sensors within each location,
-    selecting the first sensor whose parameter looks like PM2.5.
+def _parse_location_date(raw: object) -> _date | None:
+    """Parse a datetimeFirst/datetimeLast value from an OpenAQ location record.
+
+    OpenAQ v3 may return these as a dict with "utc"/"local" keys, or as a
+    plain ISO-8601 string.  Returns None if unparseable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        # {"utc": "2022-01-01T00:00:00Z", "local": "..."}
+        raw_str = raw.get("utc") or raw.get("local") or ""
+    else:
+        raw_str = str(raw)
+    raw_str = raw_str.strip()
+    if not raw_str:
+        return None
+    try:
+        # Take only the date portion.
+        return _date.fromisoformat(raw_str[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _query_nearby_pm25_locations(lat: float, lon: float) -> list[dict]:
+    """Fetch all reference PM2.5 locations within 25 km, with pagination.
+
+    Queries GET /v3/locations with isMonitor=true to filter for reference /
+    regulatory monitors only.  Paginates if meta.found > limit.
+
+    Returns a flat list of raw location dicts from the OpenAQ response.
+    Raises RuntimeError on API error.
+    """
+    limit = 100
+    page = 1
+    all_results: list[dict] = []
+
+    while True:
+        params = {
+            "coordinates": f"{lat},{lon}",
+            "radius": _MAX_RADIUS_M,
+            "isMonitor": "true",
+            "limit": limit,
+            "page": page,
+        }
+        data = _api_get("/locations", params=params)
+        results = data.get("results", [])
+        meta = data.get("meta", {})
+
+        all_results.extend(results)
+
+        try:
+            total_found = int(meta.get("found", 0))
+        except (TypeError, ValueError):
+            total_found = 0
+
+        if page == 1:
+            logger.info(
+                "OpenAQ /locations: found %d reference monitors within %d km of (%s, %s)",
+                total_found,
+                _MAX_RADIUS_M // 1000,
+                lat,
+                lon,
+            )
+
+        fetched_so_far = (page - 1) * limit + len(results)
+        if not results or fetched_so_far >= total_found:
+            break
+
+        page += 1
+
+    return all_results
+
+
+def _location_to_sensor_dicts(
+    location: dict, station_lat: float, station_lon: float
+) -> list[dict]:
+    """Extract PM2.5 sensor dicts from a single location record.
+
+    Returns one dict per PM2.5 sensor found in the location.
+    Skips sensors whose parameter is not PM2.5.
+    """
+    loc_name = (
+        location.get("name")
+        or location.get("locality")
+        or "Unknown"
+    )
+    loc_id = location.get("id")
+    coords = location.get("coordinates") or {}
+    monitor_lat = float(coords.get("latitude") or station_lat)
+    monitor_lon = float(coords.get("longitude") or station_lon)
+    distance_km = _haversine_km(station_lat, station_lon, monitor_lat, monitor_lon)
+
+    # Parse data span dates (at location level in OpenAQ v3).
+    # Try both camelCase and snake_case field names defensively.
+    raw_first = (
+        location.get("datetimeFirst")
+        or location.get("datetime_first")
+    )
+    raw_last = (
+        location.get("datetimeLast")
+        or location.get("datetime_last")
+    )
+    datetime_first = _parse_location_date(raw_first)
+    datetime_last = _parse_location_date(raw_last)
+
+    sensors = location.get("sensors", [])
+    result = []
+    for sensor in sensors:
+        parameter = sensor.get("parameter", {})
+        param_name = str(parameter.get("name", "")).lower()
+        param_display = str(parameter.get("displayName", "")).lower()
+
+        is_pm25 = (
+            "pm25" in param_name
+            or "pm2.5" in param_name
+            or "pm25" in param_display
+            or "pm2.5" in param_display
+        )
+        if not is_pm25:
+            continue
+
+        sensor_id = sensor.get("id")
+        if sensor_id is None:
+            continue
+
+        result.append({
+            "sensor_id": int(sensor_id),
+            "location_id": int(loc_id) if loc_id is not None else None,
+            "name": str(loc_name),
+            "lat": monitor_lat,
+            "lon": monitor_lon,
+            "distance_km": round(distance_km, 3),
+            "datetime_first": datetime_first.isoformat() if datetime_first else None,
+            "datetime_last": datetime_last.isoformat() if datetime_last else None,
+            "is_monitor": True,  # we only query isMonitor=true
+        })
+    return result
+
+
+def find_best_pm25_sensor(lat: float, lon: float) -> list[dict]:
+    """Find ranked reference PM2.5 sensors within 25 km of the given coordinates.
+
+    Queries GET /v3/locations with isMonitor=true, filters for sensors with
+    at least 365 days of data span, and returns them sorted by distance
+    ascending.
+
+    This replaces the old find_nearest_pm25_sensor() which returned a single
+    tuple and raised RuntimeError on no results.  This function returns an
+    empty list when no qualifying sensors are found — the caller handles that.
 
     Args:
         lat: Station latitude in decimal degrees.
         lon: Station longitude in decimal degrees.
 
     Returns:
-        Tuple of (sensor_id, monitor_lat, monitor_lon, location_name).
+        List of sensor dicts sorted by distance_km ascending.  Each dict has:
+          sensor_id (int), location_id (int|None), name (str), lat (float),
+          lon (float), distance_km (float), datetime_first (str|None),
+          datetime_last (str|None), is_monitor (bool).
+        Empty list if no qualifying sensors found.
 
     Raises:
-        RuntimeError: No PM2.5 monitor found within 25 km, or API error.
+        RuntimeError: API error or network failure.
     """
-    params = {
-        "coordinates": f"{lat},{lon}",
-        "radius": _MAX_RADIUS_M,
-        "limit": 100,
-        "page": 1,
-    }
-
-    data = _api_get("/locations", params=params)
-    results = data.get("results", [])
-    meta = data.get("meta", {})
-
-    if not results:
-        raise RuntimeError(
-            f"No air quality monitors found within {_MAX_RADIUS_M // 1000} km "
-            f"of coordinates ({lat}, {lon}). "
-            "Try a location with an OpenAQ-listed monitor nearby, or check "
-            "https://explore.openaq.org/ to find the nearest monitor."
+    raw_locations = _query_nearby_pm25_locations(lat, lon)
+    if not raw_locations:
+        logger.info(
+            "OpenAQ: no reference monitors found within %d km of (%s, %s)",
+            _MAX_RADIUS_M // 1000,
+            lat,
+            lon,
         )
+        return []
 
-    total_found = meta.get("found", len(results))
+    candidates: list[dict] = []
+    for location in raw_locations:
+        for sensor_dict in _location_to_sensor_dicts(location, lat, lon):
+            # Apply 12-month data span filter.
+            dt_first_str = sensor_dict.get("datetime_first")
+            dt_last_str = sensor_dict.get("datetime_last")
+            if dt_first_str and dt_last_str:
+                try:
+                    dt_first = _date.fromisoformat(dt_first_str)
+                    dt_last = _date.fromisoformat(dt_last_str)
+                    span_days = (dt_last - dt_first).days
+                    if span_days < _MIN_DATA_SPAN_DAYS:
+                        logger.debug(
+                            "OpenAQ: skipping sensor %d '%s' — data span %d days < %d",
+                            sensor_dict["sensor_id"],
+                            sensor_dict["name"],
+                            span_days,
+                            _MIN_DATA_SPAN_DAYS,
+                        )
+                        continue
+                except (ValueError, TypeError):
+                    pass  # dates unparseable — include sensor anyway
+            # else: dates absent — include sensor (no filter applied)
+
+            candidates.append(sensor_dict)
+
+    # Sort by distance ascending (OpenAQ returns nearest first, but sort
+    # explicitly after filtering to guarantee order).
+    candidates.sort(key=lambda d: d["distance_km"])
+
     logger.info(
-        "OpenAQ /locations: found %d monitors within %d km of (%s, %s)",
-        total_found,
+        "OpenAQ: %d qualifying reference PM2.5 sensor(s) within %d km of (%s, %s)",
+        len(candidates),
         _MAX_RADIUS_M // 1000,
         lat,
         lon,
     )
+    return candidates
 
-    # Iterate locations sorted by distance (OpenAQ returns nearest first).
-    for location in results:
-        loc_name = location.get("name", "") or location.get("locality", "") or "Unknown"
-        loc_id = location.get("id")
 
-        # Each location has a list of sensors.
-        sensors = location.get("sensors", [])
-        for sensor in sensors:
-            parameter = sensor.get("parameter", {})
-            param_name = str(parameter.get("name", "")).lower()
-            param_display = str(parameter.get("displayName", "")).lower()
+def get_nearby_sensors(lat: float, lon: float) -> list[dict]:
+    """List all reference PM2.5 sensors within 25 km for the admin UI dropdown.
 
-            # Accept "pm25", "pm2.5", or display names containing those substrings.
-            is_pm25 = (
-                "pm25" in param_name
-                or "pm2.5" in param_name
-                or "pm25" in param_display
-                or "pm2.5" in param_display
-            )
-            if not is_pm25:
-                continue
+    Same query as find_best_pm25_sensor but WITHOUT the 12-month data age
+    filter, so the operator can see all available sensors.
 
-            sensor_id = sensor.get("id")
-            if sensor_id is None:
-                continue
+    Args:
+        lat: Station latitude in decimal degrees.
+        lon: Station longitude in decimal degrees.
 
-            # Extract monitor coordinates (may be at location level).
-            coords = location.get("coordinates") or {}
-            monitor_lat = float(coords.get("latitude", lat))
-            monitor_lon = float(coords.get("longitude", lon))
+    Returns:
+        List of sensor dicts sorted by distance_km ascending (same shape as
+        find_best_pm25_sensor).  Empty list if none found.
 
-            logger.info(
-                "OpenAQ: selected PM2.5 sensor id=%d at location %r (%s, %s)",
-                sensor_id,
-                loc_name,
-                monitor_lat,
-                monitor_lon,
-            )
-            return (int(sensor_id), monitor_lat, monitor_lon, str(loc_name))
+    Raises:
+        RuntimeError: API error or network failure.
+    """
+    raw_locations = _query_nearby_pm25_locations(lat, lon)
+    if not raw_locations:
+        return []
 
-    raise RuntimeError(
-        f"No PM2.5 sensors found within {_MAX_RADIUS_M // 1000} km of "
-        f"({lat}, {lon}). "
-        f"Found {len(results)} monitor(s) but none measured PM2.5. "
-        "Check https://explore.openaq.org/ for the nearest PM2.5 monitor."
-    )
+    all_sensors: list[dict] = []
+    for location in raw_locations:
+        all_sensors.extend(_location_to_sensor_dicts(location, lat, lon))
+
+    all_sensors.sort(key=lambda d: d["distance_km"])
+    return all_sensors
 
 
 def fetch_historical_pm25(
@@ -224,7 +388,7 @@ def fetch_historical_pm25(
     to narrow date ranges to <= 1 year for performance).
 
     Args:
-        sensor_id: OpenAQ sensor ID (from find_nearest_pm25_sensor).
+        sensor_id: OpenAQ sensor ID (from find_best_pm25_sensor).
         date_from: ISO-8601 date string (e.g. "2024-01-01").
         date_to:   ISO-8601 date string (e.g. "2025-12-31").
 

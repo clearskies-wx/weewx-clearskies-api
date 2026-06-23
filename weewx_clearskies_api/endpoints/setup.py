@@ -1597,3 +1597,29 @@ async def calibration_reset(request: Request) -> dict:  # type: ignore[type-arg]
         except OSError:
             pass  # Best-effort: log not required, reset() cleared in-memory state
     return {"success": True, "message": "Calibration reset. Re-bootstrap will run on next restart."}
+
+
+@router.get("/openaq-sensors")
+async def openaq_sensors(request: Request) -> dict:  # type: ignore[type-arg]
+    """List nearby reference PM2.5 sensors for the admin UI dropdown.
+
+    Returns all reference monitors within 25 km of the station, sorted by
+    distance ascending.  No data-age filter — the operator sees all available
+    sensors so they can choose one via openaq_sensor_id in [conditions].
+
+    Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
+    """
+    if not _check_proxy_auth(request):
+        raise HTTPException(status_code=403, detail="Proxy secret required")
+
+    from weewx_clearskies_api.bootstrap.openaq_client import get_nearby_sensors  # noqa: PLC0415
+    from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
+
+    station = get_station_info()
+    try:
+        sensors = get_nearby_sensors(station.latitude, station.longitude)
+    except RuntimeError as exc:
+        logger.warning("openaq-sensors: %s", exc)
+        sensors = []
+
+    return {"sensors": sensors}

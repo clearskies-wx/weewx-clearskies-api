@@ -596,7 +596,7 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
     from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
     from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
         fetch_historical_pm25,
-        find_nearest_pm25_sensor,
+        find_best_pm25_sensor,
     )
     from weewx_clearskies_api.services.station import (  # noqa: PLC0415
         get_station_info,
@@ -664,58 +664,105 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
 
     print("OpenAQ bootstrap")
 
-    # Step 1: Find nearest PM2.5 monitor.
+    # Step 1: Find ranked reference PM2.5 monitors.
     years = 3
 
     print(f"  Station location: ({lat:.4f}, {lon:.4f}), altitude {alt_m:.0f} m")
-    print(f"  Searching for nearest PM2.5 monitor within 25 km...")
+    print(f"  Searching for reference PM2.5 monitors within 25 km...")
     try:
-        sensor_id, monitor_lat, monitor_lon, location_name = find_nearest_pm25_sensor(lat, lon)
+        candidates = find_best_pm25_sensor(lat, lon)
     except RuntimeError as exc:
         print(f"  ERROR: {exc}")
         sys.exit(1)
 
-    # Compute monitor distance for display.
-    dist_km = _haversine_km(lat, lon, monitor_lat, monitor_lon)
-    print(f'  Nearest PM2.5 monitor: "{location_name}" ({dist_km:.1f} km away)')
+    if not candidates:
+        print("  No reference PM2.5 monitors found within 25 km. Bootstrap cannot proceed.")
+        sys.exit(1)
 
-    # Step 2: Fetch historical data.
+    print(f"  Found {len(candidates)} candidate sensor(s):")
+    for _c in candidates:
+        print(f"    sensor {_c['sensor_id']} — '{_c['name']}' ({_c['distance_km']:.1f} km)")
+
+    # Step 2: Try candidates in distance order until one yields clean-sky samples.
     now_utc = datetime.now(UTC)
     date_to = now_utc.date().isoformat()
     date_from = (now_utc - timedelta(days=years * 365)).date().isoformat()
 
-    print(f"  Pulling up to 3 years of history ({date_from} to {date_to})...")
-    try:
-        pm_records = fetch_historical_pm25(
-            sensor_id=sensor_id,
-            date_from=date_from,
-            date_to=date_to,
+    import copy as _copy  # noqa: PLC0415
+
+    summary = None
+    selected_candidate = None
+    for candidate in candidates:
+        sensor_id = candidate["sensor_id"]
+        location_name = candidate["name"]
+        dist_km = candidate["distance_km"]
+        print(f"\n  Trying sensor {sensor_id} '{location_name}' ({dist_km:.1f} km)...")
+        print(f"  Pulling up to 3 years of history ({date_from} to {date_to})...")
+        try:
+            pm_records = fetch_historical_pm25(
+                sensor_id=sensor_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        except RuntimeError as exc:
+            print(f"  ERROR fetching records: {exc} — skipping")
+            continue
+
+        print(f"  Retrieved {len(pm_records):,} PM2.5 records")
+        if not pm_records:
+            print("  No records — skipping")
+            continue
+
+        # Snapshot state before attempt in case we need to restore.
+        from weewx_clearskies_api.sse import auto_calibration as _ac  # noqa: PLC0415
+        _saved_samples = _copy.deepcopy(_ac._monthly_samples)  # noqa: SLF001
+        _saved_baselines = _copy.deepcopy(_ac._monthly_baselines)  # noqa: SLF001
+        _saved_flat = _ac._flat_baseline  # noqa: SLF001
+
+        print("  Matching against weewx archive...")
+        try:
+            summary = run_bootstrap(
+                engine=engine,
+                pm_records=pm_records,
+                station_lat=lat,
+                station_lon=lon,
+                station_alt_m=alt_m,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ERROR during bootstrap: {exc} — skipping")
+            # Restore state after failed attempt.
+            _ac._monthly_samples = _saved_samples  # noqa: SLF001
+            _ac._monthly_baselines = _saved_baselines  # noqa: SLF001
+            _ac._flat_baseline = _saved_flat  # noqa: SLF001
+            continue
+
+        if summary["clean_sky_samples"] > 0:
+            selected_candidate = candidate
+            break
+        else:
+            print(
+                f"  Sensor {sensor_id}: {summary['clean_sky_samples']} clean-sky samples "
+                f"(PM too high: {summary.get('skipped_pm_high', 0)}, "
+                f"no archive: {summary.get('skipped_no_archive', 0)}, "
+                f"no radiation: {summary.get('skipped_no_radiation', 0)}) — skipping"
+            )
+            # Restore state so next candidate starts clean.
+            _ac._monthly_samples = _saved_samples  # noqa: SLF001
+            _ac._monthly_baselines = _saved_baselines  # noqa: SLF001
+            _ac._flat_baseline = _saved_flat  # noqa: SLF001
+            summary = None
+
+    if summary is None:
+        print("\n  No suitable sensor produced clean-sky samples. Bootstrap complete (no data).")
+        sys.exit(0)
+
+    if selected_candidate is not None:
+        print(
+            f"\n  Selected sensor {selected_candidate['sensor_id']} "
+            f"'{selected_candidate['name']}' ({selected_candidate['distance_km']:.1f} km)"
         )
-    except RuntimeError as exc:
-        print(f"  ERROR: {exc}")
-        sys.exit(1)
 
-    print(f"  Retrieved {len(pm_records):,} PM2.5 records")
-
-    if not pm_records:
-        print("  No PM2.5 records found. Bootstrap cannot proceed.")
-        sys.exit(1)
-
-    # Step 3: Match against archive and seed calibration.
-    print("  Matching against weewx archive...")
-    try:
-        summary = run_bootstrap(
-            engine=engine,
-            pm_records=pm_records,
-            station_lat=lat,
-            station_lon=lon,
-            station_alt_m=alt_m,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"  ERROR during bootstrap: {exc}")
-        sys.exit(1)
-
-    # Step 4: Print summary.
+    # Step 3: Print summary.
     print("  Results:")
     print(f"    Archive matched:          {summary['archive_matched']:>8,}")
     print(f"    Clean-sky samples:        {summary['clean_sky_samples']:>8,}")
@@ -1225,39 +1272,157 @@ def main() -> None:
             _cal_state["months_calibrated"],
         )
         try:
+            import copy  # noqa: PLC0415
             from datetime import UTC, datetime, timedelta  # noqa: PLC0415
             from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
             from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
                 fetch_historical_pm25,
-                find_nearest_pm25_sensor,
+                find_best_pm25_sensor,
             )
             _now_utc = datetime.now(UTC)
             _date_to = _now_utc.date().isoformat()
             _date_from = (_now_utc - timedelta(days=3 * 365)).date().isoformat()
-            _sensor_id, _, _, _ = find_nearest_pm25_sensor(
-                lat=_station_for_cal.latitude,
-                lon=_station_for_cal.longitude,
-            )
-            _pm_records = fetch_historical_pm25(
-                sensor_id=_sensor_id,
-                date_from=_date_from,
-                date_to=_date_to,
-            )
-            if _pm_records:
-                _bs_summary = run_bootstrap(
-                    engine=get_engine(),
-                    pm_records=_pm_records,
-                    station_lat=_station_for_cal.latitude,
-                    station_lon=_station_for_cal.longitude,
-                    station_alt_m=_station_for_cal.altitude,
-                )
+            _bs_lat = _station_for_cal.latitude
+            _bs_lon = _station_for_cal.longitude
+            _bs_alt = _station_for_cal.altitude
+
+            # Check for operator-specified sensor override in [conditions].
+            _override_sensor_id = settings.conditions.openaq_sensor_id
+            if _override_sensor_id is not None:
+                # Operator explicitly chose a sensor — skip candidate search.
                 logger.info(
-                    "Auto-bootstrap complete: %d clean-sky samples, %d/12 months calibrated",
-                    _bs_summary["clean_sky_samples"],
-                    auto_calibration.get_calibration_state()["months_calibrated"],
+                    "Auto-bootstrap: using operator-specified OpenAQ sensor %d",
+                    _override_sensor_id,
                 )
+                _pm_records = fetch_historical_pm25(
+                    sensor_id=_override_sensor_id,
+                    date_from=_date_from,
+                    date_to=_date_to,
+                )
+                if _pm_records:
+                    _bs_summary = run_bootstrap(
+                        engine=get_engine(),
+                        pm_records=_pm_records,
+                        station_lat=_bs_lat,
+                        station_lon=_bs_lon,
+                        station_alt_m=_bs_alt,
+                    )
+                    auto_calibration.set_openaq_sensor({
+                        "sensor_id": _override_sensor_id,
+                        "name": "(operator-specified)",
+                        "distance_km": 0.0,
+                        "lat": _bs_lat,
+                        "lon": _bs_lon,
+                    })
+                    if _bs_summary["clean_sky_samples"] == 0:
+                        logger.warning(
+                            "Auto-bootstrap: operator sensor %d produced 0 clean-sky "
+                            "samples — calibration will proceed from real-time observations.",
+                            _override_sensor_id,
+                        )
+                    else:
+                        logger.info(
+                            "Auto-bootstrap complete: sensor %d — %d clean-sky samples, "
+                            "%d/12 months calibrated",
+                            _override_sensor_id,
+                            _bs_summary["clean_sky_samples"],
+                            auto_calibration.get_calibration_state()["months_calibrated"],
+                        )
+                else:
+                    logger.warning(
+                        "Auto-bootstrap: operator sensor %d returned no PM2.5 records.",
+                        _override_sensor_id,
+                    )
             else:
-                logger.info("Auto-bootstrap: no PM2.5 records found nearby")
+                # Automatic sensor selection: try candidates in distance order.
+                _candidates = find_best_pm25_sensor(_bs_lat, _bs_lon)
+                if not _candidates:
+                    logger.info(
+                        "Auto-bootstrap: no suitable OpenAQ sensor found within 25 km. "
+                        "Calibration will proceed from real-time observations."
+                    )
+                else:
+                    _selected = False
+                    for _cand in _candidates:
+                        _cand_id = _cand["sensor_id"]
+                        _cand_name = _cand["name"]
+                        _cand_dist = _cand["distance_km"]
+                        logger.info(
+                            "Auto-bootstrap: trying sensor %d '%s' (%.1f km away)...",
+                            _cand_id,
+                            _cand_name,
+                            _cand_dist,
+                        )
+                        # Snapshot state before attempting this candidate.
+                        _saved_samples = copy.deepcopy(auto_calibration._monthly_samples)
+                        _saved_baselines = copy.deepcopy(auto_calibration._monthly_baselines)
+                        _saved_flat = auto_calibration._flat_baseline
+
+                        _pm_records = fetch_historical_pm25(
+                            sensor_id=_cand_id,
+                            date_from=_date_from,
+                            date_to=_date_to,
+                        )
+                        if not _pm_records:
+                            logger.info(
+                                "Auto-bootstrap: sensor %d '%s' returned no records — skipping",
+                                _cand_id,
+                                _cand_name,
+                            )
+                            continue
+
+                        _bs_summary = run_bootstrap(
+                            engine=get_engine(),
+                            pm_records=_pm_records,
+                            station_lat=_bs_lat,
+                            station_lon=_bs_lon,
+                            station_alt_m=_bs_alt,
+                        )
+
+                        if _bs_summary["clean_sky_samples"] > 0:
+                            # SUCCESS — this sensor produced usable samples.
+                            auto_calibration.set_openaq_sensor({
+                                "sensor_id": _cand_id,
+                                "name": _cand_name,
+                                "distance_km": _cand_dist,
+                                "lat": _cand["lat"],
+                                "lon": _cand["lon"],
+                            })
+                            logger.info(
+                                "Auto-bootstrap: sensor %d '%s' selected — "
+                                "%d clean-sky samples, %d/12 months calibrated",
+                                _cand_id,
+                                _cand_name,
+                                _bs_summary["clean_sky_samples"],
+                                auto_calibration.get_calibration_state()["months_calibrated"],
+                            )
+                            _selected = True
+                            break
+                        else:
+                            # REJECT — no usable samples; restore pre-attempt state.
+                            logger.info(
+                                "Auto-bootstrap: sensor %d '%s' (%.1f km): "
+                                "%d records, %d PM>=12, %d no archive match, "
+                                "%d no radiation, %d qualifying — skipping",
+                                _cand_id,
+                                _cand_name,
+                                _cand_dist,
+                                len(_pm_records),
+                                _bs_summary.get("skipped_pm_high", 0),
+                                _bs_summary.get("skipped_no_archive", 0),
+                                _bs_summary.get("skipped_no_radiation", 0),
+                                _bs_summary["clean_sky_samples"],
+                            )
+                            # Restore state to before this attempt.
+                            auto_calibration._monthly_samples = _saved_samples  # noqa: SLF001
+                            auto_calibration._monthly_baselines = _saved_baselines  # noqa: SLF001
+                            auto_calibration._flat_baseline = _saved_flat  # noqa: SLF001
+
+                    if not _selected:
+                        logger.info(
+                            "Auto-bootstrap: no suitable OpenAQ sensor found within 25 km. "
+                            "Calibration will proceed from real-time observations."
+                        )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Auto-bootstrap failed (non-fatal): %s", exc)
 

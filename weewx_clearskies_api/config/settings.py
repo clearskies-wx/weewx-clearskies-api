@@ -1023,6 +1023,11 @@ class ConditionsSettings:
     #: Advanced operator override.  Range: [0.1, 1.0].
     gamma: float
 
+    #: Operator-specified OpenAQ sensor ID override (Phase 9).
+    #: When set, the bootstrap loop skips candidate search and uses this sensor
+    #: directly.  None means automatic sensor selection.
+    openaq_sensor_id: int | None
+
     _VALID_ENGINES: frozenset[str] = frozenset({"auto", "provider", "off"})
 
     def __init__(self, section: dict[str, Any]) -> None:
@@ -1033,6 +1038,16 @@ class ConditionsSettings:
         self.haze_aqi_provider = section.get("haze_aqi_provider") or None
         # Hygroscopic correction exponent (advanced — operator override of Hanel default)
         self.gamma = float(section.get("gamma", 0.45))
+        # Operator-specified OpenAQ sensor ID (Phase 9 smart sensor selection).
+        # Old api.conf files without this key load cleanly (section.get returns None).
+        raw_sensor_id = section.get("openaq_sensor_id")
+        if raw_sensor_id is not None and str(raw_sensor_id).strip():
+            try:
+                self.openaq_sensor_id = int(raw_sensor_id)
+            except (TypeError, ValueError):
+                self.openaq_sensor_id = None
+        else:
+            self.openaq_sensor_id = None
 
     def validate(self) -> None:
         """Raise ValueError on invalid engine or gamma value."""
