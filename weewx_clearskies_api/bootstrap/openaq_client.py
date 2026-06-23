@@ -206,6 +206,22 @@ def _query_nearby_pm25_locations(lat: float, lon: float) -> list[dict]:
     return all_results
 
 
+def _is_reference_grade(location: dict) -> bool:
+    """Return True if the location is a reference/regulatory monitor.
+
+    OpenAQ's ``isMonitor=true`` only means "fixed location" (not mobile),
+    so it includes low-cost sensors (AirGradient, Clarity, PurpleAir).
+    Reference-grade stations are identified by their instrument metadata:
+    government monitoring networks list instruments as "Government Monitor".
+    """
+    instruments = location.get("instruments", [])
+    for inst in instruments:
+        inst_name = str(inst.get("name", "")).lower()
+        if "government" in inst_name:
+            return True
+    return False
+
+
 def _location_to_sensor_dicts(
     location: dict, station_lat: float, station_lon: float
 ) -> list[dict]:
@@ -213,7 +229,11 @@ def _location_to_sensor_dicts(
 
     Returns one dict per PM2.5 sensor found in the location.
     Skips sensors whose parameter is not PM2.5.
+    Skips locations that are not reference-grade (government monitors).
     """
+    if not _is_reference_grade(location):
+        return []
+
     loc_name = (
         location.get("name")
         or location.get("locality")
