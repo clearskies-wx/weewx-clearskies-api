@@ -198,8 +198,7 @@ def _query_nearby_pm25_locations(lat: float, lon: float) -> list[dict]:
                 lon,
             )
 
-        fetched_so_far = (page - 1) * limit + len(results)
-        if not results or fetched_so_far >= total_found:
+        if len(results) < limit:
             break
 
         page += 1
@@ -536,8 +535,9 @@ def _fetch_sensor_measurements_paginated(
         )
 
         # Check if we need another page.
-        fetched_so_far = (page - 1) * limit + len(results)
-        if not results or fetched_so_far >= total_found:
+        # OpenAQ v3 never returns an exact total — found is always ">N".
+        # Paginate until a page returns fewer results than the limit.
+        if len(results) < limit:
             break
 
         page += 1
