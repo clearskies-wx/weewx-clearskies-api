@@ -1599,18 +1599,24 @@ async def calibration_reset(request: Request) -> dict:  # type: ignore[type-arg]
     return {"success": True, "message": "Calibration reset. Re-bootstrap will run on next restart."}
 
 
+_openaq_sensors_cache: dict | None = None
+_openaq_sensors_cache_ts: float = 0.0
+_OPENAQ_SENSORS_CACHE_TTL = 3600.0
+
+
 @router.get("/openaq-sensors")
 async def openaq_sensors(request: Request) -> dict:  # type: ignore[type-arg]
     """List nearby reference PM2.5 sensors for the admin UI dropdown.
 
-    Returns all reference monitors within 25 km of the station, sorted by
-    distance ascending.  No data-age filter — the operator sees all available
-    sensors so they can choose one via openaq_sensor_id in [conditions].
-
+    Cached for 1 hour — the sensor list near a station doesn't change.
     Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
     """
+    global _openaq_sensors_cache, _openaq_sensors_cache_ts  # noqa: PLW0603
     if not _check_proxy_auth(request):
         raise HTTPException(status_code=403, detail="Proxy secret required")
+
+    if _openaq_sensors_cache is not None and (time.time() - _openaq_sensors_cache_ts) < _OPENAQ_SENSORS_CACHE_TTL:
+        return _openaq_sensors_cache
 
     from weewx_clearskies_api.bootstrap.openaq_client import get_nearby_sensors  # noqa: PLC0415
     from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
@@ -1622,4 +1628,7 @@ async def openaq_sensors(request: Request) -> dict:  # type: ignore[type-arg]
         logger.warning("openaq-sensors: %s", exc)
         sensors = []
 
-    return {"sensors": sensors}
+    result = {"sensors": sensors}
+    _openaq_sensors_cache = result
+    _openaq_sensors_cache_ts = time.time()
+    return result
