@@ -364,6 +364,125 @@ class TestWireToCanonicalHappyPath:
 
 
 # ===========================================================================
+# 2b. pollutantSubIndices — per-pollutant sub-AQI pass-through
+# ===========================================================================
+
+
+class TestPollutantSubIndices:
+    """pollutantSubIndices is populated from per-pollutant aqi field in Aeris fixture."""
+
+    def _get_location_from_fixture(self) -> Any:
+        """Load fixture and parse into _AerisLocation model."""
+        from weewx_clearskies_api.providers.aqi.aeris import _AerisAQResponse  # noqa: PLC0415
+        data = _load_fixture("aeris_current.json")
+        response = _AerisAQResponse.model_validate(data)
+        return response.response[0]
+
+    def test_pollutant_sub_indices_is_not_none(self) -> None:
+        """pollutantSubIndices is populated (not None) for fixture with per-pollutant aqi values."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None, (
+            "Fixture has per-pollutant aqi values; pollutantSubIndices must not be None"
+        )
+
+    def test_pollutant_sub_indices_has_all_six_keys(self) -> None:
+        """pollutantSubIndices has exactly 6 keys — one per canonical pollutant."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        expected_keys = {"O3", "PM2.5", "PM10", "CO", "NO2", "SO2"}
+        actual_keys = set(result.pollutantSubIndices.keys())
+        assert actual_keys == expected_keys, (
+            f"Expected keys {expected_keys!r}, got {actual_keys!r}"
+        )
+
+    def test_o3_sub_index_is_33(self) -> None:
+        """O3 sub-AQI = 33 (from fixture pollutants[0].aqi=33, type='o3')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["O3"] == 33, (
+            f"Expected O3 sub-index=33, got {result.pollutantSubIndices.get('O3')!r}"
+        )
+
+    def test_pm25_sub_index_is_24(self) -> None:
+        """PM2.5 sub-AQI = 24 (from fixture pollutants[1].aqi=24, type='pm2.5')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["PM2.5"] == 24, (
+            f"Expected PM2.5 sub-index=24, got {result.pollutantSubIndices.get('PM2.5')!r}"
+        )
+
+    def test_pm10_sub_index_is_7(self) -> None:
+        """PM10 sub-AQI = 7 (from fixture pollutants[2].aqi=7, type='pm10')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["PM10"] == 7, (
+            f"Expected PM10 sub-index=7, got {result.pollutantSubIndices.get('PM10')!r}"
+        )
+
+    def test_co_sub_index_is_2(self) -> None:
+        """CO sub-AQI = 2 (from fixture pollutants[3].aqi=2, type='co')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["CO"] == 2, (
+            f"Expected CO sub-index=2, got {result.pollutantSubIndices.get('CO')!r}"
+        )
+
+    def test_no2_sub_index_is_3(self) -> None:
+        """NO2 sub-AQI = 3 (from fixture pollutants[4].aqi=3, type='no2')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["NO2"] == 3, (
+            f"Expected NO2 sub-index=3, got {result.pollutantSubIndices.get('NO2')!r}"
+        )
+
+    def test_so2_sub_index_is_0(self) -> None:
+        """SO2 sub-AQI = 0 (from fixture pollutants[5].aqi=0, type='so2')."""
+        from weewx_clearskies_api.providers.aqi.aeris import _wire_to_canonical  # noqa: PLC0415
+        location = self._get_location_from_fixture()
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["SO2"] == 0, (
+            f"Expected SO2 sub-index=0, got {result.pollutantSubIndices.get('SO2')!r}"
+        )
+
+    def test_sub_indices_none_when_pollutants_list_empty(self) -> None:
+        """pollutantSubIndices = None when pollutants[] is empty (no per-pollutant aqi)."""
+        from weewx_clearskies_api.providers.aqi.aeris import _AerisAQResponse, _wire_to_canonical  # noqa: PLC0415
+        data = _load_fixture("aeris_current.json")
+        # Remove all pollutants
+        data["response"][0]["periods"][0]["pollutants"] = []
+        response = _AerisAQResponse.model_validate(data)
+        location = response.response[0]
+        result = _wire_to_canonical(location)
+        assert result is not None
+        assert result.pollutantSubIndices is None, (
+            f"Empty pollutants list → pollutantSubIndices must be None, got {result.pollutantSubIndices!r}"
+        )
+
+
+# ===========================================================================
 # 3. _wire_to_canonical — edge cases
 # ===========================================================================
 

@@ -251,7 +251,8 @@ class _AerisPollutant(BaseModel):
     type: str  # "pm2.5", "pm10", "o3", "no2", "so2", "co", "pm1"
     valuePPB: float | None = None    # parts per billion (gases; null for particulates)
     valueUGM3: float | None = None   # µg/m³ (particulates; also present for gases but unused)
-    # name, aqi, category, color, method are present on the wire but not consumed
+    aqi: float | None = None         # per-pollutant sub-AQI on the same scale as periods[0].aqi
+    # name, category, color, method are present on the wire but not consumed
     # by the canonical AQIReading model.
 
 
@@ -480,9 +481,12 @@ def _wire_to_canonical(location: _AerisLocation) -> AQIReading | None:
     # Pollutant values: filter pollutants[] by type, extract the right value
     # field, and convert PPB → µg/m³ for gases (formula: µg/m³ = ppb × MW / 24.45).
     # pm1 and any unknown type are silently skipped (LC26 / _TYPE_TO_CANONICAL_FIELD).
+    # Also collect per-pollutant sub-AQI values (entry.aqi) into sub_indices dict.
     pollutant_values: dict[str, float | None] = {}
+    sub_indices: dict[str, float | None] = {}
     for entry in period.pollutants:
-        canonical_field = _TYPE_TO_CANONICAL_FIELD.get(entry.type.lower())
+        type_lower = entry.type.lower()
+        canonical_field = _TYPE_TO_CANONICAL_FIELD.get(type_lower)
         if canonical_field is None:
             # pm1 or unknown type — skip silently (LC26).
             continue
@@ -498,6 +502,12 @@ def _wire_to_canonical(location: _AerisLocation) -> AQIReading | None:
         else:
             # Particulate: valueUGM3 passthrough in µg/m³.
             pollutant_values[canonical_field] = entry.valueUGM3
+
+        # Per-pollutant sub-AQI: map type → canonical pollutant id and collect.
+        # _DOMINANT_TO_CANONICAL uses the same lowercase type keys as _TYPE_TO_CANONICAL_FIELD.
+        canonical_pollutant_id = _DOMINANT_TO_CANONICAL.get(type_lower)
+        if canonical_pollutant_id is not None and entry.aqi is not None:
+            sub_indices[canonical_pollutant_id] = min(round(entry.aqi), 500)
 
     # observedAt: parse explicit-offset ISO → UTC Z form (LC4 / ADR-020).
     # Using the shared to_utc_iso8601_from_offset() helper (DRY — already
@@ -541,6 +551,7 @@ def _wire_to_canonical(location: _AerisLocation) -> AQIReading | None:
         pollutantCO=pollutant_values.get("pollutantCO"),
         # pollutantNO and pollutantNH3 not available from Aeris (7 pollutants only;
         # NO and NH3 not in Aeris's /airquality response per api-docs — ADR-059).
+        pollutantSubIndices=sub_indices or None,
         observedAt=observed_at,
         source=PROVIDER_ID,
     )

@@ -1089,6 +1089,7 @@ class AQIReading(BaseModel):
     observedAt: str                      # UTC ISO-8601 with Z; required per OpenAPI
     source: str                          # "weewx" (Path A) or provider_id (Path B)
     pollutantSources: dict[str, str] | None = None  # field → source string (T4B.3); non-null only when merge ran
+    pollutantSubIndices: dict[str, float | None] | None = None  # canonical pollutant id → sub-AQI on same scale as aqi; None when provider doesn't supply
 
 
 class AQIResponse(BaseModel):

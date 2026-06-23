@@ -130,6 +130,19 @@ _MAINUS_TO_CANONICAL: dict[str, str] = {
     "co": "CO",
 }
 
+# IQAir per-pollutant field code → (canonical_concentration_field, canonical_pollutant_id).
+# Verified from real Startup-tier API capture (2026-06-23 brief §Scope 4d).
+# Concentration unit: µg/m³ for all pollutants (verified from data.units block in real response).
+# No ppb→µg/m³ conversion needed (unlike Aeris which returns valuePPB for gases).
+_CODE_TO_CANONICAL: dict[str, tuple[str, str]] = {
+    "p2": ("pollutantPM25", "PM2.5"),
+    "p1": ("pollutantPM10", "PM10"),
+    "o3": ("pollutantO3",   "O3"),
+    "n2": ("pollutantNO2",  "NO2"),
+    "s2": ("pollutantSO2",  "SO2"),
+    "co": ("pollutantCO",   "CO"),
+}
+
 # IQAir error message strings that indicate auth/credential failure (LC12/LC27).
 # From pyairvisual cloud_api.py ERROR_CODES dispatch table.
 # Maps to KeyInvalid (permanent until operator updates config).
@@ -157,14 +170,16 @@ CAPABILITY = ProviderCapability(
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
     supplied_canonical_fields=(
-        # Conservative free-tier scope per Q2 user decision 2026-05-11.
-        # Only the 6 fields verified on the Community (free) tier wire.
-        # Pollutant concentrations (pollutantPM25/PM10/O3/NO2/SO2/CO) are
-        # PARTIAL-DOMAIN on free Community tier — categorical absence (the data
-        # isn't there at any time on this tier), not tier-conditional null.
-        # A future round can lift them after paid-tier real-capture confirms
-        # the wire field names and units (likely Startup+ plan).
+        # Base fields verified on the Community (free) tier wire.
+        # Pollutant concentrations (pollutantPM25/PM10/O3/NO2/SO2/CO) and
+        # pollutantSubIndices require Startup+ plan — present only when the paid-tier
+        # per-pollutant objects (p2/p1/o3/n2/s2/co) appear in the pollution block.
+        # On the free Community tier, extra="ignore" silently defaults these to None.
+        # Declaring them here so the capability registry reflects Startup+ capability.
         "aqi", "aqiCategory", "aqiMainPollutant", "aqiLocation",
+        "pollutantPM25", "pollutantPM10",
+        "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
+        "pollutantSubIndices",
         "observedAt", "source",
     ),
     geographic_coverage="global",
@@ -188,8 +203,12 @@ CAPABILITY = ProviderCapability(
         "p1/p2/n2 confirmed, o3/s2/co inferred — real-capture should verify). "
         "Unmappable pollutant codes → None + logger.info notice (LC3). "
         "aqiLocation = f'{city}, {state}' (comma+space per Q3 user decision 2026-05-11). "
-        "pollutantPM25/PM10/O3/NO2/SO2/CO = None (PARTIAL-DOMAIN on free Community tier; "
-        "wire path for paid Startup+ tier unverified at 3b-12 brief time). "
+        "pollutantPM25/PM10/O3/NO2/SO2/CO: populated from per-pollutant objects "
+        "(p2/p1/o3/n2/s2/co) on Startup+ plan; None on free Community tier. "
+        "All IQAir concentrations are µg/m³ — verified from data.units block in real "
+        "Startup-tier response (2026-06-23); no ppb→µg/m³ conversion needed. "
+        "pollutantSubIndices: populated from per-pollutant aqius/aqicn on Startup+ plan; "
+        "None on free Community tier. "
         "pollutantNO and pollutantNH3 not available from IQAir (ADR-059). "
         "Envelope: 200-success-false (status:'fail' + data.message dispatch, LC12/LC27). "
         "Known error message strings: incorrect_api_key, api_key_expired, payment required, "
@@ -206,12 +225,30 @@ CAPABILITY = ProviderCapability(
 # ---------------------------------------------------------------------------
 
 
+class _IQAirPollutantData(BaseModel):
+    """Per-pollutant sub-object in the IQAir Startup+ pollution block.
+
+    Appears as keys p2/p1/o3/n2/s2/co under data.current.pollution on paid tiers.
+    Absent on the free Community tier (extra="ignore" on _IQAirPollution handles
+    this gracefully — optional fields default to None).
+
+    Units: all concentrations are µg/m³ (verified from data.units in real Startup-tier
+    response, 2026-06-23).  No ppb→µg/m³ conversion needed (distinct from Aeris).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    conc: float | None = None    # concentration in µg/m³
+    aqius: int | None = None     # US EPA sub-AQI for this pollutant
+    aqicn: int | None = None     # China MEP sub-AQI for this pollutant
+
+
 class _IQAirPollution(BaseModel):
     """data.current.pollution — the air quality observation block.
 
     Free Community tier: ts, aqius, mainus, aqicn, maincn only.
-    No concentration fields declared (paid-tier wire path unverified).
-    extra="ignore" drops any paid-tier fields that might appear on a higher plan.
+    Startup+ tier adds per-pollutant objects (p2/p1/o3/n2/s2/co).
+    extra="ignore" drops any unrecognised paid-tier fields.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -221,6 +258,13 @@ class _IQAirPollution(BaseModel):
     mainus: str | None = None     # dominant pollutant code in US AQI e.g. "p2"
     aqicn: int | None = None      # China AQI (not consumed by canonical)
     maincn: str | None = None     # dominant pollutant code in China AQI (not consumed)
+    # Per-pollutant data (Startup+ tier only; None on free Community tier).
+    p2: _IQAirPollutantData | None = None   # PM2.5
+    p1: _IQAirPollutantData | None = None   # PM10
+    o3: _IQAirPollutantData | None = None   # ozone
+    n2: _IQAirPollutantData | None = None   # NO2
+    s2: _IQAirPollutantData | None = None   # SO2
+    co: _IQAirPollutantData | None = None   # CO
 
 
 class _IQAirWeather(BaseModel):
@@ -438,10 +482,26 @@ def _wire_to_canonical(data: _IQAirData) -> AQIReading | None:
     if data.city and data.state:
         aqi_location = f"{data.city}, {data.state}"
 
-    # pollutantPM25/PM10/O3/NO2/SO2/CO: all None on free Community tier (LC5).
-    # PARTIAL-DOMAIN — categorical absence (not tier-conditional null).
-    # A future round can add these after paid-tier real-capture confirms wire shape.
+    # Per-pollutant concentrations and sub-indices (Startup+ tier only).
+    # Iterate _CODE_TO_CANONICAL: for each code check getattr(pollution, code).
+    # If the per-pollutant object is non-None, extract conc → concentration field
+    # and aqius/aqicn (based on _AQI_SCALE) → sub_indices dict.
+    # On free Community tier, all per-pollutant fields are None → both dicts stay empty.
+    # All IQAir concentrations are µg/m³ — no conversion needed (verified 2026-06-23).
     # pollutantNO and pollutantNH3: not available from IQAir (ADR-059).
+    pollutant_values: dict[str, float | None] = {}
+    sub_indices: dict[str, float | None] = {}
+    for code, (canonical_field, canonical_pollutant_id) in _CODE_TO_CANONICAL.items():
+        per_pollutant = getattr(pollution, code, None)
+        if per_pollutant is None:
+            continue
+        # Concentration: µg/m³ passthrough (no conversion needed per verified units).
+        if per_pollutant.conc is not None:
+            pollutant_values[canonical_field] = per_pollutant.conc
+        # Sub-index: selected by _AQI_SCALE (same logic as main aqi above).
+        sub_val = per_pollutant.aqicn if _AQI_SCALE == "cn" else per_pollutant.aqius
+        if sub_val is not None:
+            sub_indices[canonical_pollutant_id] = min(sub_val, 500)
 
     # observedAt: parse pollution.ts via shared helper (LC6 / ADR-020).
     # Py 3.11+ datetime.fromisoformat accepts Z suffix ("2019-04-08T18:00:00.000Z").
@@ -457,15 +517,16 @@ def _wire_to_canonical(data: _IQAirData) -> AQIReading | None:
     return AQIReading(
         aqi=aqi_val,
         aqiScale=aqi_scale,
-        aqiCategory=None,          # IQAir does not supply a category field on free tier
+        aqiCategory=None,          # IQAir does not supply a category field
         aqiMainPollutant=main_pollutant,
         aqiLocation=aqi_location,
-        pollutantPM25=None,   # LC5 — PARTIAL-DOMAIN free Community tier
-        pollutantPM10=None,   # LC5 — PARTIAL-DOMAIN free Community tier
-        pollutantO3=None,     # LC5 — PARTIAL-DOMAIN free Community tier
-        pollutantNO2=None,    # LC5 — PARTIAL-DOMAIN free Community tier
-        pollutantSO2=None,    # LC5 — PARTIAL-DOMAIN free Community tier
-        pollutantCO=None,     # LC5 — PARTIAL-DOMAIN free Community tier
+        pollutantPM25=pollutant_values.get("pollutantPM25"),
+        pollutantPM10=pollutant_values.get("pollutantPM10"),
+        pollutantO3=pollutant_values.get("pollutantO3"),
+        pollutantNO2=pollutant_values.get("pollutantNO2"),
+        pollutantSO2=pollutant_values.get("pollutantSO2"),
+        pollutantCO=pollutant_values.get("pollutantCO"),
+        pollutantSubIndices=sub_indices or None,
         observedAt=observed_at,
         source=PROVIDER_ID,
     )

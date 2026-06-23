@@ -1003,3 +1003,145 @@ class TestCapabilityDeclaration:
         # This test runs before the 3a2 integration module's capabilities tests
         # in the full pytest run; without cleanup the registry leak causes F.
         _reset_provider_state()
+
+
+# ===========================================================================
+# 8. pollutantSubIndices — per-pollutant sub-AQI pass-through
+# ===========================================================================
+
+
+class TestPollutantSubIndices:
+    """pollutantSubIndices is populated from already-parsed sub-AQI fields."""
+
+    def _load_wire(self, filename: str = "openmeteo_current.json") -> Any:
+        """Load and parse a fixture into the wire model."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import (
+            _OpenMeteoAQResponse,  # noqa: PLC0415
+        )
+        return _OpenMeteoAQResponse.model_validate(_load_fixture(filename))
+
+    def test_us_aqi_mode_produces_six_key_dict(self) -> None:
+        """US AQI mode: pollutantSubIndices has 6 keys (PM2.5, PM10, NO2, O3, SO2, CO)."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
+        wire = self._load_wire()
+        reading = _wire_to_canonical(wire)
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None, (
+            "US AQI fixture has all 6 sub-AQI fields; pollutantSubIndices must not be None"
+        )
+        expected_keys = {"PM2.5", "PM10", "NO2", "O3", "SO2", "CO"}
+        actual_keys = set(reading.pollutantSubIndices.keys())
+        assert actual_keys == expected_keys, (
+            f"Expected keys {expected_keys!r}, got {actual_keys!r}"
+        )
+
+    def test_us_aqi_pm25_sub_index_is_73(self) -> None:
+        """US mode: PM2.5 sub-index = 73 (fixture us_aqi_pm2_5=73)."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
+        wire = self._load_wire()
+        reading = _wire_to_canonical(wire)
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None
+        assert reading.pollutantSubIndices["PM2.5"] == 73, (
+            f"Expected PM2.5 sub-index=73, got {reading.pollutantSubIndices.get('PM2.5')!r}"
+        )
+
+    def test_us_aqi_pm10_sub_index_is_24(self) -> None:
+        """US mode: PM10 sub-index = 24 (fixture us_aqi_pm10=24)."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
+        wire = self._load_wire()
+        reading = _wire_to_canonical(wire)
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None
+        assert reading.pollutantSubIndices["PM10"] == 24, (
+            f"Expected PM10 sub-index=24, got {reading.pollutantSubIndices.get('PM10')!r}"
+        )
+
+    def test_us_aqi_co_sub_index_is_2(self) -> None:
+        """US mode: CO sub-index = 2 (fixture us_aqi_carbon_monoxide=2)."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import _wire_to_canonical  # noqa: PLC0415
+        wire = self._load_wire()
+        reading = _wire_to_canonical(wire)
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None
+        assert reading.pollutantSubIndices["CO"] == 2, (
+            f"Expected CO sub-index=2, got {reading.pollutantSubIndices.get('CO')!r}"
+        )
+
+    def test_european_aqi_mode_produces_five_key_dict(self) -> None:
+        """European AQI mode: pollutantSubIndices has 5 keys (no CO in EAQI formula)."""
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
+            _OpenMeteoAQResponse,
+            _wire_to_canonical,
+        )
+        # Build a fixture with European AQI sub-fields populated.
+        raw = _load_fixture("openmeteo_current.json")
+        raw["current"]["european_aqi"] = 30
+        raw["current"]["european_aqi_pm2_5"] = 25
+        raw["current"]["european_aqi_pm10"] = 15
+        raw["current"]["european_aqi_nitrogen_dioxide"] = 10
+        raw["current"]["european_aqi_ozone"] = 30
+        raw["current"]["european_aqi_sulphur_dioxide"] = 5
+
+        original_index = openmeteo._AQI_INDEX  # noqa: SLF001
+        try:
+            openmeteo._AQI_INDEX = "european_aqi"  # noqa: SLF001
+            wire = _OpenMeteoAQResponse.model_validate(raw)
+            reading = _wire_to_canonical(wire)
+        finally:
+            openmeteo._AQI_INDEX = original_index  # noqa: SLF001
+
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None, (
+            "European AQI fixture has 5 sub-AQI fields; pollutantSubIndices must not be None"
+        )
+        expected_keys = {"PM2.5", "PM10", "NO2", "O3", "SO2"}
+        actual_keys = set(reading.pollutantSubIndices.keys())
+        assert actual_keys == expected_keys, (
+            f"European AQI: expected keys {expected_keys!r} (no CO), got {actual_keys!r}"
+        )
+
+    def test_european_aqi_co_key_absent(self) -> None:
+        """European AQI mode: 'CO' not in pollutantSubIndices (no CO in EAQI formula)."""
+        from weewx_clearskies_api.providers.aqi import openmeteo  # noqa: PLC0415
+        from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
+            _OpenMeteoAQResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("openmeteo_current.json")
+        raw["current"]["european_aqi"] = 30
+        raw["current"]["european_aqi_pm2_5"] = 25
+        raw["current"]["european_aqi_pm10"] = 15
+        raw["current"]["european_aqi_nitrogen_dioxide"] = 10
+        raw["current"]["european_aqi_ozone"] = 30
+        raw["current"]["european_aqi_sulphur_dioxide"] = 5
+
+        original_index = openmeteo._AQI_INDEX  # noqa: SLF001
+        try:
+            openmeteo._AQI_INDEX = "european_aqi"  # noqa: SLF001
+            wire = _OpenMeteoAQResponse.model_validate(raw)
+            reading = _wire_to_canonical(wire)
+        finally:
+            openmeteo._AQI_INDEX = original_index  # noqa: SLF001
+
+        assert reading is not None
+        assert reading.pollutantSubIndices is not None
+        assert "CO" not in reading.pollutantSubIndices, (
+            "EAQI has no CO sub-AQI; 'CO' must not appear in pollutantSubIndices"
+        )
+
+    def test_sub_indices_none_when_all_sub_aqi_null(self) -> None:
+        """pollutantSubIndices = None when all sub-AQI values are null."""
+        from weewx_clearskies_api.providers.aqi.openmeteo import (  # noqa: PLC0415
+            _OpenMeteoAQResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("openmeteo_current_us_aqi_only.json")
+        wire = _OpenMeteoAQResponse.model_validate(raw)
+        reading = _wire_to_canonical(wire)
+        assert reading is not None
+        assert reading.pollutantSubIndices is None, (
+            "All sub-AQI fields null → pollutantSubIndices must be None, "
+            f"got {reading.pollutantSubIndices!r}"
+        )

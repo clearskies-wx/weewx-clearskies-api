@@ -1191,3 +1191,209 @@ class TestHttpErrorPropagation:
             with pytest.raises(TransientNetworkError):
                 fetch(lat=_LAT_NASHVILLE, lon=_LON_NASHVILLE, key=_TEST_KEY)
         _reset_provider_state()
+
+
+# ===========================================================================
+# 9. pollutantSubIndices — per-pollutant sub-AQI pass-through
+# ===========================================================================
+
+
+# Coordinates for paid-tier fixture (Mount Pearl, Newfoundland)
+_LAT_MOUNT_PEARL = 47.56038
+_LON_MOUNT_PEARL = -52.7115
+
+
+class TestPollutantSubIndices:
+    """pollutantSubIndices is populated from Startup+ per-pollutant objects; None on free tier."""
+
+    def _load_startup_wire(self) -> Any:
+        """Load and parse the paid-tier fixture."""
+        from weewx_clearskies_api.providers.aqi.iqair import _IQAirResponse  # noqa: PLC0415
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        return _IQAirResponse.model_validate(raw)
+
+    def test_free_tier_fixture_pollutant_sub_indices_is_none(self) -> None:
+        """Free Community tier: pollutantSubIndices = None (no per-pollutant objects)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_city_nashville.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is None, (
+            "Free Community tier has no per-pollutant objects; "
+            f"pollutantSubIndices must be None, got {result.pollutantSubIndices!r}"
+        )
+
+    def test_free_tier_fixture_all_pollutant_concentrations_are_none(self) -> None:
+        """Free Community tier: all pollutant concentration fields are None."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_city_nashville.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        for field in ("pollutantPM25", "pollutantPM10", "pollutantO3",
+                      "pollutantNO2", "pollutantSO2", "pollutantCO"):
+            val = getattr(result, field)
+            assert val is None, (
+                f"Free tier: {field} must be None (no per-pollutant data), got {val!r}"
+            )
+
+    def test_startup_fixture_loads_cleanly(self) -> None:
+        """Paid-tier fixture loads via _IQAirResponse without error."""
+        response = self._load_startup_wire()
+        assert response.status == "success"
+        assert response.data is not None
+
+    def test_startup_fixture_per_pollutant_objects_parse(self) -> None:
+        """Paid-tier fixture: p2/p1/o3 per-pollutant objects parse into _IQAirPollutantData."""
+        from weewx_clearskies_api.providers.aqi.iqair import _IQAirResponse  # noqa: PLC0415
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        pollution = response.data.current.pollution
+        assert pollution.p2 is not None, "p2 (PM2.5) object must parse on paid-tier fixture"
+        assert pollution.p1 is not None, "p1 (PM10) object must parse on paid-tier fixture"
+        assert pollution.o3 is not None, "o3 object must parse on paid-tier fixture"
+        # n2/s2/co absent in fixture → None (optional fields)
+        assert pollution.n2 is None
+        assert pollution.s2 is None
+        assert pollution.co is None
+
+    def test_startup_fixture_pollutant_sub_indices_is_not_none(self) -> None:
+        """Paid-tier fixture: pollutantSubIndices is populated (not None)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is not None, (
+            "Paid-tier fixture has per-pollutant aqius values; "
+            "pollutantSubIndices must not be None"
+        )
+
+    def test_startup_fixture_pm25_sub_index_is_7(self) -> None:
+        """Paid-tier: PM2.5 sub-index = 7 (p2.aqius=7 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["PM2.5"] == 7, (
+            f"Expected PM2.5 sub-index=7 (p2.aqius), "
+            f"got {result.pollutantSubIndices.get('PM2.5')!r}"
+        )
+
+    def test_startup_fixture_pm10_sub_index_is_3(self) -> None:
+        """Paid-tier: PM10 sub-index = 3 (p1.aqius=3 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["PM10"] == 3, (
+            f"Expected PM10 sub-index=3 (p1.aqius), "
+            f"got {result.pollutantSubIndices.get('PM10')!r}"
+        )
+
+    def test_startup_fixture_o3_sub_index_is_7(self) -> None:
+        """Paid-tier: O3 sub-index = 7 (o3.aqius=7 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        assert result.pollutantSubIndices["O3"] == 7, (
+            f"Expected O3 sub-index=7 (o3.aqius), "
+            f"got {result.pollutantSubIndices.get('O3')!r}"
+        )
+
+    def test_startup_fixture_pm25_concentration_is_1_3(self) -> None:
+        """Paid-tier: pollutantPM25 = 1.3 µg/m³ (p2.conc=1.3 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantPM25 == pytest.approx(1.3, rel=1e-6), (
+            f"Expected pollutantPM25=1.3 µg/m³, got {result.pollutantPM25!r}"
+        )
+
+    def test_startup_fixture_pm10_concentration_is_3_8(self) -> None:
+        """Paid-tier: pollutantPM10 = 3.8 µg/m³ (p1.conc=3.8 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantPM10 == pytest.approx(3.8, rel=1e-6), (
+            f"Expected pollutantPM10=3.8 µg/m³, got {result.pollutantPM10!r}"
+        )
+
+    def test_startup_fixture_o3_concentration_is_18_4(self) -> None:
+        """Paid-tier: pollutantO3 = 18.4 µg/m³ (o3.conc=18.4 in fixture)."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantO3 == pytest.approx(18.4, rel=1e-6), (
+            f"Expected pollutantO3=18.4 µg/m³, got {result.pollutantO3!r}"
+        )
+
+    def test_startup_fixture_absent_pollutants_not_in_sub_indices(self) -> None:
+        """Paid-tier fixture: NO2/SO2/CO absent → those keys not in pollutantSubIndices."""
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirResponse,
+            _wire_to_canonical,
+        )
+        raw = _load_fixture("iqair_nearest_station_startup.json")
+        response = _IQAirResponse.model_validate(raw)
+        assert response.data is not None
+        result = _wire_to_canonical(response.data)
+        assert result is not None
+        assert result.pollutantSubIndices is not None
+        # Fixture only has p2/p1/o3 — n2/s2/co are absent
+        for key in ("NO2", "SO2", "CO"):
+            assert key not in result.pollutantSubIndices, (
+                f"Fixture lacks {key} per-pollutant object; "
+                f"'{key}' must not appear in pollutantSubIndices"
+            )

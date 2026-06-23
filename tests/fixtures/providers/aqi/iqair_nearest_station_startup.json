@@ -1,0 +1,30 @@
+{
+  "status": "success",
+  "data": {
+    "name": "St. John's",
+    "city": "Mount Pearl",
+    "state": "Newfoundland and Labrador",
+    "country": "Canada",
+    "location": { "type": "Point", "coordinates": [-52.7115, 47.56038] },
+    "units": {
+      "p2": "ugm3", "p1": "ugm3", "o3": "ugm3",
+      "n2": "ugm3", "s2": "ugm3", "co": "ugm3",
+      "pm25": "ugm3", "pm10": "ugm3"
+    },
+    "current": {
+      "pollution": {
+        "ts": "2025-09-08T07:00:00.000Z",
+        "aqius": 7, "mainus": "p2",
+        "aqicn": 6, "maincn": "o3",
+        "p2": { "conc": 1.3, "aqius": 7, "aqicn": 2 },
+        "p1": { "conc": 3.8, "aqius": 3, "aqicn": 4 },
+        "o3": { "conc": 18.4, "aqius": 7, "aqicn": 6 }
+      },
+      "weather": {
+        "ts": "2025-09-08T08:00:00.000Z",
+        "ic": "04n", "hu": 97, "pr": 1016, "tp": 18,
+        "wd": 225, "ws": 6.78, "heatIndex": 18
+      }
+    }
+  }
+}

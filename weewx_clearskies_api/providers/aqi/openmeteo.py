@@ -422,6 +422,21 @@ def _wire_to_canonical(wire: _OpenMeteoAQResponse) -> AQIReading | None:
     # aqiMainPollutant: argmax of sub-AQIs for the active index (None if all null).
     main_pollutant = _main_pollutant_from_sub_aqis(current)
 
+    # pollutantSubIndices: collect per-pollutant sub-AQI values from the already-parsed
+    # sub-AQI fields on the current block.  Same table used for argmax above.
+    # Round to int, cap at 500 (defensive; same rules as main aqi).
+    # None values are excluded — key only present when provider supplied a value.
+    sub_aqi_table = (
+        _EUROPEAN_SUB_AQI_TO_POLLUTANT
+        if _AQI_INDEX == "european_aqi"
+        else _US_SUB_AQI_TO_POLLUTANT
+    )
+    sub_indices: dict[str, float | None] = {}
+    for field_name, canonical_id in sub_aqi_table:
+        val = getattr(current, field_name, None)
+        if val is not None:
+            sub_indices[canonical_id] = min(round(val), 500)
+
     # observedAt: append "Z" to the local-naive GMT timestamp (LC4).
     # current.time arrives as "YYYY-MM-DDTHH:mm" — Open-Meteo hourly grid.
     # Appending ":00Z" gives canonical UTC ISO-8601 with seconds.
@@ -442,6 +457,7 @@ def _wire_to_canonical(wire: _OpenMeteoAQResponse) -> AQIReading | None:
         pollutantCO=current.carbon_monoxide,
         pollutantNO=current.nitrogen_monoxide,   # ADR-059: no longer dropped
         pollutantNH3=current.ammonia,             # ADR-059: Europe-only; null outside Europe
+        pollutantSubIndices=sub_indices or None,
         observedAt=observed_at,
         source=PROVIDER_ID,
     )
