@@ -117,22 +117,16 @@ def run_bootstrap(
             counters["skipped_no_radiation"] += 1
             continue
 
-        # If maxSolarRad is NULL, recompute via auto_calibration.
-        if max_solar_rad is None:
-            max_solar_rad = auto_calibration.compute_max_solar_rad(
-                lat=station_lat,
-                lon=station_lon,
-                altitude_m=station_alt_m,
-                unix_ts=float(arch_ts),
-            )
+        # Always recompute maxSolarRad — archive values are unreliable
+        # (column gets deleted/corrupted by DB maintenance).
+        max_solar_rad = auto_calibration.compute_max_solar_rad(
+            lat=station_lat,
+            lon=station_lon,
+            altitude_m=station_alt_m,
+            unix_ts=float(arch_ts),
+        )
 
         if max_solar_rad is None:
-            counters["skipped_no_radiation"] += 1
-            continue
-
-        try:
-            max_solar_rad = float(max_solar_rad)
-        except (TypeError, ValueError):
             counters["skipped_no_radiation"] += 1
             continue
 
