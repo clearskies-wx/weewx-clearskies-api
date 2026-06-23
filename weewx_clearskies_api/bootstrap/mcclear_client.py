@@ -130,7 +130,10 @@ def fetch_mcclear_clearsky_ghi(
             )
 
         # Convert DatetimeIndex → integer Unix timestamps (seconds since epoch).
-        unix_index = data.index.astype("int64") // 10**9
+        # pandas 2.x uses datetime64[us] (microseconds); older versions use [ns].
+        # Using total_seconds() is resolution-independent.
+        epoch = pd.Timestamp("1970-01-01", tz="UTC")
+        unix_index = ((data.index - epoch).total_seconds()).astype(int)
         ghi_series = data["ghi_clear"]
 
         chunk_dict = dict(zip(unix_index, ghi_series.astype(float)))
