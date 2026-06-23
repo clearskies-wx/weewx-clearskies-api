@@ -1052,3 +1052,277 @@ class TestTimezoneAwareMonthBinning:
         assert jan_count_auckland == 0 and feb_count_auckland == 1, (
             "Pacific/Auckland UTC+13: 2025-01-31 22:00 UTC → Feb 01 11:00 NZDT → February"
         )
+
+
+# ===========================================================================
+# Group 11: OpenAQ sensor info — set/get, state, persist/load, reset (Phase 9)
+# ===========================================================================
+
+# Realistic sensor info dict matching the shape produced by find_best_pm25_sensor().
+_SENSOR_INFO = {
+    "sensor_id": 9901,
+    "name": "Downtown LA Monitor",
+    "distance_km": 2.134,
+    "lat": 34.070,
+    "lon": -118.244,
+}
+
+
+class TestOpenAQSensorInfo:
+    """set_openaq_sensor / get_openaq_sensor public API contract (Phase 9 T9.8)."""
+
+    def test_set_then_get_returns_same_dict(self) -> None:
+        """set_openaq_sensor() followed by get_openaq_sensor() returns the same dict."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        result = auto_calibration.get_openaq_sensor()
+        assert result == _SENSOR_INFO, (
+            "get_openaq_sensor() must return the same dict that was set"
+        )
+
+    def test_get_returns_none_after_reset(self) -> None:
+        """get_openaq_sensor() returns None immediately after reset() (autouse fixture)."""
+        # autouse _reset_auto_cal runs reset() before this test.
+        result = auto_calibration.get_openaq_sensor()
+        assert result is None
+
+    def test_set_none_clears_stored_sensor(self) -> None:
+        """set_openaq_sensor(None) clears any previously stored sensor info."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        auto_calibration.set_openaq_sensor(None)
+        assert auto_calibration.get_openaq_sensor() is None
+
+    def test_overwrite_replaces_previous_sensor(self) -> None:
+        """Setting a second sensor dict overwrites the first."""
+        first = {"sensor_id": 1, "name": "First", "distance_km": 1.0, "lat": 34.0, "lon": -118.0}
+        second = {"sensor_id": 2, "name": "Second", "distance_km": 5.0, "lat": 34.1, "lon": -118.1}
+        auto_calibration.set_openaq_sensor(first)
+        auto_calibration.set_openaq_sensor(second)
+        assert auto_calibration.get_openaq_sensor() == second
+
+    def test_stored_sensor_is_not_a_copy(self) -> None:
+        """set_openaq_sensor stores the dict reference (not a deep copy) — caller owns it."""
+        info = dict(_SENSOR_INFO)
+        auto_calibration.set_openaq_sensor(info)
+        assert auto_calibration.get_openaq_sensor() is info
+
+
+class TestOpenAQSensorInCalibrationState:
+    """get_calibration_state() exposes openaq_sensor key correctly."""
+
+    def test_state_includes_openaq_sensor_key(self) -> None:
+        """get_calibration_state() always has an 'openaq_sensor' key."""
+        state = auto_calibration.get_calibration_state()
+        assert "openaq_sensor" in state, (
+            "get_calibration_state() must include 'openaq_sensor' key"
+        )
+
+    def test_openaq_sensor_none_when_not_set(self) -> None:
+        """openaq_sensor is None in calibration state before set_openaq_sensor() is called."""
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"] is None
+
+    def test_openaq_sensor_reflects_set_value(self) -> None:
+        """openaq_sensor in calibration state matches the stored sensor info dict."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"] == _SENSOR_INFO
+
+    def test_openaq_sensor_sensor_id_in_state(self) -> None:
+        """openaq_sensor.sensor_id in state matches what was set."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"]["sensor_id"] == 9901
+
+    def test_openaq_sensor_name_in_state(self) -> None:
+        """openaq_sensor.name in state matches what was set."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"]["name"] == "Downtown LA Monitor"
+
+    def test_openaq_sensor_distance_km_in_state(self) -> None:
+        """openaq_sensor.distance_km in state matches what was set."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"]["distance_km"] == pytest.approx(2.134)
+
+    def test_openaq_sensor_cleared_after_reset(self) -> None:
+        """After reset(), openaq_sensor in state is None."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        auto_calibration.reset()
+        state = auto_calibration.get_calibration_state()
+        assert state["openaq_sensor"] is None
+
+
+class TestOpenAQSensorPersistLoad:
+    """persist() / load_persisted() round-trip for openaq_sensor info."""
+
+    def test_persist_writes_openaq_sensor_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """persist() writes openaq_sensor_id, _name, _distance_km, _lat, _lon to disk."""
+        import json as _json
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        auto_calibration.persist()
+
+        assert persist_path.exists(), "persist() must write the calibration file"
+        data = _json.loads(persist_path.read_text(encoding="utf-8"))
+
+        assert data["openaq_sensor_id"] == 9901
+        assert data["openaq_sensor_name"] == "Downtown LA Monitor"
+        assert data["openaq_sensor_distance_km"] == pytest.approx(2.134)
+        assert data["openaq_sensor_lat"] == pytest.approx(34.070)
+        assert data["openaq_sensor_lon"] == pytest.approx(-118.244)
+
+    def test_persist_omits_openaq_fields_when_no_sensor_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """persist() does not write openaq_sensor_* keys when sensor is None."""
+        import json as _json
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+
+        # No set_openaq_sensor() call — _openaq_sensor stays None.
+        auto_calibration.persist()
+
+        data = _json.loads(persist_path.read_text(encoding="utf-8"))
+        assert "openaq_sensor_id" not in data, (
+            "openaq_sensor_id must not appear in persisted data when no sensor set"
+        )
+
+    def test_persist_load_round_trip_restores_sensor_info(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Persist sensor info, reset, load from disk — sensor info is restored."""
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        auto_calibration.persist()
+
+        # Reset wipes all state including sensor.
+        auto_calibration.reset()
+        assert auto_calibration.get_openaq_sensor() is None, (
+            "Sensor info must be cleared by reset() before load_persisted()"
+        )
+
+        auto_calibration.load_persisted()
+
+        restored = auto_calibration.get_openaq_sensor()
+        assert restored is not None, (
+            "load_persisted() must restore sensor info from disk"
+        )
+        assert restored["sensor_id"] == _SENSOR_INFO["sensor_id"]
+        assert restored["name"] == _SENSOR_INFO["name"]
+        assert restored["distance_km"] == pytest.approx(_SENSOR_INFO["distance_km"])
+        assert restored["lat"] == pytest.approx(_SENSOR_INFO["lat"])
+        assert restored["lon"] == pytest.approx(_SENSOR_INFO["lon"])
+
+    def test_load_persisted_backward_compat_v2_without_sensor_fields(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """v2 calibration.json without openaq_sensor fields loads without crash.
+
+        A file written before Phase 9 has no openaq_sensor_id / _name / etc.
+        load_persisted() must leave _openaq_sensor as None and not raise.
+        """
+        import json as _json
+
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        # v2 file with no openaq_sensor fields (simulates a pre-Phase-9 save).
+        v2_legacy = {
+            "version": 2,
+            "monthly_samples": {str(m): [] for m in range(1, 13)},
+            "monthly_baselines": {str(m): None for m in range(1, 13)},
+            "flat_baseline": None,
+            "station_type": "Vantage",
+        }
+        persist_path.write_text(_json.dumps(v2_legacy), encoding="utf-8")
+
+        # Must not raise.
+        auto_calibration.load_persisted()
+
+        assert auto_calibration.get_openaq_sensor() is None, (
+            "load_persisted() must leave _openaq_sensor=None for pre-Phase-9 files"
+        )
+
+    def test_load_persisted_with_malformed_sensor_id_leaves_sensor_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """openaq_sensor_id that cannot be cast to int → _openaq_sensor stays None."""
+        import json as _json
+
+        from weewx_clearskies_api.sse import haze_condition
+
+        persist_path = tmp_path / "calibration.json"
+        monkeypatch.setattr(auto_calibration, "_PERSIST_PATH", str(persist_path))
+        monkeypatch.setattr(auto_calibration.time, "time", lambda: _FROZEN_NOW)
+        monkeypatch.setattr(haze_condition, "set_baseline", lambda v: None)
+
+        bad_sensor = {
+            "version": 2,
+            "monthly_samples": {str(m): [] for m in range(1, 13)},
+            "monthly_baselines": {str(m): None for m in range(1, 13)},
+            "flat_baseline": None,
+            "station_type": None,
+            "openaq_sensor_id": "not-an-int",  # malformed
+            "openaq_sensor_name": "Broken",
+            "openaq_sensor_distance_km": 5.0,
+            "openaq_sensor_lat": 34.0,
+            "openaq_sensor_lon": -118.0,
+        }
+        persist_path.write_text(_json.dumps(bad_sensor), encoding="utf-8")
+
+        auto_calibration.load_persisted()  # must not raise
+
+        assert auto_calibration.get_openaq_sensor() is None, (
+            "Malformed openaq_sensor_id must leave _openaq_sensor as None"
+        )
+
+
+class TestResetClearsSensorInfo:
+    """reset() clears _openaq_sensor among all other state."""
+
+    def test_reset_clears_sensor_info(self) -> None:
+        """set_openaq_sensor() followed by reset() → get_openaq_sensor() returns None."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        assert auto_calibration.get_openaq_sensor() is not None, (
+            "Pre-condition: sensor must be set before reset"
+        )
+
+        auto_calibration.reset()
+
+        assert auto_calibration.get_openaq_sensor() is None, (
+            "reset() must clear _openaq_sensor to None"
+        )
+
+    def test_reset_clears_sensor_and_all_other_state_simultaneously(self) -> None:
+        """reset() clears sensor AND monthly samples AND baselines in a single call."""
+        auto_calibration.set_openaq_sensor(_SENSOR_INFO)
+        _inject_monthly_samples(3, _CLEAN_KCS)
+        auto_calibration._monthly_baselines[3] = 0.905
+
+        auto_calibration.reset()
+
+        assert auto_calibration.get_openaq_sensor() is None
+        total_samples = sum(
+            len(auto_calibration._monthly_samples[m]) for m in range(1, 13)
+        )
+        assert total_samples == 0
+        assert all(
+            auto_calibration._monthly_baselines[m] is None for m in range(1, 13)
+        )
