@@ -501,8 +501,8 @@ def _fetch_sensor_measurements_paginated(
 
     while True:
         params = {
-            "date_from": date_from,
-            "date_to": date_to,
+            "datetime_from": date_from,
+            "datetime_to": date_to,
             "limit": limit,
             "page": page,
         }
