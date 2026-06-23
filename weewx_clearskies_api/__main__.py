@@ -1310,6 +1310,7 @@ def main() -> None:
                             "lat": _bs_lat,
                             "lon": _bs_lon,
                         })
+                        auto_calibration.persist()
                         if _bs_summary["clean_sky_samples"] == 0:
                             logger.warning(
                                 "Auto-bootstrap: operator sensor %d produced 0 clean-sky "
@@ -1381,6 +1382,7 @@ def main() -> None:
                                     "lat": _cand["lat"],
                                     "lon": _cand["lon"],
                                 })
+                                auto_calibration.persist()
                                 logger.info(
                                     "Auto-bootstrap: sensor %d '%s' selected — "
                                     "%d clean-sky samples, %d/12 months calibrated",
