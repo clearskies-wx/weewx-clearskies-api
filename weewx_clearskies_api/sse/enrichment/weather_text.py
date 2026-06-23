@@ -222,6 +222,22 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         _fog_mist_label = _fog_mist_result
         _fog_is_hazy = False
 
+    # Provider cross-check for fog/mist: require the provider's
+    # visibility-equipped station to corroborate before labeling fog.
+    # Suppresses marine-layer humidity false positives where T-Td is
+    # tight but ground-level visibility is fine.
+    # When provider data is stale/unavailable, local detection stands
+    # (absence of provider data is not evidence of absence).
+    if _fog_mist_label in ("Foggy", "Misty"):
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text as _get_pwt_xcheck,
+        )
+        _pw_text_xcheck, _pw_age_xcheck = _get_pwt_xcheck()
+        if _pw_text_xcheck is not None:
+            _pw_lower_xcheck = _pw_text_xcheck.lower()
+            if not any(kw in _pw_lower_xcheck for kw in ("fog", "mist")):
+                _fog_mist_label = None
+
     # Haze detection: two-channel confirmation (Kcs deficit + PM).
     # detect_haze() returns 'Hazy' when both channels fire and temporal
     # coherence is satisfied, None otherwise.
@@ -376,6 +392,22 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         else:
             _fog_mist_state2 = _fog_mist_result2
             _fog_is_hazy2 = False
+
+        # Provider cross-check for fog/mist: require the provider's
+        # visibility-equipped station to corroborate before labeling fog.
+        # Suppresses marine-layer humidity false positives where T-Td is
+        # tight but ground-level visibility is fine.
+        # When provider data is stale/unavailable, local detection stands
+        # (absence of provider data is not evidence of absence).
+        if _fog_mist_state2 in ("Foggy", "Misty"):
+            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+                get_provider_weather_text as _get_pwt_xcheck2,
+            )
+            _pw_text_xcheck2, _pw_age_xcheck2 = _get_pwt_xcheck2()
+            if _pw_text_xcheck2 is not None:
+                _pw_lower_xcheck2 = _pw_text_xcheck2.lower()
+                if not any(kw in _pw_lower_xcheck2 for kw in ("fog", "mist")):
+                    _fog_mist_state2 = None
 
         # Determine effective sky the same way build_weather_text() does:
         # solar classifier during daytime, provider_sky at night / on startup.
