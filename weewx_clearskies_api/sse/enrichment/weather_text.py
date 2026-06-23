@@ -28,7 +28,6 @@ def _cloud_pct_to_sky(pct: float | None, *, is_day: bool = False) -> str | None:
     """Map cloud cover percentage to a sky-condition string.
 
     Used as the night/startup fallback when the solar classifier is unavailable.
-    Cannot produce "Scattered Clouds" composites (no Kv from cloud percentage).
 
     Thresholds (WMO / NWS okta-based approximation):
       ≤ 10 % → "Clear" / "Sunny" (day)
@@ -99,8 +98,8 @@ def _derive_weather_code(
       "Heavy Overcast" / "Overcast"                               → 4
       "Cloudy" / "Mostly Cloudy"                                  → 3
       "Partly Cloudy"                                             → 2
-      "Mostly Clear" / "Mostly Sunny" + Scattered Clouds variants → 1
-      "Clear" / "Sunny" + Scattered Clouds variants / None        → 0
+      "Mostly Clear" / "Mostly Sunny"                             → 1
+      "Clear" / "Sunny" / None                                    → 0
 
     Args:
         effective_sky: Sky condition string from the solar classifier or provider.

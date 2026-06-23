@@ -47,10 +47,6 @@ _SKY_LABEL_TO_METAR: dict[str, tuple[str, int]] = {
     # FEW — thin clouds / light scattered
     "Mostly Clear":                  ("FEW", 1),
     "Mostly Sunny":                  ("FEW", 1),
-    "Clear, Scattered Clouds":       ("FEW", 2),
-    "Sunny, Scattered Clouds":       ("FEW", 2),
-    "Mostly Clear, Scattered Clouds": ("FEW", 2),
-    "Mostly Sunny, Scattered Clouds": ("FEW", 2),
     # SCT — scattered / partly cloudy
     "Partly Cloudy":                 ("SCT", 3),
     # BKN — mostly cloudy / cloudy

@@ -92,11 +92,9 @@ _GFE_SKY_BUCKETS: list[tuple[float, str, str]] = [
 # ---------------------------------------------------------------------------
 
 _DAY_SKY_MAP: dict[str, str] = {
-    "Clear":                          "Sunny",
-    "Mostly Clear":                   "Mostly Sunny",
-    "Clear, Scattered Clouds":        "Sunny",
-    "Mostly Clear, Scattered Clouds": "Mostly Sunny",
-    "Partly Cloudy":                  "Partly Sunny",
+    "Clear":        "Sunny",
+    "Mostly Clear": "Mostly Sunny",
+    "Partly Cloudy": "Partly Sunny",
     # These pass through unchanged for both day and night:
     # "Mostly Cloudy", "Cloudy", "Overcast", "Heavy Overcast"
 }

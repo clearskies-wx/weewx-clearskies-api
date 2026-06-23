@@ -134,8 +134,7 @@ def _to_fahrenheit(value: float | None, source_unit: str) -> float | None:
 def _to_display_label(sky_label: str | None, is_daytime: bool) -> str | None:
     """Map sky classification to day/night display vocabulary.
 
-    Day: Clear→Sunny, Mostly Clear→Mostly Sunny (including composite labels
-    like "Clear, Scattered Clouds" → "Sunny, Scattered Clouds").
+    Day: Clear→Sunny, Mostly Clear→Mostly Sunny (e.g. "Clear" → "Sunny").
     Night: labels pass through unchanged.
     """
     if sky_label is None:

@@ -97,7 +97,6 @@ _HAZE_ELIGIBLE_SKY_SUBSTRINGS: tuple[str, ...] = (
     "Sunny",
     "Mostly Clear",
     "Mostly Sunny",
-    "Scattered Clouds",
     "Partly Cloudy",
 )
 
