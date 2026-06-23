@@ -27,6 +27,17 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.openaq.org/v3"
 _MAX_RADIUS_M = 25000  # 25 km max per OpenAQ docs
+_CHUNK_MONTHS = 3      # 3-month chunks keep pagination shallow
+
+
+def _add_months(d: _date, months: int) -> _date:
+    """Add months to a date, clamping day to the last day of the target month."""
+    m = d.month - 1 + months
+    year = d.year + m // 12
+    month = m % 12 + 1
+    import calendar  # noqa: PLC0415
+    max_day = calendar.monthrange(year, month)[1]
+    return _date(year, month, min(d.day, max_day))
 _REQUEST_TIMEOUT = 30  # seconds
 _RATE_LIMIT_SLEEP = 1.0  # 1 second between requests (safe at 60/min)
 
@@ -439,11 +450,11 @@ def fetch_historical_pm25(
 
     all_records: list[PMRecord] = []
 
-    # Build year-long chunks to avoid API timeouts on large date ranges.
+    # Build 3-month chunks to keep pagination shallow (< 3 pages per chunk).
+    # OpenAQ times out on deep pagination (page 8+) even with 1-year chunks.
     chunk_start = dt_from
     while chunk_start < dt_to:
-        # End of this chunk: 1 year later, or date_to, whichever is earlier.
-        chunk_end_candidate = date(chunk_start.year + 1, chunk_start.month, chunk_start.day)
+        chunk_end_candidate = _add_months(chunk_start, 3)
         chunk_end = min(chunk_end_candidate, dt_to)
 
         chunk_from_str = chunk_start.isoformat() + "T00:00:00Z"
@@ -456,12 +467,20 @@ def fetch_historical_pm25(
             chunk_end.isoformat(),
         )
 
-        chunk_records = _fetch_sensor_measurements_paginated(
-            sensor_id=sensor_id,
-            date_from=chunk_from_str,
-            date_to=chunk_to_str,
-        )
-        all_records.extend(chunk_records)
+        try:
+            chunk_records = _fetch_sensor_measurements_paginated(
+                sensor_id=sensor_id,
+                date_from=chunk_from_str,
+                date_to=chunk_to_str,
+            )
+            all_records.extend(chunk_records)
+        except RuntimeError as exc:
+            logger.warning(
+                "OpenAQ: chunk %s -> %s failed (%s), continuing with partial data",
+                chunk_start.isoformat(),
+                chunk_end.isoformat(),
+                exc,
+            )
 
         chunk_start = chunk_end
 
