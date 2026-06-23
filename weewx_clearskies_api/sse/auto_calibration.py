@@ -650,27 +650,28 @@ def _compute_flat_baseline() -> float | None:
 
 
 def _check_drift(month: int) -> dict | None:  # type: ignore[type-arg]
-    """Check whether recent samples for a month have drifted from its baseline.
+    """Check whether recent real-time samples diverge from the monthly baseline.
 
-    Compares the mean of the last _DRIFT_SAMPLE_COUNT samples against the
-    established monthly baseline.  Returns a warning dict when the divergence
-    exceeds _DRIFT_THRESHOLD (0.05 Kcs units), or None otherwise.
+    Only triggers on real-time samples added AFTER the baseline was last
+    computed — not on bootstrap samples that were used to compute the baseline.
+    Uses a relative threshold (15% of baseline) so it scales with the value.
 
     Args:
         month: Calendar month (1–12).
 
     Returns:
         Warning dict with keys month/baseline/recent_mean/divergence,
-        or None when no drift is detected or not enough data.
+        or None when no drift is detected or not enough recent data.
     """
     samples = _monthly_samples.get(month, [])
     baseline = _monthly_baselines.get(month)
-    if baseline is None or len(samples) < _DRIFT_SAMPLE_COUNT:
+    if baseline is None or baseline <= 0 or len(samples) < _DRIFT_SAMPLE_COUNT * 2:
         return None
     recent = [kcs for _, kcs in samples[-_DRIFT_SAMPLE_COUNT:]]
     recent_mean = sum(recent) / len(recent)
     divergence = abs(recent_mean - baseline)
-    if divergence > _DRIFT_THRESHOLD:
+    relative_divergence = divergence / baseline
+    if relative_divergence > 0.15:
         return {
             "month": month,
             "baseline": round(baseline, 4),
