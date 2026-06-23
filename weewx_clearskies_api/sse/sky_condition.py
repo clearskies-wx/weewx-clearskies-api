@@ -1,8 +1,8 @@
-"""Sky condition classification from solar radiation (ADR-044, amended).
+"""Sky condition classification from solar radiation (ADR-073).
 
-Uses the Variability Index (VI) system adapted from CAELUS (Ruiz-Arias &
-Gueymard 2023) to classify sky conditions from GHI (measured radiation)
-and a clear-sky reference (maxSolarRad from weewx).
+Kv-first decision tree in the Duchon & O'Malley (1999) tradition —
+variability-primary, clearness-secondary — using CAELUS-derived indices
+(Ruiz-Arias & Gueymard 2023) at 1-minute resolution.
 
 Four indices computed from a 30-minute rolling window of 1-minute
 averaged GHI data:
@@ -12,26 +12,27 @@ averaged GHI data:
          first-derivative of clear-sky-detrended GHI
   - Kvf: fine variability index (10-min) — same as Kv, shorter window
 
-Six CAELUS classes mapped to display vocabulary with Km sub-splits:
-  CLOUDLESS          → "Clear"
-  CLOUD_ENHANCEMENT  → "Clear"
-  THIN_CLOUDS        → "Mostly Clear"
-  SCATTER_CLOUDS     → Km-dependent: "Clear, Scattered Clouds" / "Mostly Clear,
-                        Scattered Clouds" / "Partly Cloudy" / "Mostly Cloudy"
-  THICK_CLOUDS       → "Mostly Cloudy"
-  OVERCAST zone      → Km×Kv sub-split: "Cloudy" / "Overcast" / "Heavy Overcast"
+Primary axis: Kv (uniform vs. variable sky). Kv < 0.05 indicates
+uniform sky — either clear or fully overcast (both produce smooth
+GHI curves). Kv >= 0.05 indicates variable sky — broken coverage
+with cloud-edge transitions. Km then distinguishes within each branch.
+
+Seven display labels:
+  Uniform branch:  "Clear", "Overcast", "Heavy Overcast"
+  Variable branch: "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy"
+  Cloud enhancement: "Partly Cloudy"
 
 Temporal coherence filter: a new classification must persist for 15
 consecutive minutes before replacing the previous stable label.
 Prevents rapid flicker at class boundaries.
 
 Data flow: 5-second LOOP packets → 1-minute bins → 30-minute ring buffer
-→ index computation → CAELUS decision tree → temporal coherence filter.
+→ index computation → Kv-first decision tree → temporal coherence filter.
 
 Startup backfill: archive records can seed the ring buffer for immediate
 (if coarser) classification on API restart.
 
-Deviations from CAELUS:
+Index computation from CAELUS (classification tree is ours):
   - maxSolarRad used as clear-sky reference (CAELUS uses ghicda)
   - Solar zenith angle computed via Skyfield (station coords from configure())
   - GHI mirroring adapted from CAELUS mirror_ghi_with_pandas() — synthetic
@@ -78,31 +79,31 @@ _NOISE_FLOOR: float = 0.0
 _KC_MAX: float = 1.2
 
 # ---------------------------------------------------------------------------
-# CAELUS thresholds (Table 3, Ruiz-Arias & Gueymard 2023)
+# Kv-first classification thresholds (ADR-073)
 # ---------------------------------------------------------------------------
 
 _CLOUDEN_MIN_KCS: float = 1.06
 _CLOUDEN_MIN_KV: float = 0.20
 _CLOUDEN_MIN_KVF: float = 0.20
-_CLOUDLESS_MIN_KM: float = 0.6
-_CLOUDLESS_MIN_KCS: float = 0.85
-_CLOUDLESS_MAX_KCS: float = 1.15
-_CLOUDLESS_MAX_KV: float = 0.03
-_THINCLOUDS_MIN_KM: float = 0.5
-_THINCLOUDS_MIN_KV: float = 0.03
-_THINCLOUDS_MAX_KV: float = 0.08
-_THICKCLOUDS_MAX_KM: float = 0.4
-_THICKCLOUDS_MIN_KV: float = 0.04
-_THICKCLOUDS_MAX_KV: float = 0.16
-_OVERCAST_MAX_KM: float = 0.3
-_OVERCAST_MAX_KV: float = 0.10
+
+# Primary axis: Kv uniform/variable boundary
+_KV_UNIFORM: float = 0.05
+
+# Uniform branch: clear vs. overcast vs. heavy overcast
+_UNIFORM_CLEAR_MIN_KM: float = 0.85
+_UNIFORM_CLEAR_MIN_KCS: float = 0.80
+_UNIFORM_HEAVY_MAX_KM: float = 0.35
+
+# Variable branch: Km thresholds for coverage degree
+_VARIABLE_CLEAR_MIN_KM: float = 0.85
+_VARIABLE_PARTLY_MIN_KM: float = 0.60
+_VARIABLE_MOSTLY_MIN_KM: float = 0.40
 
 # SZA proxy: maxSolarRad > threshold approximates solar zenith angle < Ndeg.
 # maxSolarRad is a clear-sky irradiance estimate — it drops to zero at sunrise/
 # sunset and peaks at solar noon, tracking the same geometry as SZA without
 # requiring ephemeris computation in this module.
 _SZA80_MSR_PROXY: float = 100.0   # maxSolarRad > 100 ≈ SZA < 80°
-_SZA75_MSR_PROXY: float = 200.0   # maxSolarRad > 200 ≈ SZA < 75°
 
 # SZA guard threshold (degrees elevation). When solar elevation < this value
 # (SZA > 85°), classify() returns the last stable label instead of classifying.
@@ -192,10 +193,9 @@ def update(
 def classify() -> str | None:
     """Classify sky condition from the ring buffer.
 
-    Returns one of: "Clear", "Clear, Scattered Clouds",
-    "Mostly Clear", "Mostly Clear, Scattered Clouds",
-    "Partly Cloudy", "Mostly Cloudy", "Cloudy", "Overcast",
-    "Heavy Overcast", or None when insufficient data.
+    Returns one of: "Clear", "Mostly Clear", "Partly Cloudy",
+    "Mostly Cloudy", "Cloudy", "Overcast", "Heavy Overcast",
+    or None when insufficient data.
 
     When solar elevation < 5° (SZA > 85°) and station coordinates are
     configured, returns _last_stable_label without classifying.
@@ -213,7 +213,7 @@ def classify() -> str | None:
         return _last_stable_label
 
     kcs, km, kv, kvf, latest_msr = indices
-    raw_label = _classify_caelus(kcs, km, kv, kvf, latest_msr)
+    raw_label = _classify_sky(kcs, km, kv, kvf, latest_msr)
 
     now = _ring[-1].ts if _ring else time.time()
     return _apply_coherence_filter(raw_label, now)
@@ -340,7 +340,7 @@ def backfill(records: list[tuple[float, float, float]]) -> None:
         indices = _compute_indices()
         if indices is not None:
             kcs, km, kv, kvf, latest_msr = indices
-            _last_stable_label = _classify_caelus(kcs, km, kv, kvf, latest_msr)
+            _last_stable_label = _classify_sky(kcs, km, kv, kvf, latest_msr)
 
 
 # ---------------------------------------------------------------------------
@@ -622,94 +622,42 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
     return kcs, km, kv, kvf, latest.max_solar_rad
 
 
-def _classify_caelus(
+def _classify_sky(
     kcs: float, km: float, kv: float, kvf: float, latest_msr: float,
 ) -> str:
-    """Classify sky condition using CAELUS set-based logic.
+    """Classify sky condition using the Kv-first decision tree (ADR-073).
 
-    Three anchor classes are evaluated independently (CLOUD_ENHANCEMENT,
-    CLOUDLESS, OVERCAST).  The "cloudy zone" is the residual — everything
-    not matching an anchor.  Within each zone, Km sub-splits produce the
-    final display label.
-
-    CAELUS source: github.com/jararias/caelus (skytype.py, sky_indices.py).
+    Primary axis: Kv (uniform vs. variable sky). Secondary: Km within
+    each branch. Cloud enhancement evaluated first as a special case.
     """
-    # --- Anchor 1: CLOUD_ENHANCEMENT ---
-    # GHI above clear-sky — sun IS visible, cloud edges scattering extra.
-    clouden = (
+    # --- Cloud enhancement (Kcs above clear-sky + high variability) ---
+    if (
         latest_msr > _SZA80_MSR_PROXY
         and kcs > _CLOUDEN_MIN_KCS
         and kv > _CLOUDEN_MIN_KV
         and kvf > _CLOUDEN_MIN_KVF
-    )
-
-    # --- Anchor 2: CLOUDLESS ---
-    if latest_msr > _SZA75_MSR_PROXY:
-        cloudless = (
-            km > _CLOUDLESS_MIN_KM
-            and kcs > _CLOUDLESS_MIN_KCS
-            and kcs < _CLOUDLESS_MAX_KCS
-            and kv < _CLOUDLESS_MAX_KV
-        )
-    else:
-        cloudless = (
-            km > _CLOUDLESS_MIN_KM
-            and kcs > 0.80
-            and kcs < 1.20
-            and kv < _CLOUDLESS_MAX_KV
-        )
-
-    # --- Anchor 3: OVERCAST zone ---
-    overcast = km < _OVERCAST_MAX_KM and kv < _OVERCAST_MAX_KV
-
-    # --- Priority: cloud_enhancement > cloudless > overcast > cloudy zone ---
-
-    if clouden:
-        return "Clear"
-
-    if cloudless:
-        return "Clear"
-
-    if overcast:
-        # Sub-split by Km (thickness) × Kv (curve shape).
-        if km < 0.15 and kv < _CLOUDLESS_MAX_KV:
-            return "Heavy Overcast"
-        if km < 0.15:
-            return "Overcast"
-        if kv < _CLOUDLESS_MAX_KV:
-            return "Overcast"
-        return "Cloudy"
-
-    # --- Cloudy zone residual (not cloudless, not overcast, not clouden) ---
-
-    # THIN_CLOUDS: high Km, slight variability — cirrus/haze, uniform layer.
-    if (
-        km > _THINCLOUDS_MIN_KM
-        and kv >= _THINCLOUDS_MIN_KV
-        and kv < _THINCLOUDS_MAX_KV
     ):
-        return "Mostly Clear"
-
-    # THICK_CLOUDS: low Km, moderate variability — heavy broken cloud deck.
-    if (
-        km < _THICKCLOUDS_MAX_KM
-        and kv >= _THICKCLOUDS_MIN_KV
-        and kv < _THICKCLOUDS_MAX_KV
-    ):
-        return "Mostly Cloudy"
-
-    # SCATTER_CLOUDS: catch-all — patchy cumulus, sun in and out.
-    # Km sub-split boundaries derived from Kasten-Czeplak (1980):
-    #   Km = 1 - 0.75 × (N/8)^3.4
-    #   Km 0.97 ≈ 2 oktas (FEW), Km 0.85 ≈ 4 oktas (SCT), Km 0.52 ≈ 7 oktas (BKN)
-    # "Scattered Clouds" descriptor only when sky is predominantly clear.
-    if km > 0.97:
-        return "Clear, Scattered Clouds"
-    if km > 0.85:
-        return "Mostly Clear, Scattered Clouds"
-    if km > 0.52:
         return "Partly Cloudy"
-    return "Mostly Cloudy"
+
+    # --- Primary axis: Kv (uniform vs. variable sky) ---
+    if kv < _KV_UNIFORM:
+        # UNIFORM SKY — no cloud-edge transitions detected.
+        # Km distinguishes clear (high) from overcast (moderate/low).
+        if km > _UNIFORM_CLEAR_MIN_KM and kcs > _UNIFORM_CLEAR_MIN_KCS:
+            return "Clear"
+        if km > _UNIFORM_HEAVY_MAX_KM:
+            return "Overcast"
+        return "Heavy Overcast"
+
+    # VARIABLE SKY — cloud-edge transitions present.
+    # Km distinguishes coverage degree.
+    if km > _VARIABLE_CLEAR_MIN_KM:
+        return "Mostly Clear"
+    if km > _VARIABLE_PARTLY_MIN_KM:
+        return "Partly Cloudy"
+    if km > _VARIABLE_MOSTLY_MIN_KM:
+        return "Mostly Cloudy"
+    return "Cloudy"
 
 
 def _apply_coherence_filter(raw_label: str, now: float) -> str | None:
