@@ -183,8 +183,9 @@ def _query_nearby_pm25_locations(lat: float, lon: float) -> list[dict]:
 
         all_results.extend(results)
 
+        raw_found = str(meta.get("found", 0)).lstrip(">").strip()
         try:
-            total_found = int(meta.get("found", 0))
+            total_found = int(raw_found)
         except (TypeError, ValueError):
             total_found = 0
 
@@ -511,8 +512,11 @@ def _fetch_sensor_measurements_paginated(
         data = _api_get(path, params=params)
         meta = data.get("meta", {})
         results = data.get("results", [])
+        # OpenAQ v3 returns meta.found as ">1000" (string with > prefix)
+        # when the exact count exceeds the limit. Strip the prefix.
+        raw_found = str(meta.get("found", 0)).lstrip(">").strip()
         try:
-            total_found = int(meta.get("found", 0))
+            total_found = int(raw_found)
         except (TypeError, ValueError):
             total_found = 0
 
