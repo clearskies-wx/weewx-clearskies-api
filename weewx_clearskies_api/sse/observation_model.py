@@ -233,6 +233,19 @@ def build_observation(obs_data: dict | None = None) -> Observation:  # type: ign
         obs.fog_mist_state = _fog_mist_result  # "Foggy", "Misty", or None
         _fog_is_hazy = False
 
+    # Provider cross-check for fog/mist: require the provider's
+    # visibility-equipped station to corroborate before labeling fog.
+    # Mirrors the cross-check in weather_text.py compose/enrich functions.
+    if obs.fog_mist_state in ("Foggy", "Misty"):
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text as _get_pwt_obs,
+        )
+        _pw_text_obs, _pw_age_obs = _get_pwt_obs()
+        if _pw_text_obs is not None:
+            _pw_lower_obs = _pw_text_obs.lower()
+            if not any(kw in _pw_lower_obs for kw in ("fog", "mist")):
+                obs.fog_mist_state = None
+
     # ------------------------------------------------------------------
     # Haze detection (ADR-067)
     # detect_haze() returns 'Hazy' or None.
