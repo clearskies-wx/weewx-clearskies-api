@@ -56,8 +56,9 @@ Covers per the task-3b-12 brief §Coverage shape (test_iqair.py):
   Capability declaration:
   - CAPABILITY.provider_id = "iqair", domain = "aqi".
   - CAPABILITY.auth_required = ("key",).
-  - CAPABILITY.supplied_canonical_fields has exactly the 6 free-tier fields.
-  - CAPABILITY.supplied_canonical_fields excludes all pollutant concentrations.
+  - CAPABILITY.supplied_canonical_fields has 13 entries (6 base + 6 concentrations + pollutantSubIndices).
+  - CAPABILITY.supplied_canonical_fields includes pollutant concentrations (Startup+ tier).
+  - CAPABILITY.supplied_canonical_fields includes pollutantSubIndices (Startup+ tier).
   - CAPABILITY.geographic_coverage = "global".
   - CAPABILITY.default_poll_interval_seconds = 900.
   - wire_providers([iqair.CAPABILITY]) → registry has iqair aqi entry.
@@ -230,22 +231,46 @@ class TestIQAirWireShapeValidation:
             f"Expected pollution ts '2019-04-08T18:00:00.000Z', got {ts!r}"
         )
 
-    def test_pollution_model_has_no_concentration_fields(self) -> None:
-        """_IQAirPollution model has no concentration fields (pm25/pm10/o3/no2/so2/co).
+    def test_pollution_model_has_no_flat_concentration_fields(self) -> None:
+        """_IQAirPollution model has no flat concentration float fields (pm25/pm10/no2).
 
-        Free tier does not supply concentrations; model must not declare them
-        (would silently None on real data that lacks them — invisible mismatch).
-        Extra fields on the wire are dropped by extra='ignore'.
+        Per-pollutant data is modelled as sub-objects (_IQAirPollutantData), not flat floats.
+        Wire codes p2/p1/o3/n2/s2/co map to _IQAirPollutantData | None fields, not float | None.
+        This test guards against accidentally adding flat float concentrations directly.
+        Updated per Round 1: o3/co are now IQAirPollutantData sub-objects (not flat floats),
+        so only pm25/pm10/no2 remain as "impossible flat field" names to check.
         """
         from weewx_clearskies_api.providers.aqi.iqair import _IQAirPollution  # noqa: PLC0415
-        # The declared fields must be only the 5 free-tier pollution fields
         declared = set(_IQAirPollution.model_fields.keys())
-        concentration_field_names = {"pm25", "pm10", "o3", "no2", "so2", "co"}
-        overlap = declared & concentration_field_names
+        # These names would indicate a flat float field was added (wrong design).
+        # Wire codes p2/p1/o3/n2/s2/co are per-pollutant objects, not flat floats.
+        bad_flat_field_names = {"pm25", "pm10", "no2"}
+        overlap = declared & bad_flat_field_names
         assert not overlap, (
-            f"_IQAirPollution must not declare concentration fields "
-            f"(paid-tier only, wire shape unverified); found: {overlap!r}"
+            f"_IQAirPollution must not declare flat concentration floats; found: {overlap!r}"
         )
+
+    def test_pollution_per_pollutant_fields_are_optional_sub_objects(self) -> None:
+        """Per-pollutant fields (p2/p1/o3/n2/s2/co) are _IQAirPollutantData | None (not float).
+
+        Startup+ tier supplies per-pollutant sub-objects; free tier omits them entirely.
+        Optional fields default to None via extra='ignore' on free tier responses.
+        """
+        from weewx_clearskies_api.providers.aqi.iqair import (  # noqa: PLC0415
+            _IQAirPollutantData,
+            _IQAirPollution,
+        )
+        import typing  # noqa: PLC0415
+        for code in ("p2", "p1", "o3", "n2", "s2", "co"):
+            assert code in _IQAirPollution.model_fields, (
+                f"Per-pollutant field '{code}' must be declared on _IQAirPollution"
+            )
+            annotation = _IQAirPollution.model_fields[code].annotation
+            # The annotation should be Optional[_IQAirPollutantData] i.e. _IQAirPollutantData | None
+            args = getattr(annotation, "__args__", None)
+            assert args is not None and _IQAirPollutantData in args, (
+                f"Field '{code}' must be typed as _IQAirPollutantData | None, got {annotation!r}"
+            )
 
     def test_status_fail_with_no_data_parses_cleanly(self) -> None:
         """Error envelope status='fail' with no data field validates via _IQAirResponse.
@@ -1083,25 +1108,44 @@ class TestCapabilityDeclaration:
             f"CAPABILITY missing expected free-tier fields: {missing!r}"
         )
 
-    def test_capability_supplied_fields_excludes_pollutant_concentrations(self) -> None:
-        """CAPABILITY.supplied_canonical_fields excludes all concentration fields (PARTIAL-DOMAIN)."""
+    def test_capability_supplied_fields_includes_pollutant_concentrations(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes all 6 concentration fields (Startup+).
+
+        Updated per Round 1: IQAir Startup+ tier supplies per-pollutant concentrations
+        (p2/p1/o3/n2/s2/co objects in the pollution block). CAPABILITY now declares these
+        fields so the registry reflects Startup+ capability; on free Community tier,
+        _wire_to_canonical returns None for each (no per-pollutant objects present).
+        """
         from weewx_clearskies_api.providers.aqi.iqair import CAPABILITY  # noqa: PLC0415
         concentration_fields = {
             "pollutantPM25", "pollutantPM10",
             "pollutantO3", "pollutantNO2", "pollutantSO2", "pollutantCO",
         }
         supplied = set(CAPABILITY.supplied_canonical_fields)
-        overlap = concentration_fields & supplied
-        assert not overlap, (
-            f"CAPABILITY must NOT include concentration fields (PARTIAL-DOMAIN free tier): {overlap!r}"
+        missing = concentration_fields - supplied
+        assert not missing, (
+            f"CAPABILITY must include Startup+ concentration fields; missing: {missing!r}"
         )
 
-    def test_capability_supplied_fields_has_exactly_six_entries(self) -> None:
-        """CAPABILITY.supplied_canonical_fields has exactly 6 entries (conservative per Q2 decision)."""
+    def test_capability_supplied_fields_includes_pollutant_sub_indices(self) -> None:
+        """CAPABILITY.supplied_canonical_fields includes pollutantSubIndices (Startup+)."""
+        from weewx_clearskies_api.providers.aqi.iqair import CAPABILITY  # noqa: PLC0415
+        assert "pollutantSubIndices" in CAPABILITY.supplied_canonical_fields, (
+            "CAPABILITY must include 'pollutantSubIndices' (Startup+ tier field)"
+        )
+
+    def test_capability_supplied_fields_has_thirteen_entries(self) -> None:
+        """CAPABILITY.supplied_canonical_fields has 13 entries (6 base + 6 conc + pollutantSubIndices).
+
+        Updated per Round 1 brief: Startup+ fields now included in CAPABILITY.
+        Count: aqi, aqiCategory, aqiMainPollutant, aqiLocation, observedAt, source (6 base)
+             + pollutantPM25, pollutantPM10, pollutantO3, pollutantNO2, pollutantSO2, pollutantCO (6)
+             + pollutantSubIndices (1) = 13 total.
+        """
         from weewx_clearskies_api.providers.aqi.iqair import CAPABILITY  # noqa: PLC0415
         count = len(CAPABILITY.supplied_canonical_fields)
-        assert count == 6, (
-            f"Expected exactly 6 CAPABILITY fields (free-tier conservative), got {count}"
+        assert count == 13, (
+            f"Expected 13 CAPABILITY fields (6 base + 6 concentrations + pollutantSubIndices), got {count}"
         )
 
     def test_wire_providers_registers_iqair_aqi_in_registry(self) -> None:
