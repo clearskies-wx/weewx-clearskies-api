@@ -690,6 +690,33 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
 
     import copy as _copy  # noqa: PLC0415
 
+    # Fetch McClear clear-sky GHI for the bootstrap date range.
+    from weewx_clearskies_api.bootstrap.mcclear_client import fetch_mcclear_clearsky_ghi  # noqa: PLC0415
+
+    _soda_email = os.environ.get("WEEWX_CLEARSKIES_SODA_EMAIL", "").strip()
+    if not _soda_email:
+        print(
+            "ERROR: WEEWX_CLEARSKIES_SODA_EMAIL is not set. "
+            "Register a free account at https://www.soda-pro.com/ and set this "
+            "environment variable before running bootstrap."
+        )
+        sys.exit(1)
+
+    print(f"  Fetching McClear clear-sky GHI ({date_from} to {date_to})...")
+    try:
+        mcclear_ghi: dict[int, float] = fetch_mcclear_clearsky_ghi(
+            latitude=lat,
+            longitude=lon,
+            altitude_m=alt_m,
+            start_date=date_from,
+            end_date=date_to,
+            soda_email=_soda_email,
+        )
+        print(f"  McClear: {len(mcclear_ghi):,} data points fetched")
+    except RuntimeError as exc:
+        print(f"  ERROR: McClear fetch failed: {exc}")
+        sys.exit(1)
+
     summary = None
     selected_candidate = None
     for candidate in candidates:
@@ -727,6 +754,7 @@ def _run_bootstrap(args: argparse.Namespace) -> None:
                 station_lat=lat,
                 station_lon=lon,
                 station_alt_m=alt_m,
+                mcclear_ghi=mcclear_ghi,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"  ERROR during bootstrap: {exc} — skipping")
@@ -1284,6 +1312,40 @@ def main() -> None:
                 _bs_lon = _station_for_cal.longitude
                 _bs_alt = _station_for_cal.altitude
 
+                # Fetch McClear clear-sky GHI for the bootstrap date range.
+                _soda_email = os.environ.get("WEEWX_CLEARSKIES_SODA_EMAIL", "").strip()
+                _mcclear_ghi: dict[int, float] | None = None
+                if _soda_email:
+                    try:
+                        from weewx_clearskies_api.bootstrap.mcclear_client import (  # noqa: PLC0415
+                            fetch_mcclear_clearsky_ghi,
+                        )
+                        _mcclear_ghi = fetch_mcclear_clearsky_ghi(
+                            latitude=_bs_lat,
+                            longitude=_bs_lon,
+                            altitude_m=_bs_alt,
+                            start_date=_date_from,
+                            end_date=_date_to,
+                            soda_email=_soda_email,
+                        )
+                        logger.info(
+                            "Auto-bootstrap: McClear fetched %d data points",
+                            len(_mcclear_ghi),
+                        )
+                    except Exception as _mc_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Auto-bootstrap: McClear fetch failed (%s) — skipping bootstrap",
+                            _mc_exc,
+                        )
+                        return
+                else:
+                    logger.warning(
+                        "Auto-bootstrap: WEEWX_CLEARSKIES_SODA_EMAIL not set — "
+                        "skipping bootstrap (McClear required for accurate calibration). "
+                        "Register at https://www.soda-pro.com/ and set the env var."
+                    )
+                    return
+
                 _override_sensor_id = settings.conditions.openaq_sensor_id
                 if _override_sensor_id is not None:
                     logger.info(
@@ -1302,6 +1364,7 @@ def main() -> None:
                             station_lat=_bs_lat,
                             station_lon=_bs_lon,
                             station_alt_m=_bs_alt,
+                            mcclear_ghi=_mcclear_ghi,
                         )
                         auto_calibration.set_openaq_sensor({
                             "sensor_id": _override_sensor_id,
@@ -1372,6 +1435,7 @@ def main() -> None:
                                 station_lat=_bs_lat,
                                 station_lon=_bs_lon,
                                 station_alt_m=_bs_alt,
+                                mcclear_ghi=_mcclear_ghi,
                             )
 
                             if _bs_summary["clean_sky_samples"] > 0:

@@ -26,10 +26,6 @@ Persistence: samples and baselines saved to
 tmp-rename).  On startup, load_persisted() restores prior session state.
 v1 flat-sample format is migrated to v2 monthly format automatically.
 
-maxSolarRad computation:
-  compute_max_solar_rad() implements the Ryan-Stolzenbach clear-sky
-  irradiance formula using Skyfield for solar position.
-
 Module-level state is intentional — the API is a single-process service.
 Use reset() for test isolation.
 """
@@ -38,10 +34,9 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -708,84 +703,3 @@ def _percentile(sorted_values: list[float], percentile: float) -> float:
         return sorted_values[-1]
 
     return sorted_values[lo] + frac * (sorted_values[hi] - sorted_values[lo])
-
-
-def compute_max_solar_rad(
-    lat: float,
-    lon: float,
-    altitude_m: float,
-    unix_ts: float,
-    atc: float = 0.80,
-) -> float | None:
-    """Compute clear-sky solar irradiance using the Ryan-Stolzenbach formula.
-
-    Matches the weewx wxformulas.py solar_rad_RS() computation, using Skyfield
-    for solar position (elevation and Earth-Sun distance) instead of PyEphem.
-
-    Args:
-        lat:        Station latitude in decimal degrees.
-        lon:        Station longitude in decimal degrees.
-        altitude_m: Station altitude in metres above sea level.
-        unix_ts:    Unix timestamp for which to compute maxSolarRad.
-        atc:        Atmospheric transmission coefficient (0.7–0.91).
-                    Values outside this range are replaced with 0.8 per the
-                    weewx formula.  Default: 0.80.
-
-    Returns:
-        Estimated clear-sky GHI in W/m², or None when the ephemeris is
-        unavailable or a computation error occurs.
-
-    Formula reference:
-        Ryan & Stolzenbach (1972), MIT — "Environmental Heat Transfer."
-        Matched verbatim from weewx wxformulas.py solar_rad_RS().
-    """
-    if atc < 0.7 or atc > 0.91:
-        atc = 0.8
-
-    try:
-        from skyfield.api import wgs84  # noqa: PLC0415
-
-        from weewx_clearskies_api.services.almanac import get_ts_eph  # noqa: PLC0415
-
-        ts, eph = get_ts_eph()
-
-        location = wgs84.latlon(lat, lon, elevation_m=altitude_m)  # type: ignore[call-arg]
-        earth = eph["earth"]  # type: ignore[index]
-        sun = eph["sun"]  # type: ignore[index]
-        observer = earth + location  # type: ignore[operator]
-
-        dt = datetime.fromtimestamp(unix_ts, tz=UTC)
-        t = ts.utc(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)  # type: ignore[attr-defined]
-
-        apparent = observer.at(t).observe(sun).apparent()  # type: ignore[attr-defined]
-        alt_obj, _az, dist_obj = apparent.altaz()  # type: ignore[attr-defined]
-
-        elevation = float(alt_obj.degrees)  # type: ignore[attr-defined]
-        distance_au = float(dist_obj.au)  # type: ignore[attr-defined]
-
-    except RuntimeError:
-        logger.debug("compute_max_solar_rad: ephemeris not available")
-        return None
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("compute_max_solar_rad: Skyfield computation failed: %s", exc)
-        return None
-
-    nrel = 1367.0
-    sinal = math.sin(math.radians(elevation))
-
-    if sinal <= 0:
-        return 0.0
-
-    z = altitude_m
-    try:
-        rm = (
-            ((288.0 - 0.0065 * z) / 288.0) ** 5.256
-            / (sinal + 0.15 * (elevation + 3.885) ** -1.253)
-        )
-        toa = nrel * sinal / (distance_au ** 2)
-        sr = toa * atc ** rm
-    except (ValueError, OverflowError, ZeroDivisionError) as exc:
-        logger.debug("compute_max_solar_rad: formula computation failed: %s", exc)
-        return None
-
-    return sr

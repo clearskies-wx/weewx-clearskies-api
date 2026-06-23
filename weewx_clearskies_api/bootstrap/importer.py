@@ -1,8 +1,14 @@
-"""Bootstrap import orchestrator (ADR-068 T8.1).
+"""Bootstrap import orchestrator (ADR-068 T8.1, ADR-072 T2.2/T2.5).
 
 Matches historical OpenAQ PM2.5 records against the weewx archive, computes
-the clear-sky clearness index (Kcs = radiation / maxSolarRad) for each
+the clear-sky clearness index (Kcs = radiation / mcclear_ghi) for each
 qualifying record, and seeds the auto-calibration monthly sample bins.
+
+Clear-sky GHI is provided by CAMS McClear (via pvlib.iotools.get_cams()),
+fetched before bootstrap begins and passed in as a timestamp→GHI lookup dict.
+McClear provides atmosphere-adjusted clear-sky GHI at ground level with real
+atmospheric conditions, eliminating the sunrise/sunset poison zone that
+affected the Ryan-Stolzenbach fallback.
 
 Read-only archive access: this module never INSERTs, UPDATEs, or DELETEs
 from the weewx archive.  All writes go through auto_calibration.persist()
@@ -10,13 +16,14 @@ which writes only to /etc/weewx-clearskies/calibration.json.
 
 Clean-sky sample criteria (must all pass):
   - PM2.5 < _PM25_CLEAN (12.0 µg/m³)
-  - maxSolarRad > 100 W/m² (proxy for solar elevation > 10°)
+  - McClear GHI > 50 W/m² (proxy for solar elevation high enough)
   - rainRate = 0 or NULL
-  - Kcs = radiation / maxSolarRad > 0.3
+  - Kcs = radiation / mcclear_ghi in range (0.3, 1.5]
 """
 
 from __future__ import annotations
 
+import bisect
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -30,10 +37,12 @@ from weewx_clearskies_api.sse import auto_calibration
 logger = logging.getLogger(__name__)
 
 # Constants mirrored from auto_calibration for clean-sky gate logic.
-_PM25_CLEAN = auto_calibration._PM25_CLEAN         # 12.0 µg/m³
-_MIN_MAX_SOLAR_RAD = 100.0   # W/m² — proxy for solar elevation > 10°
+_PM25_CLEAN = auto_calibration._PM25_CLEAN         # 12.0 µg/m³  # noqa: SLF001
+_MIN_CLEARSKY_GHI = 50.0     # W/m² — McClear GHI gate (realistic at low angles)
 _MIN_KCS = 0.3               # Sun actually shining (not just above horizon)
+_MAX_KCS = 1.5               # Defense-in-depth ceiling (cloud enhancement ~1.2-1.3)
 _ARCHIVE_MATCH_WINDOW = 1800  # ±30 minutes (seconds)
+_MCCLEAR_MATCH_WINDOW = 900   # ±15 minutes (McClear is at 15-min resolution)
 
 
 def run_bootstrap(
@@ -42,20 +51,21 @@ def run_bootstrap(
     station_lat: float,
     station_lon: float,
     station_alt_m: float,
+    mcclear_ghi: dict[int, float],
 ) -> dict:
     """Import PM records and match against weewx archive to build calibration samples.
 
+    Clear-sky GHI is provided by CAMS McClear (mcclear_ghi lookup dict).
     For each PM record:
       1. Find nearest weewx archive record by timestamp (within ±30 min).
-      2. Read radiation and maxSolarRad from the archive row.
-      3. If maxSolarRad is NULL, recompute via
-         auto_calibration.compute_max_solar_rad().
-      4. Compute Kcs = radiation / maxSolarRad. Skip if either is 0 or NULL.
+      2. Read radiation from the archive row.
+      3. Look up McClear clear-sky GHI for the archive timestamp (±15 min).
+      4. Compute Kcs = radiation / mcclear_ghi. Skip if either is 0 or NULL.
       5. Apply clean-sky criteria:
            - PM2.5 < 12.0 µg/m³
-           - maxSolarRad > 100 W/m²
+           - McClear GHI > 50 W/m²
            - rainRate = 0 or NULL
-           - Kcs > 0.3
+           - Kcs in range (0.3, 1.5]
       6. Append qualifying (timestamp, kcs) to the appropriate monthly bin in
          auto_calibration._monthly_samples, keyed by local calendar month.
 
@@ -63,11 +73,13 @@ def run_bootstrap(
     recompute flat fallback, notify haze_condition, and persist.
 
     Args:
-        engine:       SQLAlchemy engine pointing at the weewx archive (read-only).
-        pm_records:   PM2.5 records from OpenAQ, sorted ascending by timestamp.
-        station_lat:  Station latitude (decimal degrees).
-        station_lon:  Station longitude (decimal degrees).
+        engine:        SQLAlchemy engine pointing at the weewx archive (read-only).
+        pm_records:    PM2.5 records from OpenAQ, sorted ascending by timestamp.
+        station_lat:   Station latitude (decimal degrees).
+        station_lon:   Station longitude (decimal degrees).
         station_alt_m: Station altitude (metres above sea level).
+        mcclear_ghi:   Dict mapping Unix timestamp (int, UTC) to McClear clear-sky
+                       GHI (W/m²), as returned by fetch_mcclear_clearsky_ghi().
 
     Returns:
         Summary dict with counters, per-month sample counts, and calibration state.
@@ -80,9 +92,13 @@ def run_bootstrap(
         "skipped_max_solar_low": 0,
         "skipped_rain": 0,
         "skipped_kcs_low": 0,
+        "skipped_kcs_high": 0,
         "skipped_pm_high": 0,
         "clean_sky_samples": 0,
     }
+
+    # Pre-sort McClear keys for O(log n) nearest-neighbour lookup.
+    _mcclear_sorted_keys = sorted(mcclear_ghi.keys())
 
     # Get station timezone for month binning.
     tz = ZoneInfo(auto_calibration._timezone_name)  # noqa: SLF001
@@ -104,7 +120,7 @@ def run_bootstrap(
 
         counters["archive_matched"] += 1
 
-        arch_ts, radiation, max_solar_rad, rain_rate = arch_row
+        arch_ts, radiation, _max_solar_rad, rain_rate, _out_temp, _out_humidity = arch_row
 
         # Gate: radiation must not be NULL.
         if radiation is None:
@@ -117,21 +133,17 @@ def run_bootstrap(
             counters["skipped_no_radiation"] += 1
             continue
 
-        # Always recompute maxSolarRad — archive values are unreliable
-        # (column gets deleted/corrupted by DB maintenance).
-        max_solar_rad = auto_calibration.compute_max_solar_rad(
-            lat=station_lat,
-            lon=station_lon,
-            altitude_m=station_alt_m,
-            unix_ts=float(arch_ts),
+        # Look up McClear clear-sky GHI for this archive timestamp.
+        max_solar_rad = _lookup_mcclear_ghi(
+            mcclear_ghi, _mcclear_sorted_keys, int(arch_ts)
         )
 
         if max_solar_rad is None:
             counters["skipped_no_radiation"] += 1
             continue
 
-        # Gate: maxSolarRad must be above minimum (sun high enough).
-        if max_solar_rad <= _MIN_MAX_SOLAR_RAD:
+        # Gate: McClear GHI must be above minimum (sun high enough).
+        if max_solar_rad <= _MIN_CLEARSKY_GHI:
             counters["skipped_max_solar_low"] += 1
             continue
 
@@ -153,6 +165,11 @@ def run_bootstrap(
         kcs = radiation / max_solar_rad
         if kcs <= _MIN_KCS:
             counters["skipped_kcs_low"] += 1
+            continue
+
+        # Gate: Kcs ceiling (defense-in-depth against cloud enhancement outliers).
+        if kcs > _MAX_KCS:
+            counters["skipped_kcs_high"] += 1
             continue
 
         # All criteria met — bin sample by local calendar month.
@@ -198,6 +215,45 @@ def run_bootstrap(
     }
 
 
+def _lookup_mcclear_ghi(
+    mcclear_ghi: dict[int, float],
+    sorted_keys: list[int],
+    target_ts: int,
+) -> float | None:
+    """Find the nearest McClear GHI value within ±15 minutes of target_ts.
+
+    Uses a pre-sorted key list and bisect for O(log n) lookup.
+
+    Args:
+        mcclear_ghi:  Timestamp → GHI dict (from fetch_mcclear_clearsky_ghi).
+        sorted_keys:  Sorted list of keys from mcclear_ghi.
+        target_ts:    Archive timestamp to look up (integer Unix seconds, UTC).
+
+    Returns:
+        Nearest GHI value (float) if within ±15 minutes, else None.
+    """
+    if not sorted_keys:
+        return None
+
+    pos = bisect.bisect_left(sorted_keys, target_ts)
+
+    # Check candidates: the insertion point and the one before it.
+    best_ts: int | None = None
+    best_diff = _MCCLEAR_MATCH_WINDOW + 1
+
+    for idx in (pos - 1, pos):
+        if 0 <= idx < len(sorted_keys):
+            diff = abs(sorted_keys[idx] - target_ts)
+            if diff < best_diff:
+                best_diff = diff
+                best_ts = sorted_keys[idx]
+
+    if best_ts is None or best_diff > _MCCLEAR_MATCH_WINDOW:
+        return None
+
+    return mcclear_ghi[best_ts]
+
+
 def _find_nearest_archive_record(
     engine: Engine,
     target_ts: float,
@@ -207,8 +263,9 @@ def _find_nearest_archive_record(
     The weewx archive dateTime column is Unix epoch seconds.
 
     Returns:
-        Tuple of (dateTime, radiation, maxSolarRad, rainRate), or None when
-        no record falls within the ±30-minute window.
+        Tuple of (dateTime, radiation, maxSolarRad, rainRate, outTemp,
+        outHumidity), or None when no record falls within the ±30-minute
+        window.
 
     SQL is fully parameterized — no string interpolation.
     """
@@ -219,7 +276,8 @@ def _find_nearest_archive_record(
         with engine.connect() as conn:
             result = conn.execute(
                 text(
-                    "SELECT dateTime, radiation, maxSolarRad, rainRate "
+                    "SELECT dateTime, radiation, maxSolarRad, rainRate, "
+                    "outTemp, outHumidity "
                     "FROM archive "
                     "WHERE dateTime BETWEEN :start AND :end "
                     "ORDER BY ABS(dateTime - :target) "
