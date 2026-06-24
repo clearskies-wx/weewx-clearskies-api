@@ -203,13 +203,13 @@ def classify() -> str | None:
     When solar elevation < 5° (SZA > 85°) and station coordinates are
     configured, returns _last_stable_label without classifying.
     """
-    # SZA guard: skip classification when sun is too low on the horizon.
-    # Uses the cached Skyfield observer built at configure() time.
+    # SZA guard: return None when sun is too low for reliable classification.
+    # None tells the downstream consumer to fall back to provider cloud cover.
     if _skyfield_observer is not None:
         now_ts = _ring[-1].ts if _ring else time.time()
         elevation = _compute_solar_elevation(now_ts)
         if elevation is not None and elevation < _SZA_GUARD_ELEVATION:
-            return _last_stable_label
+            return None
 
     indices = _compute_indices()
     if indices is None:
