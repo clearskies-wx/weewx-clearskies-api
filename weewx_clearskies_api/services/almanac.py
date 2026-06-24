@@ -474,15 +474,21 @@ def _compute_sun_for_date(
         if e >= 3 and dusk_time is None:
             dusk_time = _to_utc_z(t)
 
-    # --- Solar noon position (azimuth / altitude / RA / Dec) ---
+    # --- Transit (solar noon): find culmination between t0 and t1 ---
     azimuth: float | None = None
     altitude_deg: float | None = None
     ra_hours: float | None = None
     dec_deg: float | None = None
     transit_time: str | None = None
 
-    t_noon = ts.utc(d.year, d.month, d.day, 12, 0, 0)  # type: ignore[call-arg]
-    astrometric = observer.at(t_noon).observe(sun)  # type: ignore[attr-defined]
+    f_transit = almanac.meridian_transits(eph, sun, location)  # type: ignore[arg-type]
+    t_transits, _ = almanac.find_discrete(t0, t1, f_transit)  # type: ignore[arg-type]
+    if len(t_transits) > 0:
+        transit_time = _to_utc_z(t_transits[0])
+
+    # Position at solar noon (transit), not UTC noon.
+    t_pos = t_transits[0] if len(t_transits) > 0 else ts.utc(d.year, d.month, d.day, 12, 0, 0)  # type: ignore[call-arg]
+    astrometric = observer.at(t_pos).observe(sun)  # type: ignore[attr-defined]
     apparent = astrometric.apparent()  # type: ignore[attr-defined]
     alt_obj, az_obj, _dist = apparent.altaz()  # type: ignore[attr-defined]
     azimuth = round(float(az_obj.degrees), 2)  # type: ignore[attr-defined]
@@ -490,12 +496,6 @@ def _compute_sun_for_date(
     ra_obj, dec_obj, _dist2 = apparent.radec()  # type: ignore[attr-defined]
     ra_hours = round(float(ra_obj.hours), 4)  # type: ignore[attr-defined]
     dec_deg = round(float(dec_obj.degrees), 4)  # type: ignore[attr-defined]
-
-    # Transit: find culmination (highest altitude) between t0 and t1.
-    f_transit = almanac.meridian_transits(eph, sun, location)  # type: ignore[arg-type]
-    t_transits, _ = almanac.find_discrete(t0, t1, f_transit)  # type: ignore[arg-type]
-    if len(t_transits) > 0:
-        transit_time = _to_utc_z(t_transits[0])
 
     # --- Next equinox / solstice ---
     next_equinox: str | None = None
@@ -585,11 +585,11 @@ def _compute_moon_for_date(
     if len(t_transits_m) > 0:
         transit_time = _to_utc_z(t_transits_m[0])
 
-    # --- Moon position at local noon ---
+    # --- Moon position at transit (or UTC noon fallback) ---
     import math
 
-    t_noon = ts.utc(d.year, d.month, d.day, 12, 0, 0)  # type: ignore[call-arg]
-    astrometric = observer.at(t_noon).observe(moon)  # type: ignore[attr-defined]
+    t_moon_pos = t_transits_m[0] if len(t_transits_m) > 0 else ts.utc(d.year, d.month, d.day, 12, 0, 0)  # type: ignore[call-arg]
+    astrometric = observer.at(t_moon_pos).observe(moon)  # type: ignore[attr-defined]
     apparent = astrometric.apparent()  # type: ignore[attr-defined]
     alt_obj, az_obj, _dist = apparent.altaz()  # type: ignore[attr-defined]
     azimuth = round(float(az_obj.degrees), 2)  # type: ignore[attr-defined]
@@ -598,9 +598,9 @@ def _compute_moon_for_date(
     ra_hours = round(float(ra_obj.hours), 4)  # type: ignore[attr-defined]
     dec_deg = round(float(dec_obj.degrees), 4)  # type: ignore[attr-defined]
 
-    # Phase angle via ecliptic frame.
-    sun_ecl = earth.at(t_noon).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
-    moon_ecl = earth.at(t_noon).observe(moon).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
+    # Phase angle via ecliptic frame (at same time as position).
+    sun_ecl = earth.at(t_moon_pos).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
+    moon_ecl = earth.at(t_moon_pos).observe(moon).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
     sun_lon = float(sun_ecl[1].degrees)  # type: ignore[index]
     moon_lon = float(moon_ecl[1].degrees)  # type: ignore[index]
     phase_angle = (moon_lon - sun_lon) % 360.0
