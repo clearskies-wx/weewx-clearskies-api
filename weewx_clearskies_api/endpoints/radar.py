@@ -45,7 +45,7 @@ wire_radar_settings() (3b-15; T1.5):
   Called from __main__.py at startup step 6n, after wire_providers (6i).
 
 Dispatch tables (T1.5):
-  /frames: _KNOWN_RADAR_PROVIDERS — all 10 providers (7 keyless/browser-direct +
+  /frames: _KNOWN_RADAR_PROVIDERS — all 9 providers (6 keyless/browser-direct +
            2 proxied + 1 iframe). aeris REMOVED (3,000 map units/day unviable).
   /tiles:  _PROXIED_RADAR_PROVIDERS — proxied-only (librewxr, openweathermap).
            Renamed from _KEYED_RADAR_PROVIDERS per ADR-015 amendment 2026-06-24;
@@ -99,7 +99,7 @@ router = APIRouter()
 _RADAR_OWM_APPID: str | None = None
 
 # Known radar provider ids (dispatch table keys for /frames).
-# 10 providers: 7 browser-direct/keyless (3b-14 + T1.5) + 2 proxied (T1.5) + 1 iframe (3b-16).
+# 9 providers: 6 browser-direct/keyless (3b-14 + T1.5) + 2 proxied (T1.5) + 1 iframe (3b-16).
 # aeris REMOVED from radar domain — 3,000 map units/day unviable (ADR-015 amendment 2026-06-24).
 # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
 _KNOWN_RADAR_PROVIDERS = frozenset(
