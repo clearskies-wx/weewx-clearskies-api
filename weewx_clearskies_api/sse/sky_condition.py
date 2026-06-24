@@ -12,19 +12,22 @@ averaged GHI data:
          first-derivative of clear-sky-detrended GHI
   - Kvf: fine variability index (10-min) — same as Kv, shorter window
 
-Primary axis: Kv (uniform vs. variable sky). Kv < 0.05 indicates
-uniform sky — either clear or fully overcast (both produce smooth
-GHI curves). Kv >= 0.05 indicates variable sky — broken coverage
-with cloud-edge transitions. Km then distinguishes within each branch.
+Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky).
+Uniform requires both the coarse 30-min window (Kv) and the fine
+10-min window (Kvf) below 0.05 — smooth GHI in both time scales.
+Variable triggers if either window exceeds 0.05 — cloud-edge
+transitions at any scale push the sky into the variable branch.
+Km then distinguishes coverage degree within each branch.
 
 Seven display labels:
   Uniform branch:  "Clear", "Overcast", "Heavy Overcast"
   Variable branch: "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy"
   Cloud enhancement: "Partly Cloudy"
 
-Temporal coherence filter: a new classification must persist for 15
+Temporal coherence filter: a new classification must persist for 5
 consecutive minutes before replacing the previous stable label.
-Prevents rapid flicker at class boundaries.
+Startup grace period is 2 minutes. Prevents rapid flicker at class
+boundaries.
 
 Data flow: 5-second LOOP packets → 1-minute bins → 30-minute ring buffer
 → index computation → Kv-first decision tree → temporal coherence filter.
@@ -627,8 +630,11 @@ def _classify_sky(
 ) -> str:
     """Classify sky condition using the Kv-first decision tree (ADR-073).
 
-    Primary axis: Kv (uniform vs. variable sky). Secondary: Km within
-    each branch. Cloud enhancement evaluated first as a special case.
+    Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky).
+    Uniform requires both the 30-min (Kv) and 10-min (Kvf) windows below
+    _KV_UNIFORM; variable triggers if either exceeds the threshold.
+    Secondary: Km within each branch. Cloud enhancement evaluated first
+    as a special case.
     """
     # --- Cloud enhancement (Kcs above clear-sky + high variability) ---
     if (
@@ -639,8 +645,10 @@ def _classify_sky(
     ):
         return "Partly Cloudy"
 
-    # --- Primary axis: Kv (uniform vs. variable sky) ---
-    if kv < _KV_UNIFORM:
+    # --- Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky) ---
+    # Uniform requires BOTH the coarse (30-min) and fine (10-min) windows calm;
+    # variable triggers if EITHER shows activity.
+    if kv < _KV_UNIFORM and kvf < _KV_UNIFORM:
         # UNIFORM SKY — no cloud-edge transitions detected.
         # Km distinguishes clear (high) from overcast (moderate/low).
         if km > _UNIFORM_CLEAR_MIN_KM and kcs > _UNIFORM_CLEAR_MIN_KCS:
@@ -663,8 +671,8 @@ def _classify_sky(
 def _apply_coherence_filter(raw_label: str, now: float) -> str | None:
     """Apply temporal coherence filter to prevent rapid label flicker.
 
-    A raw label must persist for 15 consecutive minutes before becoming
-    stable. On startup, 3 consecutive minutes suffice as a grace period.
+    A raw label must persist for 5 consecutive minutes before becoming
+    stable. On startup, 2 consecutive minutes suffice as a grace period.
     """
     global _last_stable_label
 
@@ -691,9 +699,9 @@ def _apply_coherence_filter(raw_label: str, now: float) -> str | None:
 
     consecutive_span = history_list[-1][0] - first_matching_ts
 
-    if consecutive_span >= 900.0:  # 15 minutes
+    if consecutive_span >= 300.0:  # 5 minutes
         _last_stable_label = latest_label
-    elif _last_stable_label is None and consecutive_span >= 180.0:  # 3-min startup grace
+    elif _last_stable_label is None and consecutive_span >= 120.0:  # 2-min startup grace
         _last_stable_label = latest_label
 
     return _last_stable_label
