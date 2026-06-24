@@ -26,6 +26,22 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class LayerDeclaration:
+    """One data layer within a multi-layer provider (API-MANUAL.md §12)."""
+
+    layer_id: str               # e.g., "nexrad", "mrms", "goes_visible"
+    layer_name: str             # Display name for the UI layer panel
+    layer_type: str             # "radar" | "satellite" | "overlay" | "alerts"
+    wms_endpoint_url: str | None = None    # Full WMS endpoint URL (browser-direct layers)
+    tile_url_template: str | None = None   # XYZ tile URL template (tile-based layers)
+    wms_layer_name: str | None = None      # WMS layer name parameter
+    time_enabled: bool = True              # Whether frame metadata is available
+    geographic_coverage: str = ""          # e.g., "CONUS", "US all territories"
+    default_enabled: bool = False          # Whether enabled by default in dashboard
+    browser_direct: bool = True            # True = browser fetches directly; False = API proxy
+
+
+@dataclass(frozen=True)
 class ProviderCapability:
     """Static capability declaration per ADR-038 §4.
 
@@ -67,6 +83,8 @@ class ProviderCapability:
     iframe_url: str | None = None             # operator-supplied iframe URL (iframe provider only)
     # ADR-066: observed vs model data classification for AQI providers
     is_observed_source: bool = True           # True for observed-data providers; False for model-based (Open-Meteo, OWM)
+    # Multi-layer support (API-MANUAL.md §12) — optional, None for single-layer providers
+    layers: tuple[LayerDeclaration, ...] | None = None
 
 
 # ---------------------------------------------------------------------------

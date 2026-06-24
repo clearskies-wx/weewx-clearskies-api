@@ -108,6 +108,8 @@ _KNOWN_RADAR_PROVIDERS = frozenset(
         "aeris",
         "openweathermap",
         "iframe",
+        "librewxr",
+        "noaa",
     }
 )
 
@@ -301,6 +303,102 @@ def get_radar_frames(
     else:
         # Keyless providers: get_frames() takes no arguments.
         frames_list = module.get_frames()  # type: ignore[attr-defined]
+
+    return RadarFramesResponse(
+        data=frames_list,
+        generatedAt=now_str,
+    )
+
+
+@router.get(
+    "/radar/providers/{provider_id}/layers/{layer_id}/frames",
+    summary="Per-layer radar frames (multi-layer providers)",
+    tags=["Radar"],
+    response_model=RadarFramesResponse,
+)
+def get_radar_layer_frames(
+    provider_id: str,
+    layer_id: str,
+    params: Annotated[RadarFramesQueryParams, Depends(_get_radar_frames_params)],
+) -> RadarFramesResponse:
+    """Return radar frame timestamps for a specific sub-layer of a multi-layer provider.
+
+    Decision tree:
+      1. provider_id not in _KNOWN_RADAR_PROVIDERS → 404.
+      2. provider_id in dispatch but not in capability registry → 404.
+      3. provider_id == "iframe" → 501 (no frame index).
+      4. Provider has no layers OR requested layer_id not in capability.layers → 404.
+      5. Dispatch to module.get_frames(layer=layer_id) → 200 RadarFramesResponse.
+    """
+    now_str = utc_isoformat(datetime.now(tz=UTC))
+
+    # --- Branch 1: unknown provider_id ---
+    if provider_id not in _KNOWN_RADAR_PROVIDERS:
+        logger.debug("Radar provider_id %r not in dispatch table (layer endpoint)", provider_id)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Radar provider {provider_id!r} is not supported. "
+                f"Known providers: {sorted(_KNOWN_RADAR_PROVIDERS)}"
+            ),
+        )
+
+    # --- Branch 2: in dispatch but not registered ---
+    provider_registry = get_provider_registry()
+    radar_cap = next(
+        (p for p in provider_registry if p.domain == "radar" and p.provider_id == provider_id),
+        None,
+    )
+
+    if radar_cap is None:
+        logger.debug(
+            "Radar provider %r in dispatch table but not in capability registry "
+            "(layer endpoint; operator configured a different provider)",
+            provider_id,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Radar provider {provider_id!r} is not configured for this deployment. "
+                "Check the [radar] section in api.conf."
+            ),
+        )
+
+    # --- Branch 3: iframe ---
+    if provider_id == "iframe":
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "iframe providers do not have frame indexes. "
+                "The dashboard reads iframe_url from /capabilities."
+            ),
+        )
+
+    # --- Branch 4: no layers declared or layer_id not found ---
+    if radar_cap.layers is None or not any(
+        layer.layer_id == layer_id for layer in radar_cap.layers
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Layer {layer_id!r} not found for provider {provider_id!r}",
+        )
+
+    # --- Branch 5: dispatch to module with layer kwarg ---
+    module = get_provider_module(domain="radar", provider_id=provider_id)
+
+    if provider_id == "aeris":
+        frames_list = module.get_frames(
+            client_id=_RADAR_AERIS_CLIENT_ID,
+            client_secret=_RADAR_AERIS_CLIENT_SECRET,
+            layer=layer_id,
+        )
+    elif provider_id == "openweathermap":
+        frames_list = module.get_frames(
+            appid=_RADAR_OWM_APPID,
+            layer=layer_id,
+        )
+    else:
+        frames_list = module.get_frames(layer=layer_id)
 
     return RadarFramesResponse(
         data=frames_list,

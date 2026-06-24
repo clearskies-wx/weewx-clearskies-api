@@ -662,6 +662,21 @@ class WeewxColumnEntry(BaseModel):
     archiveColumn: str
 
 
+class LayerDeclarationResponse(BaseModel):
+    """One data layer within a multi-layer provider (API-MANUAL.md §12)."""
+
+    layerId: str
+    layerName: str
+    layerType: str  # "radar" | "satellite" | "overlay" | "alerts"
+    wmsEndpointUrl: str | None = None
+    tileUrlTemplate: str | None = None
+    wmsLayerName: str | None = None
+    timeEnabled: bool = True
+    geographicCoverage: str = ""
+    defaultEnabled: bool = False
+    browserDirect: bool = True
+
+
 class CapabilityDeclaration(BaseModel):
     """Per ADR-038: one configured provider module."""
 
@@ -676,6 +691,7 @@ class CapabilityDeclaration(BaseModel):
     wmsLayerName: str | None = None
     tileContentType: str | None = None
     iframeUrl: str | None = None
+    layers: list[LayerDeclarationResponse] | None = None
 
 
 class CapabilityRegistry(BaseModel):
