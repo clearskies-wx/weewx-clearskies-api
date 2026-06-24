@@ -218,6 +218,13 @@ def classify() -> str | None:
     kcs, km, kv, kvf, latest_msr = indices
     raw_label = _classify_sky(kcs, km, kv, kvf, latest_msr)
 
+    # TEMPORARY DEBUG — remove after threshold tuning
+    import logging as _dbg_logging  # noqa: PLC0415
+    _dbg_logging.getLogger("sky_condition").info(
+        "ring=%d Kcs=%.4f Km=%.4f Kv=%.4f Kvf=%.4f MSR=%.1f raw=%s stable=%s",
+        len(_ring), kcs, km, kv, kvf, latest_msr, raw_label, _last_stable_label,
+    )
+
     now = _ring[-1].ts if _ring else time.time()
     return _apply_coherence_filter(raw_label, now)
 
