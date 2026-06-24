@@ -542,16 +542,27 @@ def get_eclipses(
             cached = get_cache().get(cache_key)
             if cached is not None:
                 logger.debug("eclipses cache hit: from=%s", today.isoformat())
-                eclipses = [
-                    LunarEclipseEntry(
+                eclipses = []
+                for e in cached:
+                    # Deserialise contactTimes from cached dicts back into
+                    # EclipseContactPoint objects.  The warmer stores plain dicts
+                    # (JSON-safe); reconstruct the Pydantic model instances here.
+                    raw_ct = e.get("contactTimes")
+                    contact_times = None
+                    if isinstance(raw_ct, dict):
+                        contact_times = {
+                            k: EclipseContactPoint(date=v["date"], altitude=v["altitude"])
+                            if isinstance(v, dict) and "date" in v and "altitude" in v
+                            else None
+                            for k, v in raw_ct.items()
+                        }
+                    eclipses.append(LunarEclipseEntry(
                         date=e["date"],
                         type=e["type"],
-                        contactTimes=None,
-                        obscuration=None,
-                        visibility=None,
-                    )
-                    for e in cached
-                ]
+                        contactTimes=contact_times,
+                        obscuration=e.get("obscuration"),
+                        visibility=e.get("visibility"),
+                    ))
                 return EclipseResponse(
                     data=LunarEclipseList(
                         from_date=from_date.isoformat(),

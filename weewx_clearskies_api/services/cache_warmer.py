@@ -328,24 +328,143 @@ class BackgroundCacheWarmer:
             logger.warning("Cache warmer: planets warm failed", exc_info=True)
 
     def _warm_eclipses(self) -> None:
-        """Warm GET /almanac/eclipses for the rolling 1-year window from today."""
+        """Warm GET /almanac/eclipses for the rolling 1-year window from today.
+
+        Skyfield computes eclipse dates and types.  AstronomyAPI.com enriches each
+        eclipse with contact times, obscuration, and visibility (same logic as the
+        cache-miss path in the endpoint).  If AstronomyAPI credentials are absent or
+        the enrichment call fails, the unenriched Skyfield data is cached instead so
+        the endpoint always has *something* to return.
+        """
+        import os  # noqa: PLC0415 — deferred import to keep startup fast
+
         try:
             from datetime import date, timedelta
             from weewx_clearskies_api.services.almanac import compute_lunar_eclipses
 
-            cache = get_cache()
             today = date.today()
             to_date = today + timedelta(days=3652)
 
             eclipses_data = compute_lunar_eclipses(from_date=today, to_date=to_date)
+        except Exception:
+            logger.warning("Cache warmer: eclipses warm failed", exc_info=True)
+            return
+
+        cache = get_cache()
+
+        # ------------------------------------------------------------------
+        # AstronomyAPI enrichment — contact times + local visibility.
+        # Mirrors the endpoint's enrichment logic (almanac.py lines 569-633).
+        # Failures fall back to caching unenriched Skyfield data.
+        # ------------------------------------------------------------------
+        app_id = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_ID", "").strip()
+        app_secret = os.environ.get("WEEWX_CLEARSKIES_ASTRONOMYAPI_APP_SECRET", "").strip()
+        if not app_id or not app_secret:
+            # Credentials not configured — cache unenriched Skyfield data.
             cache.set(
                 f"warmer:almanac:eclipses:{today.isoformat()}",
                 eclipses_data,
                 self._settings.eclipses_interval_seconds,
             )
-            logger.info("Cache warmer: eclipses refreshed (from %s)", today.isoformat())
+            logger.info(
+                "Cache warmer: eclipses refreshed (from %s, no AstronomyAPI credentials)",
+                today.isoformat(),
+            )
+            return
+
+        try:
+            from datetime import timedelta as _td
+            from weewx_clearskies_api.services.astronomyapi_client import AstronomyApiClient
+
+            lat = self._station["lat"]
+            lon = self._station["lon"]
+            alt_m = self._station["alt_m"]
+
+            with AstronomyApiClient(app_id, app_secret) as client:
+                api_eclipses = client.get_lunar_eclipses(lat, lon, alt_m, today, to_date)
+
+            # Build a contact_map keyed by date string (±1 day to handle
+            # timezone-induced date offset between Skyfield UTC dates and
+            # AstronomyAPI local dates).
+            contact_map: dict[str, dict] = {}
+            for ae in api_eclipses:
+                contact_map[ae["date"]] = ae
+                try:
+                    d = date.fromisoformat(ae["date"])
+                    contact_map[(d - _td(days=1)).isoformat()] = ae
+                    contact_map[(d + _td(days=1)).isoformat()] = ae
+                except (ValueError, KeyError):
+                    pass
+
+            # Enrich each eclipse dict with contactTimes, obscuration, visibility.
+            enriched: list[dict] = []
+            for e in eclipses_data:
+                api_data = contact_map.get(e["date"])
+                if api_data:
+                    raw_ct = api_data.get("contactTimes")
+                    contact_times: dict | None = None
+                    if isinstance(raw_ct, dict):
+                        contact_times = {
+                            k: v
+                            if isinstance(v, dict) and "date" in v and "altitude" in v
+                            else None
+                            for k, v in raw_ct.items()
+                        }
+                    obscuration = api_data.get("obscuration")
+                    # Compute visibility per ADR-053 tiers (same as endpoint).
+                    peak = (api_data.get("contactTimes") or {}).get("peak")
+                    peak_alt = peak["altitude"] if isinstance(peak, dict) else None
+                    if peak_alt is None or peak_alt <= 0:
+                        visibility: str | None = "Not Visible"
+                    elif peak_alt <= 5:
+                        visibility = "Barely Visible"
+                    elif peak_alt <= 15:
+                        visibility = "Low in Sky"
+                    else:
+                        all_above = all(
+                            (ct or {}).get("altitude", -1) > 0
+                            for ct in (api_data.get("contactTimes") or {}).values()
+                            if ct is not None
+                        )
+                        visibility = "Visible All Night" if all_above else "Mostly Visible"
+                    enriched.append({
+                        "date": e["date"],
+                        "type": e["type"],
+                        "contactTimes": contact_times,
+                        "obscuration": obscuration,
+                        "visibility": visibility,
+                    })
+                else:
+                    enriched.append({
+                        "date": e["date"],
+                        "type": e["type"],
+                        "contactTimes": None,
+                        "obscuration": None,
+                        "visibility": None,
+                    })
+
+            cache.set(
+                f"warmer:almanac:eclipses:{today.isoformat()}",
+                enriched,
+                self._settings.eclipses_interval_seconds,
+            )
+            logger.info(
+                "Cache warmer: eclipses refreshed with AstronomyAPI enrichment (from %s, %d events)",
+                today.isoformat(),
+                len(enriched),
+            )
         except Exception:
-            logger.warning("Cache warmer: eclipses warm failed", exc_info=True)
+            # AstronomyAPI enrichment failed — fall back to unenriched Skyfield data.
+            logger.warning(
+                "Cache warmer: AstronomyAPI lunar eclipse enrichment failed; "
+                "caching unenriched Skyfield data",
+                exc_info=True,
+            )
+            cache.set(
+                f"warmer:almanac:eclipses:{today.isoformat()}",
+                eclipses_data,
+                self._settings.eclipses_interval_seconds,
+            )
 
     def _warm_solar_eclipses(self) -> None:
         """Warm GET /almanac/eclipses/solar from AstronomyAPI.com."""
