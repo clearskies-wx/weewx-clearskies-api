@@ -697,58 +697,69 @@ class SeeingSettings:
 
 class RadarSettings:
     """[radar] section settings (3b-14; extended 3b-15 with 2 keyed providers;
-    extended 3b-16 with iframe provider).
+    extended 3b-16 with iframe provider; T1.5 adds librewxr + noaa).
 
-    Provider id for the radar data source.  Five keyless providers (rainviewer,
-    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan), two keyed providers
-    (aeris, openweathermap) per ADR-015, and one iframe provider (iframe).
+    Provider id for the radar data source.  Keyless providers (rainviewer,
+    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan, noaa), proxied providers
+    (librewxr, openweathermap) per ADR-015, and one iframe provider (iframe).
 
     Note: mapbox_jma is NOT included — deferred per ADR-015 2026-05-11 amendment
     (Mapbox JMA tilesets are raster-array shape, GL-JS-only; incompatible with
     Leaflet).
+    Note: aeris is NOT valid for radar — dropped (3,000 map units/day unviable
+    per ADR-015 amendment 2026-06-24).
 
     Per ADR-015: single radar provider per deploy (operator picks one per
     their lat/lon).  Per-region auto-pick is a setup-wizard concern (out of scope).
 
-    Keyed provider credentials (aeris, openweathermap) are NOT stored here —
+    Keyed/proxied provider credentials (openweathermap) are NOT stored here —
     they are wired at startup via wire_radar_settings() in endpoints/radar.py,
     which reads them from settings.forecast (provider-scoped per 3b-5 Q2).
 
     iframe provider: operator supplies iframe_url in [radar] section; the
     dashboard embeds the URL directly.  No frames index, no tile proxy.
+
+    librewxr provider: optionally supply librewxr_endpoint to point at a
+    self-hosted instance.  Defaults to https://api.librewxr.net if absent.
     """
 
     #: Provider id: "rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet",
-    #: "dwd_radolan", "aeris", "openweathermap", "iframe", or absent.
+    #: "dwd_radolan", "noaa", "librewxr", "openweathermap", "iframe", or absent.
     provider: str | None
     #: iframe embed URL.  Required when provider == "iframe"; None otherwise.
     iframe_url: str | None
+    #: LibreWxR base URL.  None → use default https://api.librewxr.net.
+    librewxr_endpoint: str | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
         self.provider = raw_provider if raw_provider else None
         raw_iframe_url = str(section.get("iframe_url", "")).strip()
         self.iframe_url = raw_iframe_url if raw_iframe_url else None
+        self.librewxr_endpoint: str | None = section.get("librewxr_endpoint", "") or None
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
         valid_providers = {
             "rainviewer",
-            "iem_nexrad",
-            "noaa_mrms",
+            "iem_nexrad",   # deprecated — migrate to "noaa"
+            "noaa_mrms",    # deprecated — migrate to "noaa"
             "msc_geomet",
             "dwd_radolan",
-            "aeris",       # keyed — added 3b-15; credentials in settings.forecast
+            "noaa",         # unified NOAA (nexrad + mrms + satellite + SPC) — T1.5
+            "librewxr",     # proxied — API fetches from upstream LibreWxR — T1.5
             "openweathermap",  # keyed — added 3b-15; credentials in settings.forecast
-            "iframe",      # iframe embed — added 3b-16; requires iframe_url in [radar]
+            "iframe",       # iframe embed — added 3b-16; requires iframe_url in [radar]
         }
         # mapbox_jma is NOT valid — deferred per ADR-015 2026-05-11 amendment.
+        # aeris is NOT valid — dropped from radar domain (T1.5; 3,000 map units/day unviable).
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[radar] provider {self.provider!r} not in {valid_providers}. "
                 "Supported values: 'rainviewer', 'iem_nexrad', 'noaa_mrms', "
-                "'msc_geomet', 'dwd_radolan' (keyless); "
-                "'aeris', 'openweathermap' (keyed; credentials in [forecast] section); "
+                "'msc_geomet', 'dwd_radolan', 'noaa' (keyless/browser-direct); "
+                "'librewxr' (proxied; optional librewxr_endpoint in [radar]); "
+                "'openweathermap' (keyed; credentials in [forecast] section); "
                 "'iframe' (embed; requires iframe_url in [radar] section)."
             )
         if self.provider == "iframe" and not self.iframe_url:

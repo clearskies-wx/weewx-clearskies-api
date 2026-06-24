@@ -506,10 +506,14 @@ class RadarFramesQueryParams(BaseModel):
 class RadarTileQueryParams(BaseModel):
     """Query params for /radar/providers/{provider_id}/tiles/{z}/{x}/{y}.
 
-    Only the optional `t` (time) query param is accepted.
+    Accepted optional params:
+      t     — ISO-8601 timestamp (all providers; selects frame).
+      color — integer color scheme ID (LibreWxR only; ignored by other providers).
+
     extra="forbid" rejects unknown keys per security-baseline §3.5.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     t: str | None = None
+    color: int | None = None  # Color scheme ID (LibreWxR only)
