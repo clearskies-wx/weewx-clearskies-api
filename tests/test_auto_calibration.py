@@ -551,10 +551,22 @@ class TestProcessPacket:
         assert self._total_samples() == 0, "None solar elevation must suppress sample"
 
     def test_cloudy_sky_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Cloudy sky label → Gate 3 fires (no 'Clear'/'Sunny' substring)."""
+        """Cloudy sky label → Gate 3 fires (not in {'Clear', 'Sunny'} exact match)."""
         self._patch_all_gates(monkeypatch, sky_label="Cloudy")
         auto_calibration.process_packet({})
         assert self._total_samples() == 0, "Cloudy sky must suppress sample collection"
+
+    def test_mostly_clear_sky_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """'Mostly Clear' → Gate 3 fires (not in {'Clear', 'Sunny'} exact match)."""
+        self._patch_all_gates(monkeypatch, sky_label="Mostly Clear")
+        auto_calibration.process_packet({})
+        assert self._total_samples() == 0, "'Mostly Clear' must be rejected by exact-match filter"
+
+    def test_mostly_sunny_sky_suppresses_sample(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """'Mostly Sunny' → Gate 3 fires (not in {'Clear', 'Sunny'} exact match)."""
+        self._patch_all_gates(monkeypatch, sky_label="Mostly Sunny")
+        auto_calibration.process_packet({})
+        assert self._total_samples() == 0, "'Mostly Sunny' must be rejected by exact-match filter"
 
     def test_none_sky_label_suppresses_sample(
         self, monkeypatch: pytest.MonkeyPatch

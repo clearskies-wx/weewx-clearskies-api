@@ -2,9 +2,9 @@
 
 Validates the two-channel haze detection algorithm:
   - Gate ordering (disabled, solar elevation, sky label, wet deposition, RH)
-  - PM channel thresholds (dry, humid disambiguation, coarse dust)
+  - PM channel thresholds (RH-graduated: dry/moderate/humid tiers, both species)
   - Kcs deficit channel (baseline comparison)
-  - Temporal coherence filter (15-minute rolling window, ≥50% True)
+  - Temporal coherence filter (5-minute rolling window, ≥50% True)
   - Configuration API (set_enabled, set_baseline, set_gamma, reset)
   - Wet deposition edge cases (rain start/stop, 30-min holdoff)
 
@@ -57,10 +57,10 @@ _CLEAR_DAY_KWARGS: dict = dict(
     kcs=0.85,               # below baseline 0.90 → deficit = 0.05
     solar_elevation=45.0,
     sky_label="Clear",
-    pm25=15.0,              # >12 µg/m³ dry threshold
+    pm25=55.0,              # >50 µg/m³ dry threshold (RH < 60%)
     pm10=None,
     out_temp=72.0,          # °F
-    dewpoint=50.0,          # °F → RH ≈ 47% (dry, RH < 80%)
+    dewpoint=50.0,          # °F → RH ≈ 47% (dry, RH < 60%)
     rain_rate=0.0,
 )
 
@@ -77,8 +77,8 @@ def _fill_history_with_false(count: int, base_ts: float = _BASE_TS) -> float:
 
     Returns the timestamp of the last entry so callers can advance time.
     The entries are spaced 1 second apart starting at base_ts, all before
-    the window cutoff of base_ts + count (so they remain in the 15-min window
-    if the True call happens within 900 s of the last false entry).
+    the window cutoff of base_ts + count (so they remain in the 5-min window
+    if the True call happens within 300 s of the last false entry).
     """
     for i in range(count):
         ts = base_ts + i
@@ -86,7 +86,7 @@ def _fill_history_with_false(count: int, base_ts: float = _BASE_TS) -> float:
             kcs=0.85,
             solar_elevation=5.0,   # below 10° → records False, returns None
             sky_label="Clear",
-            pm25=15.0,
+            pm25=55.0,
             pm10=None,
             out_temp=72.0,
             dewpoint=50.0,
@@ -213,70 +213,114 @@ class TestGates:
 
 
 class TestPMChannel:
-    """PM concentration thresholds — dry, humid, coarse dust."""
+    """PM concentration thresholds — RH-graduated, both species independent."""
 
     def test_no_pm_data_returns_none(self) -> None:
         """pm25=None and pm10=None → no PM data, returns None."""
         result = _detect(pm25=None, pm10=None)
-        assert result is None, "No PM data must return None (Channel 2 graceful degradation)"
+        assert result is None
 
-    def test_pm25_below_dry_threshold_returns_none(self) -> None:
-        """pm25=5.0 (< 12 µg/m³), pm10=None, dry RH → PM channel not confirmed."""
-        # kcs=0.85 → deficit positive, but PM channel must fail first
-        result = _detect(pm25=5.0, pm10=None, out_temp=72.0, dewpoint=50.0)
-        assert result is None, "pm25=5.0 below dry threshold must not confirm PM channel"
+    # --- Dry tier (RH < 60%) ---
 
-    def test_pm25_above_dry_threshold_confirms_pm_channel(self) -> None:
-        """pm25=15.0 (> 12 µg/m³), RH < 80% (dry) → PM confirmed."""
-        result = _detect(pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0)
-        assert result == "Hazy", "pm25=15.0 in dry conditions must confirm PM channel"
+    def test_dry_pm25_below_threshold_returns_none(self) -> None:
+        """RH≈47% (dry), pm25=49 (< 50) → not confirmed."""
+        result = _detect(pm25=49.0, pm10=None, out_temp=72.0, dewpoint=50.0)
+        assert result is None
 
-    def test_pm25_at_humid_condition_below_35_not_confirmed(self) -> None:
-        """pm25=20.0, T-Td=4°F (≤ 4°F), RH≈88% → not confirmed (needs > 35 µg/m³).
+    def test_dry_pm25_at_threshold_returns_none(self) -> None:
+        """RH≈47% (dry), pm25=50.0 (== 50, needs > 50) → not confirmed."""
+        result = _detect(pm25=50.0, pm10=None, out_temp=72.0, dewpoint=50.0)
+        assert result is None
 
-        At T-Td ≤ 4°F, the humid disambiguation branch requires pm25 > 35.
-        The dry branch (rh < 80%) also won't fire because RH ≈ 88% (> 80%).
-        Temperature pair chosen so RH is in [80%, 90%] — high enough that dry
-        branch fails, but below 90% Gate 4 (which defers to fog).
-        """
-        # T=80°F, Td=76°F → T-Td=4°F → humid; RH ≈ 88%
-        result = _detect(pm25=20.0, pm10=None, out_temp=80.0, dewpoint=76.0)
-        assert result is None, (
-            "pm25=20.0 in humid conditions (T-Td=4°F) must not confirm PM (needs > 35)"
-        )
+    def test_dry_pm25_above_threshold_confirms(self) -> None:
+        """RH≈47% (dry), pm25=51 (> 50) → confirmed."""
+        result = _detect(pm25=51.0, pm10=None, out_temp=72.0, dewpoint=50.0)
+        assert result == "Hazy"
 
-    def test_pm25_above_humid_threshold_confirms_pm_channel(self) -> None:
-        """pm25=40.0, T-Td=4°F (≤ 4°F), RH≈88% → humid threshold exceeded, PM confirmed.
+    def test_dry_pm10_below_threshold_returns_none(self) -> None:
+        """RH≈47% (dry), pm10=99 (< 100) → not confirmed."""
+        result = _detect(pm25=None, pm10=99.0, out_temp=72.0, dewpoint=50.0)
+        assert result is None
 
-        Temperature pair chosen so RH lands in [80%, 90%]: high enough that the
-        dry branch (rh < 80%) fails, but below the 90% RH gate that defers to fog.
-        At RH≈88%, f(RH)≈2.06, so the f(RH)-adjusted deficit threshold is ~0.062.
-        kcs=0.80 gives deficit=0.10 which exceeds 0.062.
-        """
-        result = _detect(pm25=40.0, pm10=None, out_temp=80.0, dewpoint=76.0, kcs=0.80)
-        assert result == "Hazy", (
-            "pm25=40.0 in humid conditions (T-Td=4°F, RH≈88%) with deficit=0.10 must confirm"
-        )
+    def test_dry_pm10_at_threshold_returns_none(self) -> None:
+        """RH≈47% (dry), pm10=100.0 (== 100, needs > 100) → not confirmed."""
+        result = _detect(pm25=None, pm10=100.0, out_temp=72.0, dewpoint=50.0)
+        assert result is None
 
-    def test_pm10_above_threshold_confirms_pm_channel(self) -> None:
-        """pm10=60.0 (> 50 µg/m³), pm25=None → coarse dust PM confirmed."""
-        result = _detect(pm25=None, pm10=60.0)
-        assert result == "Hazy", "pm10=60.0 must confirm PM channel (coarse dust)"
+    def test_dry_pm10_above_threshold_confirms(self) -> None:
+        """RH≈47% (dry), pm10=101 (> 100) → confirmed."""
+        result = _detect(pm25=None, pm10=101.0, out_temp=72.0, dewpoint=50.0)
+        assert result == "Hazy"
 
-    def test_pm10_below_threshold_not_confirmed(self) -> None:
-        """pm10=30.0 (< 50 µg/m³), pm25=None → PM not confirmed."""
-        result = _detect(pm25=None, pm10=30.0)
-        assert result is None, "pm10=30.0 below threshold must not confirm PM channel"
+    # --- Moderate tier (RH 60-80%) ---
+    # Use out_temp=75.0, dewpoint=62.0 → RH ≈ 65% (moderate)
 
-    def test_pm25_exactly_at_dry_threshold_not_confirmed(self) -> None:
-        """pm25=12.0 (== 12 µg/m³) → NOT confirmed (must be > 12, not ≥)."""
-        result = _detect(pm25=12.0, pm10=None, out_temp=72.0, dewpoint=50.0)
-        assert result is None, "pm25=12.0 exactly at threshold must not confirm (requires >12)"
+    def test_moderate_pm25_below_threshold_returns_none(self) -> None:
+        """RH≈65% (moderate), pm25=34 (< 35) → not confirmed."""
+        result = _detect(pm25=34.0, pm10=None, out_temp=75.0, dewpoint=62.0)
+        assert result is None
 
-    def test_pm10_exactly_at_threshold_not_confirmed(self) -> None:
-        """pm10=50.0 (== 50 µg/m³) → NOT confirmed (must be > 50, not ≥)."""
-        result = _detect(pm25=None, pm10=50.0)
-        assert result is None, "pm10=50.0 exactly at threshold must not confirm (requires >50)"
+    def test_moderate_pm25_above_threshold_confirms(self) -> None:
+        """RH≈65% (moderate), pm25=36 (> 35) → confirmed."""
+        result = _detect(pm25=36.0, pm10=None, out_temp=75.0, dewpoint=62.0)
+        assert result == "Hazy"
+
+    def test_moderate_pm10_below_threshold_returns_none(self) -> None:
+        """RH≈65% (moderate), pm10=74 (< 75) → not confirmed."""
+        result = _detect(pm25=None, pm10=74.0, out_temp=75.0, dewpoint=62.0)
+        assert result is None
+
+    def test_moderate_pm10_above_threshold_confirms(self) -> None:
+        """RH≈65% (moderate), pm10=76 (> 75) → confirmed."""
+        result = _detect(pm25=None, pm10=76.0, out_temp=75.0, dewpoint=62.0)
+        assert result == "Hazy"
+
+    # --- Humid tier (RH 80-90%) ---
+    # Use out_temp=80.0, dewpoint=74.0 → RH ≈ 82% (humid)
+
+    def test_humid_pm25_below_threshold_returns_none(self) -> None:
+        """RH≈82% (humid), pm25=24 (< 25) → not confirmed."""
+        result = _detect(pm25=24.0, pm10=None, out_temp=80.0, dewpoint=74.0, kcs=0.80)
+        assert result is None
+
+    def test_humid_pm25_above_threshold_confirms(self) -> None:
+        """RH≈82% (humid), pm25=26 (> 25) → confirmed."""
+        result = _detect(pm25=26.0, pm10=None, out_temp=80.0, dewpoint=74.0, kcs=0.80)
+        assert result == "Hazy"
+
+    def test_humid_pm10_below_threshold_returns_none(self) -> None:
+        """RH≈82% (humid), pm10=49 (< 50) → not confirmed."""
+        result = _detect(pm25=None, pm10=49.0, out_temp=80.0, dewpoint=74.0, kcs=0.80)
+        assert result is None
+
+    def test_humid_pm10_above_threshold_confirms(self) -> None:
+        """RH≈82% (humid), pm10=51 (> 50) → confirmed."""
+        result = _detect(pm25=None, pm10=51.0, out_temp=80.0, dewpoint=74.0, kcs=0.80)
+        assert result == "Hazy"
+
+    # --- RH unknown ---
+
+    def test_rh_unknown_uses_dry_thresholds(self) -> None:
+        """out_temp=None, dewpoint=None → rh=None → dry thresholds (conservative)."""
+        result = _detect(pm25=55.0, pm10=None, out_temp=None, dewpoint=None)
+        assert result == "Hazy"
+
+    def test_rh_unknown_below_dry_threshold_returns_none(self) -> None:
+        """out_temp=None, dewpoint=None → rh=None → pm25=49 < 50 dry threshold."""
+        result = _detect(pm25=49.0, pm10=None, out_temp=None, dewpoint=None)
+        assert result is None
+
+    # --- Independence ---
+
+    def test_pm25_alone_confirms_channel(self) -> None:
+        """PM2.5 alone (no PM10) confirms Channel 2."""
+        result = _detect(pm25=55.0, pm10=None)
+        assert result == "Hazy"
+
+    def test_pm10_alone_confirms_channel(self) -> None:
+        """PM10 alone (no PM2.5) confirms Channel 2."""
+        result = _detect(pm25=None, pm10=101.0)
+        assert result == "Hazy"
 
 
 # ===========================================================================
@@ -326,7 +370,7 @@ class TestKcsChannel:
 
 
 class TestTemporalCoherence:
-    """15-minute rolling window, ≥50% True entries → 'Hazy'."""
+    """5-minute rolling window, ≥50% True entries → 'Hazy'."""
 
     def test_single_positive_detection_returns_hazy(self) -> None:
         """Single call with both channels firing → 1/1 = 100% ≥ 50% → 'Hazy'."""
@@ -340,7 +384,7 @@ class TestTemporalCoherence:
     ) -> None:
         """3 False entries + 1 True → 1/4 = 25% < 50% → None.
 
-        Uses monkeypatch to control time so all entries fall within the 900s window.
+        Uses monkeypatch to control time so all entries fall within the 300s window.
         """
         fake_now = [_BASE_TS]
 
@@ -356,7 +400,7 @@ class TestTemporalCoherence:
                 kcs=0.85,
                 solar_elevation=5.0,  # Gate 1 fires → records False
                 sky_label="Clear",
-                pm25=15.0,
+                pm25=55.0,
                 pm10=None,
                 out_temp=72.0,
                 dewpoint=50.0,
@@ -369,7 +413,7 @@ class TestTemporalCoherence:
             kcs=0.85,
             solar_elevation=45.0,
             sky_label="Clear",
-            pm25=15.0,
+            pm25=55.0,
             pm10=None,
             out_temp=72.0,
             dewpoint=50.0,
@@ -400,7 +444,7 @@ class TestTemporalCoherence:
             kcs=0.85,
             solar_elevation=5.0,
             sky_label="Clear",
-            pm25=15.0,
+            pm25=55.0,
             pm10=None,
             out_temp=72.0,
             dewpoint=50.0,
@@ -413,7 +457,7 @@ class TestTemporalCoherence:
             kcs=0.85,
             solar_elevation=45.0,
             sky_label="Clear",
-            pm25=15.0,
+            pm25=55.0,
             pm10=None,
             out_temp=72.0,
             dewpoint=50.0,
@@ -425,10 +469,10 @@ class TestTemporalCoherence:
     def test_history_pruning_removes_stale_entries(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Entries older than 900s are pruned; only recent entries count for coherence.
+        """Entries older than 300s are pruned; only recent entries count for coherence.
 
-        Strategy: fill history with True entries at t=0, advance time by 1000s
-        (past the 900s cutoff), then record a False entry. Only the False entry
+        Strategy: fill history with True entries at t=0, advance time by 400s
+        (past the 300s cutoff), then record a False entry. Only the False entry
         is in the window → 0/1 = 0% < 50% → None.
         """
         fake_now = [_BASE_TS]
@@ -445,22 +489,22 @@ class TestTemporalCoherence:
                 kcs=0.85,
                 solar_elevation=45.0,
                 sky_label="Clear",
-                pm25=15.0,
+                pm25=55.0,
                 pm10=None,
                 out_temp=72.0,
                 dewpoint=50.0,
                 rain_rate=0.0,
             )
 
-        # Advance past the 900s window.
-        fake_now[0] = _BASE_TS + 1000.0
+        # Advance past the 300s window.
+        fake_now[0] = _BASE_TS + 400.0
 
         # Record a False entry — this triggers pruning of the old True entries.
         result = haze_condition.detect_haze(
             kcs=0.85,
             solar_elevation=5.0,  # Gate 1 fires → records False
             sky_label="Clear",
-            pm25=15.0,
+            pm25=55.0,
             pm10=None,
             out_temp=72.0,
             dewpoint=50.0,
@@ -468,7 +512,7 @@ class TestTemporalCoherence:
         )
         # After pruning: only the 1 False entry remains → 0/1 = 0% < 50%
         assert result is None, (
-            "After stale True entries pruned (>900s), only 1 False entry → must return None"
+            "After stale True entries pruned (>300s), only 1 False entry → must return None"
         )
 
     def test_mixed_entries_equal_to_50_percent_returns_hazy(
@@ -487,7 +531,7 @@ class TestTemporalCoherence:
             fake_now[0] = _BASE_TS + i
             haze_condition.detect_haze(
                 kcs=0.85, solar_elevation=5.0, sky_label="Clear",
-                pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
+                pm25=55.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
             )
 
         # 4 True entries.
@@ -495,7 +539,7 @@ class TestTemporalCoherence:
             fake_now[0] = _BASE_TS + 4 + i
             haze_condition.detect_haze(
                 kcs=0.85, solar_elevation=45.0, sky_label="Clear",
-                pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
+                pm25=55.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
             )
 
         # History: 4 False + 4 True = 8 total, last call returned result already.
@@ -503,7 +547,7 @@ class TestTemporalCoherence:
         fake_now[0] = _BASE_TS + 8.0
         result = haze_condition.detect_haze(
             kcs=0.85, solar_elevation=45.0, sky_label="Clear",
-            pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
+            pm25=55.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
         )
         # 5 True out of 9 total = 55.6% ≥ 50%
         assert result == "Hazy", (
@@ -598,13 +642,13 @@ class TestConfiguration:
             fake_now[0] = _BASE_TS + 100.0 + i
             haze_condition.detect_haze(
                 kcs=0.85, solar_elevation=5.0, sky_label="Clear",
-                pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
+                pm25=55.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
             )
 
         fake_now[0] = _BASE_TS + 103.0
         result = haze_condition.detect_haze(
             kcs=0.85, solar_elevation=45.0, sky_label="Clear",
-            pm25=15.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
+            pm25=55.0, pm10=None, out_temp=72.0, dewpoint=50.0, rain_rate=0.0,
         )
         # 1 True / 4 total = 25% < 50% after reset.
         assert result is None, (
@@ -751,29 +795,24 @@ class TestRHComputation:
     """Relative humidity edge cases for gate 4 and PM channel branching."""
 
     def test_rh_exactly_90_not_deferred(self) -> None:
-        """RH exactly 90% passes Gate 4 (requires > 90%, not ≥ 90%).
+        """RH < 90% passes Gate 4 (requires > 90%, not ≥ 90%).
 
-        out_temp=70°F, dewpoint=62.4°F → RH ≈ 78% (below 90%).
-        Test that near-90% RH does not trigger the gate.
+        T=77°F, Td=72°F → RH ≈ 83% (below 90%, gate does NOT fire).
+        With the RH-graduated thresholds, RH≈83% falls in the humid tier (80-90%).
+        pm25=40.0 > 25 (humid threshold) → PM confirmed.
+        kcs=0.80 → deficit=0.10; at RH≈83% f(RH)-adjusted threshold is well below 0.10.
         """
-        # T=77°F, Td=72°F → T-Td=5°F → RH ≈ 83% (< 90%, gate does NOT fire)
-        result = _detect(out_temp=77.0, dewpoint=72.0, pm25=40.0, kcs=0.85)
-        # humid disambiguation: T-Td=5°F > 4°F, so dry threshold applies.
-        # RH ≈ 83% < 80%? No, 83 > 80 → dry branch fails.
-        # T-Td=5°F > 4°F → humid branch not taken.
-        # pm10=None → no coarse PM.
-        # Actually RH ≈ 83%: dry branch (rh < 80) fails, humid (T-Td ≤ 4°F) fails too.
-        # pm10=None, so PM channel not confirmed → None.
-        assert result is None, (
-            "RH ≈ 83%, T-Td=5°F: dry branch fails (>80%), humid branch fails (T-Td>4°F)"
+        result = _detect(out_temp=77.0, dewpoint=72.0, pm25=40.0, kcs=0.80)
+        assert result == "Hazy", (
+            "RH ≈ 83% (humid tier): pm25=40.0 > 25 humid threshold must confirm PM channel"
         )
 
     def test_rh_missing_uses_dry_branch(self) -> None:
-        """When out_temp or dewpoint is None, rh=None → dry branch applies (rh < 80 or None)."""
-        # rh=None falls into dry branch; pm25=15 > 12 → PM confirmed.
-        result = _detect(out_temp=None, dewpoint=None, pm25=15.0)
+        """When out_temp or dewpoint is None, rh=None → dry thresholds apply (conservative)."""
+        # rh=None falls into dry branch; pm25=55 > 50 → PM confirmed.
+        result = _detect(out_temp=None, dewpoint=None, pm25=55.0)
         assert result == "Hazy", (
-            "rh=None must fall into dry branch; pm25=15.0 > 12 must confirm PM channel"
+            "rh=None must fall into dry branch; pm25=55.0 > 50 must confirm PM channel"
         )
 
     def test_rh_above_90_with_high_pm25_still_deferred(self) -> None:
