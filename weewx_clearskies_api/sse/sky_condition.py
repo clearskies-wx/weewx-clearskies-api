@@ -215,14 +215,14 @@ def classify() -> str | None:
     if indices is None:
         return _last_stable_label
 
-    kcs, km, kv, kvf, latest_msr = indices
-    raw_label = _classify_sky(kcs, km, kv, kvf, latest_msr)
+    kcs, km, kmf, kv, kvf, latest_msr = indices
+    raw_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr)
 
     # TEMPORARY DEBUG — remove after threshold tuning
     import logging as _dbg_logging  # noqa: PLC0415
     _dbg_logging.getLogger("sky_condition").info(
-        "ring=%d Kcs=%.4f Km=%.4f Kv=%.4f Kvf=%.4f MSR=%.1f raw=%s stable=%s",
-        len(_ring), kcs, km, kv, kvf, latest_msr, raw_label, _last_stable_label,
+        "ring=%d Kcs=%.4f Km=%.4f Kmf=%.4f Kv=%.4f Kvf=%.4f MSR=%.1f raw=%s stable=%s",
+        len(_ring), kcs, km, kmf, kv, kvf, latest_msr, raw_label, _last_stable_label,
     )
 
     now = _ring[-1].ts if _ring else time.time()
@@ -550,12 +550,12 @@ def _trim_ring(timestamp: float) -> None:
         _ring.popleft()
 
 
-def _compute_indices() -> tuple[float, float, float, float, float] | None:
-    """Compute (Kcs, Km, Kv, Kvf, latest_msr) from the ring buffer.
+def _compute_indices() -> tuple[float, float, float, float, float, float] | None:
+    """Compute (Kcs, Km, Kmf, Kv, Kvf, latest_msr) from the ring buffer.
 
     Returns None when ring has < 3 entries (startup guard).
 
-    Km is computed from mirrored (ghi, max_solar_rad) pairs when station
+    Km/Kmf are computed from mirrored (ghi, max_solar_rad) pairs when station
     coordinates are available — see _mirror_for_km().  Kv and Kvf always
     use the raw ring buffer (real measurements only).
     """
@@ -629,19 +629,35 @@ def _compute_indices() -> tuple[float, float, float, float, float] | None:
         fine_span = max(ring_list[-1].ts - ring_list[first_fine_idx].ts, 60.0)
         kvf = sum(fine_diff_abs) / fine_span if fine_diff_abs else 0.0
 
-    return kcs, km, kv, kvf, latest.max_solar_rad
+    # Kmf: fine mean transmittance (10-min window).
+    # Same formula as Km but over the 10-min subset. Used in the variable
+    # branch where responsiveness to recent clearing/clouding matters.
+    if len(fine_indices) < 2:
+        kmf = km
+    else:
+        fine_pairs = [km_pairs[i] for i in fine_indices]
+        fine_ghi = [p[0] for p in fine_pairs]
+        fine_msr = [p[1] for p in fine_pairs]
+        fine_mean_msr = sum(fine_msr) / len(fine_msr)
+        if fine_mean_msr > 0:
+            kmf = max(sum(fine_ghi) / len(fine_ghi) / fine_mean_msr, 0.0)
+        else:
+            kmf = 0.0
+
+    return kcs, km, kmf, kv, kvf, latest.max_solar_rad
 
 
 def _classify_sky(
-    kcs: float, km: float, kv: float, kvf: float, latest_msr: float,
+    kcs: float, km: float, kmf: float, kv: float, kvf: float,
+    latest_msr: float,
 ) -> str:
     """Classify sky condition using the Kv-first decision tree (ADR-073).
 
     Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky).
     Uniform requires both the 30-min (Kv) and 10-min (Kvf) windows below
     _KV_UNIFORM; variable triggers if either exceeds the threshold.
-    Secondary: Km within each branch. Cloud enhancement evaluated first
-    as a special case.
+    Secondary: Km (30-min) in uniform branch, Kmf (10-min) in variable
+    branch. Cloud enhancement evaluated first as a special case.
     """
     # --- Cloud enhancement (Kcs above clear-sky + high variability) ---
     if (
@@ -665,12 +681,12 @@ def _classify_sky(
         return "Heavy Overcast"
 
     # VARIABLE SKY — cloud-edge transitions present.
-    # Km distinguishes coverage degree.
-    if km > _VARIABLE_CLEAR_MIN_KM:
+    # Kmf (10-min) distinguishes coverage degree — responsive to recent changes.
+    if kmf > _VARIABLE_CLEAR_MIN_KM:
         return "Mostly Clear"
-    if km > _VARIABLE_PARTLY_MIN_KM:
+    if kmf > _VARIABLE_PARTLY_MIN_KM:
         return "Partly Cloudy"
-    if km > _VARIABLE_MOSTLY_MIN_KM:
+    if kmf > _VARIABLE_MOSTLY_MIN_KM:
         return "Mostly Cloudy"
     return "Cloudy"
 
