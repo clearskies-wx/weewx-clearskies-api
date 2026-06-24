@@ -21,7 +21,7 @@ Gates applied before channel evaluation:
   - RH > 90% gate: defer to fog/mist detection (Phase 5).
 
 Temporal coherence filter:
-  A 15-minute rolling window (deque of (timestamp, bool) pairs). Haze is
+  A 5-minute rolling window (deque of (timestamp, bool) pairs). Haze is
   only reported when ≥ 50% of entries in the window show is_hazy=True.
   Prevents label flicker at aerosol-concentration boundaries.
 
@@ -69,8 +69,17 @@ _RH_REF: float = 0.40
 # at RH=89% threshold≈0.064 (with default γ=0.45).
 _DEFICIT_THRESHOLD: float = 0.03
 
-# Rolling history of (unix_timestamp, is_hazy) pairs for the 15-minute
-# temporal coherence filter.  Entries older than 900 s are pruned on each
+# RH-graduated PM confirmation thresholds (µg/m³).
+# Research basis: CMA dry haze (~54 µg/m³ PM2.5 for vis < 10 km),
+# IMPROVE extinction ratio (coarse 0.6 m²/g vs fine 3-4 m²/g),
+# WMO dusty-air definition (50-200 µg/m³ PM10).
+# See docs/reference/haze-detection-research.md.
+_PM_THRESHOLDS_DRY: tuple[float, float] = (50.0, 100.0)      # PM2.5, PM10 at RH < 60%
+_PM_THRESHOLDS_MODERATE: tuple[float, float] = (35.0, 75.0)   # PM2.5, PM10 at RH 60-80%
+_PM_THRESHOLDS_HUMID: tuple[float, float] = (25.0, 50.0)      # PM2.5, PM10 at RH 80-90%
+
+# Rolling history of (unix_timestamp, is_hazy) pairs for the 5-minute
+# temporal coherence filter.  Entries older than 300 s are pruned on each
 # call to detect_haze().
 _haze_history: deque[tuple[float, bool]] = deque()
 
@@ -211,7 +220,6 @@ def detect_haze(
     # Convert to °C for the formula.
     # ------------------------------------------------------------------
     rh: float | None = None
-    t_td_f: float | None = None  # temperature depression in °F
 
     if out_temp is not None and dewpoint is not None:
         t_c = (out_temp - 32.0) * 5.0 / 9.0
@@ -225,7 +233,6 @@ def detect_haze(
             )
             # Clamp to [0, 100] to absorb sensor noise.
             rh = max(0.0, min(100.0, rh))
-        t_td_f = out_temp - dewpoint
 
     # ------------------------------------------------------------------
     # Gate 4: RH type discriminator.
@@ -245,23 +252,20 @@ def detect_haze(
         _record_history(now, is_hazy=False)
         return None
 
+    # RH-graduated PM thresholds (CMA/IMPROVE/WMO research-backed).
+    # Both PM2.5 and PM10 are independent first-class indicators.
+    if rh is not None and rh >= 80.0:
+        pm25_threshold, pm10_threshold = _PM_THRESHOLDS_HUMID
+    elif rh is not None and rh >= 60.0:
+        pm25_threshold, pm10_threshold = _PM_THRESHOLDS_MODERATE
+    else:
+        pm25_threshold, pm10_threshold = _PM_THRESHOLDS_DRY
+
     pm_confirmed = False
-
-    # Dry haze (RH < 80% or RH unknown): EPA "Moderate" PM2.5 breakpoint.
-    if rh is None or rh < 80.0:
-        if pm25 is not None and pm25 > 12.0:
-            pm_confirmed = True
-
-    # Humid disambiguation (T-Td ≤ 4°F): higher PM2.5 threshold distinguishes
-    # particulate haze from fog onset at moderate humidity.
-    if not pm_confirmed and t_td_f is not None and t_td_f <= 4.0:
-        if pm25 is not None and pm25 > 35.0:
-            pm_confirmed = True
-
-    # Coarse-mode dust/sand (any RH): PM10 threshold.
-    if not pm_confirmed:
-        if pm10 is not None and pm10 > 50.0:
-            pm_confirmed = True
+    if pm25 is not None and pm25 > pm25_threshold:
+        pm_confirmed = True
+    if not pm_confirmed and pm10 is not None and pm10 > pm10_threshold:
+        pm_confirmed = True
 
     if not pm_confirmed:
         _record_history(now, is_hazy=False)
@@ -301,7 +305,7 @@ def detect_haze(
     _record_history(now, is_hazy=True)
 
     # ------------------------------------------------------------------
-    # Temporal coherence filter: 15-minute window.
+    # Temporal coherence filter: 5-minute window.
     # Haze is only reported when ≥ 50% of entries in the window are True.
     # Prevents label flicker at aerosol-concentration boundaries.
     # ------------------------------------------------------------------
@@ -350,15 +354,15 @@ def reset() -> None:
 
 
 def _record_history(now: float, *, is_hazy: bool) -> None:
-    """Append a (timestamp, is_hazy) entry and prune entries older than 15 min."""
+    """Append a (timestamp, is_hazy) entry and prune entries older than 5 min."""
     _haze_history.append((now, is_hazy))
-    cutoff = now - 900.0
+    cutoff = now - 300.0
     while _haze_history and _haze_history[0][0] < cutoff:
         _haze_history.popleft()
 
 
 def _evaluate_coherence(now: float) -> str | None:
-    """Return 'Hazy' if ≥ 50% of the 15-minute history entries are True."""
+    """Return 'Hazy' if ≥ 50% of the 5-minute history entries are True."""
     window = list(_haze_history)
     if not window:
         return None

@@ -64,7 +64,7 @@ _RAIN_HOLDOFF = 1800.0
 _PERSIST_PATH = "/etc/weewx-clearskies/calibration.json"
 _PERSIST_INTERVAL = 600.0
 
-_CLEAN_SKY_SUBSTRINGS: tuple[str, ...] = ("Clear", "Sunny")
+_CLEAN_SKY_LABELS: frozenset[str] = frozenset({"Clear", "Sunny"})
 
 _MONTH_NAMES: tuple[str, ...] = (
     "January", "February", "March", "April", "May", "June",
@@ -239,7 +239,7 @@ def process_packet(packet: dict) -> None:  # type: ignore[type-arg]
     if sky_label is None:
         return
 
-    if not any(sub in sky_label for sub in _CLEAN_SKY_SUBSTRINGS):
+    if sky_label not in _CLEAN_SKY_LABELS:
         return
 
     # ------------------------------------------------------------------
