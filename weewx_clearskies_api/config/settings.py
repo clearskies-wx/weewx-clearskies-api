@@ -90,8 +90,7 @@ class ApiSettings:
         # Validate bind_host is a legal IP address or hostname.
         # ipaddress.ip_address accepts both IPv4 and IPv6 per coding.md §1.
         # Hostname strings are allowed too — they'll be resolved via getaddrinfo.
-        if self.bind_host not in ("", "localhost"):
-            # Not a bare IP — accept it as a hostname; resolution happens at bind time.
+        if self.bind_host not in ("", "localhost", "*"):
             with contextlib.suppress(ValueError):
                 ipaddress.ip_address(self.bind_host)
         if not (1 <= self.bind_port <= 65535):
@@ -1322,7 +1321,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         # serves only /setup/* and GET /api/v1/status so the wizard can connect.
         logger.info("No configuration file found — starting in setup mode")
         return Settings(
-            api=ApiSettings({"bind_host": "0.0.0.0", "bind_port": 8765}),
+            api=ApiSettings({"bind_host": "*", "bind_port": 8765}),
             health=HealthSettings({"bind_host": "127.0.0.1", "bind_port": 8081}),
             logging_settings=LoggingSettings({}),
             database=DatabaseSettings({}),

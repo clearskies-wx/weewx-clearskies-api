@@ -260,11 +260,12 @@ def _parse_args() -> argparse.Namespace:
 
 def _is_loopback(host: str) -> bool:
     """Return True if host is a loopback address (IPv4 or IPv6)."""
+    if host == "*":
+        return False
     try:
         addr = ipaddress.ip_address(host)
         return addr.is_loopback
     except ValueError:
-        # Hostname — check well-known loopback names.
         return host in ("localhost",)
 
 
@@ -291,12 +292,15 @@ def _resolve_bind_addresses(host: str, port: int) -> list[tuple[str, int]]:
     Returns a list of (ip_address_string, port) tuples — one per address
     family resolved. For "127.0.0.1" this returns [("127.0.0.1", port)].
     For "localhost" this typically returns both ("127.0.0.1", port) and
-    ("::1", port) on dual-stack systems.
+    ("::1", port) on dual-stack systems. For "*" (wildcard), returns both
+    "0.0.0.0" and "::" via AI_PASSIVE — true dual-stack binding.
     """
     results: list[tuple[str, int]] = []
+    gai_host: str | None = None if host == "*" else host
+    gai_flags = socket.AI_PASSIVE if host == "*" else 0
     try:
         for _family, _type, _proto, _cname, sockaddr in socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM
+            gai_host, port, type=socket.SOCK_STREAM, flags=gai_flags
         ):
             ip_str = sockaddr[0]
             if (ip_str, port) not in results:
@@ -424,7 +428,7 @@ def _format_address_for_url(host: str, port: int) -> str:
     When host is a wildcard (``::`` or ``0.0.0.0``), substitutes ``localhost``
     so the operator gets a usable address to paste into a browser.
     """
-    if host in ("::", "0.0.0.0"):
+    if host in ("*", "::", "0.0.0.0"):
         host = "localhost"
     # Wrap raw IPv6 literals in brackets per coding.md §1 / RFC 3986.
     try:
