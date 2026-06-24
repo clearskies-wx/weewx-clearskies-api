@@ -375,6 +375,27 @@ def _station_local_window(
     return t0, t1
 
 
+def _local_time_to_skyfield(
+    ts: object, d: date, hour: int, minute: int, station_tz: str,
+) -> object:
+    """Convert a station-local time to a Skyfield Time object.
+
+    Builds a timezone-aware datetime via ZoneInfo, converts to UTC, then
+    unpacks into ts.utc().  Same conversion pattern as _station_local_window().
+    """
+    try:
+        zi = ZoneInfo(station_tz)
+    except ZoneInfoNotFoundError:
+        zi = ZoneInfo("UTC")
+
+    local_dt = datetime(d.year, d.month, d.day, hour, minute, 0, tzinfo=zi)
+    utc_dt = local_dt.astimezone(UTC)
+    return ts.utc(  # type: ignore[union-attr]
+        utc_dt.year, utc_dt.month, utc_dt.day,
+        utc_dt.hour, utc_dt.minute, utc_dt.second,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Core compute helpers
 # ---------------------------------------------------------------------------
@@ -973,21 +994,29 @@ def compute_planets(
             sunrise_tt = t.tt  # type: ignore[attr-defined]
             sunrise_iso = _to_utc_z(t)
 
-    # Midnight TT (midpoint of the window) for classification boundary.
-    midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
+    # Midnight TT — t1 of station-local window = start of next local day.
+    midnight_tt = t1.tt  # type: ignore[attr-defined]
+
+    # --- Next-day sunrise (ends tonight's dark period) ---
+    next_day = date_val + timedelta(days=1)
+    t0_next, t1_next = _station_local_window(ts, next_day, station_tz)
+    f_sun_next = almanac.risings_and_settings(eph, sun, location)  # type: ignore[arg-type]
+    times_sun_next, events_sun_next = almanac.find_discrete(t0_next, t1_next, f_sun_next)  # type: ignore[arg-type]
+    next_sunrise_tt: float | None = None
+    for t, e in zip(times_sun_next, events_sun_next, strict=False):
+        if e == 1:  # rising
+            next_sunrise_tt = t.tt  # type: ignore[attr-defined]
+            break
 
     # Noon time for magnitude/RA/Dec/elongation computation.
-    t_noon = ts.utc(date_val.year, date_val.month, date_val.day, 12, 0, 0)  # type: ignore[call-arg]
+    t_noon = _local_time_to_skyfield(ts, date_val, 12, 0, station_tz)
 
     # Pre-compute the Sun's apparent position at noon for elongation calculations.
     sun_apparent_noon = earth.at(t_noon).observe(sun).apparent()  # type: ignore[attr-defined]
 
-    # Reference times for altitude/direction computation:
-    #   Evening planets — 9 pm local (21:00).
-    #   Morning planets — 5 am local (05:00).
-    #   All-night planets — local midnight (midpoint of window).
-    t_9pm = ts.utc(date_val.year, date_val.month, date_val.day, 21, 0, 0)  # type: ignore[call-arg]
-    t_5am = ts.utc(date_val.year, date_val.month, date_val.day, 5, 0, 0)  # type: ignore[call-arg]
+    # Reference times for altitude/direction computation (station-local).
+    t_9pm = _local_time_to_skyfield(ts, date_val, 21, 0, station_tz)
+    t_5am = _local_time_to_skyfield(ts, next_day, 5, 0, station_tz)
     t_midnight_chk = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
 
     evening: list[dict] = []
@@ -1063,13 +1092,13 @@ def compute_planets(
             return _alt_az_at(t_check)[0]
 
         # We need sun to have set and planet to be above horizon to be "visible".
-        if sunset_tt is None and sunrise_tt is None:
-            # No night at this location on this date (polar day).
+        if sunset_tt is None and sunrise_tt is None and next_sunrise_tt is None:
             continue
 
         # Build time objects for altitude checks.
         t_sunset_chk = ts.tt_jd(sunset_tt) if sunset_tt is not None else None  # type: ignore[attr-defined]
-        t_sunrise_chk = ts.tt_jd(sunrise_tt) if sunrise_tt is not None else None  # type: ignore[attr-defined]
+        effective_sunrise_tt = next_sunrise_tt if next_sunrise_tt is not None else sunrise_tt
+        t_sunrise_chk = ts.tt_jd(effective_sunrise_tt) if effective_sunrise_tt is not None else None  # type: ignore[attr-defined]
 
         above_at_sunset = (t_sunset_chk is not None and _alt_at(t_sunset_chk) > 0)
         above_at_sunrise = (t_sunrise_chk is not None and _alt_at(t_sunrise_chk) > 0)
@@ -1085,8 +1114,8 @@ def compute_planets(
                                    and (planet_set_tt < midnight_tt or not above_at_midnight)):
             ref_time = t_9pm
             target_list = evening
-        elif above_at_sunrise or (planet_rise_tt is not None and sunrise_tt is not None
-                                    and planet_rise_tt < sunrise_tt
+        elif above_at_sunrise or (planet_rise_tt is not None and effective_sunrise_tt is not None
+                                    and planet_rise_tt < effective_sunrise_tt
                                     and (planet_rise_tt > midnight_tt or not above_at_midnight)):
             ref_time = t_5am
             target_list = morning
@@ -1348,7 +1377,7 @@ def compute_meteor_showers(
 
             # --- Radiant altitude at local midnight on peak night ---
             t0, t1 = _station_local_window(ts, peak_date, station_tz)
-            midnight_tt = (t0.tt + t1.tt) / 2.0  # type: ignore[attr-defined]
+            midnight_tt = t1.tt  # type: ignore[attr-defined]
             t_midnight = ts.tt_jd(midnight_tt)  # type: ignore[attr-defined]
 
             # RA/Dec given in degrees; Star wants ra_hours.
@@ -1368,7 +1397,7 @@ def compute_meteor_showers(
             # Use ecliptic phase angle at local noon (same as _compute_moon_for_date).
             moon = eph["moon"]  # type: ignore[index]
             sun = eph["sun"]  # type: ignore[index]
-            t_noon = ts.utc(peak_date.year, peak_date.month, peak_date.day, 12, 0, 0)  # type: ignore[call-arg]
+            t_noon = _local_time_to_skyfield(ts, peak_date, 12, 0, station_tz)
             sun_ecl = earth.at(t_noon).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
             moon_ecl = earth.at(t_noon).observe(moon).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
             sun_lon = float(sun_ecl[1].degrees)  # type: ignore[index]

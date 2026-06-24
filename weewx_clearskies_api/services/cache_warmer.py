@@ -50,6 +50,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 from sqlalchemy import Engine
@@ -251,8 +252,6 @@ class BackgroundCacheWarmer:
         cache hit when the user pages forward to the next day.
         """
         try:
-            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
             from weewx_clearskies_api.services.almanac import compute_almanac
 
             cache = get_cache()
@@ -308,11 +307,15 @@ class BackgroundCacheWarmer:
             from weewx_clearskies_api.services.almanac import compute_planets
 
             cache = get_cache()
-            today = datetime.now(timezone.utc).date()
+            station_tz = self._station["station_tz"]
+            try:
+                zi = ZoneInfo(station_tz)
+                today = datetime.now(tz=zi).date()
+            except (ZoneInfoNotFoundError, KeyError):
+                today = datetime.now(timezone.utc).date()
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]
-            station_tz = self._station["station_tz"]
 
             planets_data = compute_planets(today, lat, lon, alt_m, station_tz)
             cache.set(
@@ -384,12 +387,16 @@ class BackgroundCacheWarmer:
             from weewx_clearskies_api.services.almanac import compute_meteor_showers
 
             cache = get_cache()
-            today = date.today()
+            station_tz = self._station["station_tz"]
+            try:
+                zi = ZoneInfo(station_tz)
+                today = datetime.now(tz=zi).date()
+            except (ZoneInfoNotFoundError, KeyError):
+                today = date.today()
             to_date = today + timedelta(days=365)
             lat = self._station["lat"]
             lon = self._station["lon"]
             alt_m = self._station["alt_m"]
-            station_tz = self._station["station_tz"]
 
             showers_data = compute_meteor_showers(
                 lat, lon, alt_m, station_tz,
