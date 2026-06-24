@@ -349,8 +349,8 @@ def backfill(records: list[tuple[float, float, float]]) -> None:
     if len(_ring) >= 3:
         indices = _compute_indices()
         if indices is not None:
-            kcs, km, kv, kvf, latest_msr = indices
-            _last_stable_label = _classify_sky(kcs, km, kv, kvf, latest_msr)
+            kcs, km, kmf, kv, kvf, latest_msr = indices
+            _last_stable_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr)
 
 
 # ---------------------------------------------------------------------------
