@@ -3,13 +3,25 @@
 Validates the two-channel haze detection algorithm:
   - Gate ordering (disabled, solar elevation, sky label, wet deposition, RH)
   - PM channel thresholds (RH-graduated: dry/moderate/humid tiers, both species)
-  - Kcs deficit channel (baseline comparison)
+  - Kcs deficit channel (dynamic baseline from sky_condition.get_dynamic_clear_threshold)
   - Temporal coherence filter (5-minute rolling window, ≥50% True)
-  - Configuration API (set_enabled, set_baseline, set_gamma, reset)
+  - Configuration API (set_enabled, set_gamma, reset)
   - Wet deposition edge cases (rain start/stop, 30-min holdoff)
 
-Module-level state is intentional in haze_condition.py; the autouse fixture
-calls reset() before every test to provide clean isolation.
+Channel 1 (Kcs deficit) note
+------------------------------
+Channel 1 now calls sky_condition.get_dynamic_clear_threshold() to obtain the
+elevation-adjusted clear-sky baseline.  In unit tests the sky_condition ring
+buffer is not seeded, so get_dynamic_clear_threshold() returns None — which
+would cause all detect_haze() calls to return None before reaching the
+coherence filter.  The _mock_dynamic_threshold fixture patches
+sky_condition.get_dynamic_clear_threshold to return a fixed 0.90, restoring
+the behaviour previously provided by the removed _clean_kcs_baseline variable
+and set_baseline() function.  Tests that specifically need a different
+threshold value override the mock inline.
+
+Module-level state is intentional in haze_condition.py; the autouse fixtures
+call reset() before every test to provide clean isolation.
 
 Temporal coherence note
 ------------------------
@@ -19,12 +31,13 @@ records True but the history has exactly one entry, so hazy_count/total = 1.0
 (≥0.50) and "Hazy" is immediately returned.  To test the <50% threshold,
 the history must be pre-populated with False entries before the True one.
 The _fill_history() helper does this by calling detect_haze() with parameters
-guaranteed to record False entries (solar_elevation=5.0, below-10° gate).
+guaranteed to record False entries (solar_elevation=5.0, below the 15° gate).
 """
 
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -32,7 +45,7 @@ from weewx_clearskies_api.sse import haze_condition
 
 
 # ---------------------------------------------------------------------------
-# Autouse reset fixture — every test starts from a clean slate.
+# Autouse fixtures — every test starts from a clean slate.
 # ---------------------------------------------------------------------------
 
 
@@ -42,6 +55,23 @@ def _reset_haze():
     haze_condition.reset()
     yield
     haze_condition.reset()
+
+
+@pytest.fixture(autouse=True)
+def _mock_dynamic_threshold():
+    """Patch sky_condition.get_dynamic_clear_threshold to return 0.90.
+
+    Channel 1 of detect_haze() calls get_dynamic_clear_threshold() via a
+    lazy local import.  Without a seeded ring buffer the function returns
+    None, causing every detect_haze() call to short-circuit before the
+    coherence filter.  Patching at the source module ensures the Kcs-deficit
+    tests exercise the same logic as before set_baseline() was removed.
+    """
+    with patch(
+        "weewx_clearskies_api.sse.sky_condition.get_dynamic_clear_threshold",
+        return_value=0.90,
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +114,7 @@ def _fill_history_with_false(count: int, base_ts: float = _BASE_TS) -> float:
         ts = base_ts + i
         haze_condition.detect_haze(
             kcs=0.85,
-            solar_elevation=5.0,   # below 10° → records False, returns None
+            solar_elevation=5.0,   # below 15° gate → records False, returns None
             sky_label="Clear",
             pm25=55.0,
             pm10=None,
@@ -116,25 +146,29 @@ class TestGates:
         result = _detect(solar_elevation=None)
         assert result is None, "solar_elevation=None must return None (Gate 1)"
 
-    def test_solar_elevation_below_10_returns_none(self) -> None:
-        """solar_elevation=5.0 (< 10°) → Gate 1 fires, returns None."""
+    def test_solar_elevation_below_15_returns_none(self) -> None:
+        """solar_elevation=5.0 (< 15°) → Gate 1 fires, returns None.
+
+        The solar elevation gate threshold is 15° (aligned with the SZA guard
+        in sky_condition.py so Kcs comparisons use the same data quality cut-off).
+        """
         result = _detect(solar_elevation=5.0)
-        assert result is None, "solar_elevation=5.0 must return None (< 10° gate)"
+        assert result is None, "solar_elevation=5.0 must return None (< 15° gate)"
 
-    def test_solar_elevation_exactly_10_returns_none(self) -> None:
-        """solar_elevation=10.0 (== 10°) → Gate 1 fires (≤ 10.0), returns None."""
-        result = _detect(solar_elevation=10.0)
-        assert result is None, "solar_elevation=10.0 must return None (≤ 10° gate, exclusive)"
+    def test_solar_elevation_exactly_15_returns_none(self) -> None:
+        """solar_elevation=15.0 (== 15°) → Gate 1 fires (≤ 15.0), returns None."""
+        result = _detect(solar_elevation=15.0)
+        assert result is None, "solar_elevation=15.0 must return None (≤ 15° gate, exclusive)"
 
-    def test_solar_elevation_above_10_not_gated(self) -> None:
-        """solar_elevation=10.01 (just above 10°) → Gate 1 does NOT fire."""
+    def test_solar_elevation_above_15_not_gated(self) -> None:
+        """solar_elevation=15.01 (just above 15°) → Gate 1 does NOT fire."""
         # This test just verifies gate 1 doesn't block; other gates may still fire.
         # With both channels firing and no other gate active, we get a result.
-        result = _detect(solar_elevation=10.01)
+        result = _detect(solar_elevation=15.01)
         # Should return "Hazy" (single entry = 100% true) or None from another gate.
-        # The only question is: does solar elevation gate block at 10.01? No.
+        # The only question is: does solar elevation gate block at 15.01? No.
         assert result == "Hazy", (
-            "solar_elevation=10.01 should pass Gate 1 and allow haze detection"
+            "solar_elevation=15.01 should pass Gate 1 and allow haze detection"
         )
 
     def test_mostly_cloudy_sky_label_returns_none(self) -> None:
@@ -561,7 +595,7 @@ class TestTemporalCoherence:
 
 
 class TestConfiguration:
-    """set_enabled, set_baseline, set_gamma, reset."""
+    """set_enabled, set_gamma, reset."""
 
     def test_set_enabled_false_suppresses_detection(self) -> None:
         """set_enabled(False) → detect_haze() returns None on subsequent calls."""
@@ -574,20 +608,34 @@ class TestConfiguration:
         haze_condition.set_enabled(True)
         assert _detect() == "Hazy", "set_enabled(True) must re-enable haze detection"
 
-    def test_set_baseline_raises_threshold(self) -> None:
-        """set_baseline(0.95) → kcs=0.85 deficit=0.10 exceeds f(RH)-adjusted threshold."""
-        haze_condition.set_baseline(0.95)
-        # kcs=0.85 < baseline 0.95 → deficit = 0.10 > ~0.031
-        result = _detect(kcs=0.85)
-        assert result == "Hazy", (
-            "After set_baseline(0.95), kcs=0.85 deficit=0.10 must exceed threshold"
+    def test_dynamic_baseline_0_90_rejects_kcs_0_91(self) -> None:
+        """Dynamic baseline=0.90 (mocked): kcs=0.91 > baseline → deficit < 0 → None.
+
+        Channel 1 obtains its baseline from sky_condition.get_dynamic_clear_threshold(),
+        which the _mock_dynamic_threshold fixture patches to return 0.90.
+        kcs=0.91 exceeds the 0.90 threshold, so deficit <= 0 and the channel does
+        not fire.
+        """
+        result = _detect(kcs=0.91)
+        assert result is None, (
+            "kcs=0.91 above dynamic baseline 0.90 must return None (no deficit)"
         )
 
-    def test_set_baseline_default_0_90_rejected_by_kcs_0_91(self) -> None:
-        """Default baseline=0.90: kcs=0.91 > baseline → deficit < 0 → None."""
-        # At default baseline 0.90, kcs=0.91 has no deficit.
-        result = _detect(kcs=0.91)
-        assert result is None, "kcs=0.91 above default baseline 0.90 must return None"
+    def test_higher_dynamic_baseline_detects_with_kcs_0_85(self) -> None:
+        """Dynamic baseline=0.95: kcs=0.85 → deficit=0.10 exceeds f(RH)-adjusted threshold.
+
+        Patches get_dynamic_clear_threshold() to return 0.95, simulating a station
+        in a clean-air location with a higher elevation-adjusted clear-sky baseline.
+        kcs=0.85 deficit=0.10 is well above the ~0.031 f(RH)-adjusted threshold.
+        """
+        with patch(
+            "weewx_clearskies_api.sse.sky_condition.get_dynamic_clear_threshold",
+            return_value=0.95,
+        ):
+            result = _detect(kcs=0.85)
+        assert result == "Hazy", (
+            "Dynamic baseline=0.95, kcs=0.85 deficit=0.10 must exceed threshold → Hazy"
+        )
 
     def test_set_gamma_changes_correction_exponent(self) -> None:
         """set_gamma(0.12) changes the hygroscopic correction exponent without error."""
@@ -609,14 +657,17 @@ class TestConfiguration:
         haze_condition.reset()
         assert _detect() == "Hazy", "reset() must restore enabled=True"
 
-    def test_reset_restores_default_baseline(self) -> None:
-        """reset() restores _clean_kcs_baseline to 0.90."""
-        haze_condition.set_baseline(0.99)
+    def test_reset_clears_gamma_to_default(self) -> None:
+        """reset() restores _gamma to the default 0.45.
+
+        Verifies that reset() leaves the module in a state where detection
+        still works with the default exponent after set_gamma() was called.
+        """
+        haze_condition.set_gamma(1.52)
         haze_condition.reset()
-        # kcs=0.91 > 0.90 (restored baseline) → no deficit
-        result = _detect(kcs=0.91)
-        assert result is None, (
-            "reset() must restore baseline to 0.90; kcs=0.91 must not confirm channel"
+        # With default gamma and both channels firing, result must be Hazy.
+        assert _detect() == "Hazy", (
+            "reset() must restore gamma to default; detection must still work"
         )
 
     def test_reset_clears_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
