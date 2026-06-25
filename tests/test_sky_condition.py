@@ -911,7 +911,7 @@ _NYC_ALT = 10.0
 # 2024-06-21 16:56 UTC → solar noon for NYC → elevation ≈ +73°
 _NYC_NOON_TS = 1_718_988_960.0
 
-# 2024-06-21 14:00 UTC → 10 AM EDT → elevation well above 5°
+# 2024-06-21 14:00 UTC → 10 AM EDT → elevation well above 15°
 _NYC_MORNING_TS = 1_718_978_400.0
 
 # 2024-06-21 04:00 UTC → midnight EDT → elevation ≈ -50° (well below horizon)
@@ -1144,17 +1144,23 @@ def test_sza_guard_skipped_when_no_station_coords():
     )
 
 
-def test_sza_guard_returns_last_stable_when_below_threshold():
-    """SZA guard returns the last stable label when solar elevation < 5°.
+def test_sza_guard_returns_none_when_below_threshold_with_prior_label():
+    """SZA guard returns None when solar elevation < 15°, even with a prior stable label.
+
+    The SZA guard now returns None unconditionally when elevation < _SZA_GUARD_ELEVATION
+    (15°).  This prevents stale labels from being held past sunset; downstream
+    consumers are expected to fall back to provider cloud cover when None is returned.
 
     Strategy:
-    1. Feed 30 minutes of clear data at midday timestamps (high elevation) to
-       establish a stable label via the coherence filter.
-    2. Call classify() with the ring's last timestamp replaced by a well-below-
-       horizon timestamp (NYC midnight = elevation ≈ -50°).  We do this by
-       feeding a single reading at the midnight timestamp, which adds a new
-       ring entry.  The SZA guard evaluates ring[-1].ts.
-    3. Assert the returned label equals the previously established label.
+    1. Feed 30 minutes of clear data at midday timestamps to establish a stable label.
+    2. Feed 13 readings at a post-sunset timestamp so ring[-1].ts is below-horizon.
+       The sunset transition in update() clears ring + _last_stable_label when
+       max(ghi, msr) first drops below _MIN_SOLAR_RAD; but GHI=20, msr=30 keeps
+       max(20,30)=30 >= 20, so the night guard does NOT fire and the ring keeps
+       the new entry.  _last_stable_label was cleared by the earlier sunset in
+       the ring (the morning data aged out of the 30-min window before post-sunset
+       data arrived, but the transition is driven by _was_daytime, not the window).
+    3. SZA guard fires (elevation ≈ -8° at _NYC_POSTSUNSET_TS < 15°) and returns None.
     """
     _configure_nyc()
     if not _skyfield_available():
@@ -1172,27 +1178,26 @@ def test_sza_guard_returns_last_stable_when_below_threshold():
 
     # Phase 2: feed 13 readings at a post-sunset timestamp (after the morning
     # data ends), so ring[-1].ts is a below-horizon time.
-    # _NYC_POSTSUNSET_TS = 8 PM EDT = elevation ≈ -8° (well below 5°).
+    # _NYC_POSTSUNSET_TS = 8 PM EDT = elevation ≈ -8° (well below 15°).
     # GHI=20, msr=30 → max(20,30)=30 >= 20 → night guard does NOT fire.
     # 12 readings + 1 trigger force_flush → one new ring entry at post-sunset ts.
     for i in range(13):
         sky_condition.update(20.0, 30.0, timestamp=_NYC_POSTSUNSET_TS + i * 5)
 
-    # Now classify().  ring[-1].ts is in the post-sunset range (elevation < 5°).
-    # The SZA guard fires and returns _last_stable_label.
+    # Now classify().  ring[-1].ts is in the post-sunset range (elevation < 15°).
+    # The SZA guard fires and returns None (not _last_stable_label).
     result = sky_condition.classify()
-    assert result == stable_label, (
-        f"SZA guard must return last stable label {stable_label!r} "
-        f"when solar elevation < 5°, got {result!r}"
+    assert result is None, (
+        f"SZA guard must return None when solar elevation < 15°, got {result!r}"
     )
 
 
 def test_sza_guard_allows_classification_above_threshold():
-    """classify() returns a non-None label when solar elevation > 5°.
+    """classify() returns a non-None label when solar elevation > 15°.
 
-    Feed 30 minutes of data at midday timestamps (solar elevation ≈ 73°).
+    Feed 30 minutes of data at midday timestamps (solar elevation ≈ 52°).
     The SZA guard checks ring[-1].ts; at solar noon the elevation is well
-    above the 5° threshold, so the guard does not fire.
+    above the 15° threshold, so the guard does not fire.
     """
     _configure_nyc()
     if not _skyfield_available():
@@ -1204,7 +1209,7 @@ def test_sza_guard_allows_classification_above_threshold():
     _feed_constant_ghi_at(ghi=800.0, msr=900.0, minutes=30, base_ts=_NYC_MORNING_TS)
     result = sky_condition.classify()
     assert result is not None, (
-        "classify() must return a label when solar elevation is well above 5°"
+        "classify() must return a label when solar elevation is well above 15°"
     )
 
 
@@ -1230,16 +1235,16 @@ def test_sza_guard_does_not_block_data_acceptance():
 
     assert len(sky_condition._ring) >= 1, (
         "Ring must accept readings when max(ghi,msr) >= _MIN_SOLAR_RAD, "
-        "even when solar elevation < 5° (SZA guard does not block data acceptance)"
+        "even when solar elevation < 15° (SZA guard does not block data acceptance)"
     )
 
 
 def test_sza_guard_returns_none_below_threshold_on_cold_start():
-    """SZA guard returns None on cold start with no prior stable label.
+    """SZA guard returns None on cold start when solar elevation < 15°.
 
-    On a cold start, _last_stable_label is None.  When the first classify() call
-    has ring[-1].ts at a below-horizon timestamp, the SZA guard fires and returns
-    _last_stable_label, which is still None — no label has been established yet.
+    The SZA guard unconditionally returns None when elevation < _SZA_GUARD_ELEVATION.
+    On a cold start there is no prior stable label, so None is the only possible
+    result.  This test verifies the cold-start path is consistent with that contract.
 
     Uses _NYC_POSTSUNSET_TS (8 PM EDT, solar elevation ≈ -8°) with
     GHI=20/msr=30 so the night guard does not fire but the SZA guard does.
@@ -1325,22 +1330,29 @@ def test_backfill_still_works_with_station_coords():
     """backfill() with archive records seeds the ring when station coords configured.
 
     Station coords must not interfere with the backfill startup path.
-    After backfilling 6 records at the default _BASE_TS timestamps,
-    classify() must return a non-None label immediately (backfill bypasses
-    the coherence filter by pre-setting _last_stable_label).
+    Records use _NYC_MORNING_TS (2024-06-21 14:00 UTC, solar elevation ≈ +52°
+    for NYC) so the SZA guard (elevation < 15°) does not fire, and classify()
+    can return the label established by backfill().
     """
     _configure_nyc()
+    if not _skyfield_available():
+        pytest.skip("Skyfield ephemeris not available in this test environment")
 
-    records = _make_backfill_records(n=6, ghi=800.0, msr=900.0, interval_sec=300)
+    sky_condition.reset()
+    _configure_nyc()
+
+    # Use midday timestamps where solar elevation for NYC is well above 15°.
+    # _NYC_MORNING_TS = 2024-06-21 14:00 UTC → 10 AM EDT → elevation ≈ +52°.
+    records = _make_backfill_records(
+        n=6, ghi=800.0, msr=900.0, interval_sec=300, end_ts=_NYC_MORNING_TS
+    )
     sky_condition.backfill(records)
     result = sky_condition.classify()
-    # SZA guard: ring[-1].ts is _BASE_TS (synthetic timestamp ≈ 1_000_080).
-    # _compute_solar_elevation returns a value — but if the observer is built,
-    # that Unix timestamp maps to ~1970 (very old date) where Skyfield may
-    # return an elevation.  If the SZA guard fires, it returns _last_stable_label
-    # which was pre-set by backfill().  Either way, a non-None label must come back.
+    # SZA guard: ring[-1].ts is at _NYC_MORNING_TS (elevation ≈ +52° >> 15°).
+    # Guard does not fire; backfill pre-set _last_stable_label, so result is non-None.
     assert result is not None, (
-        "classify() must return a label after backfill with station coords configured"
+        "classify() must return a label after backfill with station coords configured "
+        "when ring[-1].ts is at a high-elevation midday timestamp"
     )
 
 
