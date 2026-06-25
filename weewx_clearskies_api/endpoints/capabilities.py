@@ -25,6 +25,7 @@ from weewx_clearskies_api.models.responses import (
     CapabilityDeclaration,
     CapabilityRegistry,
     CapabilityResponse,
+    LayerDeclarationResponse,
     WeewxColumnEntry,
     utc_isoformat,
 )
@@ -79,6 +80,21 @@ def get_capabilities() -> CapabilityResponse:
             wmsLayerName=cap.wms_layer_name,
             tileContentType=cap.tile_content_type,
             iframeUrl=cap.iframe_url,
+            layers=[
+                LayerDeclarationResponse(
+                    layerId=layer.layer_id,
+                    layerName=layer.layer_name,
+                    layerType=layer.layer_type,
+                    wmsEndpointUrl=layer.wms_endpoint_url,
+                    tileUrlTemplate=layer.tile_url_template,
+                    wmsLayerName=layer.wms_layer_name,
+                    timeEnabled=layer.time_enabled,
+                    geographicCoverage=layer.geographic_coverage,
+                    defaultEnabled=layer.default_enabled,
+                    browserDirect=layer.browser_direct,
+                )
+                for layer in cap.layers
+            ] if cap.layers else None,
         )
         for cap in provider_registry
     ]
