@@ -106,34 +106,14 @@ def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
     Raises:
         ValueError: If any timestamp or duration cannot be parsed.
     """
-    start_raw = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-    end_raw = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-    # Ensure both are tz-aware (UTC) — bare dates like "2026-12-31" parse as naive.
-    start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=UTC)
-    end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=UTC)
+    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     delta = _parse_iso_duration(period_iso)
     if delta is None or delta.total_seconds() <= 0:
         raise ValueError(f"Cannot parse or zero-duration period: {period_iso!r}")
 
-    # Anchor at the earlier of end-of-range or NOW so we generate recent
-    # timestamps, not future ones.  IEM NEXRAD declares a range like
-    # "1995-01-01/2026-12-31/PT5M" — walking from 2026-12-31 produces
-    # future timestamps with no radar data.
-    now = datetime.now(tz=UTC)
-    anchor = min(end, now)
-
-    # Snap anchor to the nearest cadence boundary so generated timestamps
-    # land on exact data times (e.g. :00, :05, :10 for PT5M).  IEM's WMS
-    # has nearestValue="0" — it rejects requests with non-matching times.
-    delta_secs = int(delta.total_seconds())
-    if delta_secs > 0:
-        epoch_secs = int(anchor.timestamp())
-        anchor = datetime.fromtimestamp(
-            (epoch_secs // delta_secs) * delta_secs, tz=UTC
-        )
-
     timestamps: list[str] = []
-    current = anchor
+    current = end
     while current >= start and len(timestamps) < _MAX_PERIOD_FRAMES:
         timestamps.append(current.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
         current = current - delta

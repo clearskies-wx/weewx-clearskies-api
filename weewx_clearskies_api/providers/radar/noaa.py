@@ -43,7 +43,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime, timedelta
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList
 from weewx_clearskies_api.providers._common.cache import get_cache
@@ -235,10 +234,6 @@ _LAYERS: tuple[LayerDeclaration, ...] = (
 # Capability declaration (ADR-038 §4)
 # ---------------------------------------------------------------------------
 
-_IEM_TMS_TEMPLATE = (
-    "https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/{path}/{z}/{x}/{y}.png"
-)
-
 CAPABILITY = ProviderCapability(
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
@@ -251,7 +246,8 @@ CAPABILITY = ProviderCapability(
         "GOES satellite (5 bands), SPC severe weather overlays, alert polygons. "
         "All free government endpoints, no API key required."
     ),
-    tile_url_template=_IEM_TMS_TEMPLATE,
+    wms_endpoint_url=_IEM_NEXRAD_URL,
+    wms_layer_name=_IEM_NEXRAD_LAYER,
     tile_content_type="image/png",
     layers=_LAYERS,
 )
@@ -382,41 +378,6 @@ def _from_cached(cached: dict) -> RadarFrameList:  # type: ignore[type-arg]
 # ---------------------------------------------------------------------------
 
 
-def _get_nexrad_tms_frames() -> RadarFrameList:
-    """Generate NEXRAD TMS tile frame list.
-
-    IEM serves NEXRAD as pre-rendered TMS tiles at fixed 5-minute offsets
-    from the current time — NOT WMS-T.  11 frames covering 50 minutes.
-    URL: ``/cache/tile.py/1.0.0/nexrad-n0q-900913-mXXm/{z}/{x}/{y}.png``
-    Reference: https://mesonet.agron.iastate.edu/ogc/
-    """
-    offsets = [50, 45, 40, 35, 30, 25, 20, 15, 10, 5, 0]
-    now = datetime.now(tz=UTC)
-    # Snap to 5-minute boundary
-    now = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
-
-    frames: list[RadarFrame] = []
-    for offset_min in offsets:
-        frame_time = now - timedelta(minutes=offset_min)
-        if offset_min == 0:
-            path = "nexrad-n0q-900913"
-            kind = "current"
-        else:
-            path = f"nexrad-n0q-900913-m{offset_min:02d}m"
-            kind = "past"
-        frames.append(RadarFrame(
-            time=frame_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            path=path,
-            kind=kind,
-        ))
-
-    return RadarFrameList(
-        providerId=PROVIDER_ID,
-        frames=frames,
-        attribution=ATTRIBUTION,
-    )
-
-
 def get_frames(*, layer: str | None = None) -> RadarFrameList:
     """Fetch radar or satellite frame index from WMS GetCapabilities.
 
@@ -449,11 +410,7 @@ def get_frames(*, layer: str | None = None) -> RadarFrameList:
             domain=DOMAIN,
         )
 
-    # NEXRAD uses IEM TMS tiles (pre-rendered, CDN-cached) — no WMS GetCapabilities.
-    if decl.layer_id == _DEFAULT_LAYER_ID:
-        return _get_nexrad_tms_frames()
-
-    # Per-layer cache check (WMS-T layers only — MRMS, satellite).
+    # Per-layer cache check.
     cache = get_cache()
     key = _cache_key(decl.layer_id)
     hit = cache.get(key)
