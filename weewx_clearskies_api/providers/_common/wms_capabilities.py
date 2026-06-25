@@ -122,6 +122,16 @@ def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
     now = datetime.now(tz=UTC)
     anchor = min(end, now)
 
+    # Snap anchor to the nearest cadence boundary so generated timestamps
+    # land on exact data times (e.g. :00, :05, :10 for PT5M).  IEM's WMS
+    # has nearestValue="0" — it rejects requests with non-matching times.
+    delta_secs = int(delta.total_seconds())
+    if delta_secs > 0:
+        epoch_secs = int(anchor.timestamp())
+        anchor = datetime.fromtimestamp(
+            (epoch_secs // delta_secs) * delta_secs, tz=UTC
+        )
+
     timestamps: list[str] = []
     current = anchor
     while current >= start and len(timestamps) < _MAX_PERIOD_FRAMES:
