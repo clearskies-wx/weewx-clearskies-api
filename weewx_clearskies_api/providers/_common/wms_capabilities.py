@@ -106,8 +106,11 @@ def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
     Raises:
         ValueError: If any timestamp or duration cannot be parsed.
     """
-    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-    end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    start_raw = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    end_raw = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    # Ensure both are tz-aware (UTC) — bare dates like "2026-12-31" parse as naive.
+    start = start_raw if start_raw.tzinfo else start_raw.replace(tzinfo=UTC)
+    end = end_raw if end_raw.tzinfo else end_raw.replace(tzinfo=UTC)
     delta = _parse_iso_duration(period_iso)
     if delta is None or delta.total_seconds() <= 0:
         raise ValueError(f"Cannot parse or zero-duration period: {period_iso!r}")
