@@ -112,8 +112,15 @@ def _expand_period(start_iso: str, end_iso: str, period_iso: str) -> list[str]:
     if delta is None or delta.total_seconds() <= 0:
         raise ValueError(f"Cannot parse or zero-duration period: {period_iso!r}")
 
+    # Anchor at the earlier of end-of-range or NOW so we generate recent
+    # timestamps, not future ones.  IEM NEXRAD declares a range like
+    # "1995-01-01/2026-12-31/PT5M" — walking from 2026-12-31 produces
+    # future timestamps with no radar data.
+    now = datetime.now(tz=UTC)
+    anchor = min(end, now)
+
     timestamps: list[str] = []
-    current = end
+    current = anchor
     while current >= start and len(timestamps) < _MAX_PERIOD_FRAMES:
         timestamps.append(current.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
         current = current - delta
