@@ -4,10 +4,14 @@ Two-channel confirmation algorithm: both the pyranometer Kcs deficit channel
 and the PM concentration channel must fire before a "Hazy" label is emitted.
 
 Channel 1 — Kcs deficit:
-  Current Kcs is compared against a station-specific clean-sky baseline.
-  A positive deficit (baseline - kcs > 0) indicates aerosol extinction beyond
-  what a clean atmosphere produces.  The deficit threshold is adjusted by an
-  f(RH) hygroscopic correction factor.
+  Current Kcs is compared against the dynamic clear-sky threshold returned by
+  sky_condition.get_dynamic_clear_threshold().  A positive deficit
+  (threshold - kcs > 0) indicates aerosol extinction beyond what a clean
+  atmosphere produces.  The deficit threshold is adjusted by an f(RH)
+  hygroscopic correction factor.
+
+  If get_dynamic_clear_threshold() returns None (sky_condition ring buffer not
+  yet seeded), Channel 1 returns None immediately — no haze label is emitted.
 
 Channel 2 — PM confirmation:
   PM2.5 or PM10 from an observed-data AQI provider must exceed concentration
@@ -15,20 +19,17 @@ Channel 2 — PM confirmation:
   triggering on cirrus or other non-aerosol optical effects.
 
 Gates applied before channel evaluation:
-  - Solar elevation gate (el > 10°): Kcs is unreliable at low sun angles.
+  - Solar elevation gate (el > 15°): Kcs is unreliable at low sun angles.
+    The 15° threshold aligns with the SZA guard in sky_condition.py — both
+    modules use the same cut-off so Kcs comparisons are consistent.
   - Clear-sky-only constraint: haze is invalid under thick cloud cover.
   - Wet deposition gate: suppress during rain and 30 min post-rain.
-  - RH > 90% gate: defer to fog/mist detection (Phase 5).
+  - RH > 90% gate: defer to fog/mist detection.
 
 Temporal coherence filter:
   A 5-minute rolling window (deque of (timestamp, bool) pairs). Haze is
   only reported when ≥ 50% of entries in the window show is_hazy=True.
   Prevents label flicker at aerosol-concentration boundaries.
-
-Phase milestones (completed):
-  Phase 6: set_baseline() is called by the auto-calibration module (ADR-068)
-            with a learned monthly-normal clean-sky Kcs percentile.
-  Phase 8: set_gamma() is wired to the [conditions] gamma key in api.conf.
 
 Module-level state is intentional — the API is a single-process service.
 Use reset() for test isolation.
@@ -48,15 +49,9 @@ from math import exp
 # operator sets [conditions] haze_detection = false in api.conf.
 _enabled: bool = True
 
-# Temporary fixed clean-sky baseline.  CLOUDLESS class Kcs > 0.85; 0.90 is a
-# conservative estimate that sits above the cloudless threshold.  Phase 6 will
-# replace this with a station-specific learned value (90th–95th percentile of
-# qualifying clean-sky Kcs samples over a 90-day rolling window).
-_clean_kcs_baseline: float = 0.90
-
 # Hygroscopic correction exponent.  γ = 0.45 is the "composition-unknown"
-# default per Hanel (1976) and Tang (1996).  Phase 8 will make this
-# operator-configurable per region via the admin UI.
+# default per Hanel (1976) and Tang (1996).  Operator-configurable via
+# [conditions] gamma in api.conf.
 _gamma: float = 0.45
 
 # Reference RH for the f(RH) correction (dry baseline, dimensionless fraction).
@@ -141,7 +136,8 @@ def detect_haze(
     Implements the two-channel confirmation algorithm from API-MANUAL §8.
 
     Both channels must fire for a 'Hazy' label to be emitted:
-      Channel 1: Kcs deficit below the auto-calibrated clean-sky baseline.
+      Channel 1: Kcs deficit below the dynamic clear-sky threshold from
+                 sky_condition.get_dynamic_clear_threshold().
       Channel 2: PM2.5 or PM10 exceeds the RH-conditioned threshold.
 
     Args:
@@ -167,10 +163,11 @@ def detect_haze(
 
     # ------------------------------------------------------------------
     # Gate 1: Solar elevation — Kcs is unreliable at low sun angles.
-    # The Ryan-Stolzenbach model underestimates maxSolarRad by ~20% below
-    # 10° elevation, making Kcs deficit comparisons unreliable.
+    # The 15° threshold aligns with the SZA guard in sky_condition.py so
+    # that Kcs deficit comparisons use the same data quality cut-off in
+    # both modules.
     # ------------------------------------------------------------------
-    if solar_elevation is None or solar_elevation <= 10.0:
+    if solar_elevation is None or solar_elevation <= 15.0:
         _record_history(now, is_hazy=False)
         return None
 
@@ -237,7 +234,7 @@ def detect_haze(
     # ------------------------------------------------------------------
     # Gate 4: RH type discriminator.
     # RH > 90%: aerosol extinction is dominated by water droplets — defer
-    # to fog/mist detection (Phase 5). Do NOT report haze.
+    # to fog/mist detection. Do NOT report haze.
     # ------------------------------------------------------------------
     if rh is not None and rh > 90.0:
         _record_history(now, is_hazy=False)
@@ -273,13 +270,21 @@ def detect_haze(
 
     # ------------------------------------------------------------------
     # Channel 1: Kcs deficit.
-    # A positive deficit (baseline - kcs) indicates aerosol extinction.
+    # Uses the dynamic clear-sky threshold from sky_condition so that the
+    # baseline tracks the elevation-adjusted theoretical clear-sky Kcs.
+    # If the ring buffer is not yet seeded, skip — no haze label.
     # ------------------------------------------------------------------
     if kcs is None:
         _record_history(now, is_hazy=False)
         return None
 
-    deficit = _clean_kcs_baseline - kcs
+    from weewx_clearskies_api.sse.sky_condition import get_dynamic_clear_threshold  # noqa: PLC0415
+    baseline = get_dynamic_clear_threshold()
+    if baseline is None:
+        _record_history(now, is_hazy=False)
+        return None
+
+    deficit = baseline - kcs
     if deficit <= 0.0:
         _record_history(now, is_hazy=False)
         return None
@@ -312,16 +317,10 @@ def detect_haze(
     return _evaluate_coherence(now)
 
 
-def set_baseline(value: float) -> None:
-    """Set the clean-sky Kcs baseline.  Called by Phase 6 auto-calibration."""
-    global _clean_kcs_baseline  # noqa: PLW0603
-    _clean_kcs_baseline = float(value)
-
-
 def set_gamma(value: float) -> None:
     """Set the f(RH) hygroscopic correction exponent.
 
-    Wired to the [conditions] gamma key in api.conf (Phase 8, ADR-068).
+    Wired to the [conditions] gamma key in api.conf (ADR-068).
     γ range: 0.12 (mineral dust) to 1.52 (sea salt) per Hanel 1976 / Tang 1996.
     Default 0.45 is composition-unknown (moderate).
     """
@@ -337,10 +336,9 @@ def set_deficit_threshold(value: float) -> None:
 
 def reset() -> None:
     """Clear all module-level state.  For test isolation only."""
-    global _enabled, _clean_kcs_baseline, _gamma, _DEFICIT_THRESHOLD  # noqa: PLW0603
+    global _enabled, _gamma, _DEFICIT_THRESHOLD  # noqa: PLW0603
     global _last_rain_end, _was_raining  # noqa: PLW0603
     _enabled = True
-    _clean_kcs_baseline = 0.90
     _gamma = 0.45
     _DEFICIT_THRESHOLD = 0.03
     _last_rain_end = 0.0

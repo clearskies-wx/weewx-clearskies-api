@@ -41,6 +41,10 @@ Startup sequence (ADR-012):
     6o. wire radar — register configured radar provider's CAPABILITY in registry.
     6p. wire radar settings — wire credentials for keyed radar providers (aeris, openweathermap).
     7. register DB probe      — health subsystem wired with SELECT 1 probe.
+    7a. Create SSE infrastructure (emitter + direct adapter).
+    7b. Create UnitTransformer from settings; attach to app.state.
+    7c. Configure enrichment processors; register packet-tap processors.
+    7d. Register endpoint enrichments (current, almanac/planets).
     8. start uvicorn          — public API + health app.
 """
 
@@ -238,13 +242,6 @@ def _parse_args() -> argparse.Namespace:
     serve_parser.add_argument(
         "--tls-key", type=Path, help="Path to TLS private key (PEM)"
     )
-
-    # bootstrap subcommand — seeds auto-calibration from OpenAQ historical data.
-    boot_parser = subparsers.add_parser(
-        "bootstrap",
-        help="Import PM2.5 history from OpenAQ to seed calibration baseline (ADR-068 T8.1)",
-    )
-
 
     args = parser.parse_args()
 
@@ -578,267 +575,6 @@ def _wire_providers_from_config(settings: Settings) -> None:
     wire_providers(declarations)
 
 
-def _run_bootstrap(args: argparse.Namespace) -> None:
-    """Execute the OpenAQ bootstrap subcommand.
-
-    Startup sequence:
-      1. Bootstrap logging (INFO).
-      2. Load settings (api.conf → DB connection info, station lat/lon/alt).
-      3. Build the SQLAlchemy engine (read-only, no write-probe).
-      4. Load station metadata from weewx.conf.
-      5. Find nearest PM2.5 sensor via OpenAQ.
-      6. Fetch historical PM2.5 data.
-      7. Match against weewx archive and seed calibration samples.
-      8. Print human-readable summary and exit.
-
-    Args:
-        args: Parsed CLI args from _parse_args() with command="bootstrap".
-              Relevant fields: args.years, args.max_distance_km.
-    """
-    from datetime import UTC, datetime, timedelta  # noqa: PLC0415
-
-    from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
-    from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
-        fetch_historical_pm25,
-        find_best_pm25_sensor,
-    )
-    from weewx_clearskies_api.services.station import (  # noqa: PLC0415
-        get_station_info,
-        load_station_metadata,
-    )
-    from weewx_clearskies_api.services.weewx_conf import (  # noqa: PLC0415
-        WeewxConfLoadError,
-        load_weewx_conf,
-    )
-
-    setup_logging("INFO")
-    settings = load_settings()
-
-    if not settings.configured:
-        print(
-            "ERROR: No api.conf found (setup mode). "
-            "Complete the setup wizard before running bootstrap."
-        )
-        sys.exit(1)
-
-    # Build read-only DB engine.
-    engine = build_engine(settings.database)
-
-    # Load station metadata so we have lat/lon/alt.
-    try:
-        weewx_cfg = load_weewx_conf(settings.weewx.config_path)
-    except WeewxConfLoadError as exc:
-        print(f"ERROR: {exc}")
-        sys.exit(1)
-
-    # Derive target unit string for station metadata (same logic as main()).
-    _temp_target = (
-        settings.units.groups.get("group_temperature", "")
-        if settings.units.groups
-        else ""
-    )
-    if _temp_target == "degree_F":
-        _target_unit_str = "US"
-    elif _temp_target == "degree_C":
-        _rain_target = (
-            settings.units.groups.get("group_rain", "")
-            if settings.units.groups
-            else ""
-        )
-        _target_unit_str = "METRICWX" if _rain_target == "mm" else "METRIC"
-    else:
-        _target_unit_str = "US"
-
-    try:
-        load_station_metadata(
-            cfg=weewx_cfg,
-            api_station_id=settings.station.station_id,
-            api_timezone=settings.station.timezone,
-            unit_system=_target_unit_str,
-            api_default_locale=settings.station.default_locale,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"ERROR loading station metadata: {exc}")
-        sys.exit(1)
-
-    station_info = get_station_info()
-    lat = station_info.latitude
-    lon = station_info.longitude
-    alt_m = station_info.altitude
-
-    print("OpenAQ bootstrap")
-
-    # Step 1: Find ranked reference PM2.5 monitors.
-    years = 3
-
-    print(f"  Station location: ({lat:.4f}, {lon:.4f}), altitude {alt_m:.0f} m")
-    print(f"  Searching for reference PM2.5 monitors within 25 km...")
-    try:
-        candidates = find_best_pm25_sensor(lat, lon)
-    except RuntimeError as exc:
-        print(f"  ERROR: {exc}")
-        sys.exit(1)
-
-    if not candidates:
-        print("  No reference PM2.5 monitors found within 25 km. Bootstrap cannot proceed.")
-        sys.exit(1)
-
-    print(f"  Found {len(candidates)} candidate sensor(s):")
-    for _c in candidates:
-        print(f"    sensor {_c['sensor_id']} — '{_c['name']}' ({_c['distance_km']:.1f} km)")
-
-    # Step 2: Try candidates in distance order until one yields clean-sky samples.
-    now_utc = datetime.now(UTC)
-    date_to = now_utc.date().isoformat()
-    date_from = (now_utc - timedelta(days=years * 365)).date().isoformat()
-
-    import copy as _copy  # noqa: PLC0415
-
-    # Fetch McClear clear-sky GHI for the bootstrap date range.
-    from weewx_clearskies_api.bootstrap.mcclear_client import fetch_mcclear_clearsky_ghi  # noqa: PLC0415
-
-    _soda_email = os.environ.get("WEEWX_CLEARSKIES_SODA_EMAIL", "").strip()
-    if not _soda_email:
-        print(
-            "ERROR: WEEWX_CLEARSKIES_SODA_EMAIL is not set. "
-            "Register a free account at https://www.soda-pro.com/ and set this "
-            "environment variable before running bootstrap."
-        )
-        sys.exit(1)
-
-    print(f"  Fetching McClear clear-sky GHI ({date_from} to {date_to})...")
-    try:
-        mcclear_ghi: dict[int, float] = fetch_mcclear_clearsky_ghi(
-            latitude=lat,
-            longitude=lon,
-            altitude_m=alt_m,
-            start_date=date_from,
-            end_date=date_to,
-            soda_email=_soda_email,
-        )
-        print(f"  McClear: {len(mcclear_ghi):,} data points fetched")
-    except RuntimeError as exc:
-        print(f"  ERROR: McClear fetch failed: {exc}")
-        sys.exit(1)
-
-    summary = None
-    selected_candidate = None
-    for candidate in candidates:
-        sensor_id = candidate["sensor_id"]
-        location_name = candidate["name"]
-        dist_km = candidate["distance_km"]
-        print(f"\n  Trying sensor {sensor_id} '{location_name}' ({dist_km:.1f} km)...")
-        print(f"  Pulling up to 3 years of history ({date_from} to {date_to})...")
-        try:
-            pm_records = fetch_historical_pm25(
-                sensor_id=sensor_id,
-                date_from=date_from,
-                date_to=date_to,
-            )
-        except RuntimeError as exc:
-            print(f"  ERROR fetching records: {exc} — skipping")
-            continue
-
-        print(f"  Retrieved {len(pm_records):,} PM2.5 records")
-        if not pm_records:
-            print("  No records — skipping")
-            continue
-
-        # Snapshot state before attempt in case we need to restore.
-        from weewx_clearskies_api.sse import auto_calibration as _ac  # noqa: PLC0415
-        _saved_samples = _copy.deepcopy(_ac._monthly_samples)  # noqa: SLF001
-        _saved_baselines = _copy.deepcopy(_ac._monthly_baselines)  # noqa: SLF001
-        _saved_flat = _ac._flat_baseline  # noqa: SLF001
-
-        print("  Matching against weewx archive...")
-        try:
-            summary = run_bootstrap(
-                engine=engine,
-                pm_records=pm_records,
-                station_lat=lat,
-                station_lon=lon,
-                station_alt_m=alt_m,
-                mcclear_ghi=mcclear_ghi,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"  ERROR during bootstrap: {exc} — skipping")
-            # Restore state after failed attempt.
-            _ac._monthly_samples = _saved_samples  # noqa: SLF001
-            _ac._monthly_baselines = _saved_baselines  # noqa: SLF001
-            _ac._flat_baseline = _saved_flat  # noqa: SLF001
-            continue
-
-        if summary["clean_sky_samples"] > 0:
-            selected_candidate = candidate
-            break
-        else:
-            print(
-                f"  Sensor {sensor_id}: {summary['clean_sky_samples']} clean-sky samples "
-                f"(PM too high: {summary.get('skipped_pm_high', 0)}, "
-                f"no archive: {summary.get('skipped_no_archive', 0)}, "
-                f"no radiation: {summary.get('skipped_no_radiation', 0)}) — skipping"
-            )
-            # Restore state so next candidate starts clean.
-            _ac._monthly_samples = _saved_samples  # noqa: SLF001
-            _ac._monthly_baselines = _saved_baselines  # noqa: SLF001
-            _ac._flat_baseline = _saved_flat  # noqa: SLF001
-            summary = None
-
-    if summary is None:
-        print("\n  No suitable sensor produced clean-sky samples. Bootstrap complete (no data).")
-        sys.exit(0)
-
-    if selected_candidate is not None:
-        print(
-            f"\n  Selected sensor {selected_candidate['sensor_id']} "
-            f"'{selected_candidate['name']}' ({selected_candidate['distance_km']:.1f} km)"
-        )
-
-    # Step 3: Print summary.
-    print("  Results:")
-    print(f"    Archive matched:          {summary['archive_matched']:>8,}")
-    print(f"    Clean-sky samples:        {summary['clean_sky_samples']:>8,}")
-    print(f"    Skipped (no archive):     {summary['skipped_no_archive']:>8,}")
-    print(f"    Skipped (no radiation):   {summary['skipped_no_radiation']:>8,}")
-    print(f"    Skipped (maxSolar low):   {summary['skipped_max_solar_low']:>8,}")
-    print(f"    Skipped (rain):           {summary['skipped_rain']:>8,}")
-    print(f"    Skipped (Kcs low):        {summary['skipped_kcs_low']:>8,}")
-    print(f"    Skipped (PM too high):    {summary['skipped_pm_high']:>8,}")
-
-    state = summary["calibration_state"]
-    baseline = summary["baseline_kcs"]
-    n = summary["clean_sky_samples"]
-
-    if baseline is not None:
-        print(
-            f"  Calibration state: {state} "
-            f"({n} samples, baseline Kcs = {baseline:.3f})"
-        )
-    else:
-        print(
-            f"  Calibration state: {state} "
-            f"({n} samples — not enough for baseline, need 22+)"
-        )
-
-    print(f"  Saved to {summary['persist_path']}")
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Compute great-circle distance between two points in km (Haversine formula)."""
-    import math  # noqa: PLC0415
-
-    r = 6371.0  # Earth radius in km
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    return r * 2 * math.asin(math.sqrt(a))
-
-
 def main() -> None:
     """Main entry point.
 
@@ -872,12 +608,6 @@ def main() -> None:
     """
     # Step 0: Parse CLI args before logging so --help works cleanly.
     args = _parse_args()
-
-    # Dispatch: if the operator ran "clearskies-api bootstrap ...", run the
-    # bootstrap workflow and exit without starting the server.
-    if args.command == "bootstrap":
-        _run_bootstrap(args)
-        return
 
     # Step 1: Bootstrap logging before anything else so config errors appear
     # as JSON (ADR-029).
@@ -1262,7 +992,7 @@ def main() -> None:
         trend_time_grace=_effective_trend_grace,
     )
 
-    # Register packet-tap processors (order: smoother → PM → UV → sky → wind → lightning → scene → calibration).
+    # Register packet-tap processors (order: smoother → PM → UV → sky → wind → lightning → scene).
     register_processor(input_smoother.process_packet)
     register_processor(pm_feed.feed_to_smoother)
     register_processor(uv_smoother.accumulate_uv)
@@ -1271,238 +1001,15 @@ def main() -> None:
     register_processor(lightning_strike_buffer.process_packet)
     register_processor(scene_packet_tap.inject_scene_into_packet)
 
-    # Auto-calibration baseline (ADR-068): wire station metadata, load persisted
-    # state, and auto-bootstrap from OpenAQ if not fully calibrated.
-    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
+    # Haze configuration wiring (api.conf [conditions])
     from weewx_clearskies_api.sse import haze_condition  # noqa: PLC0415
 
-    # Wire station metadata into calibration module.
-    _station_for_cal = _station_for_enrichment
-    auto_calibration.set_timezone(_station_for_cal.timezone)
-    auto_calibration.set_station_type(_station_for_cal.hardware)
-
-    # Check column registry for pyranometer (radiation column).
-    _has_rad = "radiation" in registry.stock or "radiation" in registry.unmapped
-    auto_calibration.set_has_radiation(_has_rad)
-
-    # Load persisted calibration state.
-    auto_calibration.load_persisted()
-
-    # Station type change check.
-    if auto_calibration.check_station_type_change(_station_for_cal.hardware):
-        logger.warning(
-            "Station hardware type changed since last calibration. "
-            "Consider resetting calibration via the admin UI."
-        )
-
-    # Auto-bootstrap: if OpenAQ key present + not fully calibrated + has radiation.
-    # Runs in a background daemon thread so the API starts serving immediately.
-    _openaq_key = os.environ.get("WEEWX_CLEARSKIES_OPENAQ_API_KEY", "").strip()
-    _cal_state = auto_calibration.get_calibration_state()
-    if _openaq_key and _cal_state["months_calibrated"] < 12 and _has_rad:
-        def _bootstrap_thread() -> None:
-            try:
-                import copy  # noqa: PLC0415
-                from datetime import UTC, datetime, timedelta  # noqa: PLC0415
-                from weewx_clearskies_api.bootstrap.importer import run_bootstrap  # noqa: PLC0415
-                from weewx_clearskies_api.bootstrap.openaq_client import (  # noqa: PLC0415
-                    fetch_historical_pm25,
-                    find_best_pm25_sensor,
-                )
-                _now_utc = datetime.now(UTC)
-                _date_to = _now_utc.date().isoformat()
-                _date_from = (_now_utc - timedelta(days=3 * 365)).date().isoformat()
-                _bs_lat = _station_for_cal.latitude
-                _bs_lon = _station_for_cal.longitude
-                _bs_alt = _station_for_cal.altitude
-
-                # Fetch McClear clear-sky GHI for the bootstrap date range.
-                _soda_email = os.environ.get("WEEWX_CLEARSKIES_SODA_EMAIL", "").strip()
-                _mcclear_ghi: dict[int, float] | None = None
-                if _soda_email:
-                    try:
-                        from weewx_clearskies_api.bootstrap.mcclear_client import (  # noqa: PLC0415
-                            fetch_mcclear_clearsky_ghi,
-                        )
-                        _mcclear_ghi = fetch_mcclear_clearsky_ghi(
-                            latitude=_bs_lat,
-                            longitude=_bs_lon,
-                            altitude_m=_bs_alt,
-                            start_date=_date_from,
-                            end_date=_date_to,
-                            soda_email=_soda_email,
-                        )
-                        logger.info(
-                            "Auto-bootstrap: McClear fetched %d data points",
-                            len(_mcclear_ghi),
-                        )
-                    except Exception as _mc_exc:  # noqa: BLE001
-                        logger.warning(
-                            "Auto-bootstrap: McClear fetch failed (%s) — skipping bootstrap",
-                            _mc_exc,
-                        )
-                        return
-                else:
-                    logger.warning(
-                        "Auto-bootstrap: WEEWX_CLEARSKIES_SODA_EMAIL not set — "
-                        "skipping bootstrap (McClear required for accurate calibration). "
-                        "Register at https://www.soda-pro.com/ and set the env var."
-                    )
-                    return
-
-                _override_sensor_id = settings.conditions.openaq_sensor_id
-                if _override_sensor_id is not None:
-                    logger.info(
-                        "Auto-bootstrap: using operator-specified OpenAQ sensor %d",
-                        _override_sensor_id,
-                    )
-                    _pm_records = fetch_historical_pm25(
-                        sensor_id=_override_sensor_id,
-                        date_from=_date_from,
-                        date_to=_date_to,
-                    )
-                    if _pm_records:
-                        _bs_summary = run_bootstrap(
-                            engine=get_engine(),
-                            pm_records=_pm_records,
-                            station_lat=_bs_lat,
-                            station_lon=_bs_lon,
-                            station_alt_m=_bs_alt,
-                            mcclear_ghi=_mcclear_ghi,
-                        )
-                        auto_calibration.set_openaq_sensor({
-                            "sensor_id": _override_sensor_id,
-                            "name": "(operator-specified)",
-                            "distance_km": 0.0,
-                            "lat": _bs_lat,
-                            "lon": _bs_lon,
-                        })
-                        auto_calibration.persist()
-                        if _bs_summary["clean_sky_samples"] == 0:
-                            logger.warning(
-                                "Auto-bootstrap: operator sensor %d produced 0 clean-sky "
-                                "samples — calibration will proceed from real-time observations.",
-                                _override_sensor_id,
-                            )
-                        else:
-                            logger.info(
-                                "Auto-bootstrap complete: sensor %d — %d clean-sky samples, "
-                                "%d/12 months calibrated",
-                                _override_sensor_id,
-                                _bs_summary["clean_sky_samples"],
-                                auto_calibration.get_calibration_state()["months_calibrated"],
-                            )
-                    else:
-                        logger.warning(
-                            "Auto-bootstrap: operator sensor %d returned no PM2.5 records.",
-                            _override_sensor_id,
-                        )
-                else:
-                    _candidates = find_best_pm25_sensor(_bs_lat, _bs_lon)
-                    if not _candidates:
-                        logger.info(
-                            "Auto-bootstrap: no suitable OpenAQ sensor found within 25 km. "
-                            "Calibration will proceed from real-time observations."
-                        )
-                    else:
-                        _selected = False
-                        for _cand in _candidates:
-                            _cand_id = _cand["sensor_id"]
-                            _cand_name = _cand["name"]
-                            _cand_dist = _cand["distance_km"]
-                            logger.info(
-                                "Auto-bootstrap: trying sensor %d '%s' (%.1f km away)...",
-                                _cand_id,
-                                _cand_name,
-                                _cand_dist,
-                            )
-                            _saved_samples = copy.deepcopy(auto_calibration._monthly_samples)
-                            _saved_baselines = copy.deepcopy(auto_calibration._monthly_baselines)
-                            _saved_flat = auto_calibration._flat_baseline
-
-                            _pm_records = fetch_historical_pm25(
-                                sensor_id=_cand_id,
-                                date_from=_date_from,
-                                date_to=_date_to,
-                            )
-                            if not _pm_records:
-                                logger.info(
-                                    "Auto-bootstrap: sensor %d '%s' returned no records — skipping",
-                                    _cand_id,
-                                    _cand_name,
-                                )
-                                continue
-
-                            _bs_summary = run_bootstrap(
-                                engine=get_engine(),
-                                pm_records=_pm_records,
-                                station_lat=_bs_lat,
-                                station_lon=_bs_lon,
-                                station_alt_m=_bs_alt,
-                                mcclear_ghi=_mcclear_ghi,
-                            )
-
-                            if _bs_summary["clean_sky_samples"] > 0:
-                                auto_calibration.set_openaq_sensor({
-                                    "sensor_id": _cand_id,
-                                    "name": _cand_name,
-                                    "distance_km": _cand_dist,
-                                    "lat": _cand["lat"],
-                                    "lon": _cand["lon"],
-                                })
-                                auto_calibration.persist()
-                                logger.info(
-                                    "Auto-bootstrap: sensor %d '%s' selected — "
-                                    "%d clean-sky samples, %d/12 months calibrated",
-                                    _cand_id,
-                                    _cand_name,
-                                    _bs_summary["clean_sky_samples"],
-                                    auto_calibration.get_calibration_state()["months_calibrated"],
-                                )
-                                _selected = True
-                                break
-                            else:
-                                logger.info(
-                                    "Auto-bootstrap: sensor %d '%s' (%.1f km): "
-                                    "%d records, %d PM>=12, %d no archive match, "
-                                    "%d no radiation, %d qualifying — skipping",
-                                    _cand_id,
-                                    _cand_name,
-                                    _cand_dist,
-                                    len(_pm_records),
-                                    _bs_summary.get("skipped_pm_high", 0),
-                                    _bs_summary.get("skipped_no_archive", 0),
-                                    _bs_summary.get("skipped_no_radiation", 0),
-                                    _bs_summary["clean_sky_samples"],
-                                )
-                                auto_calibration._monthly_samples = _saved_samples  # noqa: SLF001
-                                auto_calibration._monthly_baselines = _saved_baselines  # noqa: SLF001
-                                auto_calibration._flat_baseline = _saved_flat  # noqa: SLF001
-
-                        if not _selected:
-                            logger.info(
-                                "Auto-bootstrap: no suitable OpenAQ sensor found within 25 km. "
-                                "Calibration will proceed from real-time observations."
-                            )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Auto-bootstrap failed (non-fatal): %s", exc)
-
-        logger.info(
-            "Auto-bootstrap: %d/12 months calibrated, starting background OpenAQ import...",
-            _cal_state["months_calibrated"],
-        )
-        _bs_thread = threading.Thread(target=_bootstrap_thread, daemon=True)
-        _bs_thread.start()
-
-    # Haze configuration wiring (api.conf [conditions])
     conditions = settings.conditions
     if not conditions.haze_detection:
         haze_condition.set_enabled(False)
         logger.info("Haze detection disabled via [conditions] haze_detection = false")
     else:
         haze_condition.set_gamma(conditions.gamma)
-
-    register_processor(auto_calibration.process_packet)
 
     # Step 7d: Register endpoint enrichments.
     from weewx_clearskies_api.sse.endpoint_enrichment import register_enrichment  # noqa: PLC0415
