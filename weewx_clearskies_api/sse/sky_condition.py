@@ -7,10 +7,27 @@ variability-primary, clearness-secondary — using CAELUS-derived indices
 Four indices computed from a 30-minute rolling window of 1-minute
 averaged GHI data:
   - Kcs: instantaneous clear-sky index (GHI / maxSolarRad)
-  - Km:  mean normalized irradiance over the window
+  - Km:  mean normalized irradiance over the window, computed as the
+         mean of per-minute (GHI / maxSolarRad) ratios
   - Kv:  coarse variability index (30-min) — cumulative absolute
          first-derivative of clear-sky-detrended GHI
   - Kvf: fine variability index (10-min) — same as Kv, shorter window
+
+Km and Kmf are now computed as the mean of per-minute ratios
+(mean(GHIi / MSRi)) rather than the ratio of means (mean(GHI) /
+mean(MSR)).  This prevents high-MSR minutes from dominating the
+denominator and biasing Km upward at sunrise or in mixed-cloud periods.
+
+Thresholds are elevation-dependent: all classification boundaries use an
+exponential-decay function of solar elevation angle (alpha):
+
+    T(k_max, alpha) = K_MIN + (k_max - K_MIN) * (1 - exp(-B * alpha))
+
+At high solar elevation (alpha >= 60°) this converges to k_max; at low
+elevation (alpha near 15°) it drops toward K_MIN.  This prevents
+over-classification of Clear/Mostly Clear when the sun is near the
+horizon and the geometry-induced variation in clear-sky irradiance
+confounds the ratio metrics.
 
 Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky).
 Uniform requires both the coarse 30-min window (Kv) and the fine
@@ -41,10 +58,9 @@ Index computation from CAELUS (classification tree is ours):
   - GHI mirroring adapted from CAELUS mirror_ghi_with_pandas() — synthetic
     pre-sunrise entries extend the Km baseline at sunrise using cos(zenith)
     interpolation.  Only affects Km; Kv/Kvf use real ring data only.
-  - SZA < 85° guard: classify() returns _last_stable_label when solar
-    elevation < 5°, preventing classification at low sun angles.
+  - SZA < 75° guard (15° elevation): classify() returns None when solar
+    elevation < 15°, preventing classification at low sun angles.
   - Trailing window instead of centered (necessary for real-time)
-  - Streaming temporal coherence filter instead of batch patch cleaning
   - Kv/Kvf detrended by clear-sky model (CAELUS relies on centered windows
     to suppress the solar geometry signal; our trailing window requires
     explicit detrending — subtract the predicted maxSolarRad delta from
@@ -92,15 +108,8 @@ _CLOUDEN_MIN_KVF: float = 0.20
 # Primary axis: Kv uniform/variable boundary
 _KV_UNIFORM: float = 0.05
 
-# Uniform branch: clear vs. overcast vs. heavy overcast
-_UNIFORM_CLEAR_MIN_KM: float = 0.85
-_UNIFORM_CLEAR_MIN_KCS: float = 0.80
+# Uniform branch: heavy overcast floor (matches _DT_K_MIN)
 _UNIFORM_HEAVY_MAX_KM: float = 0.35
-
-# Variable branch: Km thresholds for coverage degree
-_VARIABLE_CLEAR_MIN_KM: float = 0.85
-_VARIABLE_PARTLY_MIN_KM: float = 0.60
-_VARIABLE_MOSTLY_MIN_KM: float = 0.40
 
 # SZA proxy: maxSolarRad > threshold approximates solar zenith angle < Ndeg.
 # maxSolarRad is a clear-sky irradiance estimate — it drops to zero at sunrise/
@@ -109,8 +118,19 @@ _VARIABLE_MOSTLY_MIN_KM: float = 0.40
 _SZA80_MSR_PROXY: float = 100.0   # maxSolarRad > 100 ≈ SZA < 80°
 
 # SZA guard threshold (degrees elevation). When solar elevation < this value
-# (SZA > 85°), classify() returns the last stable label instead of classifying.
-_SZA_GUARD_ELEVATION: float = 5.0
+# (SZA > 75°), classify() returns None instead of classifying.
+_SZA_GUARD_ELEVATION: float = 15.0
+
+# ---------------------------------------------------------------------------
+# Dynamic threshold parameters (operator-adjustable via configure())
+# ---------------------------------------------------------------------------
+
+_DT_K_MAX_CLEAR: float = 0.80
+_DT_K_MIN: float = 0.35
+_DT_B: float = 0.1
+_DT_K_MAX_MOSTLY_CLEAR: float = 0.80   # variable branch
+_DT_K_MAX_PARTLY: float = 0.60         # variable branch
+_DT_K_MAX_MOSTLY_CLOUDY: float = 0.40  # variable branch
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -145,6 +165,20 @@ _station_lat: float | None = None
 _station_lon: float | None = None
 _station_alt: float | None = None
 _skyfield_observer: object | None = None  # skyfield VectorSum (earth + location)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic threshold function
+# ---------------------------------------------------------------------------
+
+
+def _dynamic_threshold(k_max: float, alpha: float) -> float:
+    """Compute elevation-dependent threshold using exponential decay.
+
+    At high solar elevation, returns close to k_max.
+    At low solar elevation, drops toward _DT_K_MIN.
+    """
+    return _DT_K_MIN + (k_max - _DT_K_MIN) * (1.0 - math.exp(-_DT_B * alpha))
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +234,12 @@ def classify() -> str | None:
     "Mostly Cloudy", "Cloudy", "Overcast", "Heavy Overcast",
     or None when insufficient data.
 
-    When solar elevation < 5° (SZA > 85°) and station coordinates are
-    configured, returns _last_stable_label without classifying.
+    When solar elevation < 15° (SZA > 75°) and station coordinates are
+    configured, returns None without classifying.
     """
     # SZA guard: return None when sun is too low for reliable classification.
     # None tells the downstream consumer to fall back to provider cloud cover.
+    elevation: float | None = None
     if _skyfield_observer is not None:
         now_ts = _ring[-1].ts if _ring else time.time()
         elevation = _compute_solar_elevation(now_ts)
@@ -216,7 +251,7 @@ def classify() -> str | None:
         return _last_stable_label
 
     kcs, km, kmf, kv, kvf, latest_msr = indices
-    raw_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr)
+    raw_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr, solar_elevation=elevation)
 
     # TEMPORARY DEBUG — remove after threshold tuning
     import logging as _dbg_logging  # noqa: PLC0415
@@ -234,20 +269,28 @@ def configure(
     latitude: float | None = None,
     longitude: float | None = None,
     altitude: float | None = None,
+    dt_k_max_clear: float | None = None,
+    dt_k_min: float | None = None,
+    dt_b: float | None = None,
+    sza_guard_elevation: float | None = None,
 ) -> None:
-    """Set the archive interval and optional station coordinates.
+    """Set the archive interval, optional station coordinates, and dynamic threshold parameters.
 
     Called once at startup from __main__.py after load_station_metadata().
-    The is_daytime() freshness threshold scales to 5× the archive interval
+    The is_daytime() freshness threshold scales to 5x the archive interval
     so that a station with 60-second archives uses 300 s and a station with
     300-second archives uses 1500 s.
 
     When latitude, longitude, and altitude are all provided, pre-builds the
     Skyfield observer position used for GHI mirroring and the SZA guard.
     If any coordinate is None, mirroring and the SZA guard are disabled.
+
+    Dynamic threshold parameters (dt_k_max_clear, dt_k_min, dt_b,
+    sza_guard_elevation) are optional; when None, module defaults apply.
     """
     global _archive_interval  # noqa: PLW0603
     global _station_lat, _station_lon, _station_alt, _skyfield_observer  # noqa: PLW0603
+    global _DT_K_MAX_CLEAR, _DT_K_MIN, _DT_B, _SZA_GUARD_ELEVATION  # noqa: PLW0603
     _archive_interval = float(archive_interval)
 
     if latitude is not None and longitude is not None and altitude is not None:
@@ -262,6 +305,15 @@ def configure(
         _station_lon = None
         _station_alt = None
         _skyfield_observer = None
+
+    if dt_k_max_clear is not None:
+        _DT_K_MAX_CLEAR = float(dt_k_max_clear)
+    if dt_k_min is not None:
+        _DT_K_MIN = float(dt_k_min)
+    if dt_b is not None:
+        _DT_B = float(dt_b)
+    if sza_guard_elevation is not None:
+        _SZA_GUARD_ELEVATION = float(sza_guard_elevation)
 
 
 def get_solar_elevation() -> float | None:
@@ -279,6 +331,16 @@ def get_current_kcs() -> float | None:
     return indices[0]
 
 
+def get_dynamic_clear_threshold() -> float | None:
+    """Return the current elevation-adjusted clear-sky threshold, or None."""
+    if not _ring:
+        return None
+    elevation = _compute_solar_elevation(_ring[-1].ts)
+    if elevation is None:
+        return None
+    return _dynamic_threshold(_DT_K_MAX_CLEAR, elevation)
+
+
 def is_daytime() -> bool:
     """Return True when the buffer has a recent daytime reading."""
     if not _ring and not _minute_acc:
@@ -294,6 +356,7 @@ def reset() -> None:
     """Clear all state. For test isolation only."""
     global _was_daytime, _last_minute_ts, _last_stable_label, _archive_interval
     global _station_lat, _station_lon, _station_alt, _skyfield_observer  # noqa: PLW0603
+    global _DT_K_MAX_CLEAR, _DT_K_MIN, _DT_B, _SZA_GUARD_ELEVATION  # noqa: PLW0603
     _ring.clear()
     _minute_acc.clear()
     _last_minute_ts = 0.0
@@ -305,6 +368,10 @@ def reset() -> None:
     _station_lon = None
     _station_alt = None
     _skyfield_observer = None
+    _DT_K_MAX_CLEAR = 0.80
+    _DT_K_MIN = 0.35
+    _DT_B = 0.1
+    _SZA_GUARD_ELEVATION = 15.0
 
 
 def backfill(records: list[tuple[float, float, float]]) -> None:
@@ -555,9 +622,10 @@ def _compute_indices() -> tuple[float, float, float, float, float, float] | None
 
     Returns None when ring has < 3 entries (startup guard).
 
-    Km/Kmf are computed from mirrored (ghi, max_solar_rad) pairs when station
-    coordinates are available — see _mirror_for_km().  Kv and Kvf always
-    use the raw ring buffer (real measurements only).
+    Km and Kmf are computed as the mean of per-minute (GHI / MSR) ratios,
+    using mirrored (ghi, max_solar_rad) pairs when station coordinates are
+    available — see _mirror_for_km().  Kv and Kvf always use the raw ring
+    buffer (real measurements only).
     """
     if len(_ring) < 3:
         return None
@@ -571,18 +639,13 @@ def _compute_indices() -> tuple[float, float, float, float, float, float] | None
     else:
         kcs = 0.0
 
-    # Km: mean normalized irradiance over the full ring, with GHI mirroring.
-    # _mirror_for_km() returns (ghi, msr) pairs where pre-sunrise entries
-    # may be replaced by synthetic mirrored values for a stable Km baseline.
+    # Km: mean of per-minute (GHI / maxSolarRad) ratios over the full ring,
+    # with GHI mirroring. Computing the mean of ratios (not ratio of means)
+    # avoids high-MSR minutes dominating the denominator.
     ring_list = list(_ring)
     km_pairs = _mirror_for_km(ring_list)
-    km_ghi = [p[0] for p in km_pairs]
-    km_msr = [p[1] for p in km_pairs]
-    km_mean_msr = sum(km_msr) / len(km_msr)
-    if km_mean_msr > 0:
-        km = max(sum(km_ghi) / len(km_ghi) / km_mean_msr, 0.0)
-    else:
-        km = 0.0
+    km_ratios = [ghi / msr for ghi, msr in km_pairs if msr > 0]
+    km = sum(km_ratios) / len(km_ratios) if km_ratios else 0.0
 
     # Kv: coarse variability (30-min window).
     # Detrended by clear-sky model: subtract the predicted change (maxSolarRad
@@ -629,20 +692,15 @@ def _compute_indices() -> tuple[float, float, float, float, float, float] | None
         fine_span = max(ring_list[-1].ts - ring_list[first_fine_idx].ts, 60.0)
         kvf = sum(fine_diff_abs) / fine_span if fine_diff_abs else 0.0
 
-    # Kmf: fine mean transmittance (10-min window).
+    # Kmf: fine mean transmittance (10-min window), as mean of per-minute ratios.
     # Same formula as Km but over the 10-min subset. Used in the variable
     # branch where responsiveness to recent clearing/clouding matters.
     if len(fine_indices) < 2:
         kmf = km
     else:
         fine_pairs = [km_pairs[i] for i in fine_indices]
-        fine_ghi = [p[0] for p in fine_pairs]
-        fine_msr = [p[1] for p in fine_pairs]
-        fine_mean_msr = sum(fine_msr) / len(fine_msr)
-        if fine_mean_msr > 0:
-            kmf = max(sum(fine_ghi) / len(fine_ghi) / fine_mean_msr, 0.0)
-        else:
-            kmf = 0.0
+        fine_ratios = [ghi / msr for ghi, msr in fine_pairs if msr > 0]
+        kmf = sum(fine_ratios) / len(fine_ratios) if fine_ratios else km
 
     return kcs, km, kmf, kv, kvf, latest.max_solar_rad
 
@@ -650,6 +708,7 @@ def _compute_indices() -> tuple[float, float, float, float, float, float] | None
 def _classify_sky(
     kcs: float, km: float, kmf: float, kv: float, kvf: float,
     latest_msr: float,
+    solar_elevation: float | None = None,
 ) -> str:
     """Classify sky condition using the Kv-first decision tree (ADR-073).
 
@@ -658,7 +717,14 @@ def _classify_sky(
     _KV_UNIFORM; variable triggers if either exceeds the threshold.
     Secondary: Km (30-min) in uniform branch, Kmf (10-min) in variable
     branch. Cloud enhancement evaluated first as a special case.
+
+    Classification thresholds are elevation-dependent via _dynamic_threshold().
+    When solar_elevation is None, a default high value (90.0) is used so
+    the threshold converges to k_max (backward-compatible for callers that
+    do not supply elevation).
     """
+    _alpha = solar_elevation if solar_elevation is not None else 90.0
+
     # --- Cloud enhancement (Kcs above clear-sky + high variability) ---
     if (
         latest_msr > _SZA80_MSR_PROXY
@@ -674,7 +740,7 @@ def _classify_sky(
     if kv < _KV_UNIFORM and kvf < _KV_UNIFORM:
         # UNIFORM SKY — no cloud-edge transitions detected.
         # Km distinguishes clear (high) from overcast (moderate/low).
-        if km > _UNIFORM_CLEAR_MIN_KM and kcs > _UNIFORM_CLEAR_MIN_KCS:
+        if km > _dynamic_threshold(_DT_K_MAX_CLEAR, _alpha) and kcs > _dynamic_threshold(_DT_K_MAX_CLEAR, _alpha):
             return "Clear"
         if km > _UNIFORM_HEAVY_MAX_KM:
             return "Overcast"
@@ -682,11 +748,11 @@ def _classify_sky(
 
     # VARIABLE SKY — cloud-edge transitions present.
     # Kmf (10-min) distinguishes coverage degree — responsive to recent changes.
-    if kmf > _VARIABLE_CLEAR_MIN_KM:
+    if kmf > _dynamic_threshold(_DT_K_MAX_MOSTLY_CLEAR, _alpha):
         return "Mostly Clear"
-    if kmf > _VARIABLE_PARTLY_MIN_KM:
+    if kmf > _dynamic_threshold(_DT_K_MAX_PARTLY, _alpha):
         return "Partly Cloudy"
-    if kmf > _VARIABLE_MOSTLY_MIN_KM:
+    if kmf > _dynamic_threshold(_DT_K_MAX_MOSTLY_CLOUDY, _alpha):
         return "Mostly Cloudy"
     return "Cloudy"
 
