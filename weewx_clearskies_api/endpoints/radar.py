@@ -1,4 +1,4 @@
-"""Radar endpoints: frames + tile proxy (ADR-015, 3b-14 / 3b-15; T1.5 2026-06-24).
+"""Radar endpoints: frames + tile proxy (ADR-015, 3b-14 / 3b-15).
 
 Endpoints:
   GET /radar/providers/{provider_id}/frames        — radar frame index (3b-14)
@@ -21,10 +21,10 @@ Behavior decision tree for /frames per brief §per-endpoint spec:
 
 Behavior decision tree for /tiles/{z}/{x}/{y} per brief §per-endpoint spec:
 
-  1. provider_id not in _PROXIED_RADAR_PROVIDERS frozenset → 404 Problem.
-     (Distinct from /frames: /tiles is proxied-only; browser-direct providers are
-     not supported through this proxy — the browser fetches them directly per ADR-037.)
-  2. provider_id IS in _PROXIED_RADAR_PROVIDERS but NOT in capability registry
+  1. provider_id not in _KEYED_RADAR_PROVIDERS frozenset → 404 Problem.
+     (Distinct from /frames: /tiles is keyed-only; keyless providers are not
+     supported through this proxy — the browser fetches them directly per ADR-037.)
+  2. provider_id IS in _KEYED_RADAR_PROVIDERS but NOT in capability registry
      (operator configured a different radar provider) → 404 Problem, distinguishing detail.
   3. Credentials missing (env vars unset) → 502 Problem.
   4. z/x/y out of valid range → FastAPI auto-422 from Path constraints. No special handling.
@@ -36,20 +36,15 @@ Behavior decision tree for /tiles/{z}/{x}/{y} per brief §per-endpoint spec:
   9. Upstream 429 → 503 + Retry-After (QuotaExhausted).
   10. Upstream 401/403 → 502 (KeyInvalid — operator's credentials are wrong/revoked).
 
-wire_radar_settings() (3b-15; T1.5):
+wire_radar_settings() (3b-15):
   Mirrors wire_aqi_settings() in endpoints/aqi.py.
   Extracts credentials from settings.forecast (provider-scoped per 3b-5 Q2
-  user decision; same env vars as forecast/alerts/AQI OWM).
-  For librewxr: reads librewxr_endpoint from settings.radar and calls
-  librewxr.configure().
+  user decision; same env vars as forecast/alerts Aeris + OWM).
   Called from __main__.py at startup step 6n, after wire_providers (6i).
 
-Dispatch tables (T1.5):
-  /frames: _KNOWN_RADAR_PROVIDERS — all 9 providers (6 keyless/browser-direct +
-           2 proxied + 1 iframe). aeris REMOVED (3,000 map units/day unviable).
-  /tiles:  _PROXIED_RADAR_PROVIDERS — proxied-only (librewxr, openweathermap).
-           Renamed from _KEYED_RADAR_PROVIDERS per ADR-015 amendment 2026-06-24;
-           librewxr replaces aeris (keyless-proxied rather than keyed-proxied).
+Dispatch table:
+  /frames: _KNOWN_RADAR_PROVIDERS — all 8 providers (5 keyless + 2 keyed + 1 iframe).
+  /tiles:  _KEYED_RADAR_PROVIDERS — keyed-only (aeris, openweathermap).
 
 No DB hit — radar frames / tiles come from the provider, not weewx archive.
 
@@ -91,39 +86,35 @@ router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # Module-level credential wiring (populated at startup by wire_radar_settings).
+# Aeris: client_id + client_secret.
 # OWM: appid.
-# librewxr: endpoint URL (wired via librewxr.configure()).
-# Keyless/browser-direct providers: nothing to wire.
+# Keyless providers: nothing to wire.
 # ---------------------------------------------------------------------------
 
+_RADAR_AERIS_CLIENT_ID: str | None = None
+_RADAR_AERIS_CLIENT_SECRET: str | None = None
 _RADAR_OWM_APPID: str | None = None
 
 # Known radar provider ids (dispatch table keys for /frames).
-# 9 providers: 6 browser-direct/keyless (3b-14 + T1.5) + 2 proxied (T1.5) + 1 iframe (3b-16).
-# aeris REMOVED from radar domain — 3,000 map units/day unviable (ADR-015 amendment 2026-06-24).
+# Includes all 8 providers: 5 keyless (3b-14) + 2 keyed (3b-15) + 1 iframe (3b-16).
 # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
 _KNOWN_RADAR_PROVIDERS = frozenset(
     {
         "rainviewer",
-        "iem_nexrad",       # deprecated — migrate to "noaa"
-        "noaa_mrms",        # deprecated — migrate to "noaa"
+        "iem_nexrad",
+        "noaa_mrms",
         "msc_geomet",
         "dwd_radolan",
-        "noaa",             # unified US radar+satellite+SPC — T1.5
-        "librewxr",         # proxied — T1.5
+        "aeris",
         "openweathermap",
         "iframe",
     }
 )
 
-# Proxied radar providers — API is the gateway to external services (renamed from
-# _KEYED_RADAR_PROVIDERS per ADR-015 amendment 2026-06-24). Tile traffic flows
-# through the API regardless of whether an API key is involved.
-# librewxr: proxied (API fetches from upstream LibreWxR, serves to browser)
-# openweathermap: proxied (API key protection)
-# NOT included: noaa, rainviewer, msc_geomet, dwd_radolan, iem_nexrad, noaa_mrms (browser-direct)
-# NOT included: aeris (dropped from radar domain — 3,000 map units/day unviable)
-_PROXIED_RADAR_PROVIDERS = frozenset({"librewxr", "openweathermap"})
+# Keyed-only radar providers (dispatch table keys for /tiles proxy).
+# /tiles is for keyed providers only — keyless providers are fetched directly
+# by the browser per ADR-037 (keys never reach the browser).
+_KEYED_RADAR_PROVIDERS = frozenset({"aeris", "openweathermap"})
 
 
 # ---------------------------------------------------------------------------
@@ -132,22 +123,23 @@ _PROXIED_RADAR_PROVIDERS = frozenset({"librewxr", "openweathermap"})
 
 
 def wire_radar_settings(settings: object) -> None:
-    """Wire radar-related credentials and endpoint config from the Settings object.
+    """Wire radar-related credentials from the Settings object.
 
-    For browser-direct/keyless providers (rainviewer, iem_nexrad, noaa_mrms,
-    msc_geomet, dwd_radolan, noaa): no-op — no credentials to extract.
+    For keyless providers (rainviewer, iem_nexrad, noaa_mrms, msc_geomet,
+    dwd_radolan): no-op — no credentials to extract.
+    For Aeris: extracts client_id + client_secret from settings.forecast
+      (provider-scoped per 3b-4 Q1 + 3b-5 Q2 user decisions; same env vars
+      as forecast/alerts/AQI Aeris: WEEWX_CLEARSKIES_AERIS_CLIENT_ID +
+      WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET).
     For OpenWeatherMap: extracts openweathermap_appid from settings.forecast
       (provider-scoped per 3b-5 Q2 user decision; same env var as
       forecast/alerts/AQI OWM: WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID).
-    For LibreWxR: reads librewxr_endpoint from settings.radar and calls
-      librewxr.configure() to set the upstream base URL (supports self-hosted
-      instances; defaults to https://api.librewxr.net if absent).
 
-    Brief LC-C note: OWM credentials live on settings.forecast, NOT on a
-    standalone settings.openweathermap attribute — those sections don't exist
-    in Settings.  Same pattern as wire_aqi_settings() (aqi.py line 144-146).
+    Brief LC-C note: credentials live on settings.forecast, NOT on a standalone
+    settings.aeris or settings.openweathermap attribute — those sections don't
+    exist in Settings.  Same pattern as wire_aqi_settings() (aqi.py line 144-146).
     """
-    global _RADAR_OWM_APPID  # noqa: PLW0603
+    global _RADAR_AERIS_CLIENT_ID, _RADAR_AERIS_CLIENT_SECRET, _RADAR_OWM_APPID  # noqa: PLW0603
 
     radar_section = getattr(settings, "radar", None)
     if radar_section is None:
@@ -155,7 +147,26 @@ def wire_radar_settings(settings: object) -> None:
 
     provider = getattr(radar_section, "provider", None)
 
-    if provider == "openweathermap":
+    if provider == "aeris":
+        forecast_section = getattr(settings, "forecast", None)
+        if forecast_section is None:
+            logger.error(
+                "[radar] provider=aeris but [forecast] settings section missing; "
+                "credentials cannot be wired — /radar/.../tiles will 502"
+            )
+            return
+
+        _RADAR_AERIS_CLIENT_ID = getattr(forecast_section, "aeris_client_id", None)
+        _RADAR_AERIS_CLIENT_SECRET = getattr(forecast_section, "aeris_client_secret", None)
+
+        if not _RADAR_AERIS_CLIENT_ID or not _RADAR_AERIS_CLIENT_SECRET:
+            logger.error(
+                "[radar] provider=aeris but WEEWX_CLEARSKIES_AERIS_CLIENT_ID/"
+                "WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET env vars missing; "
+                "capability still registered but /radar/.../tiles will 502 until wired"
+            )
+
+    elif provider == "openweathermap":
         forecast_section = getattr(settings, "forecast", None)
         if forecast_section is None:
             logger.error(
@@ -173,13 +184,7 @@ def wire_radar_settings(settings: object) -> None:
                 "capability still registered but /radar/.../tiles will 502 until wired"
             )
 
-    elif provider == "librewxr":
-        from weewx_clearskies_api.providers.radar import librewxr
-
-        librewxr_endpoint = getattr(radar_section, "librewxr_endpoint", None)
-        librewxr.configure(endpoint=librewxr_endpoint)
-
-    # Browser-direct/keyless providers: nothing to wire.
+    # Keyless providers: nothing to wire.
 
 
 # ---------------------------------------------------------------------------
@@ -282,105 +287,20 @@ def get_radar_frames(
     # missing from PROVIDER_MODULES — a programming error caught at startup.
     module = get_provider_module(domain="radar", provider_id=provider_id)
 
-    # openweathermap needs credentials forwarded to get_frames().
-    # All other providers (keyless + librewxr) expose get_frames() with no arguments.
-    if provider_id == "openweathermap":
+    # Keyed providers need credentials forwarded to get_frames().
+    # Keyless providers expose get_frames() with no arguments.
+    if provider_id == "aeris":
+        frames_list = module.get_frames(  # type: ignore[attr-defined]
+            client_id=_RADAR_AERIS_CLIENT_ID,
+            client_secret=_RADAR_AERIS_CLIENT_SECRET,
+        )
+    elif provider_id == "openweathermap":
         frames_list = module.get_frames(  # type: ignore[attr-defined]
             appid=_RADAR_OWM_APPID,
         )
     else:
-        # Keyless and proxied-keyless providers: get_frames() takes no arguments.
+        # Keyless providers: get_frames() takes no arguments.
         frames_list = module.get_frames()  # type: ignore[attr-defined]
-
-    return RadarFramesResponse(
-        data=frames_list,
-        generatedAt=now_str,
-    )
-
-
-@router.get(
-    "/radar/providers/{provider_id}/layers/{layer_id}/frames",
-    summary="Per-layer radar frames (multi-layer providers)",
-    tags=["Radar"],
-    response_model=RadarFramesResponse,
-)
-def get_radar_layer_frames(
-    provider_id: str,
-    layer_id: str,
-    params: Annotated[RadarFramesQueryParams, Depends(_get_radar_frames_params)],
-) -> RadarFramesResponse:
-    """Return radar frame timestamps for a specific sub-layer of a multi-layer provider.
-
-    Decision tree:
-      1. provider_id not in _KNOWN_RADAR_PROVIDERS → 404.
-      2. provider_id in dispatch but not in capability registry → 404.
-      3. provider_id == "iframe" → 501 (no frame index).
-      4. Provider has no layers OR requested layer_id not in capability.layers → 404.
-      5. Dispatch to module.get_frames(layer=layer_id) → 200 RadarFramesResponse.
-    """
-    now_str = utc_isoformat(datetime.now(tz=UTC))
-
-    # --- Branch 1: unknown provider_id ---
-    if provider_id not in _KNOWN_RADAR_PROVIDERS:
-        logger.debug("Radar provider_id %r not in dispatch table (layer endpoint)", provider_id)
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Radar provider {provider_id!r} is not supported. "
-                f"Known providers: {sorted(_KNOWN_RADAR_PROVIDERS)}"
-            ),
-        )
-
-    # --- Branch 2: in dispatch but not registered ---
-    provider_registry = get_provider_registry()
-    radar_cap = next(
-        (p for p in provider_registry if p.domain == "radar" and p.provider_id == provider_id),
-        None,
-    )
-
-    if radar_cap is None:
-        logger.debug(
-            "Radar provider %r in dispatch table but not in capability registry "
-            "(layer endpoint; operator configured a different provider)",
-            provider_id,
-        )
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Radar provider {provider_id!r} is not configured for this deployment. "
-                "Check the [radar] section in api.conf."
-            ),
-        )
-
-    # --- Branch 3: iframe ---
-    if provider_id == "iframe":
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "iframe providers do not have frame indexes. "
-                "The dashboard reads iframe_url from /capabilities."
-            ),
-        )
-
-    # --- Branch 4: no layers declared or layer_id not found ---
-    if radar_cap.layers is None or not any(
-        layer.layer_id == layer_id for layer in radar_cap.layers
-    ):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Layer {layer_id!r} not found for provider {provider_id!r}",
-        )
-
-    # --- Branch 5: dispatch to module with layer kwarg ---
-    module = get_provider_module(domain="radar", provider_id=provider_id)
-
-    if provider_id == "openweathermap":
-        frames_list = module.get_frames(
-            appid=_RADAR_OWM_APPID,
-            layer=layer_id,
-        )
-    else:
-        frames_list = module.get_frames(layer=layer_id)
 
     return RadarFramesResponse(
         data=frames_list,
@@ -402,22 +322,20 @@ def get_radar_tile(
     x: int = Path(..., ge=0, description="Slippy-map tile X"),
     y: int = Path(..., ge=0, description="Slippy-map tile Y"),
 ) -> Response:
-    """Server-side proxy for proxied radar tile providers (ADR-015 + ADR-037; T1.5).
+    """Server-side proxy for keyed radar tile providers (ADR-015 + ADR-037).
 
-    Returns raw tile bytes from the configured proxied radar provider.
-    For keyed providers (openweathermap): keys never reach the browser —
-    the API holds credentials and proxies the tile request server-side per ADR-037.
-    For proxied-keyless providers (librewxr): the API is the gateway so that
-    self-hosted endpoints stay internal and tile fetches are rate-limited.
+    Returns raw tile bytes (PNG) from the configured keyed radar provider.
+    Keys never reach the browser — the api holds credentials and proxies
+    the tile request server-side per ADR-037.
 
     This is one of two non-JSON endpoints in the codebase.  The handler
     returns fastapi.Response(content=bytes, media_type=ct) — no Pydantic
     response model exists for this route.
 
     Decision tree (see module docstring for full spec):
-      1. provider_id not in _PROXIED_RADAR_PROVIDERS → 404.
-      2. provider_id in _PROXIED_RADAR_PROVIDERS but not in registry → 404.
-      3. Credentials missing (openweathermap only) → 502.
+      1. provider_id not in _KEYED_RADAR_PROVIDERS → 404.
+      2. provider_id in _KEYED_RADAR_PROVIDERS but not in registry → 404.
+      3. Credentials missing → 502.
       4. z/x/y invalid range → FastAPI auto-422 (Path constraints).
       5. Cache hit → 200 binary response (no upstream call).
       6. Cache miss → provider.get_tile() → cache → 200 binary response.
@@ -437,29 +355,29 @@ def get_radar_tile(
             params.t,
         )
 
-    # --- Branch 1: /tiles is proxied-only ---
-    if provider_id not in _PROXIED_RADAR_PROVIDERS:
+    # --- Branch 1: /tiles is keyed-only ---
+    if provider_id not in _KEYED_RADAR_PROVIDERS:
         logger.debug(
-            "Radar tile proxy: provider_id %r not in proxied provider set "
-            "(browser-direct providers are fetched directly by the browser per ADR-037)",
+            "Radar tile proxy: provider_id %r not in keyed provider set "
+            "(keyless providers are fetched directly by the browser per ADR-037)",
             provider_id,
         )
         raise HTTPException(
             status_code=404,
             detail=(
-                f"Radar tile proxy is only available for proxied providers "
-                f"({sorted(_PROXIED_RADAR_PROVIDERS)}). "
-                f"{provider_id!r} is not a proxied provider or is not supported."
+                f"Radar tile proxy is only available for keyed providers "
+                f"({sorted(_KEYED_RADAR_PROVIDERS)}). "
+                f"{provider_id!r} is not a keyed provider or is not supported."
             ),
         )
 
-    # --- Branch 2: in proxied set but not registered (different radar provider configured) ---
+    # --- Branch 2: in keyed set but not registered (different radar provider configured) ---
     provider_registry = get_provider_registry()
     radar_providers = {p.provider_id for p in provider_registry if p.domain == "radar"}
 
     if provider_id not in radar_providers:
         logger.debug(
-            "Radar tile proxy: provider %r in proxied set but not in capability registry "
+            "Radar tile proxy: provider %r in keyed set but not in capability registry "
             "(operator configured a different radar provider)",
             provider_id,
         )
@@ -471,8 +389,15 @@ def get_radar_tile(
             ),
         )
 
-    # --- Branch 3: credentials missing (keyed providers only) ---
-    if provider_id == "openweathermap":
+    # --- Branch 3: credentials missing ---
+    if provider_id == "aeris":
+        if not _RADAR_AERIS_CLIENT_ID or not _RADAR_AERIS_CLIENT_SECRET:
+            logger.error(
+                "Aeris radar provider configured but credentials not wired at request time"
+            )
+            raise HTTPException(status_code=502, detail="Aeris credentials missing")
+
+    elif provider_id == "openweathermap":
         if not _RADAR_OWM_APPID:
             logger.error(
                 "OpenWeatherMap radar provider configured but appid not wired at request time"
@@ -483,13 +408,14 @@ def get_radar_tile(
     module = get_provider_module(domain="radar", provider_id=provider_id)
 
     try:
-        if provider_id == "librewxr":
+        if provider_id == "aeris":
             tile_bytes, content_type = module.get_tile(  # type: ignore[attr-defined]
                 z,
                 x,
                 y,
                 t=params.t,
-                color=params.color,
+                client_id=_RADAR_AERIS_CLIENT_ID,
+                client_secret=_RADAR_AERIS_CLIENT_SECRET,
             )
         elif provider_id == "openweathermap":
             tile_bytes, content_type = module.get_tile(  # type: ignore[attr-defined]
@@ -500,7 +426,7 @@ def get_radar_tile(
                 appid=_RADAR_OWM_APPID,
             )
         else:
-            # Should not reach here — guarded by _PROXIED_RADAR_PROVIDERS check above.
+            # Should not reach here — guarded by _KEYED_RADAR_PROVIDERS check above.
             raise HTTPException(
                 status_code=500,
                 detail=f"Unexpected provider_id {provider_id!r} in tile proxy",

@@ -1,9 +1,5 @@
 """NOAA MRMS (Multi-Radar/Multi-Sensor) radar provider module (ADR-015, ADR-038, 3b-14).
 
-DEPRECATED: Use the unified 'noaa' provider instead. This module remains for
-backward compatibility with existing operator configs. A migration warning
-is logged at startup when this provider is configured.
-
 Five responsibilities per ADR-038 §2:
   1. Outbound API call  — WMS GetCapabilities (no auth)
   2. Response parsing   — XML TIME dimension via parse_wms_time_dimension()
@@ -169,10 +165,6 @@ def get_frames() -> RadarFrameList:
         TransientNetworkError: Network/DNS failure or 5xx after retries.
         ProviderProtocolError: XML parse error, layer not found, or no TIME dimension.
     """
-    logger.warning(
-        "Radar provider %r is deprecated. Migrate to 'noaa' for unified US radar coverage.",
-        PROVIDER_ID,
-    )
     cache = get_cache()
     key = _cache_key()
     hit = cache.get(key)

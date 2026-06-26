@@ -17,9 +17,6 @@ Radar domain:
   Keyed (3b-15): aeris, openweathermap.
   mapbox_jma deferred per ADR-015 2026-05-11 amendment (raster-array shape;
     requires Mapbox GL JS, incompatible with Leaflet).
-  T1.5 (2026-06-24): librewxr (proxied — API is tile gateway), noaa (unified US
-    radar+satellite+SPC). aeris dropped from radar domain (3,000 map units/day
-    unviable per ADR-015 amendment 2026-06-24).
 """
 
 from __future__ import annotations
@@ -46,9 +43,7 @@ from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
 from weewx_clearskies_api.providers.radar import iframe as radar_iframe
-from weewx_clearskies_api.providers.radar import librewxr as radar_librewxr
 from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
-from weewx_clearskies_api.providers.radar import noaa as radar_noaa
 from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
 from weewx_clearskies_api.providers.radar import openweathermap as radar_openweathermap
 from weewx_clearskies_api.providers.radar import rainviewer as radar_rainviewer
@@ -70,14 +65,12 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "aeris"): forecast_aeris,
     ("forecast", "openweathermap"): forecast_openweathermap,
     ("forecast", "wunderground"): forecast_wunderground,
-    ("radar", "aeris"): radar_aeris,          # keyed — 3b-15 (dropped from radar T1.5; entry kept for config error path)
+    ("radar", "aeris"): radar_aeris,          # keyed — 3b-15
     ("radar", "dwd_radolan"): radar_dwd_radolan,
     ("radar", "iframe"): radar_iframe,        # iframe embed — 3b-16
-    ("radar", "iem_nexrad"): radar_iem_nexrad,  # deprecated — migrate to "noaa"
-    ("radar", "librewxr"): radar_librewxr,    # proxied — T1.5
+    ("radar", "iem_nexrad"): radar_iem_nexrad,
     ("radar", "msc_geomet"): radar_msc_geomet,
-    ("radar", "noaa"): radar_noaa,            # unified US radar+satellite+SPC — T1.5
-    ("radar", "noaa_mrms"): radar_noaa_mrms,  # deprecated — migrate to "noaa"
+    ("radar", "noaa_mrms"): radar_noaa_mrms,
     ("radar", "openweathermap"): radar_openweathermap,  # keyed — 3b-15
     ("radar", "rainviewer"): radar_rainviewer,
 }
