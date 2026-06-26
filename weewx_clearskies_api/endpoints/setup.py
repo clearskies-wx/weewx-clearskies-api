@@ -244,6 +244,10 @@ class ProviderConfig(BaseModel):
     #: Aeris forecast model selection: "standard" or "xcast" (ADR-063).
     #: Written to api.conf [forecast] aeris_forecast_model.
     aeris_forecast_model: str | None = None
+    #: LibreWxR API endpoint (non-secret; written to api.conf [radar] section).
+    librewxr_endpoint: str | None = None
+    #: LibreWxR geographic bounds "south,west,north,east" (non-secret; api.conf).
+    librewxr_bounds: str | None = None
 
 
 class BrandingApplyConfig(BaseModel):
@@ -658,6 +662,12 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             # Radar iframe URL (non-secret; stored in api.conf per settings.py).
             if pc.iframe_url and section == "radar":
                 cfg[section]["iframe_url"] = pc.iframe_url
+
+            # LibreWxR endpoint and bounds (non-secret; api.conf [radar]).
+            if pc.librewxr_endpoint and section == "radar":
+                cfg[section]["librewxr_endpoint"] = pc.librewxr_endpoint
+            if pc.librewxr_bounds and section == "radar":
+                cfg[section]["librewxr_bounds"] = pc.librewxr_bounds
 
             # Aeris forecast model (ADR-063; non-secret).
             if pc.aeris_forecast_model and section == "forecast":
