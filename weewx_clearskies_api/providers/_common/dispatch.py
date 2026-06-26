@@ -14,7 +14,9 @@ AQI domain: openmeteo (3b-9), aeris (3b-10), openweathermap (3b-11), iqair (3b-1
 Earthquakes domain: usgs, geonet, emsc, renass (3b-13 — domain opener; all keyless per ADR-040).
 Radar domain:
   Keyless (3b-14): rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan.
-  Keyed (3b-15): aeris, openweathermap.
+  Keyed (3b-15): aeris (deprecated from radar — module stays on disk, no longer in valid_providers),
+    openweathermap.
+  Keyless + Caddy-proxied tile (T1.2): librewxr (configurable endpoint; no get_tile()).
   mapbox_jma deferred per ADR-015 2026-05-11 amendment (raster-array shape;
     requires Mapbox GL JS, incompatible with Leaflet).
 """
@@ -43,6 +45,7 @@ from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
 from weewx_clearskies_api.providers.radar import iframe as radar_iframe
+from weewx_clearskies_api.providers.radar import librewxr as radar_librewxr
 from weewx_clearskies_api.providers.radar import msc_geomet as radar_msc_geomet
 from weewx_clearskies_api.providers.radar import noaa_mrms as radar_noaa_mrms
 from weewx_clearskies_api.providers.radar import openweathermap as radar_openweathermap
@@ -65,10 +68,11 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "aeris"): forecast_aeris,
     ("forecast", "openweathermap"): forecast_openweathermap,
     ("forecast", "wunderground"): forecast_wunderground,
-    ("radar", "aeris"): radar_aeris,          # keyed — 3b-15
+    ("radar", "aeris"): radar_aeris,          # keyed — 3b-15; deprecated from radar valid set (T1.2)
     ("radar", "dwd_radolan"): radar_dwd_radolan,
     ("radar", "iframe"): radar_iframe,        # iframe embed — 3b-16
     ("radar", "iem_nexrad"): radar_iem_nexrad,
+    ("radar", "librewxr"): radar_librewxr,   # Caddy-proxied tile, configurable endpoint — T1.2
     ("radar", "msc_geomet"): radar_msc_geomet,
     ("radar", "noaa_mrms"): radar_noaa_mrms,
     ("radar", "openweathermap"): radar_openweathermap,  # keyed — 3b-15

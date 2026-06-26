@@ -530,13 +530,23 @@ def _wire_providers_from_config(settings: Settings) -> None:
 
     # 3b-14: radar domain (keyless half — rainviewer, iem_nexrad, noaa_mrms,
     # msc_geomet, dwd_radolan).
-    # 3b-15: keyed providers added (aeris, openweathermap).
+    # 3b-15: keyed providers added (aeris — deprecated; openweathermap).
     # 3b-16: iframe provider added; uses make_capability() factory (not CAPABILITY
     #   constant) so the iframe_url is embedded in the registered capability.
+    # T1.2: librewxr added (Caddy-proxied tile; configurable endpoint).
     # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
     # Credentials for keyed providers wired separately via wire_radar_settings().
     if settings.radar.provider:
         provider_id = settings.radar.provider
+
+        # Deprecation warnings for iem_nexrad and noaa_mrms (T1.2).
+        if provider_id in ("iem_nexrad", "noaa_mrms"):
+            logger.warning(
+                "Radar provider '%s' is deprecated. "
+                "Consider migrating to 'librewxr' for better radar quality.",
+                provider_id,
+            )
+
         try:
             module = get_provider_module(domain="radar", provider_id=provider_id)
         except KeyError as exc:
@@ -545,14 +555,28 @@ def _wire_providers_from_config(settings: Settings) -> None:
                 "Cause: %s. "
                 "Check [radar] provider in api.conf. "
                 "Supported values: "
-                "rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan (keyless); "
-                "aeris, openweathermap (keyed); "
+                "rainviewer, msc_geomet, dwd_radolan, librewxr (keyless); "
+                "openweathermap (keyed); "
                 "iframe (embed; requires iframe_url). "
+                "Deprecated (still work): iem_nexrad, noaa_mrms. "
+                "Removed: aeris (no longer supported for radar). "
                 "mapbox_jma is not supported — deferred per ADR-015 2026-05-11 amendment.",
                 provider_id,
                 exc,
             )
             sys.exit(1)
+
+        # Call configure() for librewxr before the CAPABILITY is read (T1.2).
+        # configure() rebuilds the module-level CAPABILITY with operator settings
+        # (endpoint, bounds, refresh_interval).
+        if provider_id == "librewxr":
+            from weewx_clearskies_api.providers.radar import librewxr as radar_librewxr_module  # noqa: PLC0415
+            radar_librewxr_module.configure(
+                endpoint=settings.radar.librewxr_endpoint,
+                bounds=settings.radar.librewxr_bounds,
+                refresh_interval=settings.radar.librewxr_refresh_interval,
+            )
+
         if provider_id == "iframe":
             declarations.append(module.make_capability(iframe_url=settings.radar.iframe_url))
         else:

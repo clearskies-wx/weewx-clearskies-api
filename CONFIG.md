@@ -277,25 +277,56 @@ Regional coverage:
 |---|---|---|
 | `provider` | _(none)_ | Provider id (see table below). |
 | `iframe_url` | _(none)_ | Required when `provider = iframe`. The URL to embed in the dashboard radar tile. |
+| `librewxr_endpoint` | `https://api.librewxr.net` | LibreWxR API base URL. Override to point at a self-hosted LibreWxR instance. |
+| `librewxr_bounds` | _(none)_ | Optional bounding box for LibreWxR tiles: `"south,west,north,east"` (e.g. `"24.0,-125.0,50.0,-66.0"` for CONUS). Leave empty for global tiles. |
+| `librewxr_refresh_interval` | `600` | Seconds between dashboard re-fetches of the LibreWxR frame index. |
 
-| Provider id | Type | Coverage |
-|---|---|---|
-| `rainviewer` | keyless | Global |
-| `iem_nexrad` | keyless | US (NEXRAD WSR-88D) |
-| `noaa_mrms` | keyless | US (Multi-Radar/Multi-Sensor) |
-| `msc_geomet` | keyless | Canada (MSC GeoMet WMS) |
-| `dwd_radolan` | keyless | Germany (DWD RADOLAN) |
-| `aeris` | keyed (Aeris credentials) | Global |
-| `openweathermap` | keyed (OWM appid) | Global |
-| `iframe` | operator URL | Any external radar embed |
+| Provider id | Type | Coverage | Notes |
+|---|---|---|---|
+| `rainviewer` | keyless | Global | Default fallback; attribution required |
+| `iem_nexrad` | keyless | US (NEXRAD WSR-88D) | **Deprecated** — migrate to `librewxr` |
+| `noaa_mrms` | keyless | US (Multi-Radar/Multi-Sensor) | **Deprecated** — migrate to `librewxr` |
+| `msc_geomet` | keyless | Canada (MSC GeoMet WMS) | |
+| `dwd_radolan` | keyless | Germany (DWD RADOLAN) | |
+| `librewxr` | keyless + Caddy tile proxy | Global | Zoom 12, 13 color schemes, WebP, 60-min nowcast, alerts; self-host recommended |
+| `openweathermap` | keyed (OWM appid) | Global | |
+| `iframe` | operator URL | Any external radar embed | |
 
-Aeris and OpenWeatherMap credentials are shared with the `[forecast]` section.
+**Removed:** `aeris` is no longer supported as a radar provider. If you previously used `aeris` for radar, switch to `rainviewer` or `librewxr`.
+
+**Deprecated:** `iem_nexrad` and `noaa_mrms` still work but emit a startup warning. Migrate to `librewxr` for better quality (zoom 12, nowcast, color scheme selection, WebP tiles).
+
+OpenWeatherMap credentials are shared with the `[forecast]` section.
+
+Tiles for `librewxr` are proxied by Caddy at the `/librewxr` prefix — the API itself does not proxy tile bytes for this provider.
 
 **Example — RainViewer (keyless, global):**
 
 ```ini
 [radar]
 provider = rainviewer
+```
+
+**Example — LibreWxR (recommended, global coverage):**
+
+```ini
+[radar]
+provider = librewxr
+# Optional: self-hosted endpoint
+# librewxr_endpoint = https://radar.example.com
+# Optional: bounding box (CONUS)
+# librewxr_bounds = 24.0,-125.0,50.0,-66.0
+# librewxr_refresh_interval = 600
+```
+
+**Example — LibreWxR self-hosted with bounding box:**
+
+```ini
+[radar]
+provider = librewxr
+librewxr_endpoint = https://radar.example.com
+librewxr_bounds = 24.0,-125.0,50.0,-66.0
+librewxr_refresh_interval = 300
 ```
 
 **Example — operator iframe embed:**

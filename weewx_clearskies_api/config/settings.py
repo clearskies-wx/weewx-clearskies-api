@@ -697,12 +697,16 @@ class SeeingSettings:
 
 class RadarSettings:
     """[radar] section settings (3b-14; extended 3b-15 with 2 keyed providers;
-    extended 3b-16 with iframe provider).
+    extended 3b-16 with iframe provider; extended T1.2 with librewxr provider).
 
-    Provider id for the radar data source.  Five keyless providers (rainviewer,
-    iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan), two keyed providers
-    (aeris, openweathermap) per ADR-015, and one iframe provider (iframe).
+    Provider id for the radar data source.  Keyless providers: rainviewer,
+    iem_nexrad (deprecated), noaa_mrms (deprecated), msc_geomet, dwd_radolan,
+    librewxr.  Keyed provider: openweathermap.  Embed provider: iframe.
 
+    Note: aeris was removed from the valid radar provider set (T1.2 — aeris
+    radar is no longer supported; aeris remains valid for forecast/alerts/AQI).
+    Note: iem_nexrad and noaa_mrms are deprecated — they continue to work but
+    a deprecation warning is emitted at startup directing operators to librewxr.
     Note: mapbox_jma is NOT included — deferred per ADR-015 2026-05-11 amendment
     (Mapbox JMA tilesets are raster-array shape, GL-JS-only; incompatible with
     Leaflet).
@@ -710,46 +714,71 @@ class RadarSettings:
     Per ADR-015: single radar provider per deploy (operator picks one per
     their lat/lon).  Per-region auto-pick is a setup-wizard concern (out of scope).
 
-    Keyed provider credentials (aeris, openweathermap) are NOT stored here —
+    Keyed provider credentials (openweathermap) are NOT stored here —
     they are wired at startup via wire_radar_settings() in endpoints/radar.py,
     which reads them from settings.forecast (provider-scoped per 3b-5 Q2).
 
     iframe provider: operator supplies iframe_url in [radar] section; the
     dashboard embeds the URL directly.  No frames index, no tile proxy.
+
+    librewxr provider: configurable via librewxr_endpoint, librewxr_bounds,
+    librewxr_refresh_interval.  Tiles are proxied by Caddy (no tile proxy in
+    the API).  configure() is called at startup to pass these to the module.
     """
 
     #: Provider id: "rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet",
-    #: "dwd_radolan", "aeris", "openweathermap", "iframe", or absent.
+    #: "dwd_radolan", "openweathermap", "iframe", "librewxr", or absent.
+    #: Note: "aeris" removed from radar valid set (T1.2).
     provider: str | None
     #: iframe embed URL.  Required when provider == "iframe"; None otherwise.
     iframe_url: str | None
+    #: LibreWxR API base URL. Default: "https://api.librewxr.net".
+    #: Override to point at a self-hosted LibreWxR instance.
+    librewxr_endpoint: str
+    #: LibreWxR optional bounding box as "south,west,north,east" CSV.
+    #: None = no bounds constraint (global tiles).
+    librewxr_bounds: str | None
+    #: Seconds between dashboard re-fetches of the LibreWxR frame index.
+    librewxr_refresh_interval: int
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
         self.provider = raw_provider if raw_provider else None
         raw_iframe_url = str(section.get("iframe_url", "")).strip()
         self.iframe_url = raw_iframe_url if raw_iframe_url else None
+        self.librewxr_endpoint = str(
+            section.get("librewxr_endpoint", "https://api.librewxr.net")
+        ).strip() or "https://api.librewxr.net"
+        raw_librewxr_bounds = str(section.get("librewxr_bounds", "")).strip()
+        self.librewxr_bounds = raw_librewxr_bounds if raw_librewxr_bounds else None
+        self.librewxr_refresh_interval = int(
+            section.get("librewxr_refresh_interval", 600)
+        )
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
         valid_providers = {
             "rainviewer",
-            "iem_nexrad",
-            "noaa_mrms",
+            "iem_nexrad",      # deprecated — prefer librewxr; deprecation warning at startup
+            "noaa_mrms",       # deprecated — prefer librewxr; deprecation warning at startup
             "msc_geomet",
             "dwd_radolan",
-            "aeris",       # keyed — added 3b-15; credentials in settings.forecast
             "openweathermap",  # keyed — added 3b-15; credentials in settings.forecast
-            "iframe",      # iframe embed — added 3b-16; requires iframe_url in [radar]
+            "iframe",          # iframe embed — added 3b-16; requires iframe_url in [radar]
+            "librewxr",        # added T1.2; configurable endpoint, Caddy tile proxy
         }
+        # aeris removed from radar valid set (T1.2): aeris radar no longer supported.
         # mapbox_jma is NOT valid — deferred per ADR-015 2026-05-11 amendment.
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[radar] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'rainviewer', 'iem_nexrad', 'noaa_mrms', "
-                "'msc_geomet', 'dwd_radolan' (keyless); "
-                "'aeris', 'openweathermap' (keyed; credentials in [forecast] section); "
-                "'iframe' (embed; requires iframe_url in [radar] section)."
+                "Supported values: 'rainviewer', 'msc_geomet', 'dwd_radolan', "
+                "'librewxr' (keyless); "
+                "'openweathermap' (keyed; credentials in [forecast] section); "
+                "'iframe' (embed; requires iframe_url in [radar] section). "
+                "Deprecated (still work but use librewxr instead): "
+                "'iem_nexrad', 'noaa_mrms'. "
+                "Removed: 'aeris' (no longer supported for radar)."
             )
         if self.provider == "iframe" and not self.iframe_url:
             raise ValueError(

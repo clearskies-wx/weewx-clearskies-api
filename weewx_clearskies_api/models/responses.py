@@ -676,6 +676,13 @@ class CapabilityDeclaration(BaseModel):
     wmsLayerName: str | None = None
     tileContentType: str | None = None
     iframeUrl: str | None = None
+    # LibreWxR-specific fields (None for non-LibreWxR providers)
+    caddyPrefix: str | None = None
+    alertUrl: str | None = None
+    bounds: dict[str, float] | None = None
+    refreshInterval: int | None = None
+    nowcastAvailable: bool | None = None
+    alertsAvailable: bool | None = None
 
 
 class CapabilityRegistry(BaseModel):
@@ -1268,6 +1275,9 @@ class RadarFrameList(BaseModel):
     placeholder along with each frame's `path`. None for WMS-T providers
     (their tile URL is composed differently — see CAPABILITY.wms_endpoint_url).
     3b-14 auditor F2 added this.
+
+    `colorSchemes` is LibreWxR-specific: the list of available color schemes
+    from radar.colorSchemes in the wire response. None for all other providers.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1275,7 +1285,8 @@ class RadarFrameList(BaseModel):
     providerId: str
     frames: list[RadarFrame]
     attribution: str | None = None
-    tileHost: str | None = None  # RainViewer per-fetch tile host; None for WMS-T
+    tileHost: str | None = None  # RainViewer/LibreWxR per-fetch tile host; None for WMS-T
+    colorSchemes: list[dict[str, Any]] | None = None  # LibreWxR [{id: int, name: str}, ...]; None for others
 
 
 class RadarFramesResponse(BaseModel):

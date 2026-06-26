@@ -79,6 +79,12 @@ def get_capabilities() -> CapabilityResponse:
             wmsLayerName=cap.wms_layer_name,
             tileContentType=cap.tile_content_type,
             iframeUrl=cap.iframe_url,
+            caddyPrefix=cap.caddy_prefix,
+            alertUrl=cap.alert_url,
+            bounds=cap.bounds,
+            refreshInterval=cap.refresh_interval,
+            nowcastAvailable=cap.nowcast_available,
+            alertsAvailable=cap.alerts_available,
         )
         for cap in provider_registry
     ]

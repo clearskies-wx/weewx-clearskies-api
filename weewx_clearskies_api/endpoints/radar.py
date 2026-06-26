@@ -96,7 +96,10 @@ _RADAR_AERIS_CLIENT_SECRET: str | None = None
 _RADAR_OWM_APPID: str | None = None
 
 # Known radar provider ids (dispatch table keys for /frames).
-# Includes all 8 providers: 5 keyless (3b-14) + 2 keyed (3b-15) + 1 iframe (3b-16).
+# 5 keyless (3b-14) + 1 keyed (3b-15) + 1 iframe (3b-16) + 1 Caddy-proxied (T1.2).
+# aeris remains in dispatch table (module on disk) but is removed from valid_providers
+# in RadarSettings (T1.2); it is kept here so old configs don't hard-fail at the
+# dispatch gate — the settings validator rejects "aeris" first.
 # mapbox_jma deferred per ADR-015 2026-05-11 amendment.
 _KNOWN_RADAR_PROVIDERS = frozenset(
     {
@@ -105,16 +108,18 @@ _KNOWN_RADAR_PROVIDERS = frozenset(
         "noaa_mrms",
         "msc_geomet",
         "dwd_radolan",
-        "aeris",
+        "aeris",          # module on disk; no longer in valid_providers (T1.2)
         "openweathermap",
         "iframe",
+        "librewxr",       # Caddy-proxied tile, configurable endpoint — T1.2
     }
 )
 
 # Keyed-only radar providers (dispatch table keys for /tiles proxy).
-# /tiles is for keyed providers only — keyless providers are fetched directly
-# by the browser per ADR-037 (keys never reach the browser).
-_KEYED_RADAR_PROVIDERS = frozenset({"aeris", "openweathermap"})
+# /tiles is for keyed providers only — keyless/Caddy-proxied providers are
+# fetched directly by the browser per ADR-037 (keys never reach the browser).
+# aeris removed from this set (T1.2): aeris radar no longer supported.
+_KEYED_RADAR_PROVIDERS = frozenset({"openweathermap"})
 
 
 # ---------------------------------------------------------------------------

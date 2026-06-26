@@ -67,6 +67,13 @@ class ProviderCapability:
     iframe_url: str | None = None             # operator-supplied iframe URL (iframe provider only)
     # ADR-066: observed vs model data classification for AQI providers
     is_observed_source: bool = True           # True for observed-data providers; False for model-based (Open-Meteo, OWM)
+    # LibreWxR-specific capability fields (None for non-LibreWxR providers)
+    caddy_prefix: str | None = None           # e.g. "/librewxr" — Caddy route prefix for tile proxy
+    alert_url: str | None = None              # e.g. "/librewxr/v2/alerts" — alert endpoint path
+    bounds: dict[str, float] | None = None    # {south, west, north, east} operator bounding box or None
+    refresh_interval: int | None = None       # seconds between dashboard re-fetches of the frame index
+    nowcast_available: bool | None = None     # whether nowcast frames are available from this provider
+    alerts_available: bool | None = None      # whether weather alerts are available from this provider
 
 
 # ---------------------------------------------------------------------------
