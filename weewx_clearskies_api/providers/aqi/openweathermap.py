@@ -174,6 +174,7 @@ CAPABILITY = ProviderCapability(
         "confirmation. Will be removed in next major version. Migrate to Aeris or AirNow."
     ),
     is_observed_source=False,  # ADR-066: SILAM model output, not observed measurements
+    refresh_interval=900,
 )
 
 # ---------------------------------------------------------------------------

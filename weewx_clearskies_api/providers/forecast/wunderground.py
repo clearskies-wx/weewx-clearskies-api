@@ -185,6 +185,7 @@ CAPABILITY = ProviderCapability(
         "apiKey OR PWS-no-longer-active returns 401 → bundle.daily=[] via standard "
         "KeyInvalid 502 propagation."
     ),
+    refresh_interval=1800,
 )
 
 # ---------------------------------------------------------------------------

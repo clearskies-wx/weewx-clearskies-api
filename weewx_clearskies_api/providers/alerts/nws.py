@@ -98,6 +98,7 @@ CAPABILITY = ProviderCapability(
         "NWS API requires a User-Agent identifying your app; "
         "set [alerts] nws_user_agent_contact in api.conf for best results."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

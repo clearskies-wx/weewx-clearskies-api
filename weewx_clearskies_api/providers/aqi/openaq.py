@@ -145,6 +145,7 @@ CAPABILITY = ProviderCapability(
         "is available. Provides PM2.5 and PM10 only (no composite AQI, no gases). "
         "Haze-eligible (is_observed_source=True)."
     ),
+    refresh_interval=900,
 )
 
 # ---------------------------------------------------------------------------

@@ -215,6 +215,7 @@ CAPABILITY = ProviderCapability(
         "permission_denied, forbidden, feature_not_available, call_limit_reached, "
         "too_many_requests, city_not_found, no_nearest_station, node not found."
     ),
+    refresh_interval=900,
 )
 
 # ---------------------------------------------------------------------------

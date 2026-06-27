@@ -99,6 +99,7 @@ CAPABILITY = ProviderCapability(
         "Note: the feed includes quarry blasts and explosions (properties.type); "
         "filter at the dashboard layer if only seismic earthquakes are wanted."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

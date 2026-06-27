@@ -230,6 +230,7 @@ CAPABILITY = ProviderCapability(
         "pollutantNO and pollutantNH3 not available (Aeris returns 7 pollutants only). "
         "aqiLocation supplied via place.name (NOT PARTIAL-DOMAIN for Aeris)."
     ),
+    refresh_interval=900,
 )
 
 # ---------------------------------------------------------------------------

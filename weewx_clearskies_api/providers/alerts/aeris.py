@@ -188,6 +188,7 @@ CAPABILITY = ProviderCapability(
         "(e.g. 'Amber' for UK Met, 'Orange' for MeteoAlarm). "
         "details.color is Aeris's own rendering hex color — NOT the national system's color."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

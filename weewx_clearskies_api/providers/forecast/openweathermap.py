@@ -166,6 +166,7 @@ CAPABILITY = ProviderCapability(
         "to graceful empty rather than KeyInvalid 502). Coverage global "
         "per ADR-007 §Per-module behavior."
     ),
+    refresh_interval=1800,
 )
 
 # ---------------------------------------------------------------------------

@@ -179,6 +179,7 @@ CAPABILITY = ProviderCapability(
         "supplied via the standard forecast endpoints; see "
         "https://weather.gov for raw gridpoint data."
     ),
+    refresh_interval=1800,
 )
 
 # ---------------------------------------------------------------------------

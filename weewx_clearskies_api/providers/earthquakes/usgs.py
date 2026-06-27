@@ -95,6 +95,7 @@ CAPABILITY = ProviderCapability(
         "for operators without a regional provider (ADR-040 §No uncovered-region case). "
         "No API key required. Polite-use: do not poll faster than the TTL."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

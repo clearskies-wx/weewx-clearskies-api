@@ -149,6 +149,7 @@ CAPABILITY = ProviderCapability(
         "urgency, certainty, areaDesc, and category are not provided by OWM on any "
         "tier (PARTIAL-DOMAIN per canonical §4.3 OWM column); always null."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

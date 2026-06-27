@@ -89,6 +89,7 @@ CAPABILITY = ProviderCapability(
         "No API key required. CC BY 4.0 — attribution: EMSC "
         "(https://www.emsc-csem.org/), CC BY 4.0."
     ),
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

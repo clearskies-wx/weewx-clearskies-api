@@ -292,4 +292,5 @@ CAPABILITY = ProviderCapability(
     geographic_coverage="global",
     default_poll_interval_seconds=10800,
     operator_notes="Keyless; 7Timer ASTRO product, 3-hour intervals over 72 hours.",
+    refresh_interval=10800,
 )

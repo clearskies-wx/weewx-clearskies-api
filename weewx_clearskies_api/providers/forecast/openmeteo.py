@@ -147,6 +147,7 @@ CAPABILITY = ProviderCapability(
         "use. Throttled at ~10 000 calls/day fair-use. No forecast "
         "discussion available — bundle.discussion is always null."
     ),
+    refresh_interval=1800,
 )
 
 # ---------------------------------------------------------------------------

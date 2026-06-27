@@ -197,6 +197,7 @@ CAPABILITY = ProviderCapability(
         "eligible for haze confirmation (ADR-066)."
     ),
     is_observed_source=False,  # ADR-066: CAMS model output, not observed measurements
+    refresh_interval=900,
 )
 
 # ---------------------------------------------------------------------------

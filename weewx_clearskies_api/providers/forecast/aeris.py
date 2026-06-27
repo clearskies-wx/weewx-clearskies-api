@@ -190,6 +190,7 @@ CAPABILITY = ProviderCapability(
         "'xcast' (/xcast/forecasts, ML-enhanced temp/wind, default). "
         "Config key: aeris_forecast_model in [forecast] section of api.conf."
     ),
+    refresh_interval=1800,
 )
 
 # ---------------------------------------------------------------------------
