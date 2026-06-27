@@ -233,7 +233,8 @@ def get_alerts(
         )
 
     # Single source per deploy per ADR-016; take the first (and only) entry.
-    provider_id = alerts_providers[0].provider_id
+    provider_cap = alerts_providers[0]
+    provider_id = provider_cap.provider_id
 
     # --- Obtain station lat/lon (ADR-011: single-station, no ?station= param) ---
     try:
@@ -295,5 +296,5 @@ def get_alerts(
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("alerts"),
+        freshness=build_freshness("alerts", provider_refresh_interval=provider_cap.refresh_interval),
     )

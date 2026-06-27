@@ -34,6 +34,7 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
+from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 
@@ -93,6 +94,10 @@ def get_seeing_forecast() -> SeeingForecastResponse:
             detail="Seeing forecast provider not configured",
         )
 
+    # Look up provider capability for refresh_interval (ADR-075 T4.2).
+    _seeing_caps = [p for p in get_provider_registry() if p.domain == "seeing"]
+    _seeing_cap = _seeing_caps[0] if _seeing_caps else None
+
     # Station coordinates for live fallback fetch
     station_info = get_station_info()
     lat = station_info.latitude
@@ -129,7 +134,10 @@ def get_seeing_forecast() -> SeeingForecastResponse:
                 ),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
                 stationClock=build_station_clock(),
-                freshness=build_freshness("seeing"),
+                freshness=build_freshness(
+                    "seeing",
+                    provider_refresh_interval=_seeing_cap.refresh_interval if _seeing_cap else None,
+                ),
             )
     except Exception:
         logger.debug("seeing-forecast cache miss or deserialization error", exc_info=True)
@@ -176,5 +184,8 @@ def get_seeing_forecast() -> SeeingForecastResponse:
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
         stationClock=build_station_clock(),
-        freshness=build_freshness("seeing"),
+        freshness=build_freshness(
+            "seeing",
+            provider_refresh_interval=_seeing_cap.refresh_interval if _seeing_cap else None,
+        ),
     )

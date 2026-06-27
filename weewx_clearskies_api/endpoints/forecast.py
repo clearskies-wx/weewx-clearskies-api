@@ -359,7 +359,8 @@ def get_forecast(
         )
 
     # Single source per deploy per ADR-007; take the first (and only) entry.
-    provider_id = forecast_providers[0].provider_id
+    provider_cap = forecast_providers[0]
+    provider_id = provider_cap.provider_id
 
     # --- Obtain station lat/lon / timezone (ADR-011: single-station, no ?station= param) ---
     try:
@@ -482,5 +483,5 @@ def get_forecast(
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("forecast"),
+        freshness=build_freshness("forecast", provider_refresh_interval=provider_cap.refresh_interval),
     )

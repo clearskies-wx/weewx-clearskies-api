@@ -260,7 +260,8 @@ def get_radar_frames(
 
     # --- Decision tree branch 2: in dispatch but not registered ---
     provider_registry = get_provider_registry()
-    radar_providers = {p.provider_id for p in provider_registry if p.domain == "radar"}
+    radar_caps = {p.provider_id: p for p in provider_registry if p.domain == "radar"}
+    radar_providers = set(radar_caps)
 
     if provider_id not in radar_providers:
         logger.debug(
@@ -313,7 +314,7 @@ def get_radar_frames(
         data=frames_list,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("radar"),
+        freshness=build_freshness("radar", provider_refresh_interval=radar_caps[provider_id].refresh_interval),
     )
 
 

@@ -206,7 +206,8 @@ def get_earthquakes(
         )
 
     # Single source per deploy per ADR-040; take the first (and only) entry.
-    provider_id = earthquakes_providers[0].provider_id
+    provider_cap = earthquakes_providers[0]
+    provider_id = provider_cap.provider_id
 
     # --- Obtain station lat/lon (ADR-011: single-station, no ?station= param) ---
     try:
@@ -300,7 +301,7 @@ def get_earthquakes(
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("earthquakes"),
+        freshness=build_freshness("earthquakes", provider_refresh_interval=provider_cap.refresh_interval),
     )
 
 

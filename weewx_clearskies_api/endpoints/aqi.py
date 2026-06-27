@@ -322,7 +322,8 @@ def get_aqi_current(
         )
 
     # Single source per deploy per ADR-013; take the first (and only) entry.
-    provider_id = aqi_providers[0].provider_id
+    provider_cap = aqi_providers[0]
+    provider_id = provider_cap.provider_id
 
     # --- Obtain station lat/lon (ADR-011: single-station, no ?station= param) ---
     try:
@@ -445,7 +446,7 @@ def get_aqi_current(
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("aqi"),
+        freshness=build_freshness("aqi", provider_refresh_interval=provider_cap.refresh_interval),
     )
 
 
