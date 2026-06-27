@@ -93,6 +93,7 @@ CAPABILITY = ProviderCapability(
     ),
     tile_url_template="{host}{path}/{size}/{z}/{x}/{y}/{color}/{options}.png",
     tile_content_type="image/png",
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

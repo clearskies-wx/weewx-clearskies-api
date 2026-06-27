@@ -72,6 +72,7 @@ CAPABILITY = ProviderCapability(
     wms_endpoint_url="https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q-t.cgi?",
     wms_layer_name=LAYER_NAME,
     tile_content_type="image/png",
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

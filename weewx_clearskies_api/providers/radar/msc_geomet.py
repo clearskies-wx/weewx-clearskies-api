@@ -73,6 +73,7 @@ CAPABILITY = ProviderCapability(
     wms_endpoint_url="https://geo.weather.gc.ca/geomet?",
     wms_layer_name=LAYER_NAME,
     tile_content_type="image/png",
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

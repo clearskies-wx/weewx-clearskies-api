@@ -101,6 +101,7 @@ CAPABILITY = ProviderCapability(
     wms_endpoint_url=None,
     wms_layer_name=None,
     tile_content_type="image/png",
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

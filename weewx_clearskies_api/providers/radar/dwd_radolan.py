@@ -73,6 +73,7 @@ CAPABILITY = ProviderCapability(
     wms_endpoint_url="https://maps.dwd.de/geoserver/dwd/wms?",
     wms_layer_name=LAYER_NAME,
     tile_content_type="image/png",
+    refresh_interval=300,
 )
 
 # ---------------------------------------------------------------------------

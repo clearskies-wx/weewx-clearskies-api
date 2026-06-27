@@ -45,4 +45,5 @@ def make_capability(iframe_url: str) -> ProviderCapability:
             "Configure via [radar] iframe_url in api.conf."
         ),
         iframe_url=iframe_url,
+        refresh_interval=0,
     )
