@@ -314,7 +314,9 @@ def get_radar_frames(
         data=frames_list,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("radar", provider_refresh_interval=radar_caps[provider_id].refresh_interval),
+        freshness=build_freshness(
+            "radar", provider_refresh_interval=radar_caps[provider_id].refresh_interval
+        ),
     )
 
 

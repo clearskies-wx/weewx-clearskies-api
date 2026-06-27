@@ -301,7 +301,9 @@ def get_earthquakes(
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),
-        freshness=build_freshness("earthquakes", provider_refresh_interval=provider_cap.refresh_interval),
+        freshness=build_freshness(
+            "earthquakes", provider_refresh_interval=provider_cap.refresh_interval
+        ),
     )
 
 
