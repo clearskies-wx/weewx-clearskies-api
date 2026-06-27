@@ -1108,6 +1108,58 @@ def _bool(value: object) -> bool:
     return str(value).strip().lower() in ("true", "1", "yes")
 
 
+class FreshnessSettings:
+    """[freshness] section settings (ADR-075 §4).
+
+    Per-domain refresh intervals for the freshness response envelope.
+    Defaults derive from weewx archive_interval for current_observation
+    and records; static defaults for other domains.
+    """
+
+    current_observation: int  # seconds; default from archive_interval
+    forecast: int
+    alerts: int
+    aqi: int
+    almanac_daily: int
+    almanac_positions: int
+    radar: int
+    earthquakes: int
+    records: int  # seconds; default from archive_interval
+    charts_config: int
+    station_metadata: int
+    seeing: int
+    idle_timeout: int  # minutes; 0 = disabled
+    idle_refresh_factor: int
+
+    def __init__(self, section: dict[str, Any], archive_interval: int = 300) -> None:
+        self.current_observation = int(section.get("current_observation", archive_interval))
+        self.forecast = int(section.get("forecast", 1800))
+        self.alerts = int(section.get("alerts", 300))
+        self.aqi = int(section.get("aqi", 900))
+        self.almanac_daily = int(section.get("almanac_daily", 86400))
+        self.almanac_positions = int(section.get("almanac_positions", 60))
+        self.radar = int(section.get("radar", 300))
+        self.earthquakes = int(section.get("earthquakes", 300))
+        self.records = int(section.get("records", archive_interval))
+        self.charts_config = int(section.get("charts_config", 86400))
+        self.station_metadata = int(section.get("station_metadata", 86400))
+        self.seeing = int(section.get("seeing", 10800))
+        self.idle_timeout = int(section.get("idle_timeout", 30))
+        self.idle_refresh_factor = int(section.get("idle_refresh_factor", 10))
+
+    def validate(self) -> None:
+        for attr in ("current_observation", "forecast", "alerts", "aqi",
+                     "almanac_daily", "almanac_positions", "radar",
+                     "earthquakes", "records", "charts_config",
+                     "station_metadata", "seeing"):
+            if getattr(self, attr) < 1:
+                raise ValueError(f"[freshness] {attr} must be >= 1")
+        if self.idle_timeout < 0:
+            raise ValueError("[freshness] idle_timeout must be >= 0")
+        if self.idle_refresh_factor < 1:
+            raise ValueError("[freshness] idle_refresh_factor must be >= 1")
+
+
 class InputSettings:
     """[input] section settings (ADR-058).
 
@@ -1203,6 +1255,7 @@ class Settings:
     charts: ChartsSettings
     input: InputSettings
     units: UnitsSettings
+    freshness: FreshnessSettings
     column_mapping: dict[str, str]
     #: Operator-confirmed unit for each mapped column, parsed from the
     #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
@@ -1235,6 +1288,7 @@ class Settings:
         charts: ChartsSettings | None = None,
         input: InputSettings | None = None,
         units: UnitsSettings | None = None,
+        freshness: FreshnessSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
         configured: bool = True,
@@ -1263,6 +1317,7 @@ class Settings:
         self.charts = charts if charts is not None else ChartsSettings({})
         self.input = input if input is not None else InputSettings({})
         self.units = units if units is not None else UnitsSettings({})
+        self.freshness = freshness if freshness is not None else FreshnessSettings({})
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
 
@@ -1283,6 +1338,7 @@ class Settings:
         self.conditions.validate()
         self.cache_warmer.validate()
         self.input.validate()
+        self.freshness.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1392,6 +1448,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     units_cfg = UnitsSettings(dict(cfg.get("units", {})))
     column_mapping_cfg = dict(cfg.get("column_mapping", {}))
     column_units_cfg = dict(cfg.get("column_units", {}))
+    freshness_cfg = FreshnessSettings(dict(cfg.get("freshness", {})))
 
     settings = Settings(
         api=api_cfg,
@@ -1417,6 +1474,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         charts=charts_cfg,
         input=input_cfg,
         units=units_cfg,
+        freshness=freshness_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
     )

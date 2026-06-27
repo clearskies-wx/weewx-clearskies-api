@@ -7,7 +7,7 @@ lastRecord are filled per-request from a DB query.
 Station-id default: slug of weewx.conf [Station] location (per resolved
 call #3 in the brief).  Operator override via api.conf [station] station_id.
 
-Timezone source priority (ADR-020):
+Timezone source priority (ADR-075 §3):
   1. api.conf [station] timezone
   2. weewx.conf [Station] timezone (if present)
   3. OS timezone via time.tzname + zoneinfo lookup
@@ -31,6 +31,8 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import configobj
+
+from weewx_clearskies_api.models.responses import StationClock
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +151,7 @@ def _slugify(value: str) -> str:
 
 
 def _resolve_timezone(api_tz: str | None, weewx_tz: str | None) -> str:
-    """Resolve the station timezone using the priority order from ADR-020.
+    """Resolve the station timezone using the priority order from ADR-075 §3.
 
     Priority:
       1. api.conf [station] timezone (api_tz)
@@ -435,6 +437,21 @@ def get_station_info() -> StationInfo:
             "Call load_station_metadata() at startup before serving requests."
         )
     return _cached_station
+
+
+def build_station_clock() -> StationClock:
+    """Build the stationClock response block (ADR-075 §3).
+
+    Computed at response time from the cached station timezone.
+    No database query. Fast.
+    """
+    info = get_station_info()
+    now = datetime.now(tz=ZoneInfo(info.timezone))
+    return StationClock(
+        date=now.strftime("%Y-%m-%d"),
+        time=now.isoformat(),
+        timezone=info.timezone,
+    )
 
 
 def reset_cache() -> None:

@@ -1,7 +1,7 @@
 """Response envelope and data models for DB-backed endpoints.
 
 Per ADR-010: camelCase field names everywhere (identical in Python and JSON).
-Per ADR-020: datetime fields are UTC ISO-8601 with Z suffix.
+Per ADR-075: datetime fields are UTC ISO-8601 with Z suffix. stationClock on all responses.
 
 Pydantic v2 models with ConfigDict(extra="forbid") on all request/param models.
 Response models use extra="ignore" so the serialisation layer doesn't reject
@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def utc_isoformat(dt: datetime) -> str:
-    """Serialise a UTC datetime to ISO-8601 with Z suffix (ADR-020)."""
+    """Serialise a UTC datetime to ISO-8601 with Z suffix (ADR-075)."""
     # Pydantic serialises datetime to "+00:00" by default; we want "Z".
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -195,6 +195,22 @@ class PageInfo(BaseModel):
     totalRecords: int | None = None
 
 
+class StationClock(BaseModel):
+    """Station clock block — present on every API response (ADR-075 §3)."""
+
+    date: str       # station-local YYYY-MM-DD
+    time: str       # station-local ISO-8601 with UTC offset
+    timezone: str   # IANA identifier
+
+
+class FreshnessInfo(BaseModel):
+    """Data freshness block — present on cacheable responses (ADR-075 §4)."""
+
+    generatedAt: str      # UTC ISO-8601 Z
+    validUntil: str       # UTC ISO-8601 Z
+    refreshInterval: int  # seconds
+
+
 class ObservationResponse(BaseModel):
     """ObservationResponse envelope."""
 
@@ -202,6 +218,8 @@ class ObservationResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class ArchiveResponse(BaseModel):
@@ -211,6 +229,8 @@ class ArchiveResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
     page: PageInfo
 
 
@@ -243,6 +263,8 @@ class RecordsResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +293,8 @@ class ReportIndexResponse(BaseModel):
 
     data: ReportIndex
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class NOAAReport(BaseModel):
@@ -297,6 +321,8 @@ class ReportResponse(BaseModel):
 
     data: NOAAReport
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class YearlyReportResponse(BaseModel):
@@ -304,6 +330,8 @@ class YearlyReportResponse(BaseModel):
 
     data: NOAAYearlyReport
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +386,8 @@ class AlmanacResponse(BaseModel):
 
     data: AlmanacSnapshot
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class SunTimesDay(BaseModel):
@@ -381,6 +411,8 @@ class SunTimesResponse(BaseModel):
 
     data: SunTimesSeries
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class MoonPhaseDay(BaseModel):
@@ -404,6 +436,8 @@ class MoonPhaseResponse(BaseModel):
 
     data: MoonPhaseCalendar
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class SpecialMoonEntry(BaseModel):
@@ -429,6 +463,8 @@ class MoonNamesResponse(BaseModel):
 
     data: MoonNamesCalendar
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class PlanetEntry(BaseModel):
@@ -460,6 +496,8 @@ class PlanetResponse(BaseModel):
 
     data: PlanetVisibility
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class EclipseContactPoint(BaseModel):
@@ -493,6 +531,8 @@ class EclipseResponse(BaseModel):
 
     data: LunarEclipseList
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class SolarEclipseEntry(BaseModel):
@@ -519,6 +559,8 @@ class SolarEclipseResponse(BaseModel):
 
     data: SolarEclipseList
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class MeteorShowerEntry(BaseModel):
@@ -552,6 +594,8 @@ class MeteorShowerResponse(BaseModel):
 
     data: MeteorShowerList
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class SunPosition(BaseModel):
@@ -581,6 +625,9 @@ class PositionsResponse(BaseModel):
     """PositionsResponse envelope (GET /almanac/positions)."""
 
     data: PositionsSnapshot
+    generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class SeeingForecastPointResponse(BaseModel):
@@ -616,6 +663,8 @@ class SeeingForecastResponse(BaseModel):
 
     data: SeeingForecastData
     generatedAt: str             # ISO-8601
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +697,8 @@ class StationResponse(BaseModel):
     data: StationMetadata
     units: dict[str, str]
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +749,8 @@ class CapabilityResponse(BaseModel):
 
     data: CapabilityRegistry
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -727,6 +780,8 @@ class PageListResponse(BaseModel):
 
     data: PageList
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +810,8 @@ class ChartGroupResponse(BaseModel):
 
     data: ChartGroupList
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +915,8 @@ class ChartsConfigResponse(BaseModel):
 
     data: ChartsConfigData
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +936,8 @@ class MarkdownResponse(BaseModel):
 
     data: MarkdownContent
     generatedAt: str
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1062,8 @@ class ForecastResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str                # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1059,6 +1122,8 @@ class AlertListResponse(BaseModel):
     data: AlertList
     source: str  # mirrors data.source
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1112,6 +1177,8 @@ class AQIResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 class AQIHistoryResponse(BaseModel):
@@ -1128,6 +1195,8 @@ class AQIHistoryResponse(BaseModel):
     units: dict[str, str]
     source: str
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
     page: PageInfo
 
 
@@ -1182,6 +1251,8 @@ class EarthquakeListResponse(BaseModel):
     units: dict[str, str] | None = None
     source: str  # provider_id or "none"
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1237,6 +1308,8 @@ class BrandingResponse(BaseModel):
 
     data: BrandingConfig
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1299,4 +1372,6 @@ class RadarFramesResponse(BaseModel):
 
     data: RadarFrameList
     generatedAt: str  # UTC ISO-8601 with Z
+    stationClock: StationClock | None = None
+    freshness: FreshnessInfo | None = None
 
