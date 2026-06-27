@@ -32,12 +32,25 @@ from weewx_clearskies_api.models.responses import (
     StationResponse,
     utc_isoformat,
 )
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_units_block
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Freshness settings wire-up (ADR-075 T1.6)
+# ---------------------------------------------------------------------------
+
+_freshness_settings = None
+
+
+def wire_freshness_settings(freshness_settings) -> None:
+    """Store the FreshnessSettings reference. Called once at startup from __main__.py."""
+    global _freshness_settings  # noqa: PLW0603
+    _freshness_settings = freshness_settings
 
 
 @router.get("/station", summary="Station identity and metadata", tags=["Station"])
@@ -105,10 +118,14 @@ def get_station(
         defaultLocale=info.default_locale,
         archiveIntervalSeconds=info.archive_interval,
         weekStartDay=info.week_start,
+        idleTimeout=_freshness_settings.idle_timeout if _freshness_settings else 30,
+        idleRefreshFactor=_freshness_settings.idle_refresh_factor if _freshness_settings else 10,
     )
 
     return StationResponse(
         data=metadata,
         units=units,
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )

@@ -61,7 +61,8 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,8 @@ def get_alerts(
             ),
             source="none",
             generatedAt=now_str,
+            stationClock=build_station_clock(),
+            freshness=build_freshness("alerts"),
         )
 
     # Single source per deploy per ADR-016; take the first (and only) entry.
@@ -291,4 +294,6 @@ def get_alerts(
         ),
         source=provider_id,
         generatedAt=now_str,
+        stationClock=build_station_clock(),
+        freshness=build_freshness("alerts"),
     )

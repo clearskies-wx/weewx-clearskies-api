@@ -21,6 +21,8 @@ from fastapi import APIRouter
 from weewx_clearskies_api.config.settings import BrandingSettings, SocialSettings
 from weewx_clearskies_api.models.responses import BrandingResponse, utc_isoformat
 from weewx_clearskies_api.services.branding import get_branding
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -55,4 +57,6 @@ def get_branding_config() -> BrandingResponse:
     return BrandingResponse(
         data=branding,
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )

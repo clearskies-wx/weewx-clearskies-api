@@ -26,14 +26,16 @@ from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.models.params import RecordsQueryParams
 from weewx_clearskies_api.providers._common.cache import get_cache
+from weewx_clearskies_api.models.responses import RecordsBundle, RecordsResponse
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.records import get_records
+from weewx_clearskies_api.services.station import build_station_clock
+from weewx_clearskies_api.services.units import get_units_block
 from weewx_clearskies_api.units.response_conversion import apply_conversion
 
 # Alias kept for backwards-compatibility with tests that import RecordsParams
 # from this module (test_archive_params.py).
 RecordsParams = RecordsQueryParams
-from weewx_clearskies_api.models.responses import RecordsBundle, RecordsResponse
-from weewx_clearskies_api.services.records import get_records
-from weewx_clearskies_api.services.units import get_units_block
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,8 @@ def get_records_endpoint(
                     units=units,
                     source="weewx",
                     generatedAt=_now_utc_z(),
+                    stationClock=build_station_clock(),
+                    freshness=build_freshness("records"),
                 )
                 response_dict = response.model_dump(by_alias=True, exclude_none=True)
                 response_dict = apply_conversion(response_dict)
@@ -108,6 +112,8 @@ def get_records_endpoint(
         units=units,
         source="weewx",
         generatedAt=_now_utc_z(),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("records"),
     )
     response_dict = response.model_dump(by_alias=True, exclude_none=True)
     response_dict = apply_conversion(response_dict)

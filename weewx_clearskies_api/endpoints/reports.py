@@ -26,11 +26,13 @@ from weewx_clearskies_api.models.responses import (
     ReportResponse,
     YearlyReportResponse,
 )
+from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.reports import (
     get_monthly_report,
     get_report_index,
     get_yearly_report,
 )
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,12 @@ def _now_utc_z() -> str:
 def get_report_index_handler() -> ReportIndexResponse:
     """List all available NOAA monthly and yearly report files."""
     index = get_report_index()
-    return ReportIndexResponse(data=index, generatedAt=_now_utc_z())
+    return ReportIndexResponse(
+        data=index,
+        generatedAt=_now_utc_z(),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +126,12 @@ def get_monthly_report_endpoint(
             request=request,
         )
 
-    response_body = ReportResponse(data=report, generatedAt=_now_utc_z())
+    response_body = ReportResponse(
+        data=report,
+        generatedAt=_now_utc_z(),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
+    )
     return JSONResponse(
         status_code=200,
         content=response_body.model_dump(),
@@ -177,7 +189,12 @@ def get_yearly_report_endpoint(
             request=request,
         )
 
-    response_body = YearlyReportResponse(data=report, generatedAt=_now_utc_z())
+    response_body = YearlyReportResponse(
+        data=report,
+        generatedAt=_now_utc_z(),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
+    )
     return JSONResponse(
         status_code=200,
         content=response_body.model_dump(),

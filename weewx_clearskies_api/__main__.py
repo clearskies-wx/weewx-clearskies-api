@@ -986,6 +986,25 @@ def main() -> None:
 
     # Wire archive_interval to sky classifier and temperature comfort hold.
     _station_for_enrichment = get_station_info()
+
+    # Step 7c½: Configure freshness service with real archive_interval (ADR-075 T1.5).
+    # FreshnessSettings defaults current_observation and records to archive_interval=300
+    # at config-parse time (startup step 1) before the real archive_interval is known.
+    # Now that station metadata is loaded, update those two fields when the operator
+    # did not explicitly override them (i.e., the value is still the default of 300)
+    # and the real archive_interval differs.
+    from weewx_clearskies_api.services import freshness as freshness_service  # noqa: PLC0415
+    _ai = _station_for_enrichment.archive_interval
+    if settings.freshness.current_observation == 300 and _ai != 300:
+        settings.freshness.current_observation = _ai
+    if settings.freshness.records == 300 and _ai != 300:
+        settings.freshness.records = _ai
+    freshness_service.configure(settings.freshness)
+
+    # Step 7c¾: Wire freshness settings to station endpoint (ADR-075 T1.6).
+    from weewx_clearskies_api.endpoints.station import wire_freshness_settings as _wire_freshness_settings  # noqa: PLC0415, E501
+    _wire_freshness_settings(settings.freshness)
+
     sky_condition.configure(
         archive_interval=_station_for_enrichment.archive_interval,
         latitude=_station_for_enrichment.latitude,

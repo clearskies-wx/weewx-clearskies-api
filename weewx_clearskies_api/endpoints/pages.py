@@ -25,7 +25,9 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.services.content import read_page_content_file
+from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.pages import get_all_pages
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,8 @@ def get_pages() -> PageListResponse:
     return PageListResponse(
         data=PageList(pages=pages),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )
 
 
@@ -127,6 +131,8 @@ def get_page_content(slug: str) -> MarkdownResponse:
         return MarkdownResponse(
             data=MarkdownContent(markdown="", updatedAt=None),
             generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+            stationClock=build_station_clock(),
+            freshness=build_freshness("station_metadata"),
         )
 
     return MarkdownResponse(
@@ -135,4 +141,6 @@ def get_page_content(slug: str) -> MarkdownResponse:
             updatedAt=result.updated_at,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )

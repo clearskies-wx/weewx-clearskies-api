@@ -79,6 +79,8 @@ from weewx_clearskies_api.providers._common.errors import (
     QuotaExhausted,
     TransientNetworkError,
 )
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +312,8 @@ def get_radar_frames(
     return RadarFramesResponse(
         data=frames_list,
         generatedAt=now_str,
+        stationClock=build_station_clock(),
+        freshness=build_freshness("radar"),
     )
 
 

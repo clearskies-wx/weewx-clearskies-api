@@ -66,7 +66,8 @@ from weewx_clearskies_api.models.responses import (
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.services.aqi_history import get_aqi_history
 from weewx_clearskies_api.services.aqi_merge import merge_aqi_with_db
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_units_block
 
 logger = logging.getLogger(__name__)
@@ -316,6 +317,8 @@ def get_aqi_current(
             units=units,
             source="none",
             generatedAt=now_str,
+            stationClock=build_station_clock(),
+            freshness=build_freshness("aqi"),
         )
 
     # Single source per deploy per ADR-013; take the first (and only) entry.
@@ -441,6 +444,8 @@ def get_aqi_current(
         units=units,
         source=provider_id,
         generatedAt=now_str,
+        stationClock=build_station_clock(),
+        freshness=build_freshness("aqi"),
     )
 
 
@@ -507,4 +512,6 @@ def get_aqi_history_endpoint(
         source="weewx",
         generatedAt=now_str,
         page=page_info,
+        stationClock=build_station_clock(),
+        freshness=build_freshness("aqi"),
     )

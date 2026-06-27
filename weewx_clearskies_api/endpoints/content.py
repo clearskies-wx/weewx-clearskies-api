@@ -20,6 +20,8 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.services.content import read_content_file
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,8 @@ def _serve_content(filename: str) -> MarkdownResponse:
             updatedAt=result.updated_at,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )
 
 

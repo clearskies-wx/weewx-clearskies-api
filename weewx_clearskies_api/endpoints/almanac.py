@@ -62,7 +62,8 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.services import almanac as almanac_svc
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,8 @@ def get_almanac(
             return AlmanacResponse(
                 data=AlmanacSnapshot(date=cached["date_str"], sun=sun, moon=moon),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                stationClock=build_station_clock(),
+                freshness=build_freshness("almanac_daily"),
             )
     except Exception:
         logger.debug("almanac snapshot cache miss or error: %s", target_date, exc_info=True)
@@ -262,6 +265,8 @@ def get_almanac(
     return AlmanacResponse(
         data=AlmanacSnapshot(date=day.date_str, sun=sun, moon=moon),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -292,6 +297,8 @@ def get_sun_times(
             return SunTimesResponse(
                 data=SunTimesSeries(year=year, days=days),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                stationClock=build_station_clock(),
+                freshness=build_freshness("almanac_daily"),
             )
     except Exception:
         logger.debug("sun-times cache miss or error: year=%d", year, exc_info=True)
@@ -310,6 +317,8 @@ def get_sun_times(
     return SunTimesResponse(
         data=SunTimesSeries(year=year, days=days),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -341,6 +350,8 @@ def get_moon_phases(
                 return MoonPhaseResponse(
                     data=MoonPhaseCalendar(year=year, month=month, days=days),
                     generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                    stationClock=build_station_clock(),
+                    freshness=build_freshness("almanac_daily"),
                 )
         except Exception:
             logger.debug("moon-phases cache miss or error: year=%d", year, exc_info=True)
@@ -358,6 +369,8 @@ def get_moon_phases(
     return MoonPhaseResponse(
         data=MoonPhaseCalendar(year=year, month=month, days=days),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -391,6 +404,8 @@ def get_moon_names(
             return MoonNamesResponse(
                 data=MoonNamesCalendar(year=year, moons=moons),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                stationClock=build_station_clock(),
+                freshness=build_freshness("almanac_daily"),
             )
     except Exception:
         logger.debug("moon-names cache miss or error: year=%d", year, exc_info=True)
@@ -411,6 +426,8 @@ def get_moon_names(
     return MoonNamesResponse(
         data=MoonNamesCalendar(year=year, moons=moons),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -462,6 +479,8 @@ def get_planets(
                     allNight=_to_entries_cached(visibility_raw["allNight"]),
                 ),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                stationClock=build_station_clock(),
+                freshness=build_freshness("almanac_daily"),
             )
     except Exception:
         logger.debug("planets cache miss or error: date=%s", target_date.isoformat(), exc_info=True)
@@ -495,6 +514,8 @@ def get_planets(
             allNight=_to_entries(visibility_raw["allNight"]),
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
     from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
@@ -570,6 +591,8 @@ def get_eclipses(
                         eclipses=eclipses,
                     ),
                     generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                    stationClock=build_station_clock(),
+                    freshness=build_freshness("almanac_daily"),
                 )
         except Exception:
             logger.debug("eclipses cache miss or error: from=%s", today.isoformat(), exc_info=True)
@@ -651,6 +674,8 @@ def get_eclipses(
             eclipses=eclipses,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -745,6 +770,8 @@ def get_solar_eclipses(
             eclipses=solar_eclipses,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -804,6 +831,8 @@ def get_meteor_showers(
                         showers=showers,
                     ),
                     generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                    stationClock=build_station_clock(),
+                    freshness=build_freshness("almanac_daily"),
                 )
         except Exception:
             logger.debug("meteor-showers cache miss or error: from=%s", today.isoformat(), exc_info=True)
@@ -838,6 +867,8 @@ def get_meteor_showers(
             showers=showers,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_daily"),
     )
 
 
@@ -846,7 +877,12 @@ def get_positions() -> PositionsResponse:
     """Real-time sun and moon azimuth/altitude. No caching — computed at request time."""
     info = get_station_info()
     positions = almanac_svc.compute_current_positions(info.latitude, info.longitude, info.altitude)
-    return PositionsResponse(data=PositionsSnapshot(
-        sun=SunPosition(**positions["sun"]),
-        moon=MoonPosition(**positions["moon"]),
-    ))
+    return PositionsResponse(
+        data=PositionsSnapshot(
+            sun=SunPosition(**positions["sun"]),
+            moon=MoonPosition(**positions["moon"]),
+        ),
+        generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("almanac_positions"),
+    )

@@ -689,6 +689,8 @@ class StationMetadata(BaseModel):
     defaultLocale: str = "en"
     archiveIntervalSeconds: int = 300
     weekStartDay: int = 6
+    idleTimeout: int = 30          # minutes; 0 = disabled (ADR-075 T1.6)
+    idleRefreshFactor: int = 10    # multiplier applied when tab is idle
 
 
 class StationResponse(BaseModel):

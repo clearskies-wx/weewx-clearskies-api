@@ -36,11 +36,13 @@ from sqlalchemy.orm import Session
 
 from weewx_clearskies_api.db.session import get_db_session
 from weewx_clearskies_api.errors import PROBLEM_BASE_URI
-from weewx_clearskies_api.models.responses import utc_isoformat
+from weewx_clearskies_api.models.responses import FreshnessInfo, StationClock, utc_isoformat
 from weewx_clearskies_api.services.custom_query import (
     execute_custom_query,
     get_validated_series_ids,
 )
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,8 @@ class CustomQueryResponse(BaseModel):
     seriesId: str  # noqa: N815
     source: str = "weewx"
     generatedAt: str  # noqa: N815
+    stationClock: StationClock | None = None  # noqa: N815  (ADR-075 T1.5)
+    freshness: FreshnessInfo | None = None    # ADR-075 T1.5
 
 
 # ---------------------------------------------------------------------------
@@ -271,4 +275,6 @@ def get_custom_query(
         seriesId=series_id,
         source="weewx",
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("charts_config"),
     )

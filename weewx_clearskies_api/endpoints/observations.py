@@ -48,7 +48,8 @@ from weewx_clearskies_api.services.archive import (
     get_archive,
     get_current,
 )
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_target_unit, get_units_block
 
 # Alias kept for backwards-compatibility with tests that import ArchiveParams
@@ -303,6 +304,8 @@ def get_current_endpoint(
         units=units,
         source="weewx",
         generatedAt=_now_utc_z(),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("current_observation"),
     )
 
     from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
@@ -399,6 +402,8 @@ def get_archive_endpoint(
         source="weewx",
         generatedAt=_now_utc_z(),
         page=page_info,
+        stationClock=build_station_clock(),
+        freshness=build_freshness("current_observation"),
     )
 
     from weewx_clearskies_api.units.response_conversion import apply_conversion  # noqa: PLC0415

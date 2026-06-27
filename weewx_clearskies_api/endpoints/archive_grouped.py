@@ -32,6 +32,8 @@ from weewx_clearskies_api.services.archive_grouped import (
     _VALID_GROUP_BY,
     get_grouped_archive,
 )
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -254,4 +256,6 @@ def get_archive_grouped_endpoint(
     return {
         "data": grouped_data,
         "generatedAt": _now_utc_z(),
+        "stationClock": build_station_clock().model_dump(),
+        "freshness": build_freshness("current_observation").model_dump(),
     }

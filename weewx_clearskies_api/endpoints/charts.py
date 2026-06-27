@@ -35,6 +35,8 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.services.charts import get_chart_groups
 from weewx_clearskies_api.services.charts_config import get_charts_config
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,8 @@ def get_chart_groups_endpoint() -> ChartGroupResponse:
     return ChartGroupResponse(
         data=ChartGroupList(groups=response_groups),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("charts_config"),
     )
 
 
@@ -181,4 +185,6 @@ def get_charts_config_endpoint() -> ChartsConfigResponse:
     return ChartsConfigResponse(
         data=_config_to_response(config),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("charts_config"),
     )

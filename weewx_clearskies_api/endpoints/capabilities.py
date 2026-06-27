@@ -29,6 +29,8 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -96,4 +98,6 @@ def get_capabilities() -> CapabilityResponse:
             canonicalFieldsAvailable=canonical_fields_available,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("station_metadata"),
     )

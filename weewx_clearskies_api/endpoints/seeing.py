@@ -34,7 +34,8 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.services.station import get_station_info
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,8 @@ def get_seeing_forecast() -> SeeingForecastResponse:
                     points=points,
                 ),
                 generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                stationClock=build_station_clock(),
+                freshness=build_freshness("seeing"),
             )
     except Exception:
         logger.debug("seeing-forecast cache miss or deserialization error", exc_info=True)
@@ -172,4 +175,6 @@ def get_seeing_forecast() -> SeeingForecastResponse:
             points=points,
         ),
         generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+        stationClock=build_station_clock(),
+        freshness=build_freshness("seeing"),
     )
