@@ -1153,16 +1153,18 @@ def compute_planets(
         effective_rise_iso = planet_rise_iso
         effective_set_iso = planet_set_iso
 
-        if target_list is morning:
-            # Morning planets: if the only rise found was during the daytime
-            # (before sunset) or no rise was found at all, use the post-midnight rise.
-            if morning_rise_iso is not None:
-                if planet_rise_tt is None or (
-                    sunset_tt is not None and planet_rise_tt < sunset_tt
-                ):
-                    effective_rise_iso = morning_rise_iso
-            if morning_set_iso is not None and planet_set_iso is None:
-                effective_set_iso = morning_set_iso
+        if target_list is morning and morning_rise_tt is not None:
+            # Morning planets rise after midnight and are visible until
+            # sunrise.  The daytime set from today's window is irrelevant —
+            # it happened before the observing window opened.  Replace both
+            # rise and set with overnight-relevant values.
+            if planet_rise_tt is None or (
+                sunset_tt is not None and planet_rise_tt < sunset_tt
+            ):
+                effective_rise_iso = morning_rise_iso
+            # Set = post-sunrise set if found, otherwise None (visible
+            # until sunrise — the dashboard clamps the bar to sunrise).
+            effective_set_iso = morning_set_iso
 
         # Evening/all-night planets may set after midnight.
         if target_list is not morning:
