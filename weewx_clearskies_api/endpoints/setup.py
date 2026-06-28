@@ -400,6 +400,11 @@ class CurrentConfigProviderCredentials(BaseModel):
 class CurrentConfigProviderSection(BaseModel):
     provider: str
     credentials: CurrentConfigProviderCredentials
+    librewxr_endpoint: str | None = None
+    librewxr_bounds: str | None = None
+    iframe_url: str | None = None
+    aeris_forecast_model: str | None = None
+    nws_user_agent_contact: str | None = None
 
 
 class CurrentConfigStationSection(BaseModel):
@@ -1277,9 +1282,22 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         elif p == "iqair":
             creds.key = secrets.get("WEEWX_CLEARSKIES_IQAIR_KEY") or None
         # Keyless providers (nws, openmeteo, rainviewer, etc.) have no credential fields.
+
+        # Provider-specific non-secret config fields from api.conf.
+        extra: dict[str, str | None] = {}
+        if domain == "radar":
+            extra["librewxr_endpoint"] = str(domain_section.get("librewxr_endpoint", "")).strip() or None
+            extra["librewxr_bounds"] = str(domain_section.get("librewxr_bounds", "")).strip() or None
+            extra["iframe_url"] = str(domain_section.get("iframe_url", "")).strip() or None
+        if domain == "forecast":
+            extra["aeris_forecast_model"] = str(domain_section.get("aeris_forecast_model", "")).strip() or None
+        if domain in ("forecast", "alerts"):
+            extra["nws_user_agent_contact"] = str(domain_section.get("nws_user_agent_contact", "")).strip() or None
+
         providers[domain] = CurrentConfigProviderSection(
             provider=provider_id,
             credentials=creds,
+            **extra,
         )
 
     # --- Station ---
