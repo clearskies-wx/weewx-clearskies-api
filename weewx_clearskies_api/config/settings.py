@@ -1056,6 +1056,13 @@ class ConditionsSettings:
     #: directly.  None means automatic sensor selection.
     openaq_sensor_id: int | None
 
+    #: Sky classification dynamic threshold parameters (ADR-073).
+    #: All optional — None means use module defaults.
+    sky_decay_rate: float | None
+    sky_clear_threshold: float | None
+    sky_threshold_floor: float | None
+    sky_min_elevation: float | None
+
     _VALID_ENGINES: frozenset[str] = frozenset({"auto", "provider", "off"})
 
     def __init__(self, section: dict[str, Any]) -> None:
@@ -1076,6 +1083,11 @@ class ConditionsSettings:
                 self.openaq_sensor_id = None
         else:
             self.openaq_sensor_id = None
+        # Sky classification threshold overrides (ADR-073).
+        self.sky_decay_rate = _opt_float(section, "sky_decay_rate")
+        self.sky_clear_threshold = _opt_float(section, "sky_clear_threshold")
+        self.sky_threshold_floor = _opt_float(section, "sky_threshold_floor")
+        self.sky_min_elevation = _opt_float(section, "sky_min_elevation")
 
     def validate(self) -> None:
         """Raise ValueError on invalid engine or gamma value."""
@@ -1088,6 +1100,22 @@ class ConditionsSettings:
         if not (0.1 <= self.gamma <= 1.0):
             raise ValueError(
                 f"[conditions] gamma {self.gamma!r} must be in [0.1, 1.0]."
+            )
+        if self.sky_decay_rate is not None and not (0.01 <= self.sky_decay_rate <= 0.20):
+            raise ValueError(
+                f"[conditions] sky_decay_rate {self.sky_decay_rate!r} must be in [0.01, 0.20]."
+            )
+        if self.sky_clear_threshold is not None and not (0.5 <= self.sky_clear_threshold <= 1.0):
+            raise ValueError(
+                f"[conditions] sky_clear_threshold {self.sky_clear_threshold!r} must be in [0.5, 1.0]."
+            )
+        if self.sky_threshold_floor is not None and not (0.1 <= self.sky_threshold_floor <= 0.5):
+            raise ValueError(
+                f"[conditions] sky_threshold_floor {self.sky_threshold_floor!r} must be in [0.1, 0.5]."
+            )
+        if self.sky_min_elevation is not None and not (5.0 <= self.sky_min_elevation <= 30.0):
+            raise ValueError(
+                f"[conditions] sky_min_elevation {self.sky_min_elevation!r} must be in [5.0, 30.0]."
             )
 
 
@@ -1106,6 +1134,14 @@ def _bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("true", "1", "yes")
+
+
+def _opt_float(section: dict[str, Any], key: str) -> float | None:
+    """Parse an optional float from a config section. Returns None if absent or empty."""
+    raw = section.get(key)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return float(raw)
 
 
 class FreshnessSettings:

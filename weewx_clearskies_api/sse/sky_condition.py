@@ -127,7 +127,7 @@ _SZA_GUARD_ELEVATION: float = 15.0
 
 _DT_K_MAX_CLEAR: float = 0.80
 _DT_K_MIN: float = 0.35
-_DT_B: float = 0.1
+_DT_B: float = 0.06
 _DT_K_MAX_MOSTLY_CLEAR: float = 0.80   # variable branch
 _DT_K_MAX_PARTLY: float = 0.60         # variable branch
 _DT_K_MAX_MOSTLY_CLOUDY: float = 0.40  # variable branch
@@ -370,7 +370,7 @@ def reset() -> None:
     _skyfield_observer = None
     _DT_K_MAX_CLEAR = 0.80
     _DT_K_MIN = 0.35
-    _DT_B = 0.1
+    _DT_B = 0.06
     _SZA_GUARD_ELEVATION = 15.0
 
 

@@ -1010,6 +1010,10 @@ def main() -> None:
         latitude=_station_for_enrichment.latitude,
         longitude=_station_for_enrichment.longitude,
         altitude=_station_for_enrichment.altitude,
+        dt_k_max_clear=settings.conditions.sky_clear_threshold,
+        dt_k_min=settings.conditions.sky_threshold_floor,
+        dt_b=settings.conditions.sky_decay_rate,
+        sza_guard_elevation=settings.conditions.sky_min_elevation,
     )
     temperature_comfort.configure(archive_interval=_station_for_enrichment.archive_interval)
 
