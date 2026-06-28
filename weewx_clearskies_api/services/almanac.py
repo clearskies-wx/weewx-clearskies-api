@@ -1082,6 +1082,25 @@ def compute_planets(
                 planet_set_tt = t.tt  # type: ignore[attr-defined]
                 planet_set_iso = _to_utc_z(t)
 
+        # --- Morning period: midnight → next sunrise + 1h ---
+        # Tonight spans two calendar days.  The main window [t0, t1] ends at
+        # midnight, so planets that rise (or set) between midnight and sunrise
+        # are missed.  Search the post-midnight period separately.
+        morning_rise_tt: float | None = None
+        morning_rise_iso: str | None = None
+        morning_set_tt: float | None = None
+        morning_set_iso: str | None = None
+        if next_sunrise_tt is not None:
+            t_morning_end = ts.tt_jd(next_sunrise_tt + 1 / 24)  # type: ignore[attr-defined]
+            times_pm, events_pm = almanac.find_discrete(t1, t_morning_end, f_planet)  # type: ignore[arg-type]
+            for t, e in zip(times_pm, events_pm, strict=False):
+                if e == 1 and morning_rise_tt is None:
+                    morning_rise_tt = t.tt  # type: ignore[attr-defined]
+                    morning_rise_iso = _to_utc_z(t)
+                elif e == 0 and morning_set_tt is None:
+                    morning_set_tt = t.tt  # type: ignore[attr-defined]
+                    morning_set_iso = _to_utc_z(t)
+
         # --- Altitude check helper ---
         def _alt_az_at(t_check: object) -> tuple[float, float]:
             obs = (earth + location).at(t_check).observe(planet).apparent()  # type: ignore[attr-defined]
@@ -1114,7 +1133,9 @@ def compute_planets(
                                    and (planet_set_tt < midnight_tt or not above_at_midnight)):
             ref_time = t_9pm
             target_list = evening
-        elif above_at_sunrise or (planet_rise_tt is not None and effective_sunrise_tt is not None
+        elif above_at_sunrise or (morning_rise_tt is not None and effective_sunrise_tt is not None
+                                    and morning_rise_tt < effective_sunrise_tt) \
+                or (planet_rise_tt is not None and effective_sunrise_tt is not None
                                     and planet_rise_tt < effective_sunrise_tt
                                     and (planet_rise_tt > midnight_tt or not above_at_midnight)):
             ref_time = t_5am
@@ -1126,14 +1147,36 @@ def compute_planets(
         else:
             continue
 
+        # --- Merge overnight rise/set times ---
+        # Tonight spans two calendar days.  Use the rise/set that's most
+        # relevant to the overnight viewing window (sunset → next sunrise).
+        effective_rise_iso = planet_rise_iso
+        effective_set_iso = planet_set_iso
+
+        if target_list is morning:
+            # Morning planets: if the only rise found was during the daytime
+            # (before sunset) or no rise was found at all, use the post-midnight rise.
+            if morning_rise_iso is not None:
+                if planet_rise_tt is None or (
+                    sunset_tt is not None and planet_rise_tt < sunset_tt
+                ):
+                    effective_rise_iso = morning_rise_iso
+            if morning_set_iso is not None and planet_set_iso is None:
+                effective_set_iso = morning_set_iso
+
+        # Evening/all-night planets may set after midnight.
+        if target_list is not morning:
+            if morning_set_iso is not None and planet_set_iso is None:
+                effective_set_iso = morning_set_iso
+
         # Compute altitude and compass direction at the reference time.
         ref_alt, ref_az = _alt_az_at(ref_time)
         entry = {
             "name": display_name,
             "altitude": round(ref_alt, 1),
             "direction": _azimuth_to_compass(ref_az),
-            "rise": planet_rise_iso,
-            "set": planet_set_iso,
+            "rise": effective_rise_iso,
+            "set": effective_set_iso,
             "constellation": None,
             "magnitude": magnitude,
             "transitTime": transit_time_iso,
