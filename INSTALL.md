@@ -235,7 +235,7 @@ The easiest path is the stack repo, which ships a pre-configured `docker-compose
 https://github.com/inguy24/weewx-clearskies-stack
 ```
 
-To run only clearskies-api in Docker without the full stack, a Docker image is published at `ghcr.io/inguy24/weewx-clearskies-api`. The image follows the same configuration conventions as the native install.
+To run only clearskies-api in Docker without the full stack, a Docker image is published at `ghcr.io/clearskies-wx/weewx-clearskies-api`. The image follows the same configuration conventions as the native install.
 
 ---
 

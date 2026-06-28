@@ -1,0 +1,259 @@
+From 2ddfba38addb45d6653cd27a5a3d2fd988fdebd1 Mon Sep 17 00:00:00 2001
+From: Shane Burkhardt <inguy24@gmail.com>
+Date: Mon, 22 Jun 2026 15:29:35 -0700
+Subject: [PATCH] feat(calibration): remove tunable params, add endpoints,
+ sensor failover (ADR-068)
+
+settings.py: remove calibration_percentile/window_days/min_samples.
+setup.py: add GET /setup/calibration-state, POST /setup/calibration-reset.
+weather_text.py: defer haze/fog to provider when sensor data absent.
+haze_condition.py: update docstrings for completed phase references.
+
+Signed-off-by: Shane Burkhardt <inguy24@gmail.com>
+---
+ weewx_clearskies_api/config/settings.py       | 41 +++----------
+ weewx_clearskies_api/endpoints/setup.py       | 44 ++++++++++++++
+ .../sse/enrichment/weather_text.py            | 58 +++++++++++++++++++
+ weewx_clearskies_api/sse/haze_condition.py    | 10 ++--
+ 4 files changed, 114 insertions(+), 39 deletions(-)
+
+diff --git a/weewx_clearskies_api/config/settings.py b/weewx_clearskies_api/config/settings.py
+index d1ffb11..a0708bb 100644
+--- a/weewx_clearskies_api/config/settings.py
++++ b/weewx_clearskies_api/config/settings.py
+@@ -997,13 +997,17 @@ class ConditionsSettings:
+     """[conditions] section settings (Phase 0B / ADR-067 / ADR-068).
+ 
+     Controls the current conditions text blending engine that populates
+-    the weatherText field on Observation responses, and haze detection
+-    parameters introduced in Phase 8 (ADR-067/068).
++    the weatherText field on Observation responses, and haze detection.
+ 
+     engine values:
+       "auto"     — blends local sensor data with provider conditions (default).
+       "provider" — uses provider conditions text verbatim (no local blending).
+       "off"      — weatherText is always None on observations.
++
++    Calibration parameters (calibration_percentile, calibration_window_days,
++    calibration_min_samples) are fixed by the auto-calibration algorithm
++    (ADR-068) and are not operator-configurable.  Old api.conf files that
++    still contain these keys are silently ignored.
+     """
+ 
+     #: Blending engine mode: "auto" | "provider" | "off".
+@@ -1015,18 +1019,6 @@ class ConditionsSettings:
+     #: AQI provider override for haze PM data (inherits from [aqi] if not set).
+     haze_aqi_provider: str | None
+ 
+-    #: Auto-calibration percentile target (ADR-068).  Single value; the
+-    #: module derives a ±2.5pp band around this value.  Range: [0.90, 0.95].
+-    calibration_percentile: float
+-
+-    #: Rolling window length in days for clean-sky sample collection.
+-    #: Range: [30, 365].
+-    calibration_window_days: int
+-
+-    #: Minimum clean-sky samples required to activate haze detection.
+-    #: Range: [10, 100].
+-    calibration_min_samples: int
+-
+     #: Hygroscopic correction exponent γ (Hanel 1976 / Tang 1996).
+     #: Advanced operator override.  Range: [0.1, 1.0].
+     gamma: float
+@@ -1039,36 +1031,17 @@ class ConditionsSettings:
+         self.haze_detection = _bool(section.get("haze_detection", True))
+         # AQI provider override for haze PM data
+         self.haze_aqi_provider = section.get("haze_aqi_provider") or None
+-        # Auto-calibration tuning (ADR-068)
+-        self.calibration_percentile = float(section.get("calibration_percentile", 0.92))
+-        self.calibration_window_days = int(section.get("calibration_window_days", 90))
+-        self.calibration_min_samples = int(section.get("calibration_min_samples", 22))
+         # Hygroscopic correction exponent (advanced — operator override of Hanel default)
+         self.gamma = float(section.get("gamma", 0.45))
+ 
+     def validate(self) -> None:
+-        """Raise ValueError on invalid engine or haze calibration values."""
++        """Raise ValueError on invalid engine or gamma value."""
+         if self.engine not in self._VALID_ENGINES:
+             raise ValueError(
+                 f"[conditions] engine {self.engine!r} not in "
+                 f"{sorted(self._VALID_ENGINES)}. "
+                 "Supported values: 'auto', 'provider', 'off'."
+             )
+-        if not (0.90 <= self.calibration_percentile <= 0.95):
+-            raise ValueError(
+-                f"[conditions] calibration_percentile {self.calibration_percentile!r} "
+-                "must be in [0.90, 0.95]."
+-            )
+-        if not (30 <= self.calibration_window_days <= 365):
+-            raise ValueError(
+-                f"[conditions] calibration_window_days {self.calibration_window_days!r} "
+-                "must be in [30, 365]."
+-            )
+-        if not (10 <= self.calibration_min_samples <= 100):
+-            raise ValueError(
+-                f"[conditions] calibration_min_samples {self.calibration_min_samples!r} "
+-                "must be in [10, 100]."
+-            )
+         if not (0.1 <= self.gamma <= 1.0):
+             raise ValueError(
+                 f"[conditions] gamma {self.gamma!r} must be in [0.1, 1.0]."
+diff --git a/weewx_clearskies_api/endpoints/setup.py b/weewx_clearskies_api/endpoints/setup.py
+index c040fe6..c45e4c2 100644
+--- a/weewx_clearskies_api/endpoints/setup.py
++++ b/weewx_clearskies_api/endpoints/setup.py
+@@ -1553,3 +1553,47 @@ async def restart(request: Request, background_tasks: BackgroundTasks) -> Restar
+ 
+     background_tasks.add_task(_deferred_sigterm)
+     return RestartResponse(status="restarting")
++
++
++@router.get("/calibration-state")
++async def calibration_state(request: Request) -> dict:  # type: ignore[type-arg]
++    """Per-month calibration data for admin UI.
++
++    Returns the current auto-calibration state as populated by the monthly
++    Kcs baseline algorithm (ADR-068).  Each month entry shows the sample
++    count, computed percentile, and activation status.
++
++    Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
++    """
++    if not _check_proxy_auth(request):
++        raise HTTPException(status_code=403, detail="Proxy secret required")
++    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
++    return auto_calibration.get_calibration_state()
++
++
++@router.post("/calibration-reset")
++async def calibration_reset(request: Request) -> dict:  # type: ignore[type-arg]
++    """Clear calibration data and mark for re-bootstrap on next restart.
++
++    Resets in-memory calibration state and deletes the persisted
++    calibration.json file.  On the next API restart, the auto-bootstrap
++    routine will rebuild calibration from the full historical DB.
++
++    Does NOT trigger an inline re-bootstrap — restart the API after calling
++    this endpoint to complete the reset cycle.
++
++    Auth: proxy secret (X-Clearskies-Proxy-Auth header required).
++    """
++    if not _check_proxy_auth(request):
++        raise HTTPException(status_code=403, detail="Proxy secret required")
++    from weewx_clearskies_api.sse import auto_calibration  # noqa: PLC0415
++    auto_calibration.reset()
++    # Delete persisted calibration file so next restart starts fresh.
++    from pathlib import Path  # noqa: PLC0415
++    cal_path = Path(auto_calibration._PERSIST_PATH)
++    if cal_path.exists():
++        try:
++            cal_path.unlink()
++        except OSError:
++            pass  # Best-effort: log not required, reset() cleared in-memory state
++    return {"success": True, "message": "Calibration reset. Re-bootstrap will run on next restart."}
+diff --git a/weewx_clearskies_api/sse/enrichment/weather_text.py b/weewx_clearskies_api/sse/enrichment/weather_text.py
+index 1729851..a928f9a 100644
+--- a/weewx_clearskies_api/sse/enrichment/weather_text.py
++++ b/weewx_clearskies_api/sse/enrichment/weather_text.py
+@@ -254,6 +254,36 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
+             if any(kw in _pw_lower for kw in ("haze", "hazy", "smoke", "smoky")):
+                 _effective_haze_label = "Hazy"
+ 
++    # Missing-pyranometer deferral (ADR-068 v2): daytime but no Kcs data
++    # means the station lacks a pyranometer.  Local haze detection (Channel 1)
++    # cannot fire without Kcs, so defer to provider weather text for
++    # haze/smoke indicators — same mechanism as nighttime deferral.
++    if _is_day and _effective_haze_label is None and _sky_module.get_current_kcs() is None:
++        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
++            get_provider_weather_text as _get_pwt_rad,
++        )
++        _pw_text_rad, _pw_age_rad = _get_pwt_rad()
++        if _pw_text_rad is not None:
++            _pw_lower_rad = _pw_text_rad.lower()
++            if any(kw in _pw_lower_rad for kw in ("haze", "hazy", "smoke", "smoky")):
++                _effective_haze_label = "Hazy"
++
++    # Missing-hygrometer deferral (ADR-068 v2): no dewpoint means local
++    # fog/mist detection cannot fire (it requires dewpoint for the
++    # temperature-depression algorithm).  Defer to provider weather text
++    # for fog/mist indicators.
++    if _fog_mist_label is None and _dewpoint is None:
++        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
++            get_provider_weather_text as _get_pwt_fog,
++        )
++        _pw_text_fog, _pw_age_fog = _get_pwt_fog()
++        if _pw_text_fog is not None:
++            _pw_lower_fog = _pw_text_fog.lower()
++            if "fog" in _pw_lower_fog:
++                _fog_mist_label = "Foggy"
++            elif "mist" in _pw_lower_fog:
++                _fog_mist_label = "Misty"
++
+     _precip_type = obs_data.get("precipType") if obs_data else None
+     _snow_rate = get_smoothed("snowRate")
+ 
+@@ -402,6 +432,34 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
+                 if any(kw in _pw_lower2 for kw in ("haze", "hazy", "smoke", "smoky")):
+                     _is_hazy_code = True
+ 
++        # Missing-pyranometer deferral (ADR-068 v2): mirror compose_weather_text().
++        if _sky_module.is_daytime() and not _is_hazy_code and _sky_module.get_current_kcs() is None:
++            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
++                get_provider_weather_text as _get_pwt_rad2,
++            )
++            _pw_text_rad2, _pw_age_rad2 = _get_pwt_rad2()
++            if _pw_text_rad2 is not None:
++                _pw_lower_rad2 = _pw_text_rad2.lower()
++                if any(kw in _pw_lower_rad2 for kw in ("haze", "hazy", "smoke", "smoky")):
++                    _is_hazy_code = True
++
++        # Missing-hygrometer deferral (ADR-068 v2): mirror compose_weather_text().
++        # When _dewpoint is None, fog/mist detection cannot fire.  Defer to
++        # provider weather text to supply fog/mist state for code derivation.
++        if _fog_mist_state2 is None and _dewpoint is None:
++            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
++                get_provider_weather_text as _get_pwt_fog2,
++            )
++            _pw_text_fog2, _pw_age_fog2 = _get_pwt_fog2()
++            if _pw_text_fog2 is not None:
++                _pw_lower_fog2 = _pw_text_fog2.lower()
++                if "fog" in _pw_lower_fog2:
++                    _fog_mist_state2 = "Foggy"
++                    _effective_sky = "Foggy"
++                elif "mist" in _pw_lower_fog2:
++                    _fog_mist_state2 = "Misty"
++                    _effective_sky = "Misty"
++
+         weather_code = _derive_weather_code(
+             effective_sky=_effective_sky,
+             rain_label=_rain_label,
+diff --git a/weewx_clearskies_api/sse/haze_condition.py b/weewx_clearskies_api/sse/haze_condition.py
+index 0cf53df..81dfc54 100644
+--- a/weewx_clearskies_api/sse/haze_condition.py
++++ b/weewx_clearskies_api/sse/haze_condition.py
+@@ -25,10 +25,10 @@ Temporal coherence filter:
+   only reported when ≥ 50% of entries in the window show is_hazy=True.
+   Prevents label flicker at aerosol-concentration boundaries.
+ 
+-Phase milestones:
+-  Phase 6: set_baseline() will replace the fixed _clean_kcs_baseline with a
+-            learned 90th–95th percentile of locally measured clean-sky Kcs.
+-  Phase 8: set_gamma() will be wired to operator config in api.conf.
++Phase milestones (completed):
++  Phase 6: set_baseline() is called by the auto-calibration module (ADR-068)
++            with a learned monthly-normal clean-sky Kcs percentile.
++  Phase 8: set_gamma() is wired to the [conditions] gamma key in api.conf.
+ 
+ Module-level state is intentional — the API is a single-process service.
+ Use reset() for test isolation.
+@@ -318,7 +318,7 @@ def set_baseline(value: float) -> None:
+ def set_gamma(value: float) -> None:
+     """Set the f(RH) hygroscopic correction exponent.
+ 
+-    Phase 8 will wire this to api.conf for operator configurability.
++    Wired to the [conditions] gamma key in api.conf (Phase 8, ADR-068).
+     γ range: 0.12 (mineral dust) to 1.52 (sea salt) per Hanel 1976 / Tang 1996.
+     Default 0.45 is composition-unknown (moderate).
+     """
+-- 
+2.43.0
+

@@ -104,7 +104,7 @@ First public release.
 - Secrets loaded from environment variables (mode-0600 `secrets.env`)
 - Pluggable provider response cache: in-process memory (default) or Redis (`CLEARSKIES_CACHE_URL`)
 - `systemd` unit example (see INSTALL.md)
-- Docker image published to `ghcr.io/inguy24/weewx-clearskies-api`
+- Docker image published to `ghcr.io/clearskies-wx/weewx-clearskies-api`
 
 ### Known limitations
 
