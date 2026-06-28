@@ -118,6 +118,8 @@ def _build_capability() -> ProviderCapability:
         refresh_interval=_refresh_interval,
         nowcast_available=True,
         alerts_available=True,
+        satellite_available=True,
+        satellite_tile_url_template="/librewxr/{path}/{size}/{z}/{x}/{y}/0/0_0.webp",
     )
 
 
@@ -232,10 +234,18 @@ class _LibreWxRRadar(BaseModel):
     colorSchemes: list[_LibreWxRColorScheme] = []
 
 
+class _LibreWxRSatellite(BaseModel):
+    """satellite sub-object in weather-maps.json."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    infrared: list[_LibreWxRFrameEntry] = []
+
+
 class _LibreWxRWeatherMaps(BaseModel):
     """Top-level weather-maps.json response envelope.
 
-    extra="ignore" so new top-level keys (satellite, alerts, etc.) don't break us.
+    extra="ignore" so new top-level keys (alerts, etc.) don't break us.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -244,6 +254,7 @@ class _LibreWxRWeatherMaps(BaseModel):
     generated: int   # Unix epoch seconds
     host: str        # tile host
     radar: _LibreWxRRadar
+    satellite: _LibreWxRSatellite = _LibreWxRSatellite()
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +326,24 @@ def _to_canonical_frames(parsed: _LibreWxRWeatherMaps) -> list[RadarFrame]:
     return frames
 
 
+def _to_satellite_frames(parsed: _LibreWxRWeatherMaps) -> list[RadarFrame]:
+    """Map LibreWxR satellite infrared entries to canonical RadarFrame instances.
+
+    All satellite IR frames are kind="past" — satellite imagery is observational,
+    not forecast.
+    """
+    frames: list[RadarFrame] = []
+    for entry in parsed.satellite.infrared:
+        frames.append(
+            RadarFrame(
+                time=epoch_to_utc_iso8601(entry.time, provider_id=PROVIDER_ID, domain=DOMAIN),
+                kind="past",
+                path=entry.path,
+            )
+        )
+    return frames
+
+
 # ---------------------------------------------------------------------------
 # Cache serialisation helpers
 # ---------------------------------------------------------------------------
@@ -376,6 +405,7 @@ def get_frames() -> RadarFrameList:
         ) from exc
 
     frames = _to_canonical_frames(parsed)
+    satellite_frames = _to_satellite_frames(parsed)
 
     # Build colorSchemes list from wire model for dashboard consumption.
     color_schemes = [
@@ -389,16 +419,19 @@ def get_frames() -> RadarFrameList:
         attribution=ATTRIBUTION,
         tileHost=parsed.host,
         colorSchemes=color_schemes if color_schemes else None,
+        satelliteFrames=satellite_frames if satellite_frames else None,
     )
 
     cache.set(key, _to_cacheable(result), ttl_seconds=_CACHE_TTL)
 
     logger.info(
-        "LibreWxR radar frames fetched: %d frame(s) (%d past, %d nowcast) %d color scheme(s)",
+        "LibreWxR radar frames fetched: %d frame(s) (%d past, %d nowcast) "
+        "%d color scheme(s) %d satellite frame(s)",
         len(frames),
         sum(1 for f in frames if f.kind in ("past", "current")),
         sum(1 for f in frames if f.kind == "nowcast"),
         len(color_schemes),
+        len(satellite_frames),
     )
     return result
 

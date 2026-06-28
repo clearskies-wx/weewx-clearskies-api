@@ -74,6 +74,8 @@ class ProviderCapability:
     refresh_interval: int | None = None       # seconds between dashboard re-fetches of the frame index
     nowcast_available: bool | None = None     # whether nowcast frames are available from this provider
     alerts_available: bool | None = None      # whether weather alerts are available from this provider
+    satellite_available: bool | None = None   # whether satellite imagery is available
+    satellite_tile_url_template: str | None = None  # XYZ tile URL template for satellite tiles
 
 
 # ---------------------------------------------------------------------------

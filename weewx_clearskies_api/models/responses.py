@@ -736,6 +736,8 @@ class CapabilityDeclaration(BaseModel):
     refreshInterval: int | None = None
     nowcastAvailable: bool | None = None
     alertsAvailable: bool | None = None
+    satelliteAvailable: bool | None = None
+    satelliteTileUrlTemplate: str | None = None
 
 
 class CapabilityRegistry(BaseModel):
@@ -1362,6 +1364,7 @@ class RadarFrameList(BaseModel):
     attribution: str | None = None
     tileHost: str | None = None  # RainViewer/LibreWxR per-fetch tile host; None for WMS-T
     colorSchemes: list[dict[str, Any]] | None = None  # LibreWxR [{id: int, name: str}, ...]; None for others
+    satelliteFrames: list[RadarFrame] | None = None  # LibreWxR satellite IR frames; None for others
 
 
 class RadarFramesResponse(BaseModel):

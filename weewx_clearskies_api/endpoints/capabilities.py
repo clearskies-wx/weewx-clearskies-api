@@ -87,6 +87,8 @@ def get_capabilities() -> CapabilityResponse:
             refreshInterval=cap.refresh_interval,
             nowcastAvailable=cap.nowcast_available,
             alertsAvailable=cap.alerts_available,
+            satelliteAvailable=cap.satellite_available,
+            satelliteTileUrlTemplate=cap.satellite_tile_url_template,
         )
         for cap in provider_registry
     ]
