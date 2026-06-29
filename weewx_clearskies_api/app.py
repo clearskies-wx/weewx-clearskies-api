@@ -50,6 +50,7 @@ from weewx_clearskies_api.endpoints.charts import router as charts_router
 from weewx_clearskies_api.endpoints.content import router as content_router
 from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
 from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
+from weewx_clearskies_api.endpoints.geographic_features import router as geographic_features_router
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
 from weewx_clearskies_api.endpoints.pages import router as pages_router
@@ -173,6 +174,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(aqi_router, prefix="/api/v1")
         # 3b-13 new routers.
         app.include_router(earthquakes_router, prefix="/api/v1")
+        # ADR-078: geographic features (OSM via Overpass).
+        app.include_router(geographic_features_router, prefix="/api/v1")
         # 3b-14 new routers.
         app.include_router(radar_router, prefix="/api/v1")
         # Gap #10 (ADR-022): branding configuration endpoint.
