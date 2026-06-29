@@ -47,12 +47,17 @@ def build_overpass_query(south: float, west: float, north: float, east: float) -
 
     Fetches:
       - Administrative boundaries (relation, admin_level 2 or 4)
-      - Major roads (way, highway motorway/trunk/primary)
-      - Natural water bodies (relation, natural=water)
+      - Major roads (way, highway motorway/trunk only — primary excluded
+        to reduce payload and query time for large bounding boxes)
       - Rivers (way, waterway=river)
 
     Uses ``out geom;`` so geometry is included inline — no separate geometry
-    lookup step needed.
+    lookup step needed.  Timeout is 180 s (the Overpass default).
+
+    Note: ``relation["natural"="water"]`` (lakes) is intentionally excluded.
+    Lake polygons are large and complex (e.g. Lake Mead is thousands of nodes)
+    and blow up query time for little visual benefit at the zoom levels used
+    for satellite overlay context.
 
     Args:
         south: Southern latitude of the bounding box (decimal degrees).
@@ -65,11 +70,10 @@ def build_overpass_query(south: float, west: float, north: float, east: float) -
     """
     bbox = f"{south},{west},{north},{east}"
     return (
-        f'[out:json][timeout:60];\n'
+        f'[out:json][timeout:180];\n'
         f'(\n'
         f'  relation["boundary"="administrative"]["admin_level"~"2|4"]({bbox});\n'
-        f'  way["highway"~"motorway|trunk|primary"]({bbox});\n'
-        f'  relation["natural"="water"]({bbox});\n'
+        f'  way["highway"~"motorway|trunk"]({bbox});\n'
         f'  way["waterway"="river"]({bbox});\n'
         f');\n'
         f'out geom;\n'
@@ -160,13 +164,13 @@ def fetch_overpass(query: str, endpoint: str) -> dict[str, Any]:
         "User-Agent": "ClearSkies/1.0 (weewx weather dashboard)",
     }
     try:
-        with httpx.Client(timeout=60.0, headers=headers) as client:
+        with httpx.Client(timeout=200.0, headers=headers) as client:
             response = client.post(endpoint, data={"data": query})
             response.raise_for_status()
             payload = response.json()
     except httpx.TimeoutException as exc:
         logger.warning(
-            "Overpass API request timed out after 60 s: %s — returning empty FeatureCollection",
+            "Overpass API request timed out: %s — returning empty FeatureCollection",
             exc,
         )
         return dict(_EMPTY_FC)
