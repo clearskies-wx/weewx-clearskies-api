@@ -155,8 +155,12 @@ def fetch_overpass(query: str, endpoint: str) -> dict[str, Any]:
     Returns:
         GeoJSON FeatureCollection dict.
     """
+    headers = {
+        "Accept": "*/*",
+        "User-Agent": "ClearSkies/1.0 (weewx weather dashboard)",
+    }
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=60.0, headers=headers) as client:
             response = client.post(endpoint, data={"data": query})
             response.raise_for_status()
             payload = response.json()
