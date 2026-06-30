@@ -167,10 +167,7 @@ def _merge_road_segments(features: list[dict[str, Any]]) -> list[dict[str, Any]]
             merged.append(feat)
             continue
 
-        group_key = props.get("ref") or props.get("name")
-        if not group_key:
-            merged.append(feat)
-            continue
+        group_key = props.get("ref") or props.get("name") or "_unnamed_road"
 
         geom = feat.get("geometry", {})
         geom_type = geom.get("type", "")
