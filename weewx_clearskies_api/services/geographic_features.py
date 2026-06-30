@@ -104,7 +104,8 @@ def _element_to_feature(element: dict[str, Any]) -> dict[str, Any] | None:
         # Unclassifiable — skip.
         return None
 
-    properties: dict[str, Any] = {"type": feature_type}
+    osm_id = f"{elem_type}/{element.get('id', '')}"
+    properties: dict[str, Any] = {"type": feature_type, "osm_id": osm_id}
     name = tags.get("name")
     if name:
         properties["name"] = name
@@ -201,6 +202,92 @@ def fetch_overpass(query: str, endpoint: str) -> dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
+_CELL_SIZE_DEG = 2.0
+
+
+def _subdivide_bbox(
+    south: float, west: float, north: float, east: float,
+) -> list[tuple[float, float, float, float]]:
+    """Split a large BBOX into a grid of smaller cells.
+
+    Each cell is at most _CELL_SIZE_DEG × _CELL_SIZE_DEG.  Small BBOXes
+    (both dimensions ≤ _CELL_SIZE_DEG) return a single-element list
+    containing the original bounds — no subdivision needed.
+    """
+    lat_span = north - south
+    lon_span = east - west
+
+    if lat_span <= _CELL_SIZE_DEG and lon_span <= _CELL_SIZE_DEG:
+        return [(south, west, north, east)]
+
+    lat_steps = max(1, math.ceil(lat_span / _CELL_SIZE_DEG))
+    lon_steps = max(1, math.ceil(lon_span / _CELL_SIZE_DEG))
+    lat_step = lat_span / lat_steps
+    lon_step = lon_span / lon_steps
+
+    cells: list[tuple[float, float, float, float]] = []
+    for i in range(lat_steps):
+        for j in range(lon_steps):
+            cells.append((
+                south + i * lat_step,
+                west + j * lon_step,
+                south + (i + 1) * lat_step,
+                west + (j + 1) * lon_step,
+            ))
+    return cells
+
+
+def _fetch_and_merge(
+    south: float, west: float, north: float, east: float,
+    endpoint: str,
+) -> dict[str, Any]:
+    """Fetch geographic features, subdividing large BBOXes into a grid.
+
+    For small BBOXes (≤ 2° × 2°), makes a single Overpass query.  For
+    larger BBOXes, subdivides into a grid of ~2° × 2° cells, queries each
+    independently, and merges the results.  Duplicate features (elements
+    that span cell boundaries) are deduplicated by OSM element ID.
+    """
+    cells = _subdivide_bbox(south, west, north, east)
+
+    if len(cells) == 1:
+        query = build_overpass_query(*cells[0])
+        return fetch_overpass(query, endpoint)
+
+    logger.info(
+        "Large BBOX (%.1f° × %.1f°) — subdividing into %d cells of ~%.1f° × %.1f°",
+        north - south, east - west, len(cells),
+        _CELL_SIZE_DEG, _CELL_SIZE_DEG,
+    )
+
+    seen_ids: set[str] = set()
+    merged_features: list[dict[str, Any]] = []
+
+    for idx, cell in enumerate(cells):
+        query = build_overpass_query(*cell)
+        result = fetch_overpass(query, endpoint)
+        cell_features = result.get("features", [])
+        before = len(merged_features)
+        for feat in cell_features:
+            osm_id = feat.get("properties", {}).get("osm_id", "")
+            if osm_id and osm_id in seen_ids:
+                continue
+            if osm_id:
+                seen_ids.add(osm_id)
+            merged_features.append(feat)
+        new_count = len(merged_features) - before
+        logger.info(
+            "Cell %d/%d: %d features (%d new, %d total)",
+            idx + 1, len(cells), len(cell_features),
+            new_count, len(merged_features),
+        )
+
+    logger.info(
+        "Merged %d unique features from %d cells", len(merged_features), len(cells),
+    )
+    return {"type": "FeatureCollection", "features": merged_features}
+
+
 def get_geographic_features(
     settings: GeographicFeaturesSettings,
     radar_settings: RadarSettings,
@@ -282,8 +369,7 @@ def get_geographic_features(
         return cached
 
     logger.debug("geographic_features cache miss for bbox %s — fetching from Overpass", bbox_str)
-    query = build_overpass_query(south, west, north, east)
-    result = fetch_overpass(query, settings.overpass_endpoint)
+    result = _fetch_and_merge(south, west, north, east, settings.overpass_endpoint)
 
     ttl_seconds = settings.refresh_days * 86400
     cache.set(cache_key, result, ttl_seconds)
