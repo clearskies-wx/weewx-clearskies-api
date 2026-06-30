@@ -147,53 +147,66 @@ def _element_to_feature(element: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _merge_road_segments(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge road way segments that share the same route ref or name.
+def _merge_line_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge line features that share the same name (or ref for roads).
 
-    OSM represents a single highway as thousands of short way segments.
-    This groups segments by route reference (``ref`` tag, e.g. "I 5") or
-    name, and merges each group into a single MultiLineString feature.
-    Dramatically reduces the DOM element count for Leaflet rendering.
+    OSM represents rivers and highways as thousands of short way segments.
+    The Colorado River alone has 266 segments; I-5 has thousands.  Each
+    becomes a separate SVG/Canvas path in Leaflet.  This groups segments
+    by name (or route ref for roads) and merges each group into a single
+    MultiLineString, dramatically reducing the browser DOM element count.
 
-    Non-road features and roads without ref or name pass through unchanged.
+    Boundary features pass through unchanged (they're already relations).
     """
     merged: list[dict[str, Any]] = []
-    road_groups: dict[str, list[list[list[float]]]] = {}
-    road_names: dict[str, str] = {}
+    groups: dict[str, list[list[list[float]]]] = {}
+    group_meta: dict[str, dict[str, str]] = {}
 
     for feat in features:
         props = feat.get("properties", {})
-        if props.get("type") != "road":
+        feat_type = props.get("type", "")
+
+        if feat_type == "boundary":
             merged.append(feat)
             continue
 
-        group_key = props.get("ref") or props.get("name") or "_unnamed_road"
+        if feat_type == "road":
+            group_key = f"road:{props.get('ref') or props.get('name') or '_unnamed'}"
+        elif feat_type == "water":
+            group_key = f"water:{props.get('name') or '_unnamed'}"
+        else:
+            merged.append(feat)
+            continue
 
         geom = feat.get("geometry", {})
         geom_type = geom.get("type", "")
         coords = geom.get("coordinates", [])
 
         if geom_type == "LineString":
-            road_groups.setdefault(group_key, []).append(coords)
+            groups.setdefault(group_key, []).append(coords)
         elif geom_type == "MultiLineString":
-            road_groups.setdefault(group_key, []).extend(coords)
+            groups.setdefault(group_key, []).extend(coords)
         else:
             merged.append(feat)
             continue
 
-        if group_key not in road_names:
-            name = props.get("name", "")
-            road_names[group_key] = name if name else group_key
+        if group_key not in group_meta:
+            group_meta[group_key] = {
+                "type": feat_type,
+                "name": props.get("name", ""),
+            }
+            if props.get("ref"):
+                group_meta[group_key]["ref"] = props["ref"]
 
-    for group_key, line_list in road_groups.items():
+    for group_key, line_list in groups.items():
+        meta = group_meta[group_key]
+        props = {"type": meta["type"], "name": meta.get("name", group_key)}
+        if "ref" in meta:
+            props["ref"] = meta["ref"]
         merged.append({
             "type": "Feature",
             "geometry": {"type": "MultiLineString", "coordinates": line_list},
-            "properties": {
-                "type": "road",
-                "name": road_names.get(group_key, group_key),
-                "ref": group_key,
-            },
+            "properties": props,
         })
 
     return merged
@@ -309,7 +322,7 @@ def _fetch_and_merge(
     if len(cells) == 1:
         query = build_overpass_query(*cells[0])
         result = fetch_overpass(query, endpoint)
-        result["features"] = _merge_road_segments(result.get("features", []))
+        result["features"] = _merge_line_features(result.get("features", []))
         return result
 
     logger.info(
@@ -346,9 +359,9 @@ def _fetch_and_merge(
         "Merged %d unique features from %d cells", len(merged_features), len(cells),
     )
 
-    final_features = _merge_road_segments(merged_features)
+    final_features = _merge_line_features(merged_features)
     logger.info(
-        "Road merge: %d features → %d features (roads grouped by ref/name)",
+        "Line merge: %d features → %d features (roads + water grouped by name)",
         len(merged_features), len(final_features),
     )
     return {"type": "FeatureCollection", "features": final_features}
