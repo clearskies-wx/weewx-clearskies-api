@@ -662,6 +662,56 @@ class EarthquakesSettings:
             )
 
 
+class GeographicFeaturesSettings:
+    """[geographic_features] section settings (ADR-078 — PMTiles).
+
+    Controls the PMTiles geographic features overlay.  When enabled is False
+    the endpoint is still mounted but the PMTiles file will not be served
+    (the status endpoint returns available=False).
+
+    bounds: BBOX for pmtiles extract as "west,south,east,north".  When absent
+    the service extracts a global tile set (may be slow for large zooms).
+
+    maxzoom: Maximum zoom level for extraction (0-15).  Higher values produce
+    larger files with more detail.  12 is a good default for street-level.
+    """
+
+    #: Whether geographic features serving is enabled.
+    enabled: bool
+    #: Optional bounding box for extraction: "west,south,east,north" CSV.
+    bounds: str | None
+    #: Maximum zoom level for PMTiles extraction (0-15).
+    maxzoom: int
+
+    def __init__(self, cfg: dict[str, Any]) -> None:
+        self.enabled = _bool(cfg.get("enabled", "true"))
+        raw_bounds = cfg.get("bounds") or None
+        self.bounds = str(raw_bounds).strip() if raw_bounds else None
+        self.maxzoom = int(cfg.get("maxzoom", "12"))
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid bounds or maxzoom."""
+        if self.bounds is not None:
+            parts = self.bounds.split(",")
+            if len(parts) != 4:
+                raise ValueError(
+                    f"[geographic_features] bounds {self.bounds!r} must be "
+                    f"'west,south,east,north' (4 comma-separated values)."
+                )
+            for p in parts:
+                try:
+                    float(p.strip())
+                except ValueError:
+                    raise ValueError(
+                        f"[geographic_features] bounds {self.bounds!r} contains "
+                        f"non-numeric value {p.strip()!r}."
+                    ) from None
+        if not (0 <= self.maxzoom <= 15):
+            raise ValueError(
+                f"[geographic_features] maxzoom {self.maxzoom} must be 0-15."
+            )
+
+
 class SeeingSettings:
     """[seeing] section settings.
 
@@ -1280,6 +1330,7 @@ class Settings:
     aqi: AQISettings
     aqi_history: AQIHistorySettings
     earthquakes: EarthquakesSettings
+    geographic_features: GeographicFeaturesSettings
     seeing: SeeingSettings
     radar: RadarSettings
     forecast: ForecastSettings
@@ -1313,6 +1364,7 @@ class Settings:
         aqi: AQISettings | None = None,
         aqi_history: AQIHistorySettings | None = None,
         earthquakes: EarthquakesSettings | None = None,
+        geographic_features: GeographicFeaturesSettings | None = None,
         seeing: SeeingSettings | None = None,
         radar: RadarSettings | None = None,
         forecast: ForecastSettings | None = None,
@@ -1342,6 +1394,10 @@ class Settings:
         self.aqi = aqi if aqi is not None else AQISettings({})
         self.aqi_history = aqi_history if aqi_history is not None else AQIHistorySettings({})
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
+        self.geographic_features = (
+            geographic_features if geographic_features is not None
+            else GeographicFeaturesSettings({})
+        )
         self.seeing = seeing if seeing is not None else SeeingSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
@@ -1366,6 +1422,7 @@ class Settings:
         self.alerts.validate()
         self.aqi.validate()
         self.earthquakes.validate()
+        self.geographic_features.validate()
         self.seeing.validate()
         self.radar.validate()
         self.forecast.validate()
@@ -1471,6 +1528,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     aqi_cfg = AQISettings(dict(cfg.get("aqi", {})))
     aqi_history_cfg = AQIHistorySettings(dict(cfg.get("aqi.history", {})))
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
+    geographic_features_cfg = GeographicFeaturesSettings(dict(cfg.get("geographic_features", {})))
     seeing_cfg = SeeingSettings(dict(cfg.get("seeing", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
@@ -1499,6 +1557,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         aqi=aqi_cfg,
         aqi_history=aqi_history_cfg,
         earthquakes=earthquakes_cfg,
+        geographic_features=geographic_features_cfg,
         seeing=seeing_cfg,
         radar=radar_cfg,
         forecast=forecast_cfg,

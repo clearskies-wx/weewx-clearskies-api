@@ -51,6 +51,8 @@ from weewx_clearskies_api.endpoints.content import router as content_router
 from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
 from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
+from weewx_clearskies_api.endpoints.geographic_features import router as geographic_features_router
+from weewx_clearskies_api.endpoints.geographic_features import setup_router as geographic_features_setup_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
 from weewx_clearskies_api.endpoints.pages import router as pages_router
 from weewx_clearskies_api.endpoints.radar import router as radar_router
@@ -132,6 +134,9 @@ def create_app(settings: Settings) -> FastAPI:
         # Setup mode: only the setup router and the catch-all 503 are mounted.
         # No DB, no providers, no data routers.
         app.include_router(setup_router)
+        # ADR-078: geographic features setup endpoint available in setup mode
+        # (operator needs to download PMTiles before first use).
+        app.include_router(geographic_features_setup_router)
 
         @app.api_route(
             "/api/v1/{path:path}",
@@ -183,6 +188,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(seeing_router, prefix="/api/v1")
         # Custom SQL query: operator-defined series from charts.conf.
         app.include_router(custom_query_router, prefix="/api/v1")
+        # ADR-078: geographic features PMTiles data endpoints.
+        app.include_router(geographic_features_router, prefix="/api/v1")
 
         # ADR-058: SSE stream — no /api/v1 prefix; endpoint lives at /sse.
         # Dashboard connects to /sse via Caddy proxy; prefix must match.
@@ -190,6 +197,8 @@ def create_app(settings: Settings) -> FastAPI:
 
         # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
         app.include_router(setup_router)
+        # ADR-078: geographic features setup endpoint (download PMTiles).
+        app.include_router(geographic_features_setup_router)
 
         logger.info(
             "Public API app created",
