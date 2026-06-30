@@ -786,68 +786,6 @@ class RadarSettings:
             )
 
 
-class GeographicFeaturesSettings:
-    """[geographic_features] section settings (ADR-078).
-
-    Controls the GET /api/v1/geographic-features endpoint which queries the
-    Overpass API for OSM administrative boundaries, roads, and water features
-    within a configurable bounding box.
-
-    Bounds cascade (resolved in the service, not here):
-      1. bounds (explicit CSV "south,west,north,east") — highest priority
-      2. radar.librewxr_bounds — reuse the operator's configured LibreWxR bbox
-      3. Computed from station lat/lon ± radius_km — lowest priority / fallback
-    """
-
-    #: Whether the geographic features endpoint is active.  False → endpoint
-    #: returns an empty FeatureCollection with HTTP 200 rather than 503.
-    enabled: bool
-    #: Explicit bounding box as "south,west,north,east" CSV.  None = use cascade.
-    bounds: str | None
-    #: Radius in km used when no explicit bounds and no librewxr_bounds are set.
-    radius_km: float
-    #: How long in days to keep Overpass results in the cache.
-    refresh_days: int
-    #: Overpass API endpoint URL.
-    overpass_endpoint: str
-
-    def __init__(self, section: dict[str, Any]) -> None:
-        raw_enabled = str(section.get("enabled", "true")).strip().lower()
-        self.enabled = raw_enabled not in ("false", "0", "no", "off")
-        raw_bounds = str(section.get("bounds", "")).strip()
-        self.bounds = raw_bounds if raw_bounds else None
-        self.radius_km = float(section.get("radius_km", 200.0))
-        self.refresh_days = int(section.get("refresh_days", 90))
-        self.overpass_endpoint = str(
-            section.get("overpass_endpoint", "https://overpass-api.de/api/interpreter")
-        ).strip() or "https://overpass-api.de/api/interpreter"
-
-    def validate(self) -> None:
-        """Raise ValueError on invalid values."""
-        if self.radius_km <= 0:
-            raise ValueError(
-                f"[geographic_features] radius_km {self.radius_km!r} must be > 0."
-            )
-        if self.refresh_days <= 0:
-            raise ValueError(
-                f"[geographic_features] refresh_days {self.refresh_days!r} must be > 0."
-            )
-        if self.bounds is not None:
-            parts = self.bounds.split(",")
-            if len(parts) != 4:
-                raise ValueError(
-                    f"[geographic_features] bounds {self.bounds!r} must be "
-                    "'south,west,north,east' (4 comma-separated floats)."
-                )
-            try:
-                [float(p) for p in parts]
-            except ValueError as exc:
-                raise ValueError(
-                    f"[geographic_features] bounds {self.bounds!r} contains "
-                    "non-numeric values — expected 4 floats: south,west,north,east."
-                ) from exc
-
-
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
     extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
@@ -1344,7 +1282,6 @@ class Settings:
     earthquakes: EarthquakesSettings
     seeing: SeeingSettings
     radar: RadarSettings
-    geographic_features: GeographicFeaturesSettings
     forecast: ForecastSettings
     tls: TlsSettings
     branding: BrandingSettings
@@ -1378,7 +1315,6 @@ class Settings:
         earthquakes: EarthquakesSettings | None = None,
         seeing: SeeingSettings | None = None,
         radar: RadarSettings | None = None,
-        geographic_features: GeographicFeaturesSettings | None = None,
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
@@ -1408,10 +1344,6 @@ class Settings:
         self.earthquakes = earthquakes if earthquakes is not None else EarthquakesSettings({})
         self.seeing = seeing if seeing is not None else SeeingSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
-        self.geographic_features = (
-            geographic_features if geographic_features is not None
-            else GeographicFeaturesSettings({})
-        )
         self.forecast = forecast if forecast is not None else ForecastSettings({})
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
@@ -1436,7 +1368,6 @@ class Settings:
         self.earthquakes.validate()
         self.seeing.validate()
         self.radar.validate()
-        self.geographic_features.validate()
         self.forecast.validate()
         self.tls.validate()
         self.branding.validate()
@@ -1542,7 +1473,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
     seeing_cfg = SeeingSettings(dict(cfg.get("seeing", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
-    geographic_features_cfg = GeographicFeaturesSettings(dict(cfg.get("geographic_features", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
@@ -1571,7 +1501,6 @@ def load_settings(config_path: Path | None = None) -> Settings:
         earthquakes=earthquakes_cfg,
         seeing=seeing_cfg,
         radar=radar_cfg,
-        geographic_features=geographic_features_cfg,
         forecast=forecast_cfg,
         tls=tls_cfg,
         branding=branding_cfg,
