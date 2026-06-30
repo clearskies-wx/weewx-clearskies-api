@@ -73,7 +73,7 @@ def build_overpass_query(south: float, west: float, north: float, east: float) -
         f'  relation["natural"="water"]({bbox});\n'
         f'  way["waterway"="river"]({bbox});\n'
         f');\n'
-        f'out geom;\n'
+        f'out geom({bbox});\n'
     )
 
 
