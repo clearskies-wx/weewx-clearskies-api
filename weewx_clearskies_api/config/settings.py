@@ -686,7 +686,12 @@ class GeographicFeaturesSettings:
     def __init__(self, cfg: dict[str, Any]) -> None:
         self.enabled = _bool(cfg.get("enabled", "true"))
         raw_bounds = cfg.get("bounds") or None
-        self.bounds = str(raw_bounds).strip() if raw_bounds else None
+        if isinstance(raw_bounds, list):
+            self.bounds = ",".join(str(v).strip() for v in raw_bounds)
+        elif raw_bounds:
+            self.bounds = str(raw_bounds).strip()
+        else:
+            self.bounds = None
         self.maxzoom = int(cfg.get("maxzoom", "12"))
 
     def validate(self) -> None:
