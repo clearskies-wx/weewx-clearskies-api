@@ -22,7 +22,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,9 @@ def download_and_extract(bounds: str, maxzoom: int = 12) -> dict:
     Raises:
         RuntimeError: pmtiles CLI not found, extraction failed, or OS error.
     """
-    today = datetime.now(tz=UTC).strftime("%Y%m%d")
+    now = datetime.now(tz=UTC)
+    today = now.strftime("%Y%m%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y%m%d")
     source_url = f"{PROTOMAPS_BUILD_URL}/{today}.pmtiles"
 
     logger.info(
@@ -103,31 +105,48 @@ def download_and_extract(bounds: str, maxzoom: int = 12) -> dict:
         os.close(fd)
         tmp_path = Path(tmp_str)
 
-        cmd = [
-            "pmtiles",
-            "extract",
-            source_url,
-            str(tmp_path),
-            f"--bbox={bounds}",
-            f"--maxzoom={maxzoom}",
-        ]
+        # Try today's build first; fall back to yesterday's if today's
+        # hasn't been published yet (daily builds may lag behind UTC midnight).
+        result = None
+        for url in (source_url, f"{PROTOMAPS_BUILD_URL}/{yesterday}.pmtiles"):
+            cmd = [
+                "pmtiles",
+                "extract",
+                url,
+                str(tmp_path),
+                f"--bbox={bounds}",
+                f"--maxzoom={maxzoom}",
+            ]
 
-        logger.info("Running: %s", " ".join(cmd))
+            logger.info("Running: %s", " ".join(cmd))
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30-minute timeout for large extractions
-        )
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
 
-        if result.returncode != 0:
-            stderr_excerpt = result.stderr[-2000:] if result.stderr else "(no stderr)"
+            if result.returncode == 0:
+                break
+            stderr_text = result.stderr or result.stdout or ""
+            if "404" in stderr_text or "Failed to create range reader" in stderr_text:
+                logger.warning(
+                    "Build %s not available (404), trying previous day", url
+                )
+                continue
+            break
+
+        if result is None or result.returncode != 0:
+            stderr_excerpt = (result.stderr[-2000:] if result and result.stderr else "(no stderr)")
             logger.error(
-                "pmtiles extract failed (exit %d): %s", result.returncode, stderr_excerpt
+                "pmtiles extract failed (exit %d): %s",
+                result.returncode if result else -1,
+                stderr_excerpt,
             )
             raise RuntimeError(
-                f"pmtiles extract failed with exit code {result.returncode}. "
+                f"pmtiles extract failed with exit code "
+                f"{result.returncode if result else -1}. "
                 f"stderr: {stderr_excerpt}"
             )
 
