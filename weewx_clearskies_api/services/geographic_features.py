@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -114,7 +115,7 @@ def _element_to_feature(element: dict[str, Any]) -> dict[str, Any] | None:
 
     if elem_type == "way":
         raw_geom = element.get("geometry") or []
-        coords = [[pt["lon"], pt["lat"]] for pt in raw_geom if "lat" in pt and "lon" in pt]
+        coords = [[pt["lon"], pt["lat"]] for pt in raw_geom if pt is not None and "lat" in pt and "lon" in pt]
         if len(coords) < 2:
             return None
         geometry = {"type": "LineString", "coordinates": coords}
@@ -126,7 +127,7 @@ def _element_to_feature(element: dict[str, Any]) -> dict[str, Any] | None:
             if member.get("type") != "way":
                 continue
             raw_geom = member.get("geometry") or []
-            coords = [[pt["lon"], pt["lat"]] for pt in raw_geom if "lat" in pt and "lon" in pt]
+            coords = [[pt["lon"], pt["lat"]] for pt in raw_geom if pt is not None and "lat" in pt and "lon" in pt]
             if len(coords) >= 2:
                 lines.append(coords)
         if not lines:
@@ -264,6 +265,8 @@ def _fetch_and_merge(
     merged_features: list[dict[str, Any]] = []
 
     for idx, cell in enumerate(cells):
+        if idx > 0:
+            time.sleep(5)
         query = build_overpass_query(*cell)
         result = fetch_overpass(query, endpoint)
         cell_features = result.get("features", [])
