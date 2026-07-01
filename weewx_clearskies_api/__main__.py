@@ -911,6 +911,41 @@ def main() -> None:
     # Step 6m: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)
 
+    # Step 6m½: Wire forecast correction collector (ADR-079).
+    # Conditional on forecast_correction.collection_enabled AND a forecast
+    # provider being configured. If the DB path is not writable, log warning
+    # and skip (no crash).
+    if (
+        settings.forecast_correction.collection_enabled
+        and settings.forecast is not None
+        and settings.forecast.provider is not None
+    ):
+        try:
+            from weewx_clearskies_api.correction import db as correction_db  # noqa: PLC0415
+            from weewx_clearskies_api.correction.collector import ForecastCollector  # noqa: PLC0415
+
+            correction_db.init_engine(settings.forecast_correction.db_path)
+
+            _station_info = get_station_info()
+            _collector = ForecastCollector(
+                engine=engine,
+                settings=settings.forecast_correction,
+                forecast_settings=settings.forecast,
+                station_info=_station_info,
+                archive_interval=_station_info.archive_interval,
+            )
+            _collector.start()
+            logger.info(
+                "Forecast correction collector started (interval=%ds)",
+                _station_info.archive_interval,
+            )
+        except Exception:
+            logger.warning(
+                "Forecast correction collector could not start — "
+                "collection disabled for this session",
+                exc_info=True,
+            )
+
     # Step 6o: Pass settings to radar endpoint for keyed-provider credential wiring.
     # Keyless providers (rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan):
     # no-op. Aeris + OWM: extracts credentials from settings.forecast per 3b-5 Q2
