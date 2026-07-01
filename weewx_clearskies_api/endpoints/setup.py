@@ -33,13 +33,19 @@ from typing import Any
 from urllib.parse import quote_plus
 
 import configobj
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
+from weewx_clearskies_api.correction.models import (
+    CorrectionStatusResponse,
+    CorrectionToggleRequest,
+    CorrectionToggleResponse,
+    RetrainResponse,
+)
 from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, SchemaReflector
 from weewx_clearskies_api.services.station import _get_str_field, _parse_altitude
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, get_weewx_conf, load_weewx_conf
@@ -49,6 +55,31 @@ from weewx_clearskies_api.trust import TrustManager, _read_secrets_env, _write_s
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/setup", tags=["setup"])
+
+# ---------------------------------------------------------------------------
+# Forecast correction module-level state (wired at startup by __main__.py)
+# ---------------------------------------------------------------------------
+
+#: ForecastCorrectionSettings instance; set by wire_forecast_correction_settings().
+_forecast_correction_settings: object | None = None
+
+#: Runtime override for collection_enabled (toggled via /setup/forecast-correction/toggle).
+#: None means "use the value from _forecast_correction_settings".
+_collection_enabled_override: bool | None = None
+
+
+def wire_forecast_correction_settings(settings: object) -> None:
+    """Store the ForecastCorrectionSettings for use by the admin endpoints.
+
+    Called from __main__.py step 6m½ so the three forecast-correction admin
+    endpoints can access settings without importing them at module load time.
+    Mirrors wire_forecast_settings() in endpoints/forecast.py.
+
+    Args:
+        settings: ForecastCorrectionSettings instance from config.
+    """
+    global _forecast_correction_settings  # noqa: PLW0603
+    _forecast_correction_settings = settings
 
 
 # ---------------------------------------------------------------------------
@@ -1581,3 +1612,173 @@ async def restart(request: Request, background_tasks: BackgroundTasks) -> Restar
 
     background_tasks.add_task(_deferred_sigterm)
     return RestartResponse(status="restarting")
+
+
+# ---------------------------------------------------------------------------
+# Forecast correction admin endpoints (ADR-079 Phase 5)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/forecast-correction/status")
+def get_forecast_correction_status(
+    _: TrustManager = Depends(require_setup_active),
+) -> CorrectionStatusResponse:
+    """Return the current state of the forecast correction engine.
+
+    Reports model availability, enabled/active flags, pair-count statistics,
+    and the metrics from the last training run.  Requires proxy auth.
+    """
+    from weewx_clearskies_api.correction import db as correction_db  # noqa: PLC0415
+    from weewx_clearskies_api.correction.corrector import is_active  # noqa: PLC0415
+
+    fc_settings = _forecast_correction_settings
+
+    # DB may not be initialised when both enabled and collection_enabled are False.
+    # In that case return zeroed-out stats rather than raising a 500.
+    try:
+        metadata = correction_db.get_model_metadata()
+        pair_count = correction_db.get_pair_count()
+        date_start, date_end = correction_db.get_date_range()
+    except RuntimeError:
+        metadata = None
+        pair_count = 0
+        date_start = None
+        date_end = None
+
+    # Resolve enabled from settings (may be None if correction was never wired).
+    enabled: bool = bool(
+        getattr(fc_settings, "enabled", False) if fc_settings is not None else False
+    )
+
+    # Resolve collection_enabled: runtime override wins, then settings default.
+    if _collection_enabled_override is not None:
+        collection_enabled: bool = _collection_enabled_override
+    else:
+        collection_enabled = bool(
+            getattr(fc_settings, "collection_enabled", False)
+            if fc_settings is not None
+            else False
+        )
+
+    retrain_schedule: str = str(
+        getattr(fc_settings, "retrain_schedule", "manual")
+        if fc_settings is not None
+        else "manual"
+    )
+
+    return CorrectionStatusResponse(
+        model_available=(
+            metadata is not None and metadata.get("model_path") is not None
+        ),
+        is_active=is_active(),
+        enabled=enabled,
+        collection_enabled=collection_enabled,
+        retrain_schedule=retrain_schedule,
+        pair_count=pair_count,
+        date_range_start=date_start,
+        date_range_end=date_end,
+        last_trained=metadata.get("last_trained") if metadata else None,
+        sample_count=metadata.get("sample_count") if metadata else None,
+        mae_raw=metadata.get("mae_raw") if metadata else None,
+        mae_corrected=metadata.get("mae_corrected") if metadata else None,
+        provider_score=metadata.get("provider_score") if metadata else None,
+        correction_pct=metadata.get("correction_pct") if metadata else None,
+        training_status=metadata.get("training_status") if metadata else None,
+    )
+
+
+@router.post("/forecast-correction/toggle")
+def toggle_forecast_correction(
+    body: CorrectionToggleRequest,
+    _: TrustManager = Depends(require_setup_active),
+) -> CorrectionToggleResponse:
+    """Toggle correction and/or collection on or off at runtime.
+
+    Updates the corrector module's enabled state immediately.  The
+    collection_enabled toggle is tracked as a module-level override; the
+    background collector thread does not pause mid-run but the flag is
+    reflected in the status endpoint and respected by the retrainer.
+
+    Either or both fields may be provided.  Providing neither is a no-op that
+    returns the current state.  Requires proxy auth.
+    """
+    global _collection_enabled_override  # noqa: PLW0603
+
+    import weewx_clearskies_api.correction.corrector as _corrector_mod  # noqa: PLC0415
+
+    if body.enabled is not None:
+        _corrector_mod.set_enabled(body.enabled)
+        current_enabled: bool = body.enabled
+    else:
+        current_enabled = _corrector_mod._enabled  # noqa: SLF001
+
+    if body.collection_enabled is not None:
+        _collection_enabled_override = body.collection_enabled
+        current_collection_enabled: bool = body.collection_enabled
+    else:
+        # Return current effective collection_enabled.
+        if _collection_enabled_override is not None:
+            current_collection_enabled = _collection_enabled_override
+        else:
+            fc_settings = _forecast_correction_settings
+            current_collection_enabled = bool(
+                getattr(fc_settings, "collection_enabled", False)
+                if fc_settings is not None
+                else False
+            )
+
+    return CorrectionToggleResponse(
+        enabled=current_enabled,
+        collection_enabled=current_collection_enabled,
+    )
+
+
+@router.post("/forecast-correction/retrain")
+def retrain_forecast_correction(
+    _: TrustManager = Depends(require_setup_active),
+) -> RetrainResponse:
+    """Trigger an immediate model retrain.
+
+    Runs train_model() synchronously on the request thread (training typically
+    takes < 5 s on datasets up to ~50 k pairs).  On success, hot-reloads the
+    new model via reload_model() so subsequent forecast requests use it without
+    a process restart.
+
+    Returns success=False (not an HTTP error) when the min_samples gate is not
+    met — this is a normal operational state.  Requires proxy auth.
+    """
+    from weewx_clearskies_api.correction.trainer import train_model  # noqa: PLC0415
+    from weewx_clearskies_api.correction.corrector import reload_model  # noqa: PLC0415
+
+    fc_settings = _forecast_correction_settings
+    if fc_settings is None:
+        return RetrainResponse(
+            success=False,
+            message="Forecast correction is not configured; cannot retrain.",
+        )
+
+    try:
+        result = train_model(fc_settings)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Forecast correction retrain endpoint: train_model raised an exception: %s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return RetrainResponse(
+            success=False,
+            message=f"Training failed: {type(exc).__name__}",
+        )
+
+    if result.get("success"):
+        reload_model()
+
+    return RetrainResponse(
+        success=result.get("success", False),
+        message=result.get("message", ""),
+        sample_count=result.get("sample_count"),
+        mae_raw=result.get("mae_raw"),
+        mae_corrected=result.get("mae_corrected"),
+        provider_score=result.get("provider_score"),
+        correction_pct=result.get("correction_pct"),
+    )

@@ -82,6 +82,7 @@ from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_features_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
+from weewx_clearskies_api.endpoints.setup import wire_forecast_correction_settings
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
 from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
 from weewx_clearskies_api.health import create_health_app
@@ -911,25 +912,48 @@ def main() -> None:
     # Step 6m: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)
 
-    # Step 6m½: Wire forecast correction collector (ADR-079).
-    # Conditional on forecast_correction.collection_enabled AND a forecast
-    # provider being configured. If the DB path is not writable, log warning
-    # and skip (no crash).
+    # Step 6m½: Wire forecast correction engine (ADR-079).
+    #
+    # Wiring is split into two tiers:
+    #   Tier A — init_engine + wire_corrector: runs whenever enabled=True OR
+    #            collection_enabled=True.  An operator may disable collection
+    #            but keep correction active against a pre-trained model.
+    #   Tier B — collector + retrainer start: runs only when
+    #            collection_enabled=True AND a forecast provider is configured.
+    #
+    # All tiers are non-fatal: failures are logged as WARNING and the API
+    # continues without correction support for this session.
+    _fc = settings.forecast_correction
+    _fc_needs_db = _fc.enabled or _fc.collection_enabled
+    if _fc_needs_db:
+        try:
+            from weewx_clearskies_api.correction import db as correction_db  # noqa: PLC0415
+            from weewx_clearskies_api.correction.corrector import wire_corrector  # noqa: PLC0415
+
+            correction_db.init_engine(_fc.db_path)
+            wire_corrector(_fc)
+            wire_forecast_correction_settings(_fc)
+            logger.info("Forecast correction engine wired (enabled=%s)", _fc.enabled)
+        except Exception:
+            logger.warning(
+                "Forecast correction engine could not be wired — "
+                "correction disabled for this session",
+                exc_info=True,
+            )
+
     if (
-        settings.forecast_correction.collection_enabled
+        _fc.collection_enabled
         and settings.forecast is not None
         and settings.forecast.provider is not None
     ):
         try:
-            from weewx_clearskies_api.correction import db as correction_db  # noqa: PLC0415
             from weewx_clearskies_api.correction.collector import ForecastCollector  # noqa: PLC0415
-
-            correction_db.init_engine(settings.forecast_correction.db_path)
+            from weewx_clearskies_api.correction.retrainer import BackgroundRetrainer  # noqa: PLC0415
 
             _station_info = get_station_info()
             _collector = ForecastCollector(
                 engine=engine,
-                settings=settings.forecast_correction,
+                settings=_fc,
                 forecast_settings=settings.forecast,
                 station_info=_station_info,
                 archive_interval=_station_info.archive_interval,
@@ -939,9 +963,16 @@ def main() -> None:
                 "Forecast correction collector started (interval=%ds)",
                 _station_info.archive_interval,
             )
+
+            if _fc.retrain_schedule != "manual":
+                _retrainer = BackgroundRetrainer(
+                    settings=_fc,
+                    station_timezone=_station_info.timezone,
+                )
+                _retrainer.start()
         except Exception:
             logger.warning(
-                "Forecast correction collector could not start — "
+                "Forecast correction collector/retrainer could not start — "
                 "collection disabled for this session",
                 exc_info=True,
             )
