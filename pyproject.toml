@@ -51,6 +51,8 @@ dependencies = [
     # ADR-058: sse-starlette provides EventSourceResponse for the /sse endpoint
     # that streams weewx loop packets to dashboard clients.
     "sse-starlette>=2.0.0",
+    # ADR-079: scikit-learn for forecast correction Random Forest model.
+    "scikit-learn>=1.5.0",
 ]
 
 [project.optional-dependencies]

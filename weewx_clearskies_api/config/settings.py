@@ -949,6 +949,74 @@ class ForecastSettings:
             )
 
 
+class ForecastCorrectionSettings:
+    """[forecast_correction] section settings (ADR-079).
+
+    Controls the forecast temperature correction engine.  When the section
+    is absent from api.conf, defaults apply (collection enabled, correction
+    disabled).  The API never fails to start due to this section being missing.
+    """
+
+    #: Apply corrections to forecast temps.  Default False (collect first).
+    enabled: bool
+    #: Collect forecast-observation pairs.  Default True.
+    collection_enabled: bool
+    #: Filesystem path to the correction SQLite database.
+    db_path: str
+    #: Filesystem path where the trained model .pkl is written.
+    model_path: str
+    #: Retrain schedule: "weekly" | "daily" | "manual".
+    retrain_schedule: str
+    #: Day of week for weekly retrains (0=Monday, 6=Sunday).
+    retrain_day: int
+    #: Minimum pairs before first training is permitted (default 500, min 100).
+    min_samples: int
+    #: Rolling data retention window in years (default 3, min 1).
+    retention_years: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.enabled = (
+            str(section.get("enabled", "false")).strip().lower() in ("true", "1", "yes")
+        )
+        self.collection_enabled = (
+            str(section.get("collection_enabled", "true")).strip().lower()
+            in ("true", "1", "yes")
+        )
+        self.db_path = str(
+            section.get("db_path", "/etc/weewx-clearskies/forecast_correction.db")
+        ).strip()
+        self.model_path = str(
+            section.get("model_path", "/etc/weewx-clearskies/forecast_correction_model.pkl")
+        ).strip()
+        raw_schedule = str(section.get("retrain_schedule", "weekly")).strip().lower()
+        self.retrain_schedule = (
+            raw_schedule if raw_schedule in ("weekly", "daily", "manual") else "weekly"
+        )
+        self.retrain_day = int(section.get("retrain_day", 0))
+        self.min_samples = int(section.get("min_samples", 500))
+        self.retention_years = int(section.get("retention_years", 3))
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid values."""
+        if self.retrain_schedule not in ("weekly", "daily", "manual"):
+            raise ValueError(
+                f"[forecast_correction] retrain_schedule {self.retrain_schedule!r} not valid. "
+                "Supported: 'weekly', 'daily', 'manual'."
+            )
+        if not 0 <= self.retrain_day <= 6:
+            raise ValueError(
+                f"[forecast_correction] retrain_day {self.retrain_day} not in range 0-6."
+            )
+        if self.min_samples < 100:
+            raise ValueError(
+                f"[forecast_correction] min_samples {self.min_samples} must be >= 100."
+            )
+        if self.retention_years < 1:
+            raise ValueError(
+                f"[forecast_correction] retention_years {self.retention_years} must be >= 1."
+            )
+
+
 class BrandingSettings:
     """[branding] section settings (ADR-022, Gap #10).
 
@@ -1348,6 +1416,7 @@ class Settings:
     input: InputSettings
     units: UnitsSettings
     freshness: FreshnessSettings
+    forecast_correction: ForecastCorrectionSettings
     column_mapping: dict[str, str]
     #: Operator-confirmed unit for each mapped column, parsed from the
     #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
@@ -1382,6 +1451,7 @@ class Settings:
         input: InputSettings | None = None,
         units: UnitsSettings | None = None,
         freshness: FreshnessSettings | None = None,
+        forecast_correction: ForecastCorrectionSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
         configured: bool = True,
@@ -1415,6 +1485,10 @@ class Settings:
         self.input = input if input is not None else InputSettings({})
         self.units = units if units is not None else UnitsSettings({})
         self.freshness = freshness if freshness is not None else FreshnessSettings({})
+        self.forecast_correction = (
+            forecast_correction if forecast_correction is not None
+            else ForecastCorrectionSettings({})
+        )
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
 
@@ -1437,6 +1511,7 @@ class Settings:
         self.cache_warmer.validate()
         self.input.validate()
         self.freshness.validate()
+        self.forecast_correction.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1548,6 +1623,9 @@ def load_settings(config_path: Path | None = None) -> Settings:
     column_mapping_cfg = dict(cfg.get("column_mapping", {}))
     column_units_cfg = dict(cfg.get("column_units", {}))
     freshness_cfg = FreshnessSettings(dict(cfg.get("freshness", {})))
+    forecast_correction_cfg = ForecastCorrectionSettings(
+        dict(cfg.get("forecast_correction", {}))
+    )
 
     settings = Settings(
         api=api_cfg,
@@ -1575,6 +1653,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         input=input_cfg,
         units=units_cfg,
         freshness=freshness_cfg,
+        forecast_correction=forecast_correction_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
     )
