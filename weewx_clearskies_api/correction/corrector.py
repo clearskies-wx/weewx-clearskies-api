@@ -155,9 +155,8 @@ def get_enabled() -> bool:
 def set_enabled(enabled: bool) -> None:
     """Toggle correction on or off at runtime.
 
-    Called by the admin enable/disable endpoint (ADR-079).  When re-enabled,
-    does NOT automatically reload the model — ``reload_model()`` must be
-    called separately if the model was not previously loaded.
+    Called by the admin enable/disable endpoint (ADR-079).  When enabling,
+    automatically loads the model from disk if it hasn't been loaded yet.
 
     Args:
         enabled: True to enable, False to disable.
@@ -165,6 +164,8 @@ def set_enabled(enabled: bool) -> None:
     global _enabled  # noqa: PLW0603
     _enabled = enabled
     logger.info("corrector: enabled set to %s", enabled)
+    if enabled and _model is None:
+        _load_model_from_disk()
 
 
 def _predict_bias(month: float, hour: float, fcst_temp: float, point=None) -> float:
