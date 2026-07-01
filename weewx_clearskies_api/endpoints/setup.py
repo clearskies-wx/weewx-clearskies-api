@@ -1690,12 +1690,14 @@ def get_forecast_correction_status(
 
 @router.post("/forecast-correction/toggle")
 def toggle_forecast_correction(
+    request: Request,
     body: CorrectionToggleRequest,
     _: TrustManager = Depends(require_setup_active),
 ) -> CorrectionToggleResponse:
     """Toggle correction and/or collection on or off at runtime.
 
-    Updates the corrector module's enabled state immediately.  The
+    Updates the corrector module's enabled state immediately AND persists
+    the new values to ``api.conf`` so they survive service restarts.  The
     collection_enabled toggle signals the live collector thread via
     ``set_collection_enabled()`` — the next tick respects the new state.
 
@@ -1728,6 +1730,22 @@ def toggle_forecast_correction(
                 if fc_settings is not None
                 else False
             )
+
+    # Persist to api.conf so the toggle survives service restarts.
+    try:
+        config_dir: Path = request.app.state.config_dir
+        conf_path = config_dir / "api.conf"
+        if conf_path.exists():
+            cfg = configobj.ConfigObj(str(conf_path), interpolation=False)
+            if "forecast_correction" not in cfg:
+                cfg["forecast_correction"] = {}
+            if body.enabled is not None:
+                cfg["forecast_correction"]["enabled"] = str(current_enabled).lower()
+            if body.collection_enabled is not None:
+                cfg["forecast_correction"]["collection_enabled"] = str(current_collection_enabled).lower()
+            cfg.write()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not persist toggle to api.conf: %s", exc)
 
     return CorrectionToggleResponse(
         enabled=current_enabled,
