@@ -1629,7 +1629,7 @@ def get_forecast_correction_status(
     and the metrics from the last training run.  Requires proxy auth.
     """
     from weewx_clearskies_api.correction import db as correction_db  # noqa: PLC0415
-    from weewx_clearskies_api.correction.corrector import is_active  # noqa: PLC0415
+    from weewx_clearskies_api.correction.corrector import is_active, get_enabled  # noqa: PLC0415
 
     fc_settings = _forecast_correction_settings
 
@@ -1645,10 +1645,10 @@ def get_forecast_correction_status(
         date_start = None
         date_end = None
 
-    # Resolve enabled from settings (may be None if correction was never wired).
-    enabled: bool = bool(
-        getattr(fc_settings, "enabled", False) if fc_settings is not None else False
-    )
+    # Read enabled from the corrector's runtime state, not the settings object.
+    # The toggle endpoint changes the runtime flag; the settings object reflects
+    # what was in api.conf at startup and is not updated by the toggle.
+    enabled: bool = get_enabled()
 
     # Resolve collection_enabled: runtime override wins, then settings default.
     if _collection_enabled_override is not None:

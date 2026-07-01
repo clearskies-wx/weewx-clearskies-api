@@ -167,23 +167,64 @@ def set_enabled(enabled: bool) -> None:
     logger.info("corrector: enabled set to %s", enabled)
 
 
+def _predict_bias(month: float, hour: float, fcst_temp: float, point=None) -> float:
+    """Predict bias for a single temperature value.
+
+    When ``point`` is provided, extracts windDir/humidity/cloudCover/windSpeed
+    from it (hourly points carry these).  When ``point`` is None, uses stored
+    medians for all four nullable features (daily points don't carry them).
+    """
+    features: list[float] = []
+    for col in FEATURE_COLUMNS:
+        if col == "month":
+            features.append(month)
+        elif col == "hour":
+            features.append(hour)
+        elif col == "fcst_temp":
+            features.append(fcst_temp)
+        elif col == "fcst_wind_dir":
+            val = getattr(point, "windDir", None) if point else None
+            features.append(
+                float(val) if val is not None
+                else _feature_medians.get("fcst_wind_dir", 0.0)  # type: ignore[union-attr]
+            )
+        elif col == "fcst_humidity":
+            val = getattr(point, "outHumidity", None) if point else None
+            features.append(
+                float(val) if val is not None
+                else _feature_medians.get("fcst_humidity", 0.0)  # type: ignore[union-attr]
+            )
+        elif col == "fcst_cloud_cover":
+            val = getattr(point, "cloudCover", None) if point else None
+            features.append(
+                float(val) if val is not None
+                else _feature_medians.get("fcst_cloud_cover", 0.0)  # type: ignore[union-attr]
+            )
+        elif col == "fcst_wind_speed":
+            val = getattr(point, "windSpeed", None) if point else None
+            features.append(
+                float(val) if val is not None
+                else _feature_medians.get("fcst_wind_speed", 0.0)  # type: ignore[union-attr]
+            )
+
+    X = np.array([features], dtype=np.float64)
+    return float(_model.predict(X)[0])  # type: ignore[union-attr]
+
+
 def correct_bundle(bundle):
-    """Apply temperature correction to all hourly forecast points.
+    """Apply temperature correction to all forecast points (hourly + daily).
 
-    Iterates ``bundle.hourly``.  For each point:
-    1. Skips points where ``outTemp`` is None.
-    2. Parses ``validTime`` to extract month and hour features.
-    3. Extracts all 7 features in FEATURE_COLUMNS order, substituting stored
-       medians for any None values in the four nullable feature columns.
-    4. Calls ``model.predict()`` to get the predicted temperature bias.
-    5. Applies: ``point.outTemp = round(point.outTemp + predicted_bias, 1)``.
+    **Hourly points:** For each point, extracts all 7 features from the point
+    itself, predicts bias, applies ``outTemp += predicted_bias``.
 
-    Daily points are untouched.  No-op when ``is_active()`` returns False.
-    The bundle is mutated in place — this function is called post-cache so the
-    mutation does not affect the cached payload.
+    **Daily points:** For ``tempMax``, predicts bias at hour=14 (typical
+    afternoon high timing).  For ``tempMin``, predicts bias at hour=5 (typical
+    early morning low timing).  Weather features (wind, humidity, cloud, speed)
+    use stored medians since daily points don't carry per-hour values.
 
-    Performance: <5 ms for 168 hourly points (single sklearn RF predict call
-    per point; numpy array construction is vectorised per-point).
+    No-op when ``is_active()`` returns False.  The bundle is mutated in place —
+    this function is called post-cache so the mutation does not affect the
+    cached payload.
 
     Args:
         bundle: ForecastBundle instance (post-cache).
@@ -198,7 +239,6 @@ def correct_bundle(bundle):
         if point.outTemp is None:
             continue
 
-        # Parse validTime (UTC ISO-8601 with Z) for month/hour features.
         try:
             iso_str = point.validTime.replace("Z", "+00:00")
             dt = datetime.fromisoformat(iso_str)
@@ -208,43 +248,23 @@ def correct_bundle(bundle):
             )
             continue
 
-        # Build feature vector in FEATURE_COLUMNS order.
-        features: list[float] = []
-        for col in FEATURE_COLUMNS:
-            if col == "month":
-                features.append(float(dt.month))
-            elif col == "hour":
-                features.append(float(dt.hour))
-            elif col == "fcst_temp":
-                features.append(float(point.outTemp))
-            elif col == "fcst_wind_dir":
-                val = point.windDir
-                features.append(
-                    float(val) if val is not None
-                    else _feature_medians.get("fcst_wind_dir", 0.0)  # type: ignore[union-attr]
-                )
-            elif col == "fcst_humidity":
-                val = point.outHumidity
-                features.append(
-                    float(val) if val is not None
-                    else _feature_medians.get("fcst_humidity", 0.0)  # type: ignore[union-attr]
-                )
-            elif col == "fcst_cloud_cover":
-                val = point.cloudCover
-                features.append(
-                    float(val) if val is not None
-                    else _feature_medians.get("fcst_cloud_cover", 0.0)  # type: ignore[union-attr]
-                )
-            elif col == "fcst_wind_speed":
-                val = point.windSpeed
-                features.append(
-                    float(val) if val is not None
-                    else _feature_medians.get("fcst_wind_speed", 0.0)  # type: ignore[union-attr]
-                )
+        bias = _predict_bias(float(dt.month), float(dt.hour), float(point.outTemp), point)
+        point.outTemp = round(point.outTemp + bias, 1)
 
-        # Predict bias and apply correction.
-        X = np.array([features], dtype=np.float64)
-        predicted_bias = _model.predict(X)[0]  # type: ignore[union-attr]
-        point.outTemp = round(point.outTemp + predicted_bias, 1)
+    for day in bundle.daily:
+        try:
+            dt = datetime.strptime(day.validDate, "%Y-%m-%d")
+        except (ValueError, TypeError, AttributeError):
+            continue
+
+        month = float(dt.month)
+
+        if day.tempMax is not None:
+            bias_high = _predict_bias(month, 14.0, float(day.tempMax))
+            day.tempMax = round(day.tempMax + bias_high, 1)
+
+        if day.tempMin is not None:
+            bias_low = _predict_bias(month, 5.0, float(day.tempMin))
+            day.tempMin = round(day.tempMin + bias_low, 1)
 
     return bundle
