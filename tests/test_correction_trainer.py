@@ -506,3 +506,48 @@ class TestBootstrapValidationFallback:
         )
         assert "mae_raw" in result
         assert "mae_corrected" in result
+
+    def test_all_data_within_30_days_uses_bootstrap(
+        self, correction_engine, correction_settings
+    ) -> None:
+        """When all pairs are <30 days old (empty training set but enough total
+        pairs), bootstrap mode trains using all data for both sets.
+
+        This is the fresh-deployment case: the system was just installed and
+        has been collecting pairs for less than 30 days.
+        """
+        correction_settings.min_samples = 100
+
+        # All 200 pairs are within the last 30 days.
+        recent_ts = int(time.time()) - 10 * 86400  # 10 days ago
+        _insert_training_pairs(count=200, base_ts=recent_ts, ts_spacing=600, bias=2.0)
+
+        # Verify training set is empty (all data within 30 days).
+        cutoff = int(time.time()) - 30 * 86400
+        training_rows = correction_db.get_training_data(cutoff)
+        assert len(training_rows) == 0, "Precondition: no training data older than 30 days"
+
+        result = train_model(correction_settings)
+
+        assert result["success"] is True, (
+            f"Bootstrap (all-recent) should produce success=True, got: {result}"
+        )
+        assert "mae_raw" in result
+        assert "mae_corrected" in result
+        assert result["sample_count"] == 200
+
+    def test_all_data_within_30_days_below_min_samples_fails(
+        self, correction_engine, correction_settings
+    ) -> None:
+        """When all pairs are <30 days old and total count is below min_samples,
+        training correctly returns success=False.
+        """
+        correction_settings.min_samples = 500
+
+        recent_ts = int(time.time()) - 10 * 86400
+        _insert_training_pairs(count=50, base_ts=recent_ts, ts_spacing=600, bias=2.0)
+
+        result = train_model(correction_settings)
+
+        assert result["success"] is False
+        assert result["sample_count"] == 50

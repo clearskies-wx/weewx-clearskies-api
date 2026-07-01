@@ -205,32 +205,44 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
     )
 
     # ------------------------------------------------------------------
-    # Step 4: min_samples gate
+    # Step 4: Bootstrap detection + min_samples gate
     # ------------------------------------------------------------------
+    # A freshly deployed system has all pairs within the last 30 days,
+    # so the training set is empty while the validation set has everything.
+    # In this bootstrap phase, use all available data for both training
+    # and validation so the operator can train a first model immediately.
+    total_pairs = len(training_data) + len(validation_data)
+
+    if not training_data and validation_data:
+        logger.info(
+            "Training: bootstrap mode — all %d pairs are within the last "
+            "30 days. Using all data for both training and validation.",
+            len(validation_data),
+        )
+        training_data = validation_data
+
+    if not validation_data and training_data:
+        logger.info(
+            "Training: bootstrap mode — validation set is empty (all %d "
+            "pairs older than 30 days). Using training data as validation.",
+            len(training_data),
+        )
+        validation_data = training_data
+
     if len(training_data) < settings.min_samples:
         logger.warning(
-            "Training: insufficient data (%d pairs, need %d). Skipping.",
-            len(training_data),
+            "Training: insufficient data (%d total pairs, need %d). Skipping.",
+            total_pairs,
             settings.min_samples,
         )
         return {
             "success": False,
             "message": (
-                f"Insufficient training data: {len(training_data)} pairs, "
+                f"Insufficient training data: {total_pairs} pairs, "
                 f"need {settings.min_samples}"
             ),
-            "sample_count": len(training_data),
+            "sample_count": total_pairs,
         }
-
-    # Degenerate bootstrap case: all data is within the last 30 days.
-    # Use the training data as the validation set so we can still produce metrics.
-    if not validation_data:
-        logger.warning(
-            "Training: validation set is empty (all %d pairs within last 30 days). "
-            "Using training data as validation (bootstrap mode).",
-            len(training_data),
-        )
-        validation_data = training_data
 
     try:
         # ------------------------------------------------------------------
