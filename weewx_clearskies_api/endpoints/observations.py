@@ -211,6 +211,11 @@ def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
             )
 
             if updates:
+                logger.info(
+                    "Provider conditions applied: %s",
+                    {k: v for k, v in updates.items() if k in ("cloudcover", "precipType")},
+                    extra={"provider_id": provider_id},
+                )
                 return observation.model_copy(update=updates)
 
     except Exception:  # noqa: BLE001

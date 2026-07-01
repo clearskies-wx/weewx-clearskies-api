@@ -1509,6 +1509,8 @@ def fetch_current_conditions(
             "lat": round(lat, 4),
             "lon": round(lon, 4),
             "target_unit": target_unit,
+            "cloudCover": conditions.cloudCover,
+            "weatherText": conditions.weatherText,
         },
     )
     return conditions
