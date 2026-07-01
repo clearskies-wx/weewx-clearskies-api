@@ -53,10 +53,17 @@ class MockHourlyPoint:
 
 
 class MockDailyPoint:
-    """Stand-in for a DailyForecastPoint (should NOT be modified by correct_bundle())."""
+    """Stand-in for a DailyForecastPoint."""
 
-    def __init__(self, outTemp: float = 28.0) -> None:
-        self.outTemp = outTemp
+    def __init__(
+        self,
+        validDate: str = "2026-06-30",
+        tempMax: float | None = 28.0,
+        tempMin: float | None = 18.0,
+    ) -> None:
+        self.validDate = validDate
+        self.tempMax = tempMax
+        self.tempMin = tempMin
 
 
 class MockForecastBundle:
@@ -293,11 +300,11 @@ class TestMissingFeaturesUseMedians:
 # ---------------------------------------------------------------------------
 
 
-class TestDailyPointsUnchanged:
-    def test_daily_points_are_not_modified_by_correct_bundle(
+class TestDailyPointsCorrected:
+    def test_daily_temps_are_corrected_by_correct_bundle(
         self, correction_engine, correction_settings
     ) -> None:
-        """correct_bundle() must not touch bundle.daily points."""
+        """correct_bundle() adjusts daily tempMax and tempMin."""
         import weewx_clearskies_api.correction.corrector as corrector
 
         result = _populate_and_train(correction_settings, bias=2.0)
@@ -306,7 +313,7 @@ class TestDailyPointsUnchanged:
         corrector.wire_corrector(correction_settings)
         assert corrector.is_active()
 
-        daily_point = MockDailyPoint(outTemp=28.0)
+        daily_point = MockDailyPoint(validDate="2026-06-30", tempMax=28.0, tempMin=18.0)
         bundle = MockForecastBundle(
             hourly=[MockHourlyPoint(validTime="2026-06-30T14:00:00Z", outTemp=20.0)],
             daily=[daily_point],
@@ -314,8 +321,11 @@ class TestDailyPointsUnchanged:
 
         corrector.correct_bundle(bundle)
 
-        assert bundle.daily[0].outTemp == pytest.approx(28.0), (
-            "correct_bundle() must not modify daily forecast points"
+        assert bundle.daily[0].tempMax != pytest.approx(28.0, abs=0.05), (
+            "correct_bundle() should modify daily tempMax"
+        )
+        assert bundle.daily[0].tempMin != pytest.approx(18.0, abs=0.05), (
+            "correct_bundle() should modify daily tempMin"
         )
 
 

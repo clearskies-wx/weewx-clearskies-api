@@ -52,11 +52,30 @@ class MockHourlyPoint:
         self.windSpeed = windSpeed
 
 
+class MockDailyPoint:
+    """Minimal stand-in for DailyForecastPoint."""
+
+    def __init__(
+        self,
+        validDate: str,
+        tempMax: float | None = None,
+        tempMin: float | None = None,
+    ) -> None:
+        self.validDate = validDate
+        self.tempMax = tempMax
+        self.tempMin = tempMin
+
+
 class MockForecastBundle:
     """Minimal stand-in for ForecastBundle."""
 
-    def __init__(self, hourly: list[MockHourlyPoint] | None = None) -> None:
+    def __init__(
+        self,
+        hourly: list[MockHourlyPoint] | None = None,
+        daily: list[MockDailyPoint] | None = None,
+    ) -> None:
         self.hourly = hourly if hourly is not None else []
+        self.daily = daily if daily is not None else []
 
 
 # ---------------------------------------------------------------------------
