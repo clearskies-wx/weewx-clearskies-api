@@ -988,9 +988,9 @@ class ForecastCorrectionSettings:
         self.model_path = str(
             section.get("model_path", "/etc/weewx-clearskies/forecast_correction_model.pkl")
         ).strip()
-        raw_schedule = str(section.get("retrain_schedule", "weekly")).strip().lower()
+        raw_schedule = str(section.get("retrain_schedule", "daily")).strip().lower()
         self.retrain_schedule = (
-            raw_schedule if raw_schedule in ("weekly", "daily", "manual") else "weekly"
+            raw_schedule if raw_schedule in ("weekly", "daily", "manual") else "daily"
         )
         self.retrain_day = int(section.get("retrain_day", 0))
         self.min_samples = int(section.get("min_samples", 500))

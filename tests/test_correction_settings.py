@@ -19,7 +19,7 @@ class TestForecastCorrectionSettingsDefaults:
 
         assert s.enabled is False, "Default enabled must be False (collect before correcting)"
         assert s.collection_enabled is True, "Default collection_enabled must be True"
-        assert s.retrain_schedule == "weekly"
+        assert s.retrain_schedule == "daily"
         assert s.retrain_day == 0, "Default retrain_day must be 0 (Monday)"
         assert s.min_samples == 500
         assert s.retention_years == 3
@@ -143,19 +143,18 @@ class TestForecastCorrectionSettingsValidation:
 
 
 class TestForecastCorrectionSettingsInvalidScheduleDefault:
-    def test_invalid_retrain_schedule_defaults_to_weekly(self) -> None:
-        """An unrecognised retrain_schedule string is silently normalised to 'weekly'.
+    def test_invalid_retrain_schedule_defaults_to_daily(self) -> None:
+        """An unrecognised retrain_schedule string is silently normalised to 'daily'.
 
-        This is the documented __init__ behaviour: raw_schedule is set to 'weekly'
+        This is the documented __init__ behaviour: raw_schedule is set to 'daily'
         when the provided value is not in ('weekly', 'daily', 'manual').  After
-        normalisation, validate() passes because 'weekly' is always valid.
+        normalisation, validate() passes because 'daily' is always valid.
         """
         s = ForecastCorrectionSettings({"retrain_schedule": "hourly"})
-        assert s.retrain_schedule == "weekly", (
-            "Unrecognised schedule should default to 'weekly', "
+        assert s.retrain_schedule == "daily", (
+            "Unrecognised schedule should default to 'daily', "
             f"got {s.retrain_schedule!r}"
         )
-        # Validate must pass on the normalised value
         s.validate()
 
     def test_mixed_case_schedule_normalised(self) -> None:
@@ -163,10 +162,10 @@ class TestForecastCorrectionSettingsInvalidScheduleDefault:
         s = ForecastCorrectionSettings({"retrain_schedule": "Weekly"})
         assert s.retrain_schedule == "weekly"
 
-    def test_empty_schedule_defaults_to_weekly(self) -> None:
-        """An empty retrain_schedule string falls back to 'weekly'."""
+    def test_empty_schedule_defaults_to_daily(self) -> None:
+        """An empty retrain_schedule string falls back to 'daily'."""
         s = ForecastCorrectionSettings({"retrain_schedule": ""})
-        assert s.retrain_schedule == "weekly"
+        assert s.retrain_schedule == "daily"
 
 
 class TestForecastCorrectionSettingsStandaloneUsage:

@@ -238,9 +238,9 @@ path = /var/lib/weewx/weewx.sdb
 #
 # enabled = false               # Apply corrections to forecast temps
 # collection_enabled = true     # Collect forecast-observation pairs
-# retrain_schedule = weekly     # weekly | daily | manual
+# retrain_schedule = daily      # daily | weekly | manual
 # retrain_day = 0               # Day of week for weekly retrain (0=Mon, 6=Sun)
-# min_samples = 500             # Minimum pairs before first training (~21 days hourly)
+# min_samples = 500             # Minimum pairs before first training
 # retention_years = 3           # Rolling data retention window
 # db_path = /etc/weewx-clearskies/forecast_correction.db
 # model_path = /etc/weewx-clearskies/forecast_correction_model.pkl
