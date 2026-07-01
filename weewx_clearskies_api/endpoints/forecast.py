@@ -463,6 +463,12 @@ def get_forecast(
         station_tz=station.timezone,
     )
 
+    # --- Apply forecast temperature correction (ADR-079) ---
+    from weewx_clearskies_api.correction.corrector import correct_bundle, is_active  # noqa: PLC0415
+
+    if is_active():
+        bundle = correct_bundle(bundle)
+
     # --- Apply hours / days slice AFTER cache lookup (ADR-017, slice-after-cache) ---
     # Truncate from the head (first N points); Open-Meteo returns chronological order.
     # If the requested count exceeds what the provider returned, use all available.
