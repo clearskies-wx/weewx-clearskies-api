@@ -1666,9 +1666,10 @@ def get_forecast_correction_status(
         else "manual"
     )
 
+    _model_path = metadata.get("model_path") if metadata else None
     return CorrectionStatusResponse(
         model_available=(
-            metadata is not None and metadata.get("model_path") is not None
+            _model_path is not None and os.path.exists(_model_path)
         ),
         is_active=is_active(),
         enabled=enabled,
@@ -1695,9 +1696,8 @@ def toggle_forecast_correction(
     """Toggle correction and/or collection on or off at runtime.
 
     Updates the corrector module's enabled state immediately.  The
-    collection_enabled toggle is tracked as a module-level override; the
-    background collector thread does not pause mid-run but the flag is
-    reflected in the status endpoint and respected by the retrainer.
+    collection_enabled toggle signals the live collector thread via
+    ``set_collection_enabled()`` — the next tick respects the new state.
 
     Either or both fields may be provided.  Providing neither is a no-op that
     returns the current state.  Requires proxy auth.
@@ -1710,11 +1710,13 @@ def toggle_forecast_correction(
         _corrector_mod.set_enabled(body.enabled)
         current_enabled: bool = body.enabled
     else:
-        current_enabled = _corrector_mod._enabled  # noqa: SLF001
+        current_enabled = _corrector_mod.get_enabled()
 
     if body.collection_enabled is not None:
         _collection_enabled_override = body.collection_enabled
         current_collection_enabled: bool = body.collection_enabled
+        from weewx_clearskies_api.correction.collector import set_collection_enabled  # noqa: PLC0415
+        set_collection_enabled(body.collection_enabled)
     else:
         # Return current effective collection_enabled.
         if _collection_enabled_override is not None:

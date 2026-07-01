@@ -147,6 +147,11 @@ def is_active() -> bool:
     return _enabled and _model is not None
 
 
+def get_enabled() -> bool:
+    """Return the current value of the enabled flag."""
+    return _enabled
+
+
 def set_enabled(enabled: bool) -> None:
     """Toggle correction on or off at runtime.
 

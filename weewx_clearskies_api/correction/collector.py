@@ -36,6 +36,24 @@ from weewx_clearskies_api.correction import db as correction_db
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Module-level collection gate (toggled by admin endpoint, F6 audit fix)
+# ---------------------------------------------------------------------------
+
+_collection_enabled: bool = True
+
+
+def get_collection_enabled() -> bool:
+    """Return whether collection is currently enabled."""
+    return _collection_enabled
+
+
+def set_collection_enabled(enabled: bool) -> None:
+    """Toggle collection on or off at runtime (called by admin endpoint)."""
+    global _collection_enabled  # noqa: PLW0603
+    _collection_enabled = enabled
+    logger.info("Forecast collector: collection_enabled set to %s", enabled)
+
 
 class ForecastCollector:
     """Background daemon thread that collects forecast-observation pairs (ADR-079).
@@ -111,11 +129,15 @@ class ForecastCollector:
         """Execute a single collection tick.
 
         Steps:
+        0. Check collection_enabled gate (runtime toggle via admin endpoint).
         1. Query latest archive record (outTemp + dateTime).
         2. Fetch cached forecast bundle for the configured provider.
         3. Find the hourly point closest to the archive timestamp.
         4. Extract feature columns and write pair to correction DB.
         """
+        if not get_collection_enabled():
+            return
+
         # Step 1: Query latest archive record (read-only SELECT).
         archive_ts, actual_temp = self._query_latest_archive()
         if archive_ts is None:

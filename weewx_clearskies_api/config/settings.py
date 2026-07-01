@@ -1015,6 +1015,29 @@ class ForecastCorrectionSettings:
             raise ValueError(
                 f"[forecast_correction] retention_years {self.retention_years} must be >= 1."
             )
+        self._validate_path("db_path", self.db_path)
+        self._validate_path("model_path", self.model_path)
+
+    @staticmethod
+    def _validate_path(key: str, path_str: str) -> None:
+        """Verify a file path is within the filesystem write allowlist.
+
+        coding.md §1: "Never write files outside /etc/weewx-clearskies/ or /tmp."
+        """
+        from pathlib import Path  # noqa: PLC0415
+
+        resolved = Path(path_str).resolve()
+        allowed_roots = (Path("/etc/weewx-clearskies"), Path("/tmp"))
+        for root in allowed_roots:
+            try:
+                resolved.relative_to(root.resolve())
+                return
+            except ValueError:
+                continue
+        raise ValueError(
+            f"[forecast_correction] {key} {path_str!r} resolves to {resolved} "
+            f"which is outside the write allowlist (/etc/weewx-clearskies/, /tmp)."
+        )
 
 
 class BrandingSettings:
