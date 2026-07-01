@@ -358,7 +358,7 @@ class TestModelMetadata:
             mae_raw=2.75,
             mae_corrected=1.50,
             provider_score=97.25,
-            correction_pct=45.5,
+            correction_score=45.5,
             model_path="/etc/weewx-clearskies/forecast_correction_model.pkl",
             training_status="idle",
         )
@@ -372,7 +372,7 @@ class TestModelMetadata:
         assert meta["mae_raw"] == pytest.approx(2.75)
         assert meta["mae_corrected"] == pytest.approx(1.50)
         assert meta["provider_score"] == pytest.approx(97.25)
-        assert meta["correction_pct"] == pytest.approx(45.5)
+        assert meta["correction_score"] == pytest.approx(45.5)
         assert meta["model_path"] == "/etc/weewx-clearskies/forecast_correction_model.pkl"
         assert meta["training_status"] == "idle"
 
@@ -386,7 +386,7 @@ class TestModelMetadata:
             mae_raw=3.0,
             mae_corrected=2.0,
             provider_score=97.0,
-            correction_pct=33.3,
+            correction_score=33.3,
             model_path="/old/path/model.pkl",
             training_status="idle",
         )
@@ -396,7 +396,7 @@ class TestModelMetadata:
             mae_raw=2.5,
             mae_corrected=1.2,
             provider_score=97.5,
-            correction_pct=52.0,
+            correction_score=52.0,
             model_path="/new/path/model.pkl",
             training_status="idle",
         )
@@ -423,7 +423,7 @@ class TestModelMetadata:
             mae_raw=None,
             mae_corrected=None,
             provider_score=None,
-            correction_pct=None,
+            correction_score=None,
             model_path=None,
             training_status="training",
         )

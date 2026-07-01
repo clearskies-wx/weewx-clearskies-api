@@ -6,7 +6,7 @@ Validates train_model():
 - min_samples gate: early return when insufficient data.
 - None features: median imputation survives.
 - Model serialization round-trip: loaded dict has correct keys; predictions match.
-- TruScore math: provider_score and correction_pct computed correctly.
+- TruScore math: provider_score and correction_score computed correctly.
 - Retention purge: old records deleted before training.
 - Atomic write failure: temp file cleaned up, training_status=failed.
 - FEATURE_COLUMNS constant: exactly 7 entries in documented order.
@@ -378,18 +378,20 @@ class TestTruScoreMath:
             f"provider_score={result['provider_score']} != 100 - mae_raw={result['mae_raw']}"
         )
 
-    def test_correction_pct_is_nonnegative(
+    def test_correction_score_equals_100_minus_mae_corrected(
         self, correction_engine, correction_settings
     ) -> None:
-        """correction_pct is clamped to 0 when correction worsens MAE."""
+        """correction_score must equal 100.0 - mae_corrected (same scale as provider_score)."""
         correction_settings.min_samples = 100
 
         _insert_training_pairs(count=200, base_ts=_SIXTY_DAYS_AGO, ts_spacing=600, bias=2.0)
 
         result = train_model(correction_settings)
         assert result["success"] is True
-        assert result["correction_pct"] >= 0.0, (
-            f"correction_pct must be non-negative, got {result['correction_pct']}"
+
+        expected = round(100.0 - result["mae_corrected"], 2)
+        assert result["correction_score"] == pytest.approx(expected, abs=0.01), (
+            f"correction_score={result['correction_score']} != 100 - mae_corrected={result['mae_corrected']}"
         )
 
 

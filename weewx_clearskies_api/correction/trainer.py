@@ -19,7 +19,7 @@ The returned dict always has at minimum:
     sample_count (int)
 
 On success it also contains:
-    mae_raw, mae_corrected, provider_score, correction_pct  (all float)
+    mae_raw, mae_corrected, provider_score, correction_score  (all float)
 
 Error handling
 --------------
@@ -175,7 +175,7 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
 
     Returns:
         Dict with keys: success, message, sample_count, and (on success)
-        mae_raw, mae_corrected, provider_score, correction_pct.
+        mae_raw, mae_corrected, provider_score, correction_score.
     """
     now = datetime.now(timezone.utc).timestamp()
 
@@ -286,18 +286,15 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
             np.mean(np.abs(actual_val - (fcst_val + predicted_bias)))
         )
         provider_score = 100.0 - mae_raw
-        correction_pct = max(
-            0.0,
-            (mae_raw - mae_corrected) / mae_raw * 100.0 if mae_raw > 0.0 else 0.0,
-        )
+        correction_score = 100.0 - mae_corrected
 
         logger.info(
             "Training: MAE_raw=%.4f, MAE_corrected=%.4f, "
-            "ProviderScore=%.2f, CorrectionPct=%.2f%%",
+            "ProviderScore=%.2f, CorrectionScore=%.2f",
             mae_raw,
             mae_corrected,
             provider_score,
-            correction_pct,
+            correction_score,
         )
 
         # ------------------------------------------------------------------
@@ -333,7 +330,7 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
             mae_raw=round(mae_raw, 4),
             mae_corrected=round(mae_corrected, 4),
             provider_score=round(provider_score, 2),
-            correction_pct=round(correction_pct, 2),
+            correction_score=round(correction_score, 2),
             model_path=settings.model_path,
             training_status="idle",
         )
@@ -348,7 +345,7 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
             "mae_raw": round(mae_raw, 4),
             "mae_corrected": round(mae_corrected, 4),
             "provider_score": round(provider_score, 2),
-            "correction_pct": round(correction_pct, 2),
+            "correction_score": round(correction_score, 2),
         }
 
     except Exception:
@@ -361,7 +358,7 @@ def train_model(settings: ForecastCorrectionSettings) -> dict:
                 mae_raw=None,
                 mae_corrected=None,
                 provider_score=None,
-                correction_pct=None,
+                correction_score=None,
                 model_path=settings.model_path,
                 training_status="failed",
             )

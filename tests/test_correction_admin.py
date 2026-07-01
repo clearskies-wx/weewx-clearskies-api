@@ -222,7 +222,7 @@ class TestCorrectionStatus:
             "mae_raw",
             "mae_corrected",
             "provider_score",
-            "correction_pct",
+            "correction_score",
             "training_status",
         ]
         for field in required_fields:
@@ -382,7 +382,7 @@ class TestCorrectionRetrain:
         assert body.get("mae_raw") is not None, "mae_raw must be present on successful retrain"
         assert body.get("mae_corrected") is not None, "mae_corrected must be present on success"
         assert body.get("provider_score") is not None, "provider_score must be present"
-        assert body.get("correction_pct") is not None, "correction_pct must be present"
+        assert body.get("correction_score") is not None, "correction_score must be present"
         assert body.get("sample_count", 0) >= 100, (
             f"sample_count must be >= 100, got {body.get('sample_count')}"
         )

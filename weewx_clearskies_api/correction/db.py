@@ -149,7 +149,7 @@ def _create_tables(engine: Engine) -> None:
             mae_raw         REAL,
             mae_corrected   REAL,
             provider_score  REAL,
-            correction_pct  REAL,
+            correction_score  REAL,
             model_path      TEXT,
             training_status TEXT DEFAULT 'idle'
         )
@@ -170,6 +170,18 @@ def _create_tables(engine: Engine) -> None:
         conn.execute(ddl_metadata)
         conn.execute(idx_timestamp)
         conn.execute(idx_provider)
+
+        # Migration: rename correction_pct → correction_score (2026-07-01).
+        # Existing DBs have the old column name; new DBs get correction_score
+        # from the DDL above.  PRAGMA table_info is the safe way to check.
+        cols = conn.execute(text("PRAGMA table_info(model_metadata)"))
+        col_names = [row[1] for row in cols]
+        if "correction_pct" in col_names and "correction_score" not in col_names:
+            conn.execute(text(
+                "ALTER TABLE model_metadata RENAME COLUMN correction_pct TO correction_score"
+            ))
+            logger.info("Migrated model_metadata: correction_pct → correction_score")
+
         conn.commit()
 
     logger.debug("Correction tables verified/created")
@@ -333,7 +345,7 @@ def save_model_metadata(
     mae_raw: float | None,
     mae_corrected: float | None,
     provider_score: float | None,
-    correction_pct: float | None,
+    correction_score: float | None,
     model_path: str | None,
     training_status: str,
 ) -> None:
@@ -348,10 +360,10 @@ def save_model_metadata(
     sql = text("""
         INSERT OR REPLACE INTO model_metadata
             (id, last_trained, sample_count, mae_raw, mae_corrected,
-             provider_score, correction_pct, model_path, training_status)
+             provider_score, correction_score, model_path, training_status)
         VALUES
             (1, :last_trained, :sample_count, :mae_raw, :mae_corrected,
-             :provider_score, :correction_pct, :model_path, :training_status)
+             :provider_score, :correction_score, :model_path, :training_status)
     """)
     with get_engine().connect() as conn:
         conn.execute(sql, {
@@ -360,7 +372,7 @@ def save_model_metadata(
             "mae_raw": mae_raw,
             "mae_corrected": mae_corrected,
             "provider_score": provider_score,
-            "correction_pct": correction_pct,
+            "correction_score": correction_score,
             "model_path": model_path,
             "training_status": training_status,
         })
@@ -371,7 +383,7 @@ def get_model_metadata() -> dict | None:
     """Return the singleton model_metadata row as a dict, or None if absent."""
     sql = text("""
         SELECT id, last_trained, sample_count, mae_raw, mae_corrected,
-               provider_score, correction_pct, model_path, training_status
+               provider_score, correction_score, model_path, training_status
         FROM model_metadata
         WHERE id = 1
     """)

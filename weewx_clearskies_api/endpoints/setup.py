@@ -1683,7 +1683,7 @@ def get_forecast_correction_status(
         mae_raw=metadata.get("mae_raw") if metadata else None,
         mae_corrected=metadata.get("mae_corrected") if metadata else None,
         provider_score=metadata.get("provider_score") if metadata else None,
-        correction_pct=metadata.get("correction_pct") if metadata else None,
+        correction_score=metadata.get("correction_score") if metadata else None,
         training_status=metadata.get("training_status") if metadata else None,
     )
 
@@ -1782,5 +1782,5 @@ def retrain_forecast_correction(
         mae_raw=result.get("mae_raw"),
         mae_corrected=result.get("mae_corrected"),
         provider_score=result.get("provider_score"),
-        correction_pct=result.get("correction_pct"),
+        correction_score=result.get("correction_score"),
     )

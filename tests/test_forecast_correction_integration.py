@@ -9,7 +9,7 @@ Marked @pytest.mark.integration per conftest.py convention.
 Test cases:
 1. End-to-end pipeline: insert pairs → train → correct_bundle() → temps differ from originals.
 2. Correction improves accuracy: mae_corrected < mae_raw from training result.
-3. TruScore positive improvement: provider_score > 0 and correction_pct > 0.
+3. TruScore positive improvement: provider_score > 0 and correction_score > 0.
 4. No-model passthrough: without training, correct_bundle() leaves temps unchanged.
 """
 
@@ -197,7 +197,7 @@ class TestEndToEndPipeline:
     def test_truscores_are_positive_with_bias_data(
         self, correction_engine, correction_settings
     ) -> None:
-        """provider_score > 0 and correction_pct > 0 when training data has a clear bias."""
+        """provider_score > 0 and correction_score > 0 when training data has a clear bias."""
         _insert_known_bias_pairs(count=500, bias=2.5)
 
         result = train_model(correction_settings)
@@ -206,9 +206,9 @@ class TestEndToEndPipeline:
         assert result["provider_score"] > 0, (
             f"provider_score must be positive, got {result['provider_score']}"
         )
-        assert result["correction_pct"] > 0, (
-            f"correction_pct must be positive when bias is correctable, "
-            f"got {result['correction_pct']}"
+        assert result["correction_score"] > 0, (
+            f"correction_score must be positive when bias is correctable, "
+            f"got {result['correction_score']}"
         )
 
     def test_no_model_passthrough(self, correction_engine, correction_settings) -> None:

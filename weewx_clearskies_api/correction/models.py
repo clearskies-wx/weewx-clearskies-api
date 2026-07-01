@@ -47,8 +47,8 @@ class CorrectionStatusResponse(BaseModel):
     mae_corrected: float | None
     #: Provider Score = 100 − MAE_raw (higher = more accurate raw forecast).
     provider_score: float | None
-    #: Correction Score = percentage MAE improvement (clamped to 0 when correction worsens).
-    correction_pct: float | None
+    #: Correction Score = 100 − MAE_corrected (same scale as provider_score; higher = better).
+    correction_score: float | None
     #: Current training state from model_metadata: "idle" | "training" | "failed".
     training_status: str | None
 
@@ -96,5 +96,5 @@ class RetrainResponse(BaseModel):
     mae_corrected: float | None = None
     #: Provider Score = 100 − MAE_raw computed for this run.
     provider_score: float | None = None
-    #: Correction Score = percentage MAE improvement for this run.
-    correction_pct: float | None = None
+    #: Correction Score = 100 − MAE_corrected for this run (same scale as provider_score).
+    correction_score: float | None = None
