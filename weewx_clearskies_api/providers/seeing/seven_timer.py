@@ -300,6 +300,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="7Timer!",
         attribution_text="7Timer!",
+        text_prefix="",
+        text_provider_name="7Timer!",
         url="http://7timer.info/",
     ),
 )

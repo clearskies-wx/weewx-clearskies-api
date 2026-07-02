@@ -187,6 +187,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="National Weather Service",
         attribution_text="Data courtesy of the National Weather Service",
+        text_prefix="Data courtesy of",
+        text_provider_name="the National Weather Service",
         url="https://www.weather.gov/",
     ),
 )

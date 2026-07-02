@@ -196,6 +196,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=True,
         display_name="Xweather (Vaisala)",
         attribution_text="powered by Vaisala Xweather",
+        text_prefix="powered by",
+        text_provider_name="Vaisala Xweather",
         url="https://www.xweather.com/",
         logo_required=True,
     ),

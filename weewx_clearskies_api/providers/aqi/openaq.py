@@ -153,6 +153,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="OpenAQ",
         attribution_text="Air quality data from OpenAQ",
+        text_prefix="Air quality data from",
+        text_provider_name="OpenAQ",
         url="https://openaq.org/",
     ),
 )

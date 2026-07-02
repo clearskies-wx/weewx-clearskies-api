@@ -53,6 +53,8 @@ def make_capability(iframe_url: str) -> ProviderCapability:
             attribution_required=False,
             display_name="External radar",
             attribution_text="External radar source",
+            text_prefix="",
+            text_provider_name="External radar source",
             url="",
         ),
     )

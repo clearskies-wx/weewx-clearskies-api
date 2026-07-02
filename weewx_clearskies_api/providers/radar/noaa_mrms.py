@@ -82,6 +82,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="NOAA MRMS",
         attribution_text="NOAA Multi-Radar/Multi-Sensor System",
+        text_prefix="",
+        text_provider_name="NOAA Multi-Radar/Multi-Sensor System",
         url="https://www.nssl.noaa.gov/projects/mrms/",
     ),
 )

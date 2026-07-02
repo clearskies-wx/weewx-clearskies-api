@@ -100,6 +100,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="GeoNet",
         attribution_text="Earthquake data courtesy of GeoNet, NZ",
+        text_prefix="Earthquake data courtesy of",
+        text_provider_name="GeoNet, NZ",
         url="https://www.geonet.org.nz/",
     ),
 )

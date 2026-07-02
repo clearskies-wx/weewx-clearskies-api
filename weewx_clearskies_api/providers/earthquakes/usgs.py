@@ -103,6 +103,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="U.S. Geological Survey",
         attribution_text="Earthquake data courtesy of the U.S. Geological Survey",
+        text_prefix="Earthquake data courtesy of",
+        text_provider_name="the U.S. Geological Survey",
         url="https://earthquake.usgs.gov/",
     ),
 )

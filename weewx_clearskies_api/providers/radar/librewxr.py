@@ -127,6 +127,8 @@ def _build_capability() -> ProviderCapability:
             attribution_required=True,
             display_name="LibreWxR",
             attribution_text="LibreWxR — Data: CC-BY-4.0",
+            text_prefix="",
+            text_provider_name="LibreWxR — Data: CC-BY-4.0",
             url="https://librewxr.net/",
         ),
     )

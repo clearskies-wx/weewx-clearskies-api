@@ -80,6 +80,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="Iowa Environmental Mesonet",
         attribution_text="Iowa Environmental Mesonet NEXRAD",
+        text_prefix="",
+        text_provider_name="Iowa Environmental Mesonet NEXRAD",
         url="https://mesonet.agron.iastate.edu/",
     ),
 )

@@ -97,6 +97,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="EMSC",
         attribution_text="Credit: EMSC/CSEM",
+        text_prefix="Credit:",
+        text_provider_name="EMSC/CSEM",
         url="https://www.emsc-csem.org/",
     ),
 )

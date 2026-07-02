@@ -101,6 +101,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=True,
         display_name="RainViewer",
         attribution_text="RainViewer",
+        text_prefix="",
+        text_provider_name="RainViewer",
         url="https://www.rainviewer.com/",
     ),
 )

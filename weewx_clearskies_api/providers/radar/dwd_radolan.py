@@ -81,6 +81,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="DWD",
         attribution_text="Deutscher Wetterdienst",
+        text_prefix="",
+        text_provider_name="Deutscher Wetterdienst",
         url="https://www.dwd.de/",
     ),
 )

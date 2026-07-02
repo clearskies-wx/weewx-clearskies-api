@@ -107,6 +107,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="EPOS-France",
         attribution_text="Données sismiques: EPOS-France",
+        text_prefix="Données sismiques:",
+        text_provider_name="EPOS-France",
         url="https://seismology.epos-france.fr/",
     ),
 )

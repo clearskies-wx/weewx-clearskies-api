@@ -109,6 +109,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=True,
         display_name="OpenWeather",
         attribution_text="Weather data provided by OpenWeather",
+        text_prefix="Weather data provided by",
+        text_provider_name="OpenWeather",
         url="https://openweathermap.org/",
         logo_required=True,
     ),

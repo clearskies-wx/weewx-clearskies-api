@@ -193,6 +193,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="Weather Underground",
         attribution_text="Weather data from Weather Underground",
+        text_prefix="Weather data from",
+        text_provider_name="Weather Underground",
         url="https://www.wunderground.com/",
     ),
 )

@@ -223,6 +223,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=True,
         display_name="IQAir",
         attribution_text="Powered by IQAir",
+        text_prefix="Powered by",
+        text_provider_name="IQAir",
         url="https://www.iqair.com/",
         do_not_use_logo=True,
     ),

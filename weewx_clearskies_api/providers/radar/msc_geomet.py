@@ -81,6 +81,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=False,
         display_name="MSC GeoMet",
         attribution_text="Environment and Climate Change Canada",
+        text_prefix="",
+        text_provider_name="Environment and Climate Change Canada",
         url="https://eccc-msc.github.io/open-data/",
     ),
 )

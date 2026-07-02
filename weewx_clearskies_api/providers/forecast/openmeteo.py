@@ -155,6 +155,8 @@ CAPABILITY = ProviderCapability(
         attribution_required=True,
         display_name="Open-Meteo",
         attribution_text="Weather data by Open-Meteo.com",
+        text_prefix="Weather data by",
+        text_provider_name="Open-Meteo.com",
         url="https://open-meteo.com/",
     ),
 )
