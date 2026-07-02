@@ -37,6 +37,8 @@ class ProviderAttribution:
     attribution_required: bool
     display_name: str
     attribution_text: str
+    text_prefix: str
+    text_provider_name: str
     url: str
     text_translatable: bool = False
     text_language: str = "en"

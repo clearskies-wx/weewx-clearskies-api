@@ -721,6 +721,8 @@ class ProviderAttributionResponse(BaseModel):
     attributionRequired: bool
     displayName: str
     attributionText: str
+    textPrefix: str
+    textProviderName: str
     url: str
     textTranslatable: bool = False
     textLanguage: str = "en"

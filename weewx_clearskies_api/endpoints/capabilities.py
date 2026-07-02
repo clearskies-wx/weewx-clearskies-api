@@ -96,6 +96,8 @@ def get_capabilities() -> CapabilityResponse:
                     attributionRequired=cap.attribution.attribution_required,
                     displayName=cap.attribution.display_name,
                     attributionText=cap.attribution.attribution_text,
+                    textPrefix=cap.attribution.text_prefix,
+                    textProviderName=cap.attribution.text_provider_name,
                     url=cap.attribution.url,
                     textTranslatable=cap.attribution.text_translatable,
                     textLanguage=cap.attribution.text_language,
