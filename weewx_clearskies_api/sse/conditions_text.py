@@ -338,8 +338,9 @@ def build_weather_text(
 
             # Gusty check — ADR-044 §4 thresholds in mph.  Only fires for
             # non-Calm wind (Beaufort > 0) — "Calm and Gusty" makes no sense.
-            # "Gusty" has no locale key yet (not in the T3.4 scope) — left as
-            # literal English pending a future locale-file addition.
+            # "Gusty" resolves through the locale file (wind.gusty) and is
+            # joined with the locale's composition connector so word order
+            # and connector text stay correct across languages.
             if b["value"] > 0 and wind_gust is not None:
                 speed_mph = convert(wind_speed, wind_speed_unit, "mile_per_hour")
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
@@ -349,7 +350,9 @@ def build_weather_text(
                     and gust_mph >= speed_mph + 12.0
                     and gust_mph >= 18.0
                 ):
-                    wind_label = wind_label + " and Gusty"
+                    connector = i18n.t("composition.connector_and", locale)
+                    gusty = i18n.t("wind.gusty", locale)
+                    wind_label = f"{wind_label} {connector} {gusty}"
 
             parts.append(wind_label)
         except (ValueError, TypeError):

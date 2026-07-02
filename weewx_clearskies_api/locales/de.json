@@ -75,6 +75,9 @@
     "11": "Orkanartiger Sturm",
     "12": "Orkan"
   },
+  "wind": {
+    "gusty": "Böig"
+  },
   "aqi": {
     "good": "Gut",
     "moderate": "Mäßig",

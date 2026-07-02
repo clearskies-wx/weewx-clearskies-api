@@ -75,6 +75,9 @@
     "11": "Violent storm",
     "12": "Hurricane"
   },
+  "wind": {
+    "gusty": "Gusty"
+  },
   "aqi": {
     "good": "Good",
     "moderate": "Moderate",

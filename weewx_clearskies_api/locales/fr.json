@@ -75,6 +75,9 @@
     "11": "Violente tempête",
     "12": "Ouragan"
   },
+  "wind": {
+    "gusty": "Rafales"
+  },
   "aqi": {
     "good": "Bon",
     "moderate": "Modéré",

@@ -75,6 +75,9 @@
     "11": "Zeer zware storm",
     "12": "Orkaan"
   },
+  "wind": {
+    "gusty": "Windvlagen"
+  },
   "aqi": {
     "good": "Goed",
     "moderate": "Matig",
