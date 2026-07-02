@@ -54,6 +54,9 @@
     "separator": "、",
     "connector_and": "と",
     "connector_with": "を伴う",
+    "temporal_temporarily": "一時",
+    "temporal_occasionally": "時々",
+    "temporal_then": "のち",
     "order": [
       "temperature",
       "sky",

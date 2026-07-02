@@ -1,29 +1,24 @@
-"""Current conditions text composer (ADR-044).
+"""Current conditions text composer (ADR-044, I18N T3.4).
 
 Assembles weatherText from temperature-comfort, sky condition, wind (Beaufort),
 and precipitation components.  Each component is independently nullable;
 absent components are dropped from the composed string.
 
-Component order (ADR-044 §9 amendment, 2026-05-28):
-  [temperature-comfort, sky, wind, precipitation]
+Composition is locale-aware with two modes:
 
-Composition uses a "with" connector for the final part to prevent double-"and"
-when the temperature-comfort label is compound (e.g. "Warm and Humid").
+  **Template** (European + Filipino locales): reads ``composition.order``
+  from the locale file to determine component sequence (e.g. German/Russian
+  put sky first, English puts temperature first).  Connector and separator
+  strings come from the locale file.
 
-Module-level state is held only in sky_condition and temperature_comfort —
-this module is stateless.
+  **Custom** (CJK locales): dispatches to per-locale composer modules in
+  ``locales/composers/``.  Japanese uses JMA-influenced compound expressions
+  (sky + precipitation joined with 一時 "temporarily").  Chinese uses
+  CMA-style space/comma-separated terms.
 
-I18N (T3.4): precipitation labels and the compose() connectors/separator
-resolve from the locale file via i18n.t(). ``sky`` and ``provider_sky``
-inputs arrive already translated (sky_condition.classify() translates
-internally per T3.4; provider text is source text as-is) — the day/night
-vocabulary swap in ``_to_display_label`` looks up the locale's clear/sunny
-text via t() rather than hardcoded English literals, so the substitution
-stays correct for English today. True key-based (pre-translation) day/night
-selection would require reworking sky_condition's public contract and the
-provider_sky text path together; deferred to Phase 6 when non-English
-locale files are actually populated (currently all fall back to English,
-so behavior is unchanged either way).
+The ``composition.pattern`` key in each locale file ("template" or "custom")
+controls which path is taken.  Custom composers receive named components
+and produce the full text string.
 """
 
 from __future__ import annotations
@@ -120,23 +115,73 @@ def _intensity(noun_key: str, rate_inhr: float) -> str:
     return f"heavy_{noun_key}"
 
 
-def _compose(parts: list[str | None], locale: str | None = None) -> str:
-    """Join non-empty parts into a natural-language string (ADR-044 §9 amendment).
+_COMPONENT_ORDER_DEFAULT = ["temperature", "sky", "wind", "precipitation"]
 
-    Rules:
-      1 part  → "{a}"
-      2 parts → "{a}{separator}{connector} {b}"
-      3+ parts → "{a}{separator}{b}{separator}...{separator}{connector} {last}"
+# Lazy-loaded custom composer modules keyed by composer name.
+_custom_composers: dict[str, object] = {}
 
-    Separator and connectors resolve from the locale file (I18N T3.4) via
-    ``composition.separator``, ``composition.connector_and``, and
-    ``composition.connector_with``. The connector is connector_and when the
-    last part equals the locale's Beaufort-0 ("Calm") text (saying "with
-    Calm" is unnatural), and connector_with otherwise — connector_with
-    prevents double-"and" when the first part is a compound temperature-
-    comfort label like "Warm and Humid".
+
+def _get_custom_composer(name: str) -> object | None:
+    """Import and cache a custom composer module by name."""
+    if name in _custom_composers:
+        return _custom_composers[name]
+    try:
+        mod = __import__(
+            f"weewx_clearskies_api.locales.composers.{name}",
+            fromlist=["compose"],
+        )
+        _custom_composers[name] = mod
+        return mod
+    except ImportError:
+        _custom_composers[name] = None  # type: ignore[assignment]
+        return None
+
+
+def _compose_components(
+    components: dict[str, str | None],
+    locale: str | None = None,
+) -> str:
+    """Dispatch to template or custom composer based on locale config.
+
+    *components* maps component names ("temperature", "sky", "wind",
+    "precipitation") to their translated labels (or None if absent).
     """
-    filtered = [p for p in parts if p]
+    loc = locale or i18n.get_active_locale()
+    pattern = i18n.t("composition.pattern", loc)
+    composer_name = i18n.t("composition.composer", loc)
+
+    # Custom composer dispatch for CJK locales.
+    if pattern == "custom" and composer_name != "composition.composer":
+        mod = _get_custom_composer(composer_name)
+        if mod is not None and hasattr(mod, "compose"):
+            return mod.compose(components, loc)
+
+    # Template composition: locale-driven order + connectors.
+    return _template_compose(components, loc)
+
+
+def _template_compose(
+    components: dict[str, str | None],
+    locale: str,
+) -> str:
+    """Template-based composition with locale-driven order and connectors.
+
+    Reads ``composition.order`` from the locale file to determine component
+    sequence.  Uses ``connector_with`` for the last part (preventing
+    double-"and" with compound temperature labels like "Warm and Humid"),
+    except when the last part is Beaufort-0 ("Calm"), where ``connector_and``
+    is more natural.
+    """
+    # Read order from locale file; fall back to default.
+    order = _COMPONENT_ORDER_DEFAULT
+    order_raw = i18n._resolve_key(  # noqa: SLF001
+        i18n._locales.get(locale, {}), "composition.order"  # noqa: SLF001
+    )
+    if isinstance(order_raw, list) and all(isinstance(x, str) for x in order_raw):
+        order = order_raw
+
+    # Build ordered parts list from named components.
+    filtered = [components[k] for k in order if components.get(k)]
     if not filtered:
         return ""
     if len(filtered) == 1:
@@ -270,17 +315,21 @@ def build_weather_text(
         Composed conditions text, e.g. "Warm and Humid, Partly Cloudy, with Light Rain",
         or "" when no components are available.
     """
-    parts: list[str | None] = []
+    components: dict[str, str | None] = {
+        "temperature": None,
+        "sky": None,
+        "wind": None,
+        "precipitation": None,
+    }
 
     # 1. Temperature-comfort (2D matrix, ADR-044 §5-7).
-    # Convert all temperature inputs to °F before classifying.
     app_temp_f = _to_fahrenheit(app_temp, temp_unit)
     dewpoint_f = _to_fahrenheit(dewpoint, dewpoint_unit)
     out_temp_f = _to_fahrenheit(out_temp, temp_unit)
     heatindex_f = _to_fahrenheit(heatindex, temp_unit)
     windchill_f = _to_fahrenheit(windchill, temp_unit)
 
-    temp_comfort_label = _temperature_comfort.classify(
+    components["temperature"] = _temperature_comfort.classify(
         app_temp=app_temp_f,
         dewpoint=dewpoint_f,
         out_temp=out_temp_f,
@@ -288,7 +337,6 @@ def build_weather_text(
         windchill=windchill_f,
         locale=locale,
     )
-    parts.append(temp_comfort_label)
 
     # 2. Sky condition: use local solar classification only during daytime.
     # At night, fall back to provider sky data (ADR-044 §1b).
@@ -302,20 +350,9 @@ def build_weather_text(
     # Fog/mist override: when fog_mist_label is set ('Foggy' or 'Misty'),
     # it replaces the effective sky entirely.  Fog and mist are standalone
     # sky conditions — they are not appended to cloud-cover labels.
-    # When fog_mist_label is active, the haze qualifier is also suppressed
-    # (fog/mist and haze are mutually exclusive; the PM disambiguation gate
-    # in fog_condition already returns 'Hazy' for the PM case).
     if fog_mist_label is not None:
         effective_sky = fog_mist_label
     else:
-        # Haze qualifier: append ", Hazy" after the sky label when haze is
-        # detected and the effective sky is a clear-ish label.  "Hazy and
-        # Overcast" is invalid per API-MANUAL §haze detection — the
-        # clear-sky-only constraint is enforced both in detect_haze() and
-        # here as a belt-and-suspenders guard.
-        #
-        # Terse format (current default): "Sunny, Hazy"
-        # Standard/verbose (future): "Sunny. Hazy." (NWS convention)
         if haze_label is not None and effective_sky is not None:
             _sky_lower = effective_sky.lower()
             _haze_eligible = (
@@ -327,7 +364,7 @@ def build_weather_text(
             if _haze_eligible:
                 effective_sky = f"{effective_sky}, {haze_label}"
 
-    parts.append(effective_sky)
+    components["sky"] = effective_sky
 
     # 3. Wind (Beaufort label). All Beaufort values including 0 (Calm) are
     # included — calm is a real condition (ADR-044 §4, amended 2026-06-05).
@@ -336,11 +373,6 @@ def build_weather_text(
             b = beaufort(wind_speed, wind_speed_unit, locale)
             wind_label = str(b["label"])
 
-            # Gusty check — ADR-044 §4 thresholds in mph.  Only fires for
-            # non-Calm wind (Beaufort > 0) — "Calm and Gusty" makes no sense.
-            # "Gusty" resolves through the locale file (wind.gusty) and is
-            # joined with the locale's composition connector so word order
-            # and connector text stay correct across languages.
             if b["value"] > 0 and wind_gust is not None:
                 speed_mph = convert(wind_speed, wind_speed_unit, "mile_per_hour")
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
@@ -354,15 +386,13 @@ def build_weather_text(
                     gusty = i18n.t("wind.gusty", locale)
                     wind_label = f"{wind_label} {connector} {gusty}"
 
-            parts.append(wind_label)
+            components["wind"] = wind_label
         except (ValueError, TypeError):
             pass
 
     # 4. Precipitation.
-    parts.append(
-        _precip_label(
-            rain_rate, rain_rate_unit, precip_type=precip_type, snow_rate=snow_rate, locale=locale
-        )
+    components["precipitation"] = _precip_label(
+        rain_rate, rain_rate_unit, precip_type=precip_type, snow_rate=snow_rate, locale=locale
     )
 
-    return _compose(parts, locale)
+    return _compose_components(components, locale)
