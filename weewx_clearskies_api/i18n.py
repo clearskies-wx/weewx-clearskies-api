@@ -168,8 +168,10 @@ def format_number(value: float, decimals: int, locale: str | None = None) -> str
     """Format *value* with locale-correct decimal separator using Babel.
 
     *decimals* is the fixed number of digits after the decimal point.
+    Babel expects underscore-separated locale tags (``pt_BR``), so we
+    normalise from the BCP-47 hyphen form (``pt-BR``) used everywhere else.
     """
-    loc = locale or _active_locale
+    loc = (locale or _active_locale).replace("-", "_")
     pattern = "#,##0." + ("0" * decimals) if decimals > 0 else "#,##0"
     return str(format_decimal(value, format=pattern, locale=loc))
 
