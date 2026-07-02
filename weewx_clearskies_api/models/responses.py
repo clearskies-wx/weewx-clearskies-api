@@ -715,6 +715,19 @@ class WeewxColumnEntry(BaseModel):
     archiveColumn: str
 
 
+class ProviderAttributionResponse(BaseModel):
+    """Attribution metadata for a provider (ADR-080). camelCase for JSON."""
+
+    attributionRequired: bool
+    displayName: str
+    attributionText: str
+    url: str
+    textTranslatable: bool = False
+    textLanguage: str = "en"
+    logoRequired: bool = False
+    doNotUseLogo: bool = False
+
+
 class CapabilityDeclaration(BaseModel):
     """Per ADR-038: one configured provider module."""
 
@@ -738,6 +751,7 @@ class CapabilityDeclaration(BaseModel):
     alertsAvailable: bool | None = None
     satelliteAvailable: bool | None = None
     satelliteTileUrlTemplate: str | None = None
+    attribution: ProviderAttributionResponse | None = None
 
 
 class CapabilityRegistry(BaseModel):

@@ -26,6 +26,25 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class ProviderAttribution:
+    """Attribution metadata per ADR-080.
+
+    Populated on each provider's CAPABILITY declaration. Exposed via
+    GET /api/v1/capabilities so the dashboard can render ToS-compliant
+    attribution footers without hardcoding provider metadata.
+    """
+
+    attribution_required: bool
+    display_name: str
+    attribution_text: str
+    url: str
+    text_translatable: bool = False
+    text_language: str = "en"
+    logo_required: bool = False
+    do_not_use_logo: bool = False
+
+
+@dataclass(frozen=True)
 class ProviderCapability:
     """Static capability declaration per ADR-038 §4.
 
@@ -67,6 +86,8 @@ class ProviderCapability:
     iframe_url: str | None = None             # operator-supplied iframe URL (iframe provider only)
     # ADR-066: observed vs model data classification for AQI providers
     is_observed_source: bool = True           # True for observed-data providers; False for model-based (Open-Meteo, OWM)
+    # ADR-080: attribution metadata (None only for legacy declarations not yet updated)
+    attribution: ProviderAttribution | None = None
     # LibreWxR-specific capability fields (None for non-LibreWxR providers)
     caddy_prefix: str | None = None           # e.g. "/librewxr" — Caddy route prefix for tile proxy
     alert_url: str | None = None              # e.g. "/librewxr/v2/alerts" — alert endpoint path

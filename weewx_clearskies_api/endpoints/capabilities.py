@@ -25,6 +25,7 @@ from weewx_clearskies_api.models.responses import (
     CapabilityDeclaration,
     CapabilityRegistry,
     CapabilityResponse,
+    ProviderAttributionResponse,
     WeewxColumnEntry,
     utc_isoformat,
 )
@@ -89,6 +90,20 @@ def get_capabilities() -> CapabilityResponse:
             alertsAvailable=cap.alerts_available,
             satelliteAvailable=cap.satellite_available,
             satelliteTileUrlTemplate=cap.satellite_tile_url_template,
+            attribution=(
+                ProviderAttributionResponse(
+                    attributionRequired=cap.attribution.attribution_required,
+                    displayName=cap.attribution.display_name,
+                    attributionText=cap.attribution.attribution_text,
+                    url=cap.attribution.url,
+                    textTranslatable=cap.attribution.text_translatable,
+                    textLanguage=cap.attribution.text_language,
+                    logoRequired=cap.attribution.logo_required,
+                    doNotUseLogo=cap.attribution.do_not_use_logo,
+                )
+                if cap.attribution is not None
+                else None
+            ),
         )
         for cap in provider_registry
     ]
