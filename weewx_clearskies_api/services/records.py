@@ -46,46 +46,55 @@ class _RecordSpec:
     canonicalField: str  # noqa: N815 — weewx camelCase
     kind: str  # "high" | "low"
     aggregator: str  # "max"|"min"|"sum-by-day-then-max"|"sum-by-month-then-max"|"sum-by-hour-then-max"|"sum-by-year-then-max"|"max-daily-range"|"min-daily-range"|"max-consecutive-rain-days"|"max-consecutive-dry-days"
+    # I18N T3.3: dot-suffix key into the locale file's "records" section
+    # (e.g. "high_temperature" -> t("records.high_temperature", locale)).
+    # `label` above is retained unchanged (English) — it is inspected
+    # directly by tests and used as the logging fallback; `labelKey` is the
+    # new lookup used when building the served RecordEntry.label. Defaults
+    # to "" so existing 4-positional-arg call sites (including test-authored
+    # ad-hoc specs) keep working without a key — get_records() falls back to
+    # `label` when `labelKey` is empty.
+    labelKey: str = ""  # noqa: N815 — weewx camelCase convention matches sibling fields
 
 
 SECTION_MAP: dict[str, list[_RecordSpec]] = {
     "temperature": [
-        _RecordSpec("High temperature", "outTemp", "high", "max"),
-        _RecordSpec("Low temperature", "outTemp", "low", "min"),
-        _RecordSpec("High heat index", "heatindex", "high", "max"),
-        _RecordSpec("Low wind chill", "windchill", "low", "min"),
-        _RecordSpec("High apparent temperature", "appTemp", "high", "max"),
-        _RecordSpec("Low apparent temperature", "appTemp", "low", "min"),
-        _RecordSpec("Largest daily temperature range", "outTemp", "high", "max-daily-range"),
-        _RecordSpec("Smallest daily temperature range", "outTemp", "low", "min-daily-range"),
+        _RecordSpec("High temperature", "outTemp", "high", "max", "high_temperature"),
+        _RecordSpec("Low temperature", "outTemp", "low", "min", "low_temperature"),
+        _RecordSpec("High heat index", "heatindex", "high", "max", "high_heat_index"),
+        _RecordSpec("Low wind chill", "windchill", "low", "min", "low_wind_chill"),
+        _RecordSpec("High apparent temperature", "appTemp", "high", "max", "high_apparent_temperature"),
+        _RecordSpec("Low apparent temperature", "appTemp", "low", "min", "low_apparent_temperature"),
+        _RecordSpec("Largest daily temperature range", "outTemp", "high", "max-daily-range", "largest_daily_temp_range"),
+        _RecordSpec("Smallest daily temperature range", "outTemp", "low", "min-daily-range", "smallest_daily_temp_range"),
     ],
     "wind": [
-        _RecordSpec("High wind speed", "windSpeed", "high", "max"),
-        _RecordSpec("High wind gust", "windGust", "high", "max"),
-        _RecordSpec("Highest daily wind run", "windrun", "high", "sum-by-day-then-max"),
+        _RecordSpec("High wind speed", "windSpeed", "high", "max", "high_wind_speed"),
+        _RecordSpec("High wind gust", "windGust", "high", "max", "high_wind_gust"),
+        _RecordSpec("Highest daily wind run", "windrun", "high", "sum-by-day-then-max", "highest_daily_wind_run"),
     ],
     "rain": [
-        _RecordSpec("High daily rainfall", "rain", "high", "sum-by-day-then-max"),
-        _RecordSpec("High monthly rainfall", "rain", "high", "sum-by-month-then-max"),
-        _RecordSpec("Most rain in 1 hour", "rain", "high", "sum-by-hour-then-max"),
-        _RecordSpec("Highest annual rainfall", "rain", "high", "sum-by-year-then-max"),
-        _RecordSpec("Highest rain rate", "rainRate", "high", "max"),
-        _RecordSpec("Consecutive days with rain", "rain", "high", "max-consecutive-rain-days"),
-        _RecordSpec("Consecutive days without rain", "rain", "high", "max-consecutive-dry-days"),
+        _RecordSpec("High daily rainfall", "rain", "high", "sum-by-day-then-max", "high_daily_rainfall"),
+        _RecordSpec("High monthly rainfall", "rain", "high", "sum-by-month-then-max", "high_monthly_rainfall"),
+        _RecordSpec("Most rain in 1 hour", "rain", "high", "sum-by-hour-then-max", "most_rain_1_hour"),
+        _RecordSpec("Highest annual rainfall", "rain", "high", "sum-by-year-then-max", "highest_annual_rainfall"),
+        _RecordSpec("Highest rain rate", "rainRate", "high", "max", "highest_rain_rate"),
+        _RecordSpec("Consecutive days with rain", "rain", "high", "max-consecutive-rain-days", "consecutive_days_with_rain"),
+        _RecordSpec("Consecutive days without rain", "rain", "high", "max-consecutive-dry-days", "consecutive_days_without_rain"),
     ],
     "humidity": [
-        _RecordSpec("High humidity", "outHumidity", "high", "max"),
-        _RecordSpec("Low humidity", "outHumidity", "low", "min"),
-        _RecordSpec("High dewpoint", "dewpoint", "high", "max"),
-        _RecordSpec("Low dewpoint", "dewpoint", "low", "min"),
+        _RecordSpec("High humidity", "outHumidity", "high", "max", "high_humidity"),
+        _RecordSpec("Low humidity", "outHumidity", "low", "min", "low_humidity"),
+        _RecordSpec("High dewpoint", "dewpoint", "high", "max", "high_dewpoint"),
+        _RecordSpec("Low dewpoint", "dewpoint", "low", "min", "low_dewpoint"),
     ],
     "barometer": [
-        _RecordSpec("High barometer", "barometer", "high", "max"),
-        _RecordSpec("Low barometer", "barometer", "low", "min"),
+        _RecordSpec("High barometer", "barometer", "high", "max", "high_barometer"),
+        _RecordSpec("Low barometer", "barometer", "low", "min", "low_barometer"),
     ],
     "sun": [
-        _RecordSpec("High solar radiation", "radiation", "high", "max"),
-        _RecordSpec("High UV index", "UV", "high", "max"),
+        _RecordSpec("High solar radiation", "radiation", "high", "max", "high_solar_radiation"),
+        _RecordSpec("High UV index", "UV", "high", "max", "high_uv_index"),
     ],
     # aqi self-hides this round — Phase 4 / ADR-013.
     "aqi": [],
@@ -389,8 +398,15 @@ def get_records(
     registry: ColumnRegistry,
     period: str,
     section_filter: str | None,
+    locale: str | None = None,
 ) -> RecordsBundle:
-    """Query the archive for highs/lows and return a RecordsBundle."""
+    """Query the archive for highs/lows and return a RecordsBundle.
+
+    Args:
+        locale: Optional locale code (I18N T3.3) for record labels. When
+            omitted, labels resolve via the i18n module's active locale
+            (defaults to English).
+    """
     mapped_fields = set(registry.stock.keys())
     dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
 
@@ -479,9 +495,16 @@ def get_records(
             if spec.aggregator in ("max-consecutive-rain-days", "max-consecutive-dry-days"):
                 response_field = "consecutiveDays"
 
+            if spec.labelKey:
+                from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+                resolved_label = i18n.t(f"records.{spec.labelKey}", locale)
+            else:
+                resolved_label = spec.label
+
             entries.append(
                 RecordEntry(
-                    label=spec.label,
+                    label=resolved_label,
                     canonicalField=response_field,
                     value=float(val) if val is not None else None,
                     observedAt=_epoch_to_utc_z(ts) if ts is not None else None,

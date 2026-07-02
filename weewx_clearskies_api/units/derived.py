@@ -11,36 +11,47 @@ from .conversion import convert
 
 # ---------------------------------------------------------------------------
 # Beaufort scale — WMO standard thresholds in m/s
-# Each entry: (upper_bound_exclusive, beaufort_number, label)
+# Each entry: (upper_bound_exclusive, beaufort_number). Labels are no longer
+# stored here (I18N T3.3) — they resolve from the locale file via
+# i18n.t("beaufort.<number>", locale).
 # ---------------------------------------------------------------------------
 
-_BEAUFORT_SCALE: list[tuple[float, int, str]] = [
-    (0.5,  0,  "Calm"),
-    (1.6,  1,  "Very Light Breeze"),
-    (3.4,  2,  "Light breeze"),
-    (5.5,  3,  "Gentle breeze"),
-    (8.0,  4,  "Moderate breeze"),
-    (10.8, 5,  "Fresh breeze"),
-    (13.9, 6,  "Strong breeze"),
-    (17.2, 7,  "Near gale"),
-    (20.8, 8,  "Gale"),
-    (24.5, 9,  "Strong gale"),
-    (28.5, 10, "Storm"),
-    (32.7, 11, "Violent storm"),
-    (float("inf"), 12, "Hurricane"),
+_BEAUFORT_SCALE: list[tuple[float, int]] = [
+    (0.5,  0),
+    (1.6,  1),
+    (3.4,  2),
+    (5.5,  3),
+    (8.0,  4),
+    (10.8, 5),
+    (13.9, 6),
+    (17.2, 7),
+    (20.8, 8),
+    (24.5, 9),
+    (28.5, 10),
+    (32.7, 11),
+    (float("inf"), 12),
 ]
 
 
-def beaufort(wind_speed: float, source_unit: str) -> dict[str, object]:
+def beaufort(
+    wind_speed: float,
+    source_unit: str,
+    locale: str | None = None,
+) -> dict[str, object]:
     """Compute Beaufort number and label from wind speed.
 
     Args:
         wind_speed:  Wind speed value in source_unit.
         source_unit: Unit of wind_speed (e.g. "mile_per_hour").
+        locale:      Optional locale code (I18N T3.3). When omitted, the
+                     label resolves via the i18n module's active locale
+                     (defaults to English).
 
     Returns:
         {"value": int, "label": str, "formatted": str}
     """
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
     # Convert to m/s for threshold comparison (skip convert() for identity).
     if source_unit == "meter_per_second":
         mps = wind_speed
@@ -51,13 +62,15 @@ def beaufort(wind_speed: float, source_unit: str) -> dict[str, object]:
         assert converted is not None
         mps = converted
 
-    for threshold, number, label in _BEAUFORT_SCALE:
+    for threshold, number in _BEAUFORT_SCALE:
         if mps < threshold:
+            label = i18n.t(f"beaufort.{number}", locale)
             return {"value": number, "label": label, "formatted": str(number)}
 
     # Unreachable: the final entry has threshold float("inf"), but kept for
     # type-checker completeness.
-    return {"value": 12, "label": "Hurricane", "formatted": "12"}  # pragma: no cover
+    label = i18n.t("beaufort.12", locale)
+    return {"value": 12, "label": label, "formatted": "12"}  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------

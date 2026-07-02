@@ -90,13 +90,16 @@ def ugm3_to_ppm(ugm3: float | None, *, pollutant: str) -> float | None:
 # EPA AQI category breakpoints (upper bounds, inclusive).
 # Bisect-by-upper-bound dispatch: aqi value <= upper → that category.
 # Order matters — list MUST be sorted by upper bound ascending.
+# The locale key (I18N T3.3) is the third element; the category name itself
+# is no longer returned directly — epa_category() resolves it via
+# i18n.t("aqi.<key>", locale).
 _EPA_CATEGORY_BANDS: list[tuple[int, str]] = [
-    (50,  "Good"),
-    (100, "Moderate"),
-    (150, "Unhealthy for Sensitive Groups"),
-    (200, "Unhealthy"),
-    (300, "Very Unhealthy"),
-    (500, "Hazardous"),
+    (50,  "good"),
+    (100, "moderate"),
+    (150, "unhealthy_sensitive"),
+    (200, "unhealthy"),
+    (300, "very_unhealthy"),
+    (500, "hazardous"),
 ]
 
 
@@ -138,24 +141,31 @@ def ppb_to_ugm3(ppb: float, *, pollutant: str) -> float | None:
     return ppb * mw / 24.45
 
 
-def epa_category(aqi: int | float | None) -> str | None:
+def epa_category(aqi: int | float | None, locale: str | None = None) -> str | None:
     """Map a 0–500 EPA AQI value to its category name.
 
     Args:
         aqi: AQI value (or None).
+        locale: Optional locale code (I18N T3.3). When omitted, the category
+            name resolves via the i18n module's active locale (defaults to
+            English).
 
     Returns:
-        EPA category name (canonical spelling per canonical §3.8) or None.
-        Values > 500 fall into "Hazardous" (max band) for safety.
+        EPA category name (canonical spelling per canonical §3.8, resolved
+        via the locale file) or None. Values > 500 fall into "Hazardous"
+        (max band) for safety.
     """
     if aqi is None:
         return None
-    for upper, name in _EPA_CATEGORY_BANDS:
+
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+    for upper, key in _EPA_CATEGORY_BANDS:
         if aqi <= upper:
-            return name
+            return i18n.t(f"aqi.{key}", locale)
     # Above 500 — cap at "Hazardous" (top band) rather than raising. Spec is
     # 0-500 but provider-side bugs producing 501+ shouldn't crash us.
-    return "Hazardous"
+    return i18n.t("aqi.hazardous", locale)
 
 
 # ---------------------------------------------------------------------------

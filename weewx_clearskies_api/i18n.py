@@ -71,6 +71,23 @@ def get_active_locale() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_locales_loaded() -> None:
+    """Lazily populate ``_locales`` on first lookup if nothing has loaded yet.
+
+    Production startup (``__main__.py``, I18N T3.5) calls ``load_locales()``
+    explicitly before serving any request. Callers that resolve strings
+    outside that startup sequence — unit tests that exercise a single
+    function directly, or any module-level code that runs before app
+    startup — would otherwise see every lookup fall through to the raw key
+    (``_locales`` empty -> no ``"en"`` entry -> key returned as-is).
+    Loading is idempotent and cheap (13 small JSON files), so calling it
+    defensively here is safe; a later explicit ``load_locales()`` call at
+    startup simply repopulates the same dict.
+    """
+    if not _locales:
+        load_locales()
+
+
 def t(key: str, locale: str | None = None) -> str:
     """Look up a translated string by dot-separated *key*.
 
@@ -82,6 +99,7 @@ def t(key: str, locale: str | None = None) -> str:
     skeletons) is treated as "not translated" and falls through to the next
     stage in the resolution chain — it is never returned as-is.
     """
+    _ensure_locales_loaded()
     loc = locale or _active_locale
 
     value = _resolve_key(_locales.get(loc, {}), key)
@@ -109,6 +127,7 @@ def t_case(key: str, case: str = "nominative", locale: str | None = None) -> str
     As with :func:`t`, an empty string is treated as "not translated" and
     falls through to the next stage.
     """
+    _ensure_locales_loaded()
     loc = locale or _active_locale
 
     value = _resolve_key(_locales.get(loc, {}), key)

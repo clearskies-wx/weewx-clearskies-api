@@ -1191,7 +1191,7 @@ def compute_planets(
     return {"evening": evening, "morning": morning, "allNight": all_night}
 
 
-def compute_special_moon_names(year: int) -> list[dict]:
+def compute_special_moon_names(year: int, locale: str | None = None) -> list[dict]:
     """Compute special moon name annotations for all full moons in a year.
 
     Returns one entry per full moon with:
@@ -1204,6 +1204,9 @@ def compute_special_moon_names(year: int) -> list[dict]:
 
     Args:
         year: Calendar year to compute for.
+        locale: Optional locale code (I18N T3.3) for traditionalName. When
+            omitted, resolves via the i18n module's active locale (defaults
+            to English).
 
     Returns:
         List of dicts, one per full moon.
@@ -1272,11 +1275,13 @@ def compute_special_moon_names(year: int) -> list[dict]:
         hunters_moon_idx = harvest_moon_idx + 1
 
     # --- Build results ---
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
     results: list[dict] = []
     for i, t in enumerate(full_moon_times):
         dt = t.utc_datetime()  # type: ignore[attr-defined]
         date_str = dt.strftime("%Y-%m-%d")
-        traditional_name = _TRADITIONAL_MOON_NAMES.get(dt.month, "Full")
+        traditional_name = i18n.t(f"moon_names.{dt.month}", locale) if dt.month in _TRADITIONAL_MOON_NAMES else "Full"
 
         # Supermoon: Earth-Moon distance at exact full-moon time.
         dist_km = earth.at(t).observe(moon).distance().km  # type: ignore[attr-defined]
