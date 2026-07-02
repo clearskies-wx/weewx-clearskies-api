@@ -12,6 +12,9 @@ requires-python = ">=3.12"
 authors = [{ name = "Clear Skies contributors" }]
 
 dependencies = [
+    # I18N T3.1: Babel for locale-aware number formatting (decimal separators
+    # per locale, e.g. "22,5" in de-DE vs "22.5" in en-US).
+    "babel==2.18.0",
     "fastapi==0.136.1",
     "uvicorn[standard]==0.41.0",
     "pydantic==2.11.4",
