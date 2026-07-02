@@ -12,12 +12,25 @@ when the temperature-comfort label is compound (e.g. "Warm and Humid").
 
 Module-level state is held only in sky_condition and temperature_comfort —
 this module is stateless.
+
+I18N (T3.4): precipitation labels and the compose() connectors/separator
+resolve from the locale file via i18n.t(). ``sky`` and ``provider_sky``
+inputs arrive already translated (sky_condition.classify() translates
+internally per T3.4; provider text is source text as-is) — the day/night
+vocabulary swap in ``_to_display_label`` looks up the locale's clear/sunny
+text via t() rather than hardcoded English literals, so the substitution
+stays correct for English today. True key-based (pre-translation) day/night
+selection would require reworking sky_condition's public contract and the
+provider_sky text path together; deferred to Phase 6 when non-English
+locale files are actually populated (currently all fall back to English,
+so behavior is unchanged either way).
 """
 
 from __future__ import annotations
 
 from . import sky_condition as _sky_condition_module
 from . import temperature_comfort as _temperature_comfort
+from weewx_clearskies_api import i18n
 from weewx_clearskies_api.units.conversion import convert
 from weewx_clearskies_api.units.derived import beaufort
 
@@ -33,6 +46,7 @@ def _precip_label(
     *,
     precip_type: str | None = None,
     snow_rate: float | None = None,
+    locale: str | None = None,
 ) -> str | None:
     """Classify precipitation from rain rate and provider precipitation type.
 
@@ -52,25 +66,28 @@ def _precip_label(
       < 0.10 → Light
       0.10–0.30 → Moderate
       > 0.30 → Heavy
+
+    Labels resolve from the locale file (I18N T3.4) via
+    i18n.t("precipitation.<key>", locale).
     """
     pt = (precip_type or "").strip().lower()
 
     # --- Non-rain types: trust provider even when gauge reads zero ----------
     if pt == "freezing-rain":
-        return "Freezing Rain"
+        return i18n.t("precipitation.freezing_rain", locale)
     if pt == "sleet":
-        return "Sleet"
+        return i18n.t("precipitation.sleet", locale)
     if pt == "hail":
-        return "Hail"
+        return i18n.t("precipitation.hail", locale)
 
     if pt == "snow":
         rate = _to_inhr(rain_rate, source_unit)
         if rate is not None and rate > 0:
-            return _intensity("Snow", rate)
+            return i18n.t(f"precipitation.{_intensity('snow', rate)}", locale)
         sr = _to_inhr(snow_rate, source_unit)
         if sr is not None and sr > 0:
-            return _intensity("Snow", sr)
-        return "Snow"
+            return i18n.t(f"precipitation.{_intensity('snow', sr)}", locale)
+        return i18n.t("precipitation.snow", locale)
 
     # --- Rain (or precipType unknown/absent): existing behavior -------------
     if rain_rate is None or rain_rate <= 0:
@@ -78,7 +95,7 @@ def _precip_label(
     rate = _to_inhr(rain_rate, source_unit)
     if rate is None:
         return None
-    return _intensity("Rain", rate)
+    return i18n.t(f"precipitation.{_intensity('rain', rate)}", locale)
 
 
 def _to_inhr(rate: float | None, source_unit: str) -> float | None:
@@ -90,36 +107,50 @@ def _to_inhr(rate: float | None, source_unit: str) -> float | None:
     return convert(rate, source_unit, "inch_per_hour")
 
 
-def _intensity(noun: str, rate_inhr: float) -> str:
-    """Apply AMS/WMO intensity tiers to a precipitation noun."""
+def _intensity(noun_key: str, rate_inhr: float) -> str:
+    """Apply AMS/WMO intensity tiers to a precipitation noun key.
+
+    Returns a compound locale key (e.g. "light_rain", "heavy_snow") — I18N
+    T3.4. *noun_key* is "rain" or "snow".
+    """
     if rate_inhr < 0.10:
-        return f"Light {noun}"
+        return f"light_{noun_key}"
     if rate_inhr < 0.30:
-        return f"Moderate {noun}"
-    return f"Heavy {noun}"
+        return f"moderate_{noun_key}"
+    return f"heavy_{noun_key}"
 
 
-def _compose(parts: list[str | None]) -> str:
+def _compose(parts: list[str | None], locale: str | None = None) -> str:
     """Join non-empty parts into a natural-language string (ADR-044 §9 amendment).
 
     Rules:
       1 part  → "{a}"
-      2 parts → "{a}, {connector} {b}"
-      3+ parts → "{a}, {b}, ..., {connector} {last}"
+      2 parts → "{a}{separator}{connector} {b}"
+      3+ parts → "{a}{separator}{b}{separator}...{separator}{connector} {last}"
 
-    The connector is "and" when the last part is "Calm" (saying "with Calm"
-    is unnatural), and "with" otherwise.  "with" prevents double-"and" when
-    the first part is a compound temperature-comfort label like "Warm and Humid".
+    Separator and connectors resolve from the locale file (I18N T3.4) via
+    ``composition.separator``, ``composition.connector_and``, and
+    ``composition.connector_with``. The connector is connector_and when the
+    last part equals the locale's Beaufort-0 ("Calm") text (saying "with
+    Calm" is unnatural), and connector_with otherwise — connector_with
+    prevents double-"and" when the first part is a compound temperature-
+    comfort label like "Warm and Humid".
     """
     filtered = [p for p in parts if p]
     if not filtered:
         return ""
     if len(filtered) == 1:
         return filtered[0]
-    connector = "and" if filtered[-1] == "Calm" else "with"
+
+    separator = i18n.t("composition.separator", locale)
+    connector_and = i18n.t("composition.connector_and", locale)
+    connector_with = i18n.t("composition.connector_with", locale)
+    calm_text = i18n.t("beaufort.0", locale)
+
+    connector = connector_and if filtered[-1] == calm_text else connector_with
     if len(filtered) == 2:
-        return f"{filtered[0]}, {connector} {filtered[1]}"
-    return ", ".join(filtered[:-1]) + f", {connector} {filtered[-1]}"
+        return f"{filtered[0]}{separator}{connector} {filtered[1]}"
+    return separator.join(filtered[:-1]) + f"{separator}{connector} {filtered[-1]}"
 
 
 def _to_fahrenheit(value: float | None, source_unit: str) -> float | None:
@@ -131,17 +162,26 @@ def _to_fahrenheit(value: float | None, source_unit: str) -> float | None:
     return convert(value, source_unit, "degree_F")
 
 
-def _to_display_label(sky_label: str | None, is_daytime: bool) -> str | None:
+def _to_display_label(
+    sky_label: str | None,
+    is_daytime: bool,
+    locale: str | None = None,
+) -> str | None:
     """Map sky classification to day/night display vocabulary.
 
-    Day: Clear→Sunny, Mostly Clear→Mostly Sunny (e.g. "Clear" → "Sunny").
+    Day: Clear→Sunny, Mostly Clear→Mostly Sunny — text resolved from the
+    locale file (I18N T3.4) rather than hardcoded English literals.
     Night: labels pass through unchanged.
     """
     if sky_label is None:
         return None
     if is_daytime:
-        label = sky_label.replace("Mostly Clear", "Mostly Sunny")
-        return label.replace("Clear", "Sunny")
+        mostly_clear = i18n.t("sky.mostly_clear", locale)
+        mostly_sunny = i18n.t("sky.mostly_sunny", locale)
+        clear = i18n.t("sky.clear", locale)
+        sunny = i18n.t("sky.sunny", locale)
+        label = sky_label.replace(mostly_clear, mostly_sunny)
+        return label.replace(clear, sunny)
     return sky_label
 
 
@@ -173,6 +213,7 @@ def build_weather_text(
     pm10: float | None = None,
     haze_label: str | None = None,
     fog_mist_label: str | None = None,
+    locale: str | None = None,
 ) -> str:
     """Build the full weatherText string (ADR-044 §9 amendment, 2026-05-28).
 
@@ -221,6 +262,9 @@ def build_weather_text(
                          fog_condition module), or None.  When set, replaces
                          the effective sky label entirely — fog and mist are
                          standalone sky conditions, not cloud-cover modifiers.
+        locale:          Optional locale code (I18N T3.4). When omitted,
+                         labels resolve via the i18n module's active locale
+                         (defaults to English).
 
     Returns:
         Composed conditions text, e.g. "Warm and Humid, Partly Cloudy, with Light Rain",
@@ -242,6 +286,7 @@ def build_weather_text(
         out_temp=out_temp_f,
         heatindex=heatindex_f,
         windchill=windchill_f,
+        locale=locale,
     )
     parts.append(temp_comfort_label)
 
@@ -252,7 +297,7 @@ def build_weather_text(
         effective_sky = sky
     else:
         effective_sky = provider_sky
-    effective_sky = _to_display_label(effective_sky, is_day)
+    effective_sky = _to_display_label(effective_sky, is_day, locale)
 
     # Fog/mist override: when fog_mist_label is set ('Foggy' or 'Misty'),
     # it replaces the effective sky entirely.  Fog and mist are standalone
@@ -288,11 +333,13 @@ def build_weather_text(
     # included — calm is a real condition (ADR-044 §4, amended 2026-06-05).
     if wind_speed is not None:
         try:
-            b = beaufort(wind_speed, wind_speed_unit)
+            b = beaufort(wind_speed, wind_speed_unit, locale)
             wind_label = str(b["label"])
 
             # Gusty check — ADR-044 §4 thresholds in mph.  Only fires for
             # non-Calm wind (Beaufort > 0) — "Calm and Gusty" makes no sense.
+            # "Gusty" has no locale key yet (not in the T3.4 scope) — left as
+            # literal English pending a future locale-file addition.
             if b["value"] > 0 and wind_gust is not None:
                 speed_mph = convert(wind_speed, wind_speed_unit, "mile_per_hour")
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
@@ -309,6 +356,10 @@ def build_weather_text(
             pass
 
     # 4. Precipitation.
-    parts.append(_precip_label(rain_rate, rain_rate_unit, precip_type=precip_type, snow_rate=snow_rate))
+    parts.append(
+        _precip_label(
+            rain_rate, rain_rate_unit, precip_type=precip_type, snow_rate=snow_rate, locale=locale
+        )
+    )
 
-    return _compose(parts)
+    return _compose(parts, locale)

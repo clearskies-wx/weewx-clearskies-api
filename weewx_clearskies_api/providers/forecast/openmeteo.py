@@ -71,6 +71,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from weewx_clearskies_api import i18n
 from weewx_clearskies_api.models.responses import (
     DailyForecastPoint,
     ForecastBundle,
@@ -525,7 +526,13 @@ def _zip_hourly(
 
     Time conversion: local ISO → UTC ISO-8601 Z (ADR-020).
     weatherCode: WMO int as string (canonical §3.3).
-    weatherText: decoded from WMO code via lookup; None for unknown codes.
+    weatherText: decoded from WMO code, resolved via the locale file
+        (I18N T3.4, i18n.t("wmo_codes.<code>")); None for unknown codes.
+        No explicit locale is passed — the normalizer contract (PROVIDER-
+        MANUAL §4) is a fixed (raw) -> canonical signature shared by every
+        forecast provider, so translation resolves via the i18n module's
+        active locale (the operator's single configured locale — T3.5)
+        rather than a per-call parameter.
     precipType: derived from WMO code via heuristic; None if no precipitation.
     """
     points: list[HourlyForecastPoint] = []
@@ -533,7 +540,9 @@ def _zip_hourly(
         code_raw = _get_at(hourly.weather_code, i)
         code_int: int | None = int(code_raw) if code_raw is not None else None
         code_str: str | None = str(code_int) if code_int is not None else None
-        weather_text: str | None = _WMO_CODE_TO_TEXT.get(code_int) if code_int is not None else None
+        weather_text: str | None = (
+            i18n.t(f"wmo_codes.{code_int}") if code_int in _WMO_CODE_TO_TEXT else None
+        )
         precip_type: str | None = _WMO_CODE_TO_PRECIP_TYPE.get(code_int) if code_int is not None else None
 
         points.append(
@@ -572,7 +581,9 @@ def _zip_daily(
         code_raw = _get_at(daily.weather_code, i)
         code_int: int | None = int(code_raw) if code_raw is not None else None
         code_str: str | None = str(code_int) if code_int is not None else None
-        weather_text: str | None = _WMO_CODE_TO_TEXT.get(code_int) if code_int is not None else None
+        weather_text: str | None = (
+            i18n.t(f"wmo_codes.{code_int}") if code_int in _WMO_CODE_TO_TEXT else None
+        )
 
         sunrise_raw = _get_at(daily.sunrise, i)
         sunset_raw = _get_at(daily.sunset, i)
@@ -902,7 +913,9 @@ def fetch_current_conditions(
     cur = wire.current
     code_int = cur.weather_code
     code_str: str | None = str(code_int) if code_int is not None else None
-    weather_text: str | None = _WMO_CODE_TO_TEXT.get(code_int) if code_int is not None else None
+    weather_text: str | None = (
+        i18n.t(f"wmo_codes.{code_int}") if code_int in _WMO_CODE_TO_TEXT else None
+    )
     precip_type: str | None = _WMO_CODE_TO_PRECIP_TYPE.get(code_int) if code_int is not None else None
     is_day: bool | None = (cur.is_day == 1) if cur.is_day is not None else None
 

@@ -8,6 +8,7 @@ Also derives the WMO weatherCode from the composed conditions.
 import logging
 
 import weewx_clearskies_api.sse.sky_condition as _sky_module
+from weewx_clearskies_api import i18n
 from weewx_clearskies_api.sse.conditions_text import _precip_label, build_weather_text
 from weewx_clearskies_api.sse.enrichment.input_smoother import get_smoothed
 from weewx_clearskies_api.sse.fog_condition import detect_fog_mist
@@ -24,7 +25,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _cloud_pct_to_sky(pct: float | None, *, is_day: bool = False) -> str | None:
+def _cloud_pct_to_sky(
+    pct: float | None, *, is_day: bool = False, locale: str | None = None
+) -> str | None:
     """Map cloud cover percentage to a sky-condition string.
 
     Used as the night/startup fallback when the solar classifier is unavailable.
@@ -37,21 +40,23 @@ def _cloud_pct_to_sky(pct: float | None, *, is_day: bool = False) -> str | None:
       ≤ 95 % → "Cloudy"
       > 95 % → "Overcast"
 
-    Returns None when pct is None or not a numeric type.
+    Labels resolve from the locale file (I18N T3.4) via
+    i18n.t("sky.<key>", locale). Returns None when pct is None or not a
+    numeric type.
     """
     if pct is None or not isinstance(pct, (int, float)):
         return None
     if pct <= 10:
-        return "Sunny" if is_day else "Clear"
+        return i18n.t("sky.sunny" if is_day else "sky.clear", locale)
     if pct <= 25:
-        return "Mostly Sunny" if is_day else "Mostly Clear"
+        return i18n.t("sky.mostly_sunny" if is_day else "sky.mostly_clear", locale)
     if pct <= 50:
-        return "Partly Cloudy"
+        return i18n.t("sky.partly_cloudy", locale)
     if pct <= 85:
-        return "Mostly Cloudy"
+        return i18n.t("sky.mostly_cloudy", locale)
     if pct <= 95:
-        return "Cloudy"
-    return "Overcast"
+        return i18n.t("sky.cloudy", locale)
+    return i18n.t("sky.overcast", locale)
 
 
 def _derive_weather_code(
@@ -160,7 +165,7 @@ def _derive_weather_code(
 # ---------------------------------------------------------------------------
 
 
-def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[type-arg]
+def compose_weather_text(obs_data: dict | None = None, locale: str | None = None) -> str:  # type: ignore[type-arg]
     """Build the weatherText string from current smoothed values.
 
     Reads all smoothed values from the input_smoother ring buffers and the
@@ -174,6 +179,10 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         obs_data: Optional observation data dict (``data["data"]`` from the
                   /current response envelope).  Used to extract provider-
                   supplied cloud cover (``cloudcover`` field).
+        locale:   Optional locale code (I18N T3.4/T3.5). When omitted,
+                  resolves via the i18n module's active locale (the
+                  operator's configured default, set once at API startup —
+                  see T3.5).
 
     Returns:
         Composed conditions text (e.g. "Warm and Humid, Partly Cloudy"), or
@@ -188,7 +197,7 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     )
     _is_day = _sky_module.is_daytime()
     _provider_sky = (
-        _cloud_pct_to_sky(_cloud_pct, is_day=_is_day)
+        _cloud_pct_to_sky(_cloud_pct, is_day=_is_day, locale=locale)
         if isinstance(_cloud_pct, (int, float))
         else None
     )
@@ -243,7 +252,7 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     _haze_label = detect_haze(
         kcs=_sky_module.get_current_kcs(),
         solar_elevation=_sky_module.get_solar_elevation(),
-        sky_label=sky_classify(),
+        sky_label=sky_classify(locale),
         pm25=get_smoothed("pollutantPM25"),
         pm10=get_smoothed("pollutantPM10"),
         out_temp=_out_temp,
@@ -303,7 +312,7 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
     _snow_rate = get_smoothed("snowRate")
 
     return build_weather_text(
-        sky=sky_classify(),
+        sky=sky_classify(locale),
         rain_rate=_rain_rate,
         rain_rate_unit="inch_per_hour",
         wind_speed=get_smoothed("windSpeed"),
@@ -324,10 +333,11 @@ def compose_weather_text(obs_data: dict | None = None) -> str:  # type: ignore[t
         pm10=get_smoothed("pollutantPM10"),
         haze_label=_effective_haze_label,
         fog_mist_label=_fog_mist_label,
+        locale=locale,
     )
 
 
-def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
+def enrich_weather_text(data: dict, locale: str | None = None) -> dict:  # type: ignore[type-arg]
     """Inject weather text fields and code into a /current response envelope.
 
     Writes into ``data["data"]``:
@@ -341,13 +351,23 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
     - Otherwise falls back to writing at the top level of *data* (e.g. when
       the upstream API returned a non-standard shape).
 
+    Args:
+        data:   Response envelope.
+        locale: Optional locale code (I18N T3.4/T3.5). When omitted,
+                resolves via the i18n module's active locale (the
+                operator's configured default — see T3.5). The enrichment
+                pipeline dispatcher calls this with a single positional
+                ``data`` argument, so *locale* always defaults to the
+                active locale in production; the parameter exists for
+                direct/test callers that want to override it.
+
     Never raises: exceptions are caught, logged, and the key is set to None.
     """
     try:
         obs = data.get("data")
         obs_data = obs if isinstance(obs, dict) else None
 
-        text = compose_weather_text(obs_data)
+        text = compose_weather_text(obs_data, locale)
         value = text or None
 
         if isinstance(obs, dict):
@@ -362,7 +382,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         )
         _is_day_code = _sky_module.is_daytime()
         _provider_sky2: str | None = (
-            _cloud_pct_to_sky(_cloud_pct, is_day=_is_day_code)
+            _cloud_pct_to_sky(_cloud_pct, is_day=_is_day_code, locale=locale)
             if isinstance(_cloud_pct, (int, float))
             else None
         )
@@ -412,7 +432,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         # solar classifier during daytime, provider_sky at night / on startup.
         # When fog/mist is detected, fog_mist_label becomes the sky label in
         # build_weather_text(); reflect that here for code derivation.
-        _sky_from_solar = sky_classify()
+        _sky_from_solar = sky_classify(locale)
         if _sky_from_solar is not None and _sky_module.is_daytime():
             _effective_sky = _sky_from_solar
         else:
@@ -430,7 +450,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         )
         _rain_label = _precip_label(
             _rain_rate2, "inch_per_hour",
-            precip_type=_precip_type2, snow_rate=_snow_rate2,
+            precip_type=_precip_type2, snow_rate=_snow_rate2, locale=locale,
         )
 
         # Re-run haze detection with the same inputs used in compose_weather_text().
@@ -440,7 +460,7 @@ def enrich_weather_text(data: dict) -> dict:  # type: ignore[type-arg]
         _haze_label_code = detect_haze(
             kcs=_sky_module.get_current_kcs(),
             solar_elevation=_sky_module.get_solar_elevation(),
-            sky_label=sky_classify(),
+            sky_label=sky_classify(locale),
             pm25=get_smoothed("pollutantPM25"),
             pm10=get_smoothed("pollutantPM10"),
             out_temp=_out_temp,

@@ -9,6 +9,12 @@ Combines an apparent-temperature axis (§5) with a dewpoint-based moisture axis
 2. Hysteresis — module-level tier state is only updated when a value crosses
    2 °F past the opposite boundary.
 3. Hold time — the composed string is cached for 5 minutes minimum.
+
+I18N (T3.4): tier/modifier tables below store locale-file keys (resolved via
+``i18n.t("temperature.<key>", locale)`` / ``i18n.t("moisture.<key>", locale)``)
+rather than literal English text. The classifier logic itself — thresholds,
+hysteresis, hold-time cache — is unchanged; only the label text at the point
+of composition is translated.
 """
 
 from __future__ import annotations
@@ -26,26 +32,26 @@ _HOLD_SECONDS: float = 300.0    # 5 minutes — minimum hold on cached output
 # ---------------------------------------------------------------------------
 # Temperature tiers
 #
-# Each entry is (upper_bound_inclusive, label).  The last tier has no upper
-# bound — it is used when value > all listed upper bounds.
+# Each entry is (upper_bound_inclusive, locale_key). The last tier has no
+# upper bound — it is used when value > all listed upper bounds.
 # Tiers 1-5 (appTemp ≤ 32 °F) suppress the moisture modifier.
 # ---------------------------------------------------------------------------
 
 _TEMP_TIERS: list[tuple[float, str]] = [
-    (-10.0, "Dangerously Cold"),  # tier 1: ≤ −10
-    (0.0,   "Bitter Cold"),       # tier 2: −9 to 0
-    (10.0,  "Extreme Cold"),      # tier 3: 1 to 10
-    (20.0,  "Very Cold"),         # tier 4: 11 to 20
-    (32.0,  "Cold"),              # tier 5: 21 to 32
-    (45.0,  "Chilly"),            # tier 6: 33 to 45
-    (60.0,  "Cool"),              # tier 7: 46 to 60
-    (75.0,  "Pleasant"),          # tier 8: 61 to 75
-    (85.0,  "Warm"),              # tier 9: 76 to 85
-    (95.0,  "Hot"),               # tier 10: 86 to 95
-    (104.0, "Very Hot"),          # tier 11: 96 to 104
+    (-10.0, "dangerously_cold"),  # tier 1: ≤ −10
+    (0.0,   "bitter_cold"),       # tier 2: −9 to 0
+    (10.0,  "extreme_cold"),      # tier 3: 1 to 10
+    (20.0,  "very_cold"),         # tier 4: 11 to 20
+    (32.0,  "cold"),              # tier 5: 21 to 32
+    (45.0,  "chilly"),            # tier 6: 33 to 45
+    (60.0,  "cool"),              # tier 7: 46 to 60
+    (75.0,  "pleasant"),          # tier 8: 61 to 75
+    (85.0,  "warm"),              # tier 9: 76 to 85
+    (95.0,  "hot"),               # tier 10: 86 to 95
+    (104.0, "very_hot"),          # tier 11: 96 to 104
     # tier 12: ≥ 105 — default
 ]
-_TEMP_DEFAULT: str = "Dangerously Hot"
+_TEMP_DEFAULT: str = "dangerously_hot"
 
 # Number of tiers where moisture is suppressed (tiers 1-5, appTemp ≤ 32 °F).
 # These are the first 5 entries (indices 0-4) in _TEMP_TIERS.
@@ -54,20 +60,20 @@ _COLD_TIER_COUNT: int = 5
 # ---------------------------------------------------------------------------
 # Moisture tiers
 #
-# Each entry is (upper_bound_inclusive, modifier | None).  None = no modifier.
+# Each entry is (upper_bound_inclusive, locale_key | None). None = no modifier.
 # The last tier has no upper bound.
 # ---------------------------------------------------------------------------
 
 _MOISTURE_TIERS: list[tuple[float, str | None]] = [
-    (44.9,  None),              # tier A: < 45 °F
-    (54.9,  None),              # tier B: 45–54 °F
-    (59.9,  "Slightly Humid"),  # tier C: 55–59 °F
-    (64.9,  "Humid"),           # tier D: 60–64 °F
-    (69.9,  "Very Humid"),      # tier E: 65–69 °F
-    (74.9,  "Oppressive"),      # tier F: 70–74 °F
+    (44.9,  None),                # tier A: < 45 °F
+    (54.9,  None),                # tier B: 45–54 °F
+    (59.9,  "slightly_humid"),    # tier C: 55–59 °F
+    (64.9,  "humid"),             # tier D: 60–64 °F
+    (69.9,  "very_humid"),        # tier E: 65–69 °F
+    (74.9,  "oppressive"),        # tier F: 70–74 °F
     # tier G: ≥ 75 — default
 ]
-_MOISTURE_DEFAULT: str = "Miserable"
+_MOISTURE_DEFAULT: str = "miserable"
 
 # ---------------------------------------------------------------------------
 # NWS danger thresholds
@@ -118,14 +124,14 @@ def _moisture_tier_for(value: float) -> int:
 
 
 def _temp_label(tier_index: int) -> str:
-    """Return the temperature label for *tier_index*."""
+    """Return the temperature locale key for *tier_index* (I18N T3.4)."""
     if tier_index < len(_TEMP_TIERS):
         return _TEMP_TIERS[tier_index][1]
     return _TEMP_DEFAULT
 
 
 def _moisture_modifier(tier_index: int) -> str | None:
-    """Return the moisture modifier for *tier_index*, or None."""
+    """Return the moisture locale key for *tier_index*, or None (I18N T3.4)."""
     if tier_index < len(_MOISTURE_TIERS):
         return _MOISTURE_TIERS[tier_index][1]
     return _MOISTURE_DEFAULT
@@ -216,6 +222,7 @@ def classify(
     out_temp: float | None = None,
     heatindex: float | None = None,
     windchill: float | None = None,
+    locale: str | None = None,
 ) -> str | None:
     """Return the temperature-comfort descriptor.
 
@@ -233,10 +240,15 @@ def classify(
         out_temp:  Dry-bulb temperature in °F, used for near-saturation check.
         heatindex: Heat index in °F, used for NWS danger escalation.
         windchill: Wind chill in °F, used for NWS danger escalation.
+        locale:    Optional locale code (I18N T3.4). When omitted, labels
+                   resolve via the i18n module's active locale (defaults to
+                   English).
 
     Returns:
         Composite descriptor string, or ``None``.
     """
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
     global _current_temp_tier, _current_moisture_tier, _cached_result, _cache_time
 
     if app_temp is None:
@@ -248,14 +260,14 @@ def classify(
     danger_label: str | None = None
     if heatindex is not None:
         if heatindex >= _HI_EXTREME_DANGER:
-            danger_label = "Extreme Danger Heat"
+            danger_label = i18n.t("temperature.extreme_danger_heat", locale)
         elif heatindex >= _HI_DANGER:
-            danger_label = "Dangerous Heat"
+            danger_label = i18n.t("temperature.dangerous_heat", locale)
     if danger_label is None and windchill is not None:
         if windchill <= _WC_EXTREME_DANGER:
-            danger_label = "Extreme Danger Cold"
+            danger_label = i18n.t("temperature.extreme_danger_cold", locale)
         elif windchill <= _WC_DANGER:
-            danger_label = "Dangerous Cold"
+            danger_label = i18n.t("temperature.dangerous_cold", locale)
 
     # ------------------------------------------------------------------
     # Step 2: Determine temperature tier with hysteresis
@@ -277,7 +289,8 @@ def classify(
     if danger_label is not None:
         base = danger_label
     else:
-        t_label = _temp_label(new_temp_tier)
+        t_label = i18n.t(f"temperature.{_temp_label(new_temp_tier)}", locale)
+        connector_and = i18n.t("composition.connector_and", locale)
 
         # Cold-temperature suppression: tiers 1-5 (indices 0-4) suppress moisture.
         is_cold = new_temp_tier < _COLD_TIER_COUNT
@@ -286,11 +299,13 @@ def classify(
         elif out_temp is not None and round(out_temp - dewpoint, 1) <= 0.0:
             # Full saturation: outTemp at or below dewpoint — air cannot hold
             # more water vapour.  Overrides all moisture tier labels.
-            base = f"{t_label} and Fully Saturated"
+            saturated = i18n.t("temperature.fully_saturated", locale)
+            base = f"{t_label} {connector_and} {saturated}"
         else:
-            modifier = _moisture_modifier(new_moisture_tier)
-            if modifier:
-                base = f"{t_label} and {modifier}"
+            modifier_key = _moisture_modifier(new_moisture_tier)
+            if modifier_key:
+                modifier = i18n.t(f"moisture.{modifier_key}", locale)
+                base = f"{t_label} {connector_and} {modifier}"
             else:
                 base = t_label
 

@@ -36,10 +36,13 @@ Variable triggers if either window exceeds 0.05 — cloud-edge
 transitions at any scale push the sky into the variable branch.
 Km then distinguishes coverage degree within each branch.
 
-Seven display labels:
-  Uniform branch:  "Clear", "Overcast", "Heavy Overcast"
-  Variable branch: "Mostly Clear", "Partly Cloudy", "Mostly Cloudy", "Cloudy"
-  Cloud enhancement: "Partly Cloudy"
+Seven canonical keys (I18N T3.4 — translated to display text only at the
+public classify() boundary via i18n.t(f"sky.{key}", locale); internal state
+— ring buffer, coherence filter, hysteresis — operates on these keys
+unchanged, English display text is never compared or stored internally):
+  Uniform branch:  "clear", "overcast", "heavy_overcast"
+  Variable branch: "mostly_clear", "partly_cloudy", "mostly_cloudy", "cloudy"
+  Cloud enhancement: "partly_cloudy"
 
 Temporal coherence filter: a new classification must persist for 5
 consecutive minutes before replacing the previous stable label.
@@ -227,15 +230,21 @@ def update(
     _trim_ring(timestamp)
 
 
-def classify() -> str | None:
+def classify(locale: str | None = None) -> str | None:
     """Classify sky condition from the ring buffer.
 
     Returns one of: "Clear", "Mostly Clear", "Partly Cloudy",
-    "Mostly Cloudy", "Cloudy", "Overcast", "Heavy Overcast",
-    or None when insufficient data.
+    "Mostly Cloudy", "Cloudy", "Overcast", "Heavy Overcast" (translated per
+    *locale* — I18N T3.4), or None when insufficient data.
 
     When solar elevation < 15° (SZA > 75°) and station coordinates are
     configured, returns None without classifying.
+
+    Args:
+        locale: Optional locale code. When omitted, the label resolves via
+            the i18n module's active locale (defaults to English). Internal
+            classification state (ring buffer, coherence filter) is
+            locale-independent — only the returned text is translated.
     """
     # SZA guard: return None when sun is too low for reliable classification.
     # None tells the downstream consumer to fall back to provider cloud cover.
@@ -246,22 +255,25 @@ def classify() -> str | None:
         if elevation is not None and elevation < _SZA_GUARD_ELEVATION:
             return None
 
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
     indices = _compute_indices()
     if indices is None:
-        return _last_stable_label
+        return i18n.t(f"sky.{_last_stable_label}", locale) if _last_stable_label else None
 
     kcs, km, kmf, kv, kvf, latest_msr = indices
-    raw_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr, solar_elevation=elevation)
+    raw_key = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr, solar_elevation=elevation)
 
     # TEMPORARY DEBUG — remove after threshold tuning
     import logging as _dbg_logging  # noqa: PLC0415
     _dbg_logging.getLogger("sky_condition").info(
         "ring=%d Kcs=%.4f Km=%.4f Kmf=%.4f Kv=%.4f Kvf=%.4f MSR=%.1f raw=%s stable=%s",
-        len(_ring), kcs, km, kmf, kv, kvf, latest_msr, raw_label, _last_stable_label,
+        len(_ring), kcs, km, kmf, kv, kvf, latest_msr, raw_key, _last_stable_label,
     )
 
     now = _ring[-1].ts if _ring else time.time()
-    return _apply_coherence_filter(raw_label, now)
+    stable_key = _apply_coherence_filter(raw_key, now)
+    return i18n.t(f"sky.{stable_key}", locale) if stable_key else None
 
 
 def configure(
@@ -722,6 +734,13 @@ def _classify_sky(
     When solar_elevation is None, a default high value (90.0) is used so
     the threshold converges to k_max (backward-compatible for callers that
     do not supply elevation).
+
+    I18N (T3.4): returns a canonical snake_case KEY (e.g. "clear",
+    "mostly_clear"), not display text. Internal state (temporal coherence
+    filter, ring buffer, hysteresis) operates on these keys unchanged —
+    they are opaque, stable identifiers to that logic. Translation to
+    display text happens once, at the public classify() boundary, via
+    i18n.t(f"sky.{key}", locale).
     """
     _alpha = solar_elevation if solar_elevation is not None else 90.0
 
@@ -732,7 +751,7 @@ def _classify_sky(
         and kv > _CLOUDEN_MIN_KV
         and kvf > _CLOUDEN_MIN_KVF
     ):
-        return "Partly Cloudy"
+        return "partly_cloudy"
 
     # --- Primary axis: asymmetric Kv/Kvf gate (uniform vs. variable sky) ---
     # Uniform requires BOTH the coarse (30-min) and fine (10-min) windows calm;
@@ -741,20 +760,20 @@ def _classify_sky(
         # UNIFORM SKY — no cloud-edge transitions detected.
         # Km distinguishes clear (high) from overcast (moderate/low).
         if km > _dynamic_threshold(_DT_K_MAX_CLEAR, _alpha) and kcs > _dynamic_threshold(_DT_K_MAX_CLEAR, _alpha):
-            return "Clear"
+            return "clear"
         if km > _UNIFORM_HEAVY_MAX_KM:
-            return "Overcast"
-        return "Heavy Overcast"
+            return "overcast"
+        return "heavy_overcast"
 
     # VARIABLE SKY — cloud-edge transitions present.
     # Kmf (10-min) distinguishes coverage degree — responsive to recent changes.
     if kmf > _dynamic_threshold(_DT_K_MAX_MOSTLY_CLEAR, _alpha):
-        return "Mostly Clear"
+        return "mostly_clear"
     if kmf > _dynamic_threshold(_DT_K_MAX_PARTLY, _alpha):
-        return "Partly Cloudy"
+        return "partly_cloudy"
     if kmf > _dynamic_threshold(_DT_K_MAX_MOSTLY_CLOUDY, _alpha):
-        return "Mostly Cloudy"
-    return "Cloudy"
+        return "mostly_cloudy"
+    return "cloudy"
 
 
 def _apply_coherence_filter(raw_label: str, now: float) -> str | None:
