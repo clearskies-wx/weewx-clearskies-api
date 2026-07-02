@@ -1,4 +1,4 @@
-"""AerisWeather / Xweather radar provider module — Raster Maps (ADR-015, ADR-038, 3b-15).
+"""Xweather (Vaisala) — module id: aeris — radar provider module — Raster Maps (ADR-015, ADR-038, 3b-15).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — Xweather Raster Maps XYZ tile fetch:

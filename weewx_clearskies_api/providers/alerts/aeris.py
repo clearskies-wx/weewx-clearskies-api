@@ -1,4 +1,4 @@
-"""Aeris (AerisWeather/Xweather) alerts provider module (ADR-016, ADR-038).
+"""Xweather (Vaisala) — module id: aeris — alerts provider module (ADR-016, ADR-038).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
