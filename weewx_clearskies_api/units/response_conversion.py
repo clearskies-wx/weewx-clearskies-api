@@ -108,6 +108,7 @@ def _cardinal_for_degrees(degrees: object) -> "str | None":
 
 def apply_conversion(
     data: "dict[str, object] | list[object]",
+    locale: str | None = None,
 ) -> "dict[str, object] | list[object]":
     """Apply unit conversion to API response data.
 
@@ -130,6 +131,11 @@ def apply_conversion(
 
     Args:
         data: Response dict or list from model_dump().
+        locale: Optional locale code (I18N T3.2) forwarded to the configured
+            transformer's label/format calls for this conversion. ``None``
+            (default) preserves pre-i18n behavior. Not yet supplied by any
+            caller — T3.5 threads the operator's configured locale through
+            at startup.
 
     Returns:
         Converted dict or list.  Returns *data* unchanged when no transformer
@@ -137,7 +143,7 @@ def apply_conversion(
     """
     if isinstance(data, list):
         return [
-            apply_conversion(item) if isinstance(item, dict) else item
+            apply_conversion(item, locale) if isinstance(item, dict) else item
             for item in data
         ]
 
@@ -157,7 +163,7 @@ def apply_conversion(
     ):
         us_units = _infer_us_units(units_block)
         try:
-            converted_obs = _transformer.transform_record(obs_payload, us_units)
+            converted_obs = _transformer.transform_record(obs_payload, us_units, locale)
             # transform_record returns {value, label, formatted} dicts for
             # known numeric observations.  Pass them through as-is so the
             # dashboard's isConvertedValue() check succeeds (aligns REST shape
@@ -212,7 +218,7 @@ def apply_conversion(
                 converted_list.append(record)
                 continue
             try:
-                converted = _transformer.transform_record(record, us_units)
+                converted = _transformer.transform_record(record, us_units, locale)
                 # Extract raw converted values from ConvertedValue dicts.
                 # Unlike Shape 2 (which passes ConvertedValue dicts through
                 # as-is), archive records need full-precision scalar values
@@ -243,7 +249,7 @@ def apply_conversion(
     for key in ("records", "data", "results"):
         if key in data and isinstance(data[key], list):
             converted_list = [
-                apply_conversion(r) if isinstance(r, dict) else r
+                apply_conversion(r, locale) if isinstance(r, dict) else r
                 for r in data[key]  # type: ignore[union-attr]
             ]
             return {**data, key: converted_list}
@@ -252,7 +258,7 @@ def apply_conversion(
     us_units_raw = data.get("usUnits")
     if us_units_raw is not None and _transformer is not None:
         try:
-            return _transformer.transform_record(data, int(us_units_raw))  # type: ignore[arg-type]
+            return _transformer.transform_record(data, int(us_units_raw), locale)  # type: ignore[arg-type]
         except (ValueError, TypeError):
             pass
 

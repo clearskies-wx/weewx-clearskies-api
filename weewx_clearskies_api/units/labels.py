@@ -2,9 +2,22 @@
 
 These are the weewx defaults; operator config (skin.conf [Units][[Labels]]
 and [[StringFormats]]) can override them via the helper functions below.
+
+I18N (T3.2): both ``get_label()`` and ``format_value()`` accept an optional
+``locale`` parameter. When omitted (``None``), behavior is unchanged from
+before locale support existed — no locale module is imported, no babel
+formatting occurs. Passing a locale is opt-in and callers that don't yet
+know about locales (T3.5 wires the operator's configured locale through at
+startup) are unaffected.
 """
 
 from __future__ import annotations
+
+import re
+
+# Extracts the decimal-place count from a %-style format string, e.g.
+# "%.1f" -> "1", "%03.0f" -> "0", "%.5f" -> "5".
+_FORMAT_DECIMALS_RE = re.compile(r"%[-+0# ]*\d*\.(\d+)f")
 
 DEFAULT_LABELS: dict[str, str] = {
     # Temperature
@@ -107,10 +120,31 @@ DEFAULT_FORMATS: dict[str, str] = {
 }
 
 
-def get_label(unit: str, overrides: dict[str, str] | None = None) -> str:
-    """Return the display label for *unit*, applying *overrides* first."""
+def get_label(
+    unit: str,
+    overrides: dict[str, str] | None = None,
+    locale: str | None = None,
+) -> str:
+    """Return the display label for *unit*.
+
+    Resolution order (I18N T3.2):
+      1. *overrides* (operator [[Labels]] config) — operator always wins.
+      2. *locale* (``unit_labels.<unit>`` in the locale file) — locale-specific
+         default, when *locale* is provided and a translation exists.
+      3. ``DEFAULT_LABELS`` — built-in English fallback.
+
+    *locale* is optional and defaults to ``None``, which preserves the
+    pre-i18n behavior exactly (no locale module import, no lookup).
+    """
     if overrides and unit in overrides:
         return overrides[unit]
+    if locale:
+        from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+        key = f"unit_labels.{unit}"
+        translated = i18n.t(key, locale)
+        if translated != key:
+            return translated
     return DEFAULT_LABELS.get(unit, "")
 
 
@@ -118,11 +152,24 @@ def format_value(
     value: float,
     unit: str,
     overrides: dict[str, str] | None = None,
+    locale: str | None = None,
 ) -> str:
     """Format *value* for display using the format string for *unit*.
 
     *overrides* maps unit → format string (from operator [[StringFormats]]).
     Falls back to DEFAULT_FORMATS, then to "%.1f" if the unit is unknown.
+
+    When *locale* is provided (I18N T3.2), the decimal-place count is taken
+    from the resolved %-style format string but the actual rendering uses
+    ``i18n.format_number()`` (babel) so the decimal separator, digit
+    grouping, etc. match the locale's conventions. When *locale* is
+    ``None`` (default), behavior is unchanged: plain ``%`` formatting.
     """
     fmt = (overrides or {}).get(unit) or DEFAULT_FORMATS.get(unit, "%.1f")
+    if locale:
+        from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+        match = _FORMAT_DECIMALS_RE.search(fmt)
+        decimals = int(match.group(1)) if match else 1
+        return i18n.format_number(value, decimals, locale)
     return fmt % value

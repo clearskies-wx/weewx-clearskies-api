@@ -70,6 +70,9 @@ class UnitTransformer:
         label_overrides:   unit → label override (from operator [[Labels]]).
         format_overrides:  unit → format string override (from [[StringFormats]]).
         ordinates:         16 compass direction labels, N through NNW.
+        locale:            locale code (e.g. "de", "ru") for locale-aware label
+                            and number formatting (I18N T3.2). ``None`` (default)
+                            preserves pre-i18n behavior — no locale lookups.
     """
 
     def __init__(
@@ -78,6 +81,7 @@ class UnitTransformer:
         label_overrides: dict[str, str] | None = None,
         format_overrides: dict[str, str] | None = None,
         ordinates: list[str] | None = None,
+        locale: str | None = None,
     ) -> None:
         # Validate every target unit against the known valid-unit set for its group.
         for group, unit in target_units.items():
@@ -87,9 +91,14 @@ class UnitTransformer:
         self._label_overrides = label_overrides
         self._format_overrides = format_overrides
         self._ordinates = ordinates if ordinates is not None else _DEFAULT_ORDINATES
+        self._locale = locale
 
     @classmethod
-    def from_settings(cls, settings: "UnitsSettings") -> "UnitTransformer":
+    def from_settings(
+        cls,
+        settings: "UnitsSettings",
+        locale: str | None = None,
+    ) -> "UnitTransformer":
         """Construct a UnitTransformer from a UnitsSettings object.
 
         Reads target units, label overrides, format overrides, and ordinates
@@ -98,6 +107,10 @@ class UnitTransformer:
 
         Args:
             settings: UnitsSettings parsed from the [units] section of api.conf.
+            locale:   optional locale code for locale-aware label/number
+                      formatting (I18N T3.2). Not yet wired from config —
+                      T3.5 threads the operator's configured locale through
+                      at startup. Defaults to ``None`` (pre-i18n behavior).
 
         Returns:
             Configured UnitTransformer instance.
@@ -115,6 +128,7 @@ class UnitTransformer:
             label_overrides=label_overrides,
             format_overrides=format_overrides,
             ordinates=ordinates,
+            locale=locale,
         )
 
     # ------------------------------------------------------------------
@@ -139,21 +153,32 @@ class UnitTransformer:
                     target = next(iter(valid))
                 else:
                     continue
-            block[obs] = get_label(target, self._label_overrides)
+            block[obs] = get_label(target, self._label_overrides, self._locale)
         return block
 
-    def transform_record(self, data: dict[str, object], us_units: int) -> dict[str, object]:
+    def transform_record(
+        self,
+        data: dict[str, object],
+        us_units: int,
+        locale: str | None = None,
+    ) -> dict[str, object]:
         """Transform an archive record dict from the REST API.
 
         Args:
             data:     observation_name → raw_value (values may be None).
             us_units: unit-system code (1=US, 16=Metric, 17=MetricWX).
+            locale:   optional per-call locale override (I18N T3.2). When
+                      omitted, falls back to the transformer's configured
+                      ``self._locale`` (set at construction). ``None``
+                      overall (no override, no constructor locale) preserves
+                      pre-i18n behavior exactly.
 
         Returns:
             dict where known observations become
             {"value": float|None, "label": str, "formatted": str}
             and unknown / metadata fields are passed through unchanged.
         """
+        effective_locale = locale if locale is not None else self._locale
         result: dict[str, object] = {}
 
         for obs, raw_value in data.items():
@@ -165,7 +190,9 @@ class UnitTransformer:
             if obs == "extras" and isinstance(raw_value, dict):
                 extras_out: dict[str, object] = {}
                 for sub_key, sub_val in raw_value.items():
-                    transformed = self._transform_single_obs(sub_key, sub_val, us_units)
+                    transformed = self._transform_single_obs(
+                        sub_key, sub_val, us_units, effective_locale
+                    )
                     extras_out[sub_key] = transformed
                 result[obs] = extras_out
                 continue
@@ -176,7 +203,9 @@ class UnitTransformer:
                 result[obs] = raw_value
                 continue
 
-            result[obs] = self._transform_single_obs(obs, raw_value, us_units)
+            result[obs] = self._transform_single_obs(
+                obs, raw_value, us_units, effective_locale
+            )
 
         # --- Derived fields ---
         # Computed from raw values + us_units so we work in the original unit
@@ -225,7 +254,7 @@ class UnitTransformer:
         if raw_value is None:
             return {
                 "value": None,
-                "label": get_label(target_unit, self._label_overrides),
+                "label": get_label(target_unit, self._label_overrides, self._locale),
                 "formatted": "N/A",
             }
 
@@ -246,8 +275,10 @@ class UnitTransformer:
             # transform_record() pass-through branch exactly.
             return {
                 "value": numeric,
-                "label": get_label(source_unit, self._label_overrides),
-                "formatted": format_value(numeric, source_unit, self._format_overrides),
+                "label": get_label(source_unit, self._label_overrides, self._locale),
+                "formatted": format_value(
+                    numeric, source_unit, self._format_overrides, self._locale
+                ),
             }
 
         # Wind direction special case.
@@ -259,8 +290,10 @@ class UnitTransformer:
         assert converted is not None
         return {
             "value": converted,
-            "label": get_label(target_unit, self._label_overrides),
-            "formatted": format_value(converted, target_unit, self._format_overrides),
+            "label": get_label(target_unit, self._label_overrides, self._locale),
+            "formatted": format_value(
+                converted, target_unit, self._format_overrides, self._locale
+            ),
         }
 
     def add_derived_fields(self, record: dict[str, object]) -> None:
@@ -331,8 +364,10 @@ class UnitTransformer:
             try:  # noqa: SIM105
                 record["windSpeedAvg10m"] = {
                     "value": avg,
-                    "label": _lbl(disp_unit, self._label_overrides),
-                    "formatted": _fmt(avg, disp_unit, self._format_overrides),
+                    "label": _lbl(disp_unit, self._label_overrides, self._locale),
+                    "formatted": _fmt(
+                        avg, disp_unit, self._format_overrides, self._locale
+                    ),
                 }
             except Exception:  # noqa: BLE001, S110
                 pass
@@ -342,8 +377,10 @@ class UnitTransformer:
             try:  # noqa: SIM105
                 record["windGustMax10m"] = {
                     "value": gust,
-                    "label": _lbl(disp_unit, self._label_overrides),
-                    "formatted": _fmt(gust, disp_unit, self._format_overrides),
+                    "label": _lbl(disp_unit, self._label_overrides, self._locale),
+                    "formatted": _fmt(
+                        gust, disp_unit, self._format_overrides, self._locale
+                    ),
                 }
             except Exception:  # noqa: BLE001, S110
                 pass
@@ -370,6 +407,7 @@ class UnitTransformer:
         obs: str,
         raw_value: object,
         us_units: int,
+        locale: str | None = None,
     ) -> object:
         """Transform one observation name + raw value to a ConvertedValue dict.
 
@@ -381,6 +419,13 @@ class UnitTransformer:
         This is the per-field kernel used by both ``transform_record()`` (for
         top-level fields) and the ``extras`` sub-dict recursion path, so the
         conversion/formatting logic lives in exactly one place.
+
+        Args:
+            locale: resolved locale for label/format calls (I18N T3.2).
+                Callers pass the already-resolved effective locale (per-call
+                override or ``self._locale``) rather than relying on this
+                method to re-resolve it, since it's called in a tight loop
+                from ``transform_record()``.
         """
         group = OBS_GROUP.get(obs)
         if group is None:
@@ -397,11 +442,12 @@ class UnitTransformer:
                 return raw_value
             return {
                 "value": float(raw_value),  # type: ignore[arg-type]
-                "label": get_label(source_unit, self._label_overrides),
+                "label": get_label(source_unit, self._label_overrides, locale),
                 "formatted": format_value(
                     float(raw_value),  # type: ignore[arg-type]
                     source_unit,
                     self._format_overrides,
+                    locale,
                 ),
             }
 
@@ -410,7 +456,7 @@ class UnitTransformer:
         if source_unit is None or raw_value is None:
             return {
                 "value": None,
-                "label": get_label(target_unit, self._label_overrides),
+                "label": get_label(target_unit, self._label_overrides, locale),
                 "formatted": "N/A",
             }
 
@@ -426,8 +472,10 @@ class UnitTransformer:
         assert converted is not None
         return {
             "value": converted,
-            "label": get_label(target_unit, self._label_overrides),
-            "formatted": format_value(converted, target_unit, self._format_overrides),
+            "label": get_label(target_unit, self._label_overrides, locale),
+            "formatted": format_value(
+                converted, target_unit, self._format_overrides, locale
+            ),
         }
 
     def _direction_label(self, degrees: float) -> str:
