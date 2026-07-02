@@ -751,6 +751,7 @@ class CapabilityDeclaration(BaseModel):
     alertsAvailable: bool | None = None
     satelliteAvailable: bool | None = None
     satelliteTileUrlTemplate: str | None = None
+    isObservedSource: bool = True
     attribution: ProviderAttributionResponse | None = None
 
 

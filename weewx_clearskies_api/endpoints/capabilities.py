@@ -90,6 +90,7 @@ def get_capabilities() -> CapabilityResponse:
             alertsAvailable=cap.alerts_available,
             satelliteAvailable=cap.satellite_available,
             satelliteTileUrlTemplate=cap.satellite_tile_url_template,
+            isObservedSource=cap.is_observed_source,
             attribution=(
                 ProviderAttributionResponse(
                     attributionRequired=cap.attribution.attribution_required,
