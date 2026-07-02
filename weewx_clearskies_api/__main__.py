@@ -608,6 +608,8 @@ def main() -> None:
       0. Parse CLI args (--tls-cert, --tls-key).
       1. Bootstrap logging (INFO) so config-load errors are JSON.
       2. Load + validate settings from api.conf.
+      2a½. Load locale files; set the active locale from [station]
+           default_locale (I18N T3.5) — single locale for all API output.
       2a. Apply CLI TLS overrides to settings.tls.
       3. Re-configure logging at the operator's log level.
       3a. Determine config_dir from the loaded config file path.
@@ -641,6 +643,22 @@ def main() -> None:
 
     # Step 2: Load and validate settings.
     settings = load_settings()
+
+    # Step 2a½: Load locale files and set the active locale from the
+    # operator's configured default (I18N T3.5, api.conf [station]
+    # default_locale — already parsed/validated by StationSettings per
+    # ADR-021, SUPPORTED_LOCALES matches the 13 bundled locale files).
+    # This is the SINGLE locale used for ALL API output — REST and SSE
+    # alike; there is no per-request Accept-Language resolution. Runs
+    # early, before the setup-mode early-return below, so it is always
+    # initialized regardless of configured state. i18n.t() also lazy-loads
+    # defensively on first call (see i18n.py), so this step is not
+    # strictly load-bearing for correctness — but doing it explicitly here,
+    # once, is the documented startup contract.
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+    i18n.load_locales()
+    i18n.set_active_locale(settings.station.default_locale)
 
     # Step 2a: CLI flags override [tls] section values.
     if args.tls_cert is not None:
@@ -1012,9 +1030,16 @@ def main() -> None:
         logger.info("SSE input disabled ([input] enabled = false); running in REST-only mode")
 
     # Step 7b: Create UnitTransformer from settings and attach to app state.
+    # locale (I18N T3.5): the operator's configured default_locale, set as
+    # the active locale at step 2a½. Passing it here means every
+    # transform_record()/transform_field() call (REST /current, /archive,
+    # SSE) resolves unit labels/formats in the operator's locale without
+    # each caller needing to pass it explicitly — apply_conversion()'s
+    # locale parameter still defaults to None and falls back to this
+    # transformer-level value (units/transformer.py transform_record()).
     from weewx_clearskies_api.units.transformer import UnitTransformer  # noqa: PLC0415
 
-    transformer = UnitTransformer.from_settings(settings.units)
+    transformer = UnitTransformer.from_settings(settings.units, locale=i18n.get_active_locale())
     app.state.transformer = transformer
 
     # Step 7b½-a: Derive the units envelope from the transformer's target units.

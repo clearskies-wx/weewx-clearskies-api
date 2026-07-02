@@ -63,24 +63,53 @@ SECTION_MAP: dict[str, list[_RecordSpec]] = {
         _RecordSpec("Low temperature", "outTemp", "low", "min", "low_temperature"),
         _RecordSpec("High heat index", "heatindex", "high", "max", "high_heat_index"),
         _RecordSpec("Low wind chill", "windchill", "low", "min", "low_wind_chill"),
-        _RecordSpec("High apparent temperature", "appTemp", "high", "max", "high_apparent_temperature"),
-        _RecordSpec("Low apparent temperature", "appTemp", "low", "min", "low_apparent_temperature"),
-        _RecordSpec("Largest daily temperature range", "outTemp", "high", "max-daily-range", "largest_daily_temp_range"),
-        _RecordSpec("Smallest daily temperature range", "outTemp", "low", "min-daily-range", "smallest_daily_temp_range"),
+        _RecordSpec(
+            "High apparent temperature", "appTemp", "high", "max", "high_apparent_temperature"
+        ),
+        _RecordSpec(
+            "Low apparent temperature", "appTemp", "low", "min", "low_apparent_temperature"
+        ),
+        _RecordSpec(
+            "Largest daily temperature range", "outTemp", "high", "max-daily-range",
+            "largest_daily_temp_range",
+        ),
+        _RecordSpec(
+            "Smallest daily temperature range", "outTemp", "low", "min-daily-range",
+            "smallest_daily_temp_range",
+        ),
     ],
     "wind": [
         _RecordSpec("High wind speed", "windSpeed", "high", "max", "high_wind_speed"),
         _RecordSpec("High wind gust", "windGust", "high", "max", "high_wind_gust"),
-        _RecordSpec("Highest daily wind run", "windrun", "high", "sum-by-day-then-max", "highest_daily_wind_run"),
+        _RecordSpec(
+            "Highest daily wind run", "windrun", "high", "sum-by-day-then-max",
+            "highest_daily_wind_run",
+        ),
     ],
     "rain": [
-        _RecordSpec("High daily rainfall", "rain", "high", "sum-by-day-then-max", "high_daily_rainfall"),
-        _RecordSpec("High monthly rainfall", "rain", "high", "sum-by-month-then-max", "high_monthly_rainfall"),
-        _RecordSpec("Most rain in 1 hour", "rain", "high", "sum-by-hour-then-max", "most_rain_1_hour"),
-        _RecordSpec("Highest annual rainfall", "rain", "high", "sum-by-year-then-max", "highest_annual_rainfall"),
+        _RecordSpec(
+            "High daily rainfall", "rain", "high", "sum-by-day-then-max", "high_daily_rainfall"
+        ),
+        _RecordSpec(
+            "High monthly rainfall", "rain", "high", "sum-by-month-then-max",
+            "high_monthly_rainfall",
+        ),
+        _RecordSpec(
+            "Most rain in 1 hour", "rain", "high", "sum-by-hour-then-max", "most_rain_1_hour"
+        ),
+        _RecordSpec(
+            "Highest annual rainfall", "rain", "high", "sum-by-year-then-max",
+            "highest_annual_rainfall",
+        ),
         _RecordSpec("Highest rain rate", "rainRate", "high", "max", "highest_rain_rate"),
-        _RecordSpec("Consecutive days with rain", "rain", "high", "max-consecutive-rain-days", "consecutive_days_with_rain"),
-        _RecordSpec("Consecutive days without rain", "rain", "high", "max-consecutive-dry-days", "consecutive_days_without_rain"),
+        _RecordSpec(
+            "Consecutive days with rain", "rain", "high", "max-consecutive-rain-days",
+            "consecutive_days_with_rain",
+        ),
+        _RecordSpec(
+            "Consecutive days without rain", "rain", "high", "max-consecutive-dry-days",
+            "consecutive_days_without_rain",
+        ),
     ],
     "humidity": [
         _RecordSpec("High humidity", "outHumidity", "high", "max", "high_humidity"),

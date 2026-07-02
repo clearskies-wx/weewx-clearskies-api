@@ -1281,7 +1281,11 @@ def compute_special_moon_names(year: int, locale: str | None = None) -> list[dic
     for i, t in enumerate(full_moon_times):
         dt = t.utc_datetime()  # type: ignore[attr-defined]
         date_str = dt.strftime("%Y-%m-%d")
-        traditional_name = i18n.t(f"moon_names.{dt.month}", locale) if dt.month in _TRADITIONAL_MOON_NAMES else "Full"
+        traditional_name = (
+            i18n.t(f"moon_names.{dt.month}", locale)
+            if dt.month in _TRADITIONAL_MOON_NAMES
+            else "Full"
+        )
 
         # Supermoon: Earth-Moon distance at exact full-moon time.
         dist_km = earth.at(t).observe(moon).distance().km  # type: ignore[attr-defined]

@@ -137,6 +137,7 @@ These are optional overrides. When absent, values are derived from `weewx.conf`.
 | `station_id` | _(derived from weewx.conf location)_ | Station identifier slug. Used in API responses. |
 | `timezone` | _(from weewx.conf, then OS)_ | IANA timezone name (e.g. `America/Chicago`). Overrides weewx.conf and OS TZ. |
 | `hidden` | _(empty)_ | Comma-separated list of built-in page slugs to hide from `/pages`. Cannot hide `now`. |
+| `default_locale` | `en` | Single locale used for ALL computed/translated API output (Beaufort labels, sky/temperature/precipitation conditions text, AQI categories, record labels, moon names, WMO forecast text, and unit labels/number formatting). Set once at startup — there is no per-request `Accept-Language` resolution. Must be one of: `en`, `de`, `es`, `fil`, `fr`, `it`, `ja`, `nl`, `pt-PT`, `pt-BR`, `ru`, `zh-CN`, `zh-TW`. The `CLEARSKIES_DEFAULT_LOCALE` environment variable overrides this key. As of this release, only `en` has translated content — other locales fall back to English. |
 
 ---
 
