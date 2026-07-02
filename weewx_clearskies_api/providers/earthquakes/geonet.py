@@ -93,7 +93,7 @@ CAPABILITY = ProviderCapability(
         "GeoNet provides NZ-native MMI calculations and detailed regional coverage. "
         "Does not accept lat/lon/radius filter params — all events returned; "
         "radius filter applied at the endpoint layer. "
-        "No API key required. CC BY 4.0 — attribution: GeoNet (https://www.geonet.org.nz/)."
+        "No API key required. CC BY 3.0 NZ — attribution: GeoNet (https://www.geonet.org.nz/)."
     ),
     refresh_interval=300,
     attribution=ProviderAttribution(
