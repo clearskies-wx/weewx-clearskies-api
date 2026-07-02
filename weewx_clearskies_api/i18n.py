@@ -184,8 +184,8 @@ def format_number(value: float, decimals: int, locale: str | None = None) -> str
 def _resolve_key(data: dict[str, Any], key: str) -> Any:
     """Walk a dot-separated *key* path through nested dict *data*.
 
-    Returns the value at the path when it is a string or dict, or None
-    when the path does not resolve to a leaf of one of those types.
+    Returns the value at the path when it is a string, dict, or list,
+    or None when the path does not resolve to a leaf of one of those types.
     """
     parts = key.split(".")
     current: Any = data
@@ -195,4 +195,4 @@ def _resolve_key(data: dict[str, Any], key: str) -> Any:
         current = current.get(part)
         if current is None:
             return None
-    return current if isinstance(current, str | dict) else None
+    return current if isinstance(current, str | dict | list) else None
