@@ -48,7 +48,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601
 from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -94,6 +97,12 @@ CAPABILITY = ProviderCapability(
     tile_url_template="{host}{path}/{size}/{z}/{x}/{y}/{color}/{options}.png",
     tile_content_type="image/png",
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="RainViewer",
+        attribution_text="RainViewer",
+        url="https://www.rainviewer.com/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

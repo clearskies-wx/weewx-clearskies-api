@@ -55,7 +55,10 @@ from datetime import UTC, datetime
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList, utc_isoformat
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.errors import KeyInvalid
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
@@ -102,6 +105,13 @@ CAPABILITY = ProviderCapability(
     wms_layer_name=None,
     tile_content_type="image/png",
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="OpenWeather",
+        attribution_text="Weather data provided by OpenWeather",
+        url="https://openweathermap.org/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

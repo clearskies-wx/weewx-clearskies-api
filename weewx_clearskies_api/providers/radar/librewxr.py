@@ -55,7 +55,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601
 from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -120,6 +123,12 @@ def _build_capability() -> ProviderCapability:
         alerts_available=True,
         satellite_available=True,
         satellite_tile_url_template="/librewxr/{path}/{size}/{z}/{x}/{y}/0/0_0.webp",
+        attribution=ProviderAttribution(
+            attribution_required=True,
+            display_name="LibreWxR",
+            attribution_text="LibreWxR — Data: CC-BY-4.0",
+            url="https://librewxr.net/",
+        ),
     )
 
 

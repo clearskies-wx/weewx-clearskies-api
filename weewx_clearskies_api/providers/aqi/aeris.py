@@ -107,7 +107,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import AQIReading
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -215,7 +218,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),  # LC11
     default_poll_interval_seconds=DEFAULT_AQI_TTL_SECONDS,
     operator_notes=(
-        "Aeris (Xweather) /airquality endpoint. Regional config (ADR-059): "
+        "Xweather /airquality endpoint. Regional config (ADR-059): "
         "[aqi] aeris_aqi_filter sets the filter= query param; default 'airnow' (US EPA). "
         "Supported filters: airnow|china|india|eaqi|caqi|uk|de|cai. "
         "Filter does NOT auto-detect by location — must be configured explicitly. "
@@ -231,6 +234,13 @@ CAPABILITY = ProviderCapability(
         "aqiLocation supplied via place.name (NOT PARTIAL-DOMAIN for Aeris)."
     ),
     refresh_interval=900,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="Xweather (Vaisala)",
+        attribution_text="powered by Vaisala Xweather",
+        url="https://www.xweather.com/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

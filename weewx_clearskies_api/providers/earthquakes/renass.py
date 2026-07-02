@@ -48,7 +48,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import EarthquakeRecord
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -100,6 +103,12 @@ CAPABILITY = ProviderCapability(
         "filter at the dashboard layer if only seismic earthquakes are wanted."
     ),
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="EPOS-France",
+        attribution_text="Données sismiques: EPOS-France",
+        url="https://seismology.epos-france.fr/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

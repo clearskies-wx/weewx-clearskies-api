@@ -108,7 +108,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import AlertRecord
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -173,7 +176,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=_AERIS_CACHE_TTL,
     operator_notes=(
-        "Aeris (AerisWeather/Xweather) alerts. Requires client_id + client_secret "
+        "Xweather (Vaisala) alerts. Requires client_id + client_secret "
         "bound to a registered domain or bundle id "
         "(see docs/reference/api-docs/aeris.md §Authentication). "
         "Returns active alerts only per Aeris api-docs §Alerts. "
@@ -189,6 +192,13 @@ CAPABILITY = ProviderCapability(
         "details.color is Aeris's own rendering hex color — NOT the national system's color."
     ),
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="Xweather (Vaisala)",
+        attribution_text="powered by Vaisala Xweather",
+        url="https://www.xweather.com/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

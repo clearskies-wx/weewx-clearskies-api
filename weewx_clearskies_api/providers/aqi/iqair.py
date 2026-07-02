@@ -86,7 +86,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import AQIReading
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -216,6 +219,13 @@ CAPABILITY = ProviderCapability(
         "too_many_requests, city_not_found, no_nearest_station, node not found."
     ),
     refresh_interval=900,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="IQAir",
+        attribution_text="Powered by IQAir",
+        url="https://www.iqair.com/",
+        do_not_use_logo=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

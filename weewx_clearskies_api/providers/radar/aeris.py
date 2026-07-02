@@ -73,7 +73,10 @@ from datetime import UTC, datetime
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList, utc_isoformat
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.errors import KeyInvalid
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
@@ -93,7 +96,7 @@ _FRAMES_TTL = 60   # 60 s — frame index (synthesized)
 _TILE_TTL = 300    # 300 s — tile bytes per ADR-017 tile default
 _API_VERSION = "0.1.0"
 
-ATTRIBUTION = "AerisWeather / Xweather (https://www.xweather.com/)"
+ATTRIBUTION = "Xweather (Vaisala) (https://www.xweather.com/)"
 
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4)
@@ -107,7 +110,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=_FRAMES_TTL,
     operator_notes=(
-        "AerisWeather/Xweather Raster Maps — radar layer (global radar mosaic). "
+        "Xweather (Vaisala) Raster Maps — radar layer (global radar mosaic). "
         "Keyed (path-embedded client_id_client_secret); reuses provider-scoped "
         "credentials from forecast/alerts/AQI Aeris (WEEWX_CLEARSKIES_AERIS_CLIENT_ID "
         "+ _AERIS_CLIENT_SECRET env vars). Free path via PWSWeather Contributor Plan "
@@ -123,6 +126,13 @@ CAPABILITY = ProviderCapability(
     wms_layer_name=None,
     tile_content_type="image/png",
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="Xweather (Vaisala)",
+        attribution_text="powered by Vaisala Xweather",
+        url="https://www.xweather.com/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

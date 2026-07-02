@@ -47,7 +47,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import AlertRecord
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     ProviderProtocolError,
@@ -99,6 +102,12 @@ CAPABILITY = ProviderCapability(
         "set [alerts] nws_user_agent_contact in api.conf for best results."
     ),
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="National Weather Service",
+        attribution_text="Data courtesy of the National Weather Service",
+        url="https://www.weather.gov/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

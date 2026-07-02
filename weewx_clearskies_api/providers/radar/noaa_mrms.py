@@ -25,7 +25,10 @@ import logging
 
 from weewx_clearskies_api.models.responses import RadarFrame, RadarFrameList
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 from weewx_clearskies_api.providers._common.wms_capabilities import parse_wms_time_dimension
@@ -75,6 +78,12 @@ CAPABILITY = ProviderCapability(
     wms_layer_name=LAYER_NAME,
     tile_content_type="image/png",
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="NOAA MRMS",
+        attribution_text="NOAA Multi-Radar/Multi-Sensor System",
+        url="https://www.nssl.noaa.gov/projects/mrms/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

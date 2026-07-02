@@ -89,7 +89,10 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -167,6 +170,13 @@ CAPABILITY = ProviderCapability(
         "per ADR-007 §Per-module behavior."
     ),
     refresh_interval=1800,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="OpenWeather",
+        attribution_text="Weather data provided by OpenWeather",
+        url="https://openweathermap.org/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

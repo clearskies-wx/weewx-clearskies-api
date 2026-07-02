@@ -97,7 +97,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import AQIReading
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.errors import (
     GeographicallyUnsupported,
     ProviderProtocolError,
@@ -146,6 +149,12 @@ CAPABILITY = ProviderCapability(
         "Haze-eligible (is_observed_source=True)."
     ),
     refresh_interval=900,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="OpenAQ",
+        attribution_text="Air quality data from OpenAQ",
+        url="https://openaq.org/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

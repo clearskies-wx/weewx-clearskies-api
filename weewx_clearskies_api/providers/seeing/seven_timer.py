@@ -30,7 +30,10 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -293,4 +296,10 @@ CAPABILITY = ProviderCapability(
     default_poll_interval_seconds=10800,
     operator_notes="Keyless; 7Timer ASTRO product, 3-hour intervals over 72 hours.",
     refresh_interval=10800,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="7Timer!",
+        attribution_text="7Timer!",
+        url="http://7timer.info/",
+    ),
 )

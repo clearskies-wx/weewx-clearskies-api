@@ -95,7 +95,10 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import to_utc_iso8601_from_offset
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -180,7 +183,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
     operator_notes=(
-        "Aeris (AerisWeather/Xweather) free-tier and entry-paid plans. "
+        "Xweather (Vaisala) free-tier and entry-paid plans. "
         "Requires client_id + client_secret bound to a registered domain "
         "or bundle id (see docs/reference/api-docs/aeris.md §Authentication). "
         "Forecast discussion populated when paid-tier summary field is present; "
@@ -191,6 +194,13 @@ CAPABILITY = ProviderCapability(
         "Config key: aeris_forecast_model in [forecast] section of api.conf."
     ),
     refresh_interval=1800,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="Xweather (Vaisala)",
+        attribution_text="powered by Vaisala Xweather",
+        url="https://www.xweather.com/",
+        logo_required=True,
+    ),
 )
 
 # ---------------------------------------------------------------------------

@@ -102,7 +102,10 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import epoch_to_utc_iso8601
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -186,6 +189,12 @@ CAPABILITY = ProviderCapability(
         "KeyInvalid 502 propagation."
     ),
     refresh_interval=1800,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="Weather Underground",
+        attribution_text="Weather data from Weather Underground",
+        url="https://www.wunderground.com/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

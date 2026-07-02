@@ -15,7 +15,10 @@ config and ProviderCapability is a frozen dataclass.
 
 from __future__ import annotations
 
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 
 PROVIDER_ID = "iframe"
 DOMAIN = "radar"
@@ -46,4 +49,10 @@ def make_capability(iframe_url: str) -> ProviderCapability:
         ),
         iframe_url=iframe_url,
         refresh_interval=86400,
+        attribution=ProviderAttribution(
+            attribution_required=False,
+            display_name="External radar",
+            attribution_text="External radar source",
+            url="",
+        ),
     )

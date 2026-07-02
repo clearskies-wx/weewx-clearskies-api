@@ -44,7 +44,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.models.responses import EarthquakeRecord
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.datetime_utils import epoch_ms_to_utc_iso8601
 from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -96,6 +99,12 @@ CAPABILITY = ProviderCapability(
         "No API key required. Polite-use: do not poll faster than the TTL."
     ),
     refresh_interval=300,
+    attribution=ProviderAttribution(
+        attribution_required=False,
+        display_name="U.S. Geological Survey",
+        attribution_text="Earthquake data courtesy of the U.S. Geological Survey",
+        url="https://earthquake.usgs.gov/",
+    ),
 )
 
 # ---------------------------------------------------------------------------

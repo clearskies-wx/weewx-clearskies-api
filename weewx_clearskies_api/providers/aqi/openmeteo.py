@@ -83,7 +83,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from weewx_clearskies_api.models.responses import AQIReading
 from weewx_clearskies_api.providers._common.cache import get_cache
-from weewx_clearskies_api.providers._common.capability import ProviderCapability
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderAttribution,
+    ProviderCapability,
+)
 from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
@@ -198,6 +201,12 @@ CAPABILITY = ProviderCapability(
     ),
     is_observed_source=False,  # ADR-066: CAMS model output, not observed measurements
     refresh_interval=900,
+    attribution=ProviderAttribution(
+        attribution_required=True,
+        display_name="Open-Meteo",
+        attribution_text="Weather data by Open-Meteo.com",
+        url="https://open-meteo.com/",
+    ),
 )
 
 # ---------------------------------------------------------------------------
