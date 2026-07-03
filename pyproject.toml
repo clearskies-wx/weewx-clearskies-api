@@ -4,12 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "weewx-clearskies-api"
-version = "0.1.0"
+version = "1.0.0b1"
 description = "HTTP/JSON API for the Clear Skies weather dashboard"
 license = { text = "GPL-3.0-or-later" }
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Clear Skies contributors" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3.12",
+]
 
 dependencies = [
     # I18N T3.1: Babel for locale-aware number formatting (decimal separators
@@ -76,6 +83,11 @@ dev = [
     # Benchmarks run on weather-dev with a real database; excluded from CI.
     "pytest-benchmark==5.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/clearskies-wx"
+Repository = "https://github.com/clearskies-wx/weewx-clearskies-api"
+Changelog = "https://github.com/clearskies-wx/weewx-clearskies-api/blob/main/CHANGELOG.md"
 
 [project.scripts]
 weewx-clearskies-api = "weewx_clearskies_api.__main__:main"
