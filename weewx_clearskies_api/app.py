@@ -105,8 +105,8 @@ def create_app(settings: Settings) -> FastAPI:
         version="1.0.0",
         description="HTTP/JSON API for the Clear Skies weather dashboard",
         license_info={
-            "name": "GPL-3.0-or-later",
-            "url": "https://www.gnu.org/licenses/gpl-3.0.html",
+            "name": "PolyForm-Noncommercial-1.0.0",
+            "url": "https://polyformproject.org/licenses/noncommercial/1.0.0",
         },
         # Per ADR-018: OpenAPI at /api/v1/openapi.json, docs at /api/v1/docs.
         root_path="",

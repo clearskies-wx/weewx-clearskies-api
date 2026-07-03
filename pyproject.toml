@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "weewx-clearskies-api"
 version = "1.0.0b1"
 description = "HTTP/JSON API for the Clear Skies weather dashboard"
-license = { text = "GPL-3.0-or-later" }
+license = { text = "PolyForm-Noncommercial-1.0.0" }
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Clear Skies contributors" }]

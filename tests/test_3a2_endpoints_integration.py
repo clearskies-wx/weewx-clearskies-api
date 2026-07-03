@@ -158,7 +158,7 @@ def content_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
         encoding="utf-8",
     )
     (d / "legal.md").write_text(
-        "# Legal\n\nAll data is AS-IS under GPL v3.\n",
+        "# Legal\n\nAll data is AS-IS under PolyForm Noncommercial 1.0.0.\n",
         encoding="utf-8",
     )
     return d

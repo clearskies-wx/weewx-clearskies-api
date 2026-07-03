@@ -33,7 +33,7 @@ jobs:
             done
             echo ""
             echo "Add a Signed-off-by trailer with: git commit --amend -s   (or rebase with -s)."
-            echo "See https://developercertificate.org/ — DCO required by ADR-003 (GPL v3)."
+            echo "See https://developercertificate.org/ — DCO required by ADR-081 (PolyForm Noncommercial)."
             exit 1
           fi
           echo "All ${#missing[@]} PR commits carry DCO sign-off. (Counted commits = $(git rev-list --count "$BASE..$HEAD"))"

@@ -4,7 +4,7 @@ HTTP/JSON REST API for the [Clear Skies](https://github.com/inguy24/weewx-clears
 
 Part of Clear Skies — a modular, modern weather UI stack for weewx.
 
-Distributed AS-IS under [GPL v3](LICENSE).
+Distributed AS-IS under [PolyForm Noncommercial 1.0.0](LICENSE).
 
 ---
 
@@ -128,8 +128,8 @@ The canonical contract that governs all response shapes is at [`docs/contracts/o
 
 ## License
 
-[GNU General Public License v3.0](LICENSE)
+[PolyForm Noncommercial License 1.0.0](LICENSE)
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+This software is licensed for noncommercial use. See [ADDITIONAL-USES.md](ADDITIONAL-USES.md) for permitted uses and commercial licensing requirements.
 
 Distributed AS-IS. See LICENSE for full terms.

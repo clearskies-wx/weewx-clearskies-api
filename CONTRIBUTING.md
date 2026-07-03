@@ -2,7 +2,7 @@
 
 Contributions are welcome! This project uses the **Developer Certificate of Origin (DCO)**
 to ensure that contributors have the right to submit their work under this project's
-[GPL-3.0 license](LICENSE).
+[PolyForm Noncommercial 1.0.0 license](LICENSE).
 
 ## How to contribute
 
