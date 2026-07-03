@@ -1,6 +1,6 @@
 # Security — weewx-clearskies-api
 
-This repository is part of [Clear Skies](https://github.com/inguy24/weewx-clearskies-stack), distributed AS-IS under [GPL v3](LICENSE). There is no support window, no LTS, and no security backport policy — only the current release is available. See [ADR-018](https://github.com/inguy24/weewx-clearskies-stack/blob/master/docs/decisions/ADR-018-api-versioning-policy.md) for the versioning and AS-IS policy.
+This repository is part of [Clear Skies](https://github.com/clearskies-wx/weewx-clearskies-stack), distributed AS-IS under [GPL v3](LICENSE). There is no support window, no LTS, and no security backport policy — only the current release is available. See [ADR-018](https://github.com/clearskies-wx/weewx-clearskies-stack/blob/master/docs/decisions/ADR-018-api-versioning-policy.md) for the versioning and AS-IS policy.
 
 ---
 
