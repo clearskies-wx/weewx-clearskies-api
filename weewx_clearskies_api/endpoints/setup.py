@@ -170,21 +170,25 @@ class HandshakeResponse(BaseModel):
 
 
 class DbDefaultsResponse(BaseModel):
-    host: str
-    port: int
-    user: str
-    name: str
-    conf_path: str
+    kind: str = "mysql"  # "sqlite" or "mysql"
+    host: str = ""       # MySQL only
+    port: int = 0        # MySQL only
+    user: str = ""       # MySQL only
+    name: str = ""       # MySQL only
+    path: str = ""       # SQLite only — path to .sdb file
+    conf_path: str = ""  # weewx.conf path
 
 
 class DbTestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    host: str
-    port: int
-    user: str
-    password: str
-    name: str
+    kind: str = "mysql"  # "sqlite" or "mysql"
+    host: str = ""
+    port: int = 3306
+    user: str = ""
+    password: str = ""
+    name: str = ""
+    path: str = ""       # SQLite only
 
 
 class DbTestResponse(BaseModel):
@@ -223,11 +227,13 @@ class StationResponse(BaseModel):
 class DatabaseApplyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    host: str
-    port: int
-    user: str
-    password: str
-    name: str
+    kind: str = "mysql"  # "sqlite" or "mysql"
+    host: str = ""
+    port: int = 3306
+    user: str = ""
+    password: str = ""
+    name: str = ""
+    path: str = ""       # SQLite only
 
 
 class StationApplyConfig(BaseModel):
@@ -577,6 +583,17 @@ def _build_temp_mysql_url(host: str, port: int, user: str, password: str, name: 
     )
 
 
+def _build_temp_sqlite_url(path: str) -> str:
+    """Build a read-only SQLite URL for a one-shot test connection or schema reflection.
+
+    Mirrors db/engine.py's _build_sqlite_url() (ADR-012) format exactly: the
+    file: URI scheme is required for SQLAlchemy's MetaData.reflect() to work
+    correctly with mode=ro — the simpler sqlite:////path format works for
+    engine.connect()/queries but fails for reflection.
+    """
+    return f"sqlite+pysqlite:///file:///{path}?mode=ro&uri=true"
+
+
 def _load_weewx_conf_for_setup(weewx_conf_path: str) -> configobj.ConfigObj | None:
     """Load weewx.conf for setup endpoints; return None on any error (non-fatal here)."""
     try:
@@ -640,10 +657,13 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
     # [database] — non-secret fields only; password goes to secrets.env.
     if "database" not in cfg:
         cfg["database"] = {}
-    cfg["database"]["kind"] = "mysql"
-    cfg["database"]["host"] = apply.database.host
-    cfg["database"]["port"] = str(apply.database.port)
-    cfg["database"]["name"] = apply.database.name
+    cfg["database"]["kind"] = apply.database.kind
+    if apply.database.kind == "sqlite":
+        cfg["database"]["path"] = apply.database.path
+    else:
+        cfg["database"]["host"] = apply.database.host
+        cfg["database"]["port"] = str(apply.database.port)
+        cfg["database"]["name"] = apply.database.name
 
     # [weewx] — config_path if supplied.
     if apply.weewx_conf_path:
@@ -865,44 +885,102 @@ async def handshake(body: HandshakeRequest, request: Request) -> HandshakeRespon
 
 @router.get("/db-defaults", response_model=DbDefaultsResponse)
 async def db_defaults(request: Request) -> DbDefaultsResponse:
-    """Return DB connection defaults from weewx.conf. Password is never included."""
+    """Return DB connection defaults from weewx.conf. Password is never included.
+
+    Detection sequence:
+      1. [DataBindings][[wx_binding]] database — the active database stanza name
+         (usually "archive_sqlite" or "archive_mysql").
+      2. [Databases][[<stanza>]] database_type — "SQLite" or "MySQL".
+      3. SQLite: read SQLITE_ROOT from [DatabaseTypes][[SQLite]] and
+         database_name from [Databases][[<stanza>]]; join into a full path.
+      4. MySQL: read [DatabaseTypes][[MySQL]] for host/port/user, and
+         database_name from the matching [Databases] stanza (existing behavior).
+    """
     tm = await require_setup_session(request)  # noqa: F841 — side-effect: auth check
     settings = request.app.state.settings
     weewx_conf_path: str = settings.weewx.config_path
 
     cfg = _load_weewx_conf_for_setup(weewx_conf_path)
 
+    kind = "mysql"
     host = "localhost"
     port = 3306
     user = "weewx"
     db_name = "weewx"
+    sqlite_path = ""
 
     if cfg is not None:
-        db_section = cfg.get("DatabaseTypes", {})
-        # weewx.conf stores MySQL settings under [DatabaseTypes] [[MySQL]]
-        mysql_section: dict[str, Any] = {}
-        if isinstance(db_section, dict):
-            mysql_section = dict(db_section.get("MySQL", {}))
+        # 1. Find the active database stanza via [DataBindings][[wx_binding]].
+        data_bindings = cfg.get("DataBindings", {})
+        stanza_name = "archive_mysql"
+        if isinstance(data_bindings, dict):
+            wx_binding = data_bindings.get("wx_binding", {})
+            if isinstance(wx_binding, dict) and wx_binding.get("database"):
+                stanza_name = str(wx_binding["database"])
 
-        if mysql_section:
-            host = str(mysql_section.get("host", host))
-            try:
-                port = int(mysql_section.get("port", port))
-            except (ValueError, TypeError):
-                pass
-            user = str(mysql_section.get("user", user))
-
-        # Database name is under [Databases] [[weewx_mysql]] database_name
+        # 2. Look up database_type for that stanza under [Databases].
         databases_section = cfg.get("Databases", {})
+        stanza: dict[str, Any] = {}
         if isinstance(databases_section, dict):
-            for _db_key, db_val in databases_section.items():
-                if isinstance(db_val, dict):
-                    db_type = str(db_val.get("database_type", "")).lower()
-                    if db_type == "mysql":
-                        db_name = str(db_val.get("database_name", db_name))
-                        break
+            raw_stanza = databases_section.get(stanza_name)
+            if isinstance(raw_stanza, dict):
+                stanza = raw_stanza
+
+        db_type = str(stanza.get("database_type", "")).lower()
+
+        if db_type == "sqlite":
+            kind = "sqlite"
+            db_types_section = cfg.get("DatabaseTypes", {})
+            sqlite_section: dict[str, Any] = {}
+            if isinstance(db_types_section, dict):
+                raw_sqlite = db_types_section.get("SQLite")
+                if isinstance(raw_sqlite, dict):
+                    sqlite_section = raw_sqlite
+            sqlite_root = str(sqlite_section.get("SQLITE_ROOT", ""))
+            database_name = str(stanza.get("database_name", ""))
+            if sqlite_root and database_name:
+                sqlite_path = str(Path(sqlite_root) / database_name)
+            elif database_name:
+                sqlite_path = database_name
+        else:
+            # MySQL (or unresolved stanza — fall back to legacy MySQL-only detection).
+            kind = "mysql"
+            db_types_section = cfg.get("DatabaseTypes", {})
+            mysql_section: dict[str, Any] = {}
+            if isinstance(db_types_section, dict):
+                raw_mysql = db_types_section.get("MySQL")
+                if isinstance(raw_mysql, dict):
+                    mysql_section = raw_mysql
+
+            if mysql_section:
+                host = str(mysql_section.get("host", host))
+                try:
+                    port = int(mysql_section.get("port", port))
+                except (ValueError, TypeError):
+                    pass
+                user = str(mysql_section.get("user", user))
+
+            if stanza.get("database_name"):
+                db_name = str(stanza["database_name"])
+            elif isinstance(databases_section, dict):
+                # Fall back: scan all stanzas for the first MySQL one (legacy behavior
+                # when [DataBindings][[wx_binding]] is absent or points elsewhere).
+                for _db_key, db_val in databases_section.items():
+                    if isinstance(db_val, dict):
+                        candidate_type = str(db_val.get("database_type", "")).lower()
+                        if candidate_type == "mysql":
+                            db_name = str(db_val.get("database_name", db_name))
+                            break
+
+    if kind == "sqlite":
+        return DbDefaultsResponse(
+            kind="sqlite",
+            path=sqlite_path,
+            conf_path=weewx_conf_path,
+        )
 
     return DbDefaultsResponse(
+        kind="mysql",
         host=host,
         port=port,
         user=user,
@@ -915,6 +993,36 @@ async def db_defaults(request: Request) -> DbDefaultsResponse:
 async def db_test(body: DbTestRequest, request: Request) -> DbTestResponse:
     """Test a DB connection and store params in session data on success."""
     tm = await require_setup_session(request)
+
+    if body.kind == "sqlite":
+        db_path = Path(body.path)
+        if not db_path.exists():
+            return DbTestResponse(
+                success=False,
+                error=f"SQLite database file not found: {body.path}",
+            )
+        if not db_path.is_file():
+            return DbTestResponse(success=False, error=f"Path is not a file: {body.path}")
+
+        url = _build_temp_sqlite_url(body.path)
+        engine = create_engine(url, poolclass=NullPool, future=True, echo=False)
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except OperationalError as exc:
+            logger.debug("db-test SQLite OperationalError: %s", exc)
+            return DbTestResponse(success=False, error="Unable to open SQLite database file")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("db-test unexpected error (sqlite): %s", type(exc).__name__)
+            return DbTestResponse(success=False, error="Connection test failed")
+        finally:
+            engine.dispose()
+
+        tm.set_session_data("db_params", {
+            "kind": "sqlite",
+            "path": body.path,
+        })
+        return DbTestResponse(success=True, version="SQLite")
 
     url = _build_temp_mysql_url(
         host=body.host,
@@ -964,6 +1072,7 @@ async def db_test(body: DbTestRequest, request: Request) -> DbTestResponse:
 
     # Store validated params in session for /setup/schema and /setup/apply.
     tm.set_session_data("db_params", {
+        "kind": "mysql",
         "host": body.host,
         "port": body.port,
         "user": body.user,
@@ -984,13 +1093,16 @@ async def schema(request: Request) -> SchemaResponse:
     if db_params is None:
         raise HTTPException(409, detail="Test database connection first")
 
-    url = _build_temp_mysql_url(
-        host=db_params["host"],
-        port=db_params["port"],
-        user=db_params["user"],
-        password=db_params["password"],
-        name=db_params["name"],
-    )
+    if db_params.get("kind") == "sqlite":
+        url = _build_temp_sqlite_url(db_params["path"])
+    else:
+        url = _build_temp_mysql_url(
+            host=db_params["host"],
+            port=db_params["port"],
+            user=db_params["user"],
+            password=db_params["password"],
+            name=db_params["name"],
+        )
 
     engine = create_engine(url, poolclass=NullPool, future=True, echo=False)
     try:
