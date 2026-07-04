@@ -1,4 +1,4 @@
-"""Xweather (Vaisala) — module id: aeris — forecast provider module (ADR-007, ADR-038).
+"""Vaisala Xweather — module id: aeris — forecast provider module (ADR-007, ADR-038).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API calls — two per cache miss:
@@ -183,7 +183,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
     operator_notes=(
-        "Xweather (Vaisala) free-tier and entry-paid plans. "
+        "Vaisala Xweather free-tier and entry-paid plans. "
         "Requires client_id + client_secret bound to a registered domain "
         "or bundle id (see docs/reference/api-docs/aeris.md §Authentication). "
         "Forecast discussion populated when paid-tier summary field is present; "
@@ -196,7 +196,7 @@ CAPABILITY = ProviderCapability(
     refresh_interval=1800,
     attribution=ProviderAttribution(
         attribution_required=True,
-        display_name="Xweather (Vaisala)",
+        display_name="Vaisala Xweather",
         attribution_text="powered by Vaisala Xweather",
         text_prefix="powered by",
         text_provider_name="Vaisala Xweather",

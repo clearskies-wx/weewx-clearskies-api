@@ -1,4 +1,4 @@
-"""Xweather (Vaisala) — module id: aeris — alerts provider module (ADR-016, ADR-038).
+"""Vaisala Xweather — module id: aeris — alerts provider module (ADR-016, ADR-038).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — single GET per cache miss:
@@ -176,7 +176,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=_AERIS_CACHE_TTL,
     operator_notes=(
-        "Xweather (Vaisala) alerts. Requires client_id + client_secret "
+        "Vaisala Xweather alerts. Requires client_id + client_secret "
         "bound to a registered domain or bundle id "
         "(see docs/reference/api-docs/aeris.md §Authentication). "
         "Returns active alerts only per Aeris api-docs §Alerts. "
@@ -194,7 +194,7 @@ CAPABILITY = ProviderCapability(
     refresh_interval=300,
     attribution=ProviderAttribution(
         attribution_required=True,
-        display_name="Xweather (Vaisala)",
+        display_name="Vaisala Xweather",
         attribution_text="powered by Vaisala Xweather",
         text_prefix="powered by",
         text_provider_name="Vaisala Xweather",

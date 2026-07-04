@@ -10,7 +10,9 @@ day-1 alerts provider per ADR-016).
 Forecast domain: five rows (one per provider per ADR-007 day-1 set).
   Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
   wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
-AQI domain: openmeteo (3b-9), aeris (3b-10), openweathermap (3b-11), iqair (3b-12 — fourth + FINAL day-1 AQI provider).
+AQI domain: openmeteo (3b-9), aeris (3b-10), iqair (3b-12). openweathermap (3b-11) and
+  openaq removed from AQI — OWM AQI returns SILAM model predictions, not observed PM
+  data (Phase 2 API removals); openaq was never wired into dispatch.
 Earthquakes domain: usgs, geonet, emsc, renass (3b-13 — domain opener; all keyless per ADR-040).
 Radar domain:
   Keyless (3b-14): rainviewer, iem_nexrad, noaa_mrms, msc_geomet, dwd_radolan.
@@ -31,7 +33,6 @@ from weewx_clearskies_api.providers.alerts import openweathermap as alerts_openw
 from weewx_clearskies_api.providers.aqi import aeris as aqi_aeris
 from weewx_clearskies_api.providers.aqi import iqair as aqi_iqair
 from weewx_clearskies_api.providers.aqi import openmeteo as aqi_openmeteo
-from weewx_clearskies_api.providers.aqi import openweathermap as aqi_openweathermap
 from weewx_clearskies_api.providers.earthquakes import emsc as earthquakes_emsc
 from weewx_clearskies_api.providers.earthquakes import geonet as earthquakes_geonet
 from weewx_clearskies_api.providers.earthquakes import renass as earthquakes_renass
@@ -58,7 +59,6 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("aqi", "aeris"): aqi_aeris,
     ("aqi", "iqair"): aqi_iqair,
     ("aqi", "openmeteo"): aqi_openmeteo,
-    ("aqi", "openweathermap"): aqi_openweathermap,
     ("earthquakes", "emsc"): earthquakes_emsc,
     ("earthquakes", "geonet"): earthquakes_geonet,
     ("earthquakes", "renass"): earthquakes_renass,

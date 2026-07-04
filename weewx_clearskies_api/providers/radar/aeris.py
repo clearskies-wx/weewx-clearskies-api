@@ -1,4 +1,4 @@
-"""Xweather (Vaisala) — module id: aeris — radar provider module — Raster Maps (ADR-015, ADR-038, 3b-15).
+"""Vaisala Xweather — module id: aeris — radar provider module — Raster Maps (ADR-015, ADR-038, 3b-15).
 
 Five responsibilities per ADR-038 §2:
   1. Outbound API call — Xweather Raster Maps XYZ tile fetch:
@@ -96,7 +96,7 @@ _FRAMES_TTL = 60   # 60 s — frame index (synthesized)
 _TILE_TTL = 300    # 300 s — tile bytes per ADR-017 tile default
 _API_VERSION = "0.1.0"
 
-ATTRIBUTION = "Xweather (Vaisala) (https://www.xweather.com/)"
+ATTRIBUTION = "Vaisala Xweather (https://www.xweather.com/)"
 
 # ---------------------------------------------------------------------------
 # Capability declaration (ADR-038 §4)
@@ -110,7 +110,7 @@ CAPABILITY = ProviderCapability(
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=_FRAMES_TTL,
     operator_notes=(
-        "Xweather (Vaisala) Raster Maps — radar layer (global radar mosaic). "
+        "Vaisala Xweather Raster Maps — radar layer (global radar mosaic). "
         "Keyed (path-embedded client_id_client_secret); reuses provider-scoped "
         "credentials from forecast/alerts/AQI Aeris (WEEWX_CLEARSKIES_AERIS_CLIENT_ID "
         "+ _AERIS_CLIENT_SECRET env vars). Free path via PWSWeather Contributor Plan "
@@ -128,7 +128,7 @@ CAPABILITY = ProviderCapability(
     refresh_interval=300,
     attribution=ProviderAttribution(
         attribution_required=True,
-        display_name="Xweather (Vaisala)",
+        display_name="Vaisala Xweather",
         attribution_text="powered by Vaisala Xweather",
         text_prefix="powered by",
         text_provider_name="Vaisala Xweather",

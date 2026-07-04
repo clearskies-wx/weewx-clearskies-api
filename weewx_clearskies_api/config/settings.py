@@ -406,21 +406,23 @@ class AQISettings:
     Provider id for the AQI data source.  Open-Meteo is keyless — no env vars
     needed.  Aeris (3b-10) is keyed — credentials come from the shared [aeris]
     section (provider-scoped per 3b-4 Q1 user decision; same env vars as
-    forecast/alerts Aeris).  OWM (3b-11) is keyed — provider-scoped per 3b-5 Q2
-    decision; same env var as forecast/alerts OWM.  IQAir (3b-12) is keyed —
+    forecast/alerts Aeris).  IQAir (3b-12) is keyed —
     domain-scoped per Q1 user decision 2026-05-11 (IQAir is AQI-only; distinct
-    from multi-domain Aeris/OWM).
+    from multi-domain Aeris).
+
+    OWM removed from AQI (Phase 2 API removals) — OWM AQI returns SILAM model
+    predictions, not observed PM data; not a valid AQI source. OWM remains
+    valid for forecast/alerts/radar domains.
 
     Regional config (ADR-059):
       aeris_aqi_filter: one of airnow|china|india|eaqi|caqi|uk|de|cai (default airnow).
       openmeteo_aqi_index: one of us_aqi|european_aqi (default us_aqi).
       iqair_aqi_scale: one of us|cn (default us).
-      OWM has no regional config — always returns OWM 1-5 ordinal scale.
 
     Per ADR-013: single AQI provider per deploy.  No multi-provider fallback.
     """
 
-    #: Provider id: "openmeteo", "aeris", "openweathermap", "iqair".
+    #: Provider id: "openmeteo", "aeris", "iqair".
     provider: str | None
     #: IQAir API key (domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
     iqair_key: str | None
@@ -458,11 +460,11 @@ class AQISettings:
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id or regional config."""
-        valid_providers = {"openmeteo", "aeris", "openweathermap", "iqair"}
+        valid_providers = {"openmeteo", "aeris", "iqair"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[aqi] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'openmeteo', 'aeris', 'openweathermap', 'iqair'."
+                "Supported values: 'openmeteo', 'aeris', 'iqair'."
             )
         if self.aeris_aqi_filter not in self._VALID_AERIS_FILTERS:
             raise ValueError(

@@ -33,7 +33,9 @@ wire_aqi_settings (LC18/LC19):
   No-op for Open-Meteo (keyless, no credentials to wire).
   For Aeris: extracts client_id + client_secret from settings.aeris and stores
   in module-level _AERIS_CLIENT_ID + _AERIS_CLIENT_SECRET for dispatch (3b-10).
-  Future-proof for keyed providers (3b-11 OWM, 3b-12 IQAir).
+  Future-proof for keyed providers (3b-12 IQAir).
+  OWM removed from AQI (Phase 2 API removals) — OWM AQI returns SILAM model
+  predictions, not observed PM data.
 
 Units block (LC lead-call in brief §per-endpoint spec):
   Populated via get_units_block() / get_target_unit() from services/units.py.
@@ -77,14 +79,12 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Module-level credential wiring (populated at startup by wire_aqi_settings).
 # Aeris: client_id + client_secret (3b-10).
-# OWM: appid (3b-11 — provider-scoped per 3b-5 Q2; same env var as forecast/alerts OWM).
 # IQAir: key (3b-12 — domain-scoped per Q1 user decision 2026-05-11; AQI-only provider).
 # AQI history: column mapping from [aqi.history] section (P4-T3, ADR-013 corrected).
 # ---------------------------------------------------------------------------
 
 _AERIS_CLIENT_ID: str | None = None
 _AERIS_CLIENT_SECRET: str | None = None
-_OWM_APPID: str | None = None
 _IQAIR_KEY: str | None = None
 # AQI history settings — defaults to all-empty (Path B) until wired at startup.
 _AQI_HISTORY_SETTINGS: AQIHistorySettings = AQIHistorySettings({})
@@ -137,10 +137,6 @@ def wire_aqi_settings(settings: object) -> None:
       forecast/alerts Aeris) and stores in module-level _AERIS_CLIENT_ID +
       _AERIS_CLIENT_SECRET for the dispatch to pass to aeris.fetch().
       Regional config (aqi_filter) is wired via aeris.configure_regional_settings() (ADR-059).
-    For OWM (3b-11): extracts openweathermap_appid from settings.forecast
-      (provider-scoped per 3b-5 Q2 user decision; same env var as forecast/alerts OWM:
-      WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID) and stores in _OWM_APPID.
-      OWM has no regional config (always uses OWM 1-5 ordinal scale globally).
     For IQAir (3b-12): extracts iqair_key from settings.aqi (domain-scoped per
       Q1 user decision 2026-05-11; IQAir is AQI-only, not multi-domain like Aeris/OWM)
       and stores in _IQAIR_KEY.  Regional config (aqi_scale) wired via
@@ -148,7 +144,7 @@ def wire_aqi_settings(settings: object) -> None:
     AQI history (P4-T3): stores settings.aqi_history in _AQI_HISTORY_SETTINGS so
       get_aqi_history() can read archive column mappings at request time.
     """
-    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _OWM_APPID, _IQAIR_KEY  # noqa: PLW0603
+    global _AERIS_CLIENT_ID, _AERIS_CLIENT_SECRET, _IQAIR_KEY  # noqa: PLW0603
     global _AQI_HISTORY_SETTINGS  # noqa: PLW0603
 
     # Wire AQI history column settings (Path A operators configure these;
@@ -197,29 +193,6 @@ def wire_aqi_settings(settings: object) -> None:
         _aeris_mod.configure_regional_settings(
             aqi_filter=getattr(aqi_section, "aeris_aqi_filter", "airnow"),
         )
-
-    elif provider == "openweathermap":
-        # Provider-scoped credential per 3b-5 Q2 user decision — same env var as
-        # forecast/alerts OWM (WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID).
-        # Settings class stores this on ForecastSettings.openweathermap_appid;
-        # no standalone [openweathermap] section in Settings.
-        forecast_section = getattr(settings, "forecast", None)
-        if forecast_section is None:
-            logger.error(
-                "[aqi] provider = openweathermap but [forecast] settings section missing; "
-                "credentials cannot be wired"
-            )
-            return
-
-        _OWM_APPID = getattr(forecast_section, "openweathermap_appid", None)
-
-        if not _OWM_APPID:
-            logger.error(
-                "[aqi] provider = openweathermap but "
-                "WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID env var missing; "
-                "capability still registered but /aqi/current will return 502 until wired"
-            )
-        # OWM has no regional config (always uses OWM 1-5 ordinal scale globally — ADR-059).
 
     elif provider == "openmeteo":
         # Open-Meteo is keyless (auth_required=()); no credential wiring needed.
@@ -357,20 +330,6 @@ def get_aqi_current(
             lon=station.longitude,
             client_id=_AERIS_CLIENT_ID,
             client_secret=_AERIS_CLIENT_SECRET,
-        )
-    elif provider_id == "openweathermap":
-        from weewx_clearskies_api.providers.aqi import openweathermap  # noqa: PLC0415
-
-        if not _OWM_APPID:
-            logger.error(
-                "OpenWeatherMap AQI provider configured but appid not wired at request time"
-            )
-            raise HTTPException(status_code=502, detail="OpenWeatherMap appid missing")
-
-        record = openweathermap.fetch(
-            lat=station.latitude,
-            lon=station.longitude,
-            appid=_OWM_APPID,
         )
     elif provider_id == "iqair":
         from weewx_clearskies_api.providers.aqi import iqair  # noqa: PLC0415
