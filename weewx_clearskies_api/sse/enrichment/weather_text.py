@@ -25,6 +25,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_HAZE_ELIGIBLE_SKY_SUBSTRINGS: tuple[str, ...] = (
+    "Clear",
+    "Sunny",
+    "Mostly Clear",
+    "Mostly Sunny",
+    "Partly Cloudy",
+    "Scattered Clouds",
+)
+
+
+def _is_haze_eligible_sky(effective_sky: str | None) -> bool:
+    """Return True when the sky label is compatible with a haze icon.
+
+    Mirrors the haze-eligibility filter in conditions_text.py
+    build_weather_text() — haze is a clear-sky modifier, not valid
+    under opaque cloud decks.  When effective_sky is None (startup /
+    no data), allow haze so we don't silently swallow it.
+    """
+    if effective_sky is None:
+        return True
+    return any(sub in effective_sky for sub in _HAZE_ELIGIBLE_SKY_SUBSTRINGS)
+
+
 def _cloud_pct_to_sky(
     pct: float | None, *, is_day: bool = False, locale: str | None = None
 ) -> str | None:
@@ -97,7 +120,9 @@ def _derive_weather_code(
       fog_mist_state == "Misty" → 10
 
     Haze code (WMO 05):
-      is_hazy=True     → 5
+      is_hazy=True AND effective_sky is haze-eligible → 5
+      (haze-eligible = Clear/Sunny/Mostly Clear/Mostly Sunny/Partly Cloudy;
+       same filter as the text engine in conditions_text.py)
 
     Sky codes (WMO okta-based cloudiness):
       "Heavy Overcast" / "Overcast"                               → 4
@@ -144,7 +169,7 @@ def _derive_weather_code(
         return 45
     if fog_mist_state == "Misty":
         return 10
-    if is_hazy:
+    if is_hazy and _is_haze_eligible_sky(effective_sky):
         return 5
     if effective_sky in ("Heavy Overcast", "Overcast"):
         return 4

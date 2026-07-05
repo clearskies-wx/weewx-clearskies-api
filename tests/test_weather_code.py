@@ -188,12 +188,52 @@ class TestMistCode:
 
 
 class TestHazeCode:
-    """is_hazy=True → WMO 5."""
+    """is_hazy=True → WMO 5 only when sky is haze-eligible."""
 
-    def test_hazy_maps_to_5(self) -> None:
-        """is_hazy=True → WMO 5 (haze)."""
+    def test_hazy_with_eligible_sky_maps_to_5(self) -> None:
+        """is_hazy=True + haze-eligible sky → WMO 5 (haze)."""
         result = _derive_weather_code(
             effective_sky="Partly Cloudy",
+            rain_label=None,
+            fog_mist_state=None,
+            is_hazy=True,
+        )
+        assert result == 5
+
+    def test_hazy_with_clear_sky_maps_to_5(self) -> None:
+        """is_hazy=True + Clear sky → WMO 5."""
+        result = _derive_weather_code(
+            effective_sky="Clear",
+            rain_label=None,
+            fog_mist_state=None,
+            is_hazy=True,
+        )
+        assert result == 5
+
+    def test_hazy_with_mostly_cloudy_falls_through_to_sky(self) -> None:
+        """is_hazy=True + Mostly Cloudy → WMO 3 (sky wins, haze suppressed)."""
+        result = _derive_weather_code(
+            effective_sky="Mostly Cloudy",
+            rain_label=None,
+            fog_mist_state=None,
+            is_hazy=True,
+        )
+        assert result == 3
+
+    def test_hazy_with_overcast_falls_through_to_sky(self) -> None:
+        """is_hazy=True + Overcast → WMO 4 (sky wins, haze suppressed)."""
+        result = _derive_weather_code(
+            effective_sky="Overcast",
+            rain_label=None,
+            fog_mist_state=None,
+            is_hazy=True,
+        )
+        assert result == 4
+
+    def test_hazy_with_none_sky_maps_to_5(self) -> None:
+        """is_hazy=True + None sky → WMO 5 (no sky data, allow haze)."""
+        result = _derive_weather_code(
+            effective_sky=None,
             rain_label=None,
             fog_mist_state=None,
             is_hazy=True,
