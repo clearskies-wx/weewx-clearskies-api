@@ -119,6 +119,7 @@ AERIS_BASE_URL = "https://data.api.xweather.com"
 AERIS_FORECASTS_PATH = "/forecasts"
 AERIS_XCAST_FORECASTS_PATH = "/xcast/forecasts"
 AERIS_OBSERVATIONS_PATH = "/observations"
+AERIS_CONDITIONS_PATH = "/conditions"
 AERIS_CONVECTIVE_PATH = "/convective/outlook"
 DEFAULT_FORECAST_TTL_SECONDS = 1800   # 30 min per ADR-017
 DEFAULT_CONDITIONS_TTL_SECONDS = 300  # 5 min per brief
@@ -424,6 +425,19 @@ class _AerisCurrentResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     ob: _AerisCurrentOb
+
+
+class _AerisConditionsResponse(BaseModel):
+    """Wire shape of response[0] from /conditions/{lat},{lon}.
+
+    Unlike /observations (which nests data under ``ob``), /conditions
+    returns an array of ``periods`` — model-analysed data at the exact
+    requested coordinates rather than the nearest reporting station.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    periods: list[_AerisCurrentOb] = Field(default_factory=list)
 
 
 class _AerisConvectiveRisk(BaseModel):
@@ -1378,7 +1392,11 @@ def fetch_current_conditions(
     client_id: str | None,
     client_secret: str | None,
 ) -> ProviderConditions | None:
-    """Call Aeris /observations/{lat},{lon} and return ProviderConditions.
+    """Call Aeris /conditions/{lat},{lon} and return ProviderConditions.
+
+    Uses /conditions (model-analysed data at the exact requested coordinates)
+    instead of /observations (nearest reporting station, which can be miles
+    away in a different microclimate).
 
     Uses the same HTTP client, rate limiter, and error-handling patterns as
     fetch().  Cache key uses endpoint="current_conditions" so its TTL (300 s)
@@ -1389,9 +1407,9 @@ def fetch_current_conditions(
       METRIC   → tempC, windSpeedKPH
       METRICWX → tempC, windSpeedMPS
 
-    weatherText = ob.weather
-    cloudCover  = ob.sky (0-100 percent)
-    precipType  derived from ob.weatherPrimaryCoded via existing
+    weatherText = periods[0].weather
+    cloudCover  = periods[0].sky (0-100 percent)
+    precipType  derived from periods[0].weatherPrimaryCoded via existing
                 _aeris_descriptor_to_precip_type().
 
     Args:
@@ -1437,27 +1455,24 @@ def fetch_current_conditions(
         return ProviderConditions.model_validate(cached)
 
     logger.debug(
-        "Cache miss for Aeris current conditions; calling /observations",
+        "Cache miss for Aeris current conditions; calling /conditions",
         extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
     )
 
     location = f"{round(lat, 4)},{round(lon, 4)}"
-    url = f"{AERIS_BASE_URL}{AERIS_OBSERVATIONS_PATH}/{location}"
+    url = f"{AERIS_BASE_URL}{AERIS_CONDITIONS_PATH}/{location}"
     params = {
         "client_id": client_id,
         "client_secret": client_secret,
     }
 
     _rate_limiter.acquire()
-    # ProviderHTTPClient.get raises canonical taxonomy exceptions; let them
-    # propagate — do NOT re-wrap (same rule as _fetch_hourly).
     response = _client_for().get(url, params=params)
 
-    raw_list = _parse_aeris_envelope_raw(response, call_label="observations")
+    raw_list = _parse_aeris_envelope_raw(response, call_label="conditions")
     if not raw_list:
-        # warn_location path — location outside Aeris coverage; return None.
         logger.warning(
-            "Aeris observations returned empty response list for lat=%s,lon=%s — "
+            "Aeris conditions returned empty response list for lat=%s,lon=%s — "
             "location may be outside coverage",
             round(lat, 4),
             round(lon, 4),
@@ -1467,21 +1482,30 @@ def fetch_current_conditions(
 
     raw_first = raw_list[0]
     try:
-        current_wire = _AerisCurrentResponse.model_validate(raw_first)
+        conditions_wire = _AerisConditionsResponse.model_validate(raw_first)
     except ValidationError as exc:
         logger.error(
-            "Aeris observations response[0] validation failed: %s. "
+            "Aeris conditions response[0] validation failed: %s. "
             "Response body (first 2000 chars): %.2000s",
             exc,
             response.text,
         )
         raise ProviderProtocolError(
-            f"Aeris observations response validation failed: {exc}",
+            f"Aeris conditions response validation failed: {exc}",
             provider_id=PROVIDER_ID,
             domain=DOMAIN,
         ) from exc
 
-    ob = current_wire.ob
+    if not conditions_wire.periods:
+        logger.warning(
+            "Aeris conditions returned empty periods for lat=%s,lon=%s",
+            round(lat, 4),
+            round(lon, 4),
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+        return None
+
+    ob = conditions_wire.periods[0]
 
     # Unit-field selection mirrors hourly-period logic (ADR-019).
     if target_unit == "US":
