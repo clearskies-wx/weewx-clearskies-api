@@ -1235,8 +1235,12 @@ class EarthquakeRecord(BaseModel):
     normalization.  Required fields per OpenAPI: id, time, latitude, longitude,
     magnitude, source.
 
-    Earthquakes are unit-system-invariant (canonical-data-model §2.4) — no
-    units block; depth is always km, coordinates always WGS84 degrees.
+    Coordinates are always WGS84 decimal degrees and magnitude is always a
+    dimensionless number — those remain unit-system-invariant. ``depth`` and
+    ``distance``, however, DO participate in the unit system: the endpoint
+    converts both to the operator's configured `group_distance` display unit
+    (mile or km) before this model is populated. See API-MANUAL.md §2
+    "Earthquake fields".
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1247,7 +1251,7 @@ class EarthquakeRecord(BaseModel):
     longitude: float
     magnitude: float
     magnitudeType: str | None = None
-    depth: float | None = None
+    depth: float | None = None  # operator's group_distance unit (mile or km)
     place: str | None = None
     url: str | None = None
     tsunami: bool | None = None
@@ -1257,13 +1261,15 @@ class EarthquakeRecord(BaseModel):
     status: str | None = None
     extras: dict[str, Any] = Field(default_factory=dict)
     source: str
+    distance: float | None = None  # distance from station, operator's group_distance unit
 
 
 class EarthquakeListResponse(BaseModel):
     """EarthquakeListResponse envelope (OpenAPI EarthquakeListResponse schema).
 
-    Earthquake depth is always km (seismological convention). The units block
-    is included so the dashboard can read it instead of hardcoding.
+    Depth and distance are converted to the operator's configured
+    `group_distance` display unit (mile or km); the `units` block reflects
+    the unit actually used (`units.depth` and `units.distance`).
     """
 
     model_config = ConfigDict(extra="ignore")

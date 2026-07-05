@@ -35,6 +35,14 @@ wire_earthquakes_settings(settings) extracts default_radius_km, min_magnitude,
 GeoNet note: GeoNet does not support server-side radius filtering; all events
   returned and the endpoint's radius filter applies post-fetch at the canonical
   layer. Other providers (USGS, EMSC, ReNaSS) pass radius_km to the provider.
+
+Distance + unit conversion (T7.1/T7.2): every record gets a haversine
+  distance-from-station (services/station.py StationInfo lat/lon). Depth and
+  distance both participate in the group_distance unit system (unlike
+  magnitude/coordinates, which stay unit-system-invariant) — converted to the
+  operator's configured group_distance unit (mile or km) via
+  units/conversion.py's convert(), never a hand-rolled factor. See
+  API-MANUAL.md §2 "Earthquake fields".
 """
 
 from __future__ import annotations
@@ -58,6 +66,8 @@ from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
+from weewx_clearskies_api.services.units import get_units_block
+from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +174,47 @@ def _filter_by_radius(
 
 
 # ---------------------------------------------------------------------------
+# Distance-from-station + group_distance unit conversion (T7.1 / T7.2)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_distance_unit() -> str:
+    """Return the operator's configured group_distance unit: "mile" or "km".
+
+    Reads the units block populated at startup (services/units.py), keyed by
+    a group_distance member field ("windrun") rather than inferring from the
+    temperature-based target-unit-system check. This is authoritative for
+    every case: it reflects any [StdReport][[Units]][[Groups]] override the
+    operator applied specifically to group_distance, independent of the
+    US/METRIC/METRICWX inference used for other purposes. "windrun" is always
+    present in the units block (§6 unit groups; group_distance always has a
+    system default), so no fallback branch is needed.
+    """
+    return get_units_block()["windrun"]
+
+
+def _apply_distance_conversion(
+    records: list[EarthquakeRecord],
+    station_lat: float,
+    station_lon: float,
+    distance_unit: str,
+) -> None:
+    """Compute distance-from-station and convert depth/distance in place.
+
+    Distance is computed via haversine (always in km first), then both depth
+    and distance are converted to *distance_unit* ("mile" or "km") using the
+    canonical conversion registry (units/conversion.py) — never a hand-rolled
+    factor, per API-MANUAL §6 "Conversion factor accuracy".
+    """
+    for record in records:
+        distance_km = _haversine_km(
+            station_lat, station_lon, record.latitude, record.longitude
+        )
+        record.distance = _convert_unit(distance_km, "km", distance_unit)
+        record.depth = _convert_unit(record.depth, "km", distance_unit)
+
+
+# ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
 
@@ -189,6 +240,19 @@ def get_earthquakes(
     """
     now_str = utc_isoformat(datetime.now(tz=UTC))
 
+    # --- Resolve operator's group_distance unit (T7.2) ---
+    # "mile" or "km" (weewx-internal name, needed for the convert() calls below).
+    distance_unit = _resolve_distance_unit()
+    # Short display symbol for the units envelope, matching the project's
+    # existing short-symbol convention for this endpoint (e.g. "km", not the
+    # ConvertedValue " miles" label used elsewhere).
+    distance_display_unit = "mi" if distance_unit == "mile" else "km"
+    units_block = {
+        "depth": distance_display_unit,
+        "distance": distance_display_unit,
+        "magnitude": "",
+    }
+
     # --- Find the configured earthquakes provider in the capability registry ---
     provider_registry = get_provider_registry()
     earthquakes_providers = [p for p in provider_registry if p.domain == "earthquakes"]
@@ -198,7 +262,7 @@ def get_earthquakes(
         logger.debug("No earthquakes provider in registry; returning empty list")
         return EarthquakeListResponse(
             data=[],
-            units={"depth": "km", "magnitude": ""},
+            units=units_block,
             source="none",
             generatedAt=now_str,
             stationClock=build_station_clock(),
@@ -292,12 +356,17 @@ def get_earthquakes(
             status_code=502, detail=f"Unknown earthquakes provider: {provider_id!r}"
         )
 
+    # --- Compute distance-from-station and convert depth/distance (T7.1/T7.2) ---
+    # Applied to the full pre-filter list; magnitude filtering below doesn't
+    # care about depth/distance, and this keeps a single conversion pass.
+    _apply_distance_conversion(all_records, station.latitude, station.longitude, distance_unit)
+
     # --- Apply magnitude filter AFTER cache lookup + GeoNet radius filter (ADR-017) ---
     filtered_records = _filter_by_magnitude(all_records, effective_min_magnitude)
 
     return EarthquakeListResponse(
         data=filtered_records,
-        units={"depth": "km", "magnitude": ""},
+        units=units_block,
         source=provider_id,
         generatedAt=now_str,
         stationClock=build_station_clock(),

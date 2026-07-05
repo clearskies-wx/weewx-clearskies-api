@@ -37,7 +37,10 @@ EarthquakeListResponse envelope:
   - data (list[EarthquakeRecord]).
   - source (str: provider_id or "none").
   - generatedAt (UTC ISO-8601 Z).
-  No 'units' block (earthquakes are unit-system-invariant per canonical-data-model §2.4).
+  - units: {"depth": <unit>, "distance": <unit>, "magnitude": ""} where <unit>
+    is "mi" or "km" per the operator's configured group_distance unit (T7.2).
+    Magnitude and coordinates remain unit-system-invariant; depth and the
+    station-distance field do not (test station wires US defaults → "mi").
 
 ADR references: ADR-013, ADR-017, ADR-018, ADR-038, ADR-040.
 """
@@ -231,7 +234,7 @@ class TestBranch1NoProvider:
         response = client.get("/api/v1/earthquakes")
         _reset_provider_state()
         body = response.json()
-        assert body["units"] == {"depth": "km", "magnitude": ""}, (
+        assert body["units"] == {"depth": "mi", "distance": "mi", "magnitude": ""}, (
             f"Expected units block, got {body.get('units')!r}"
         )
 
@@ -335,7 +338,7 @@ class TestBranch3ProviderWithFeatures:
             response = client.get("/api/v1/earthquakes")
         _reset_provider_state()
         body = response.json()
-        assert body["units"] == {"depth": "km", "magnitude": ""}, (
+        assert body["units"] == {"depth": "mi", "distance": "mi", "magnitude": ""}, (
             f"Expected units block, got {body.get('units')!r}"
         )
 
