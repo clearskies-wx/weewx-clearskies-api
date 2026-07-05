@@ -181,16 +181,14 @@ def _filter_by_radius(
 def _resolve_distance_unit() -> str:
     """Return the operator's configured group_distance unit: "mile" or "km".
 
-    Reads the units block populated at startup (services/units.py), keyed by
-    a group_distance member field ("windrun") rather than inferring from the
-    temperature-based target-unit-system check. This is authoritative for
-    every case: it reflects any [StdReport][[Units]][[Groups]] override the
-    operator applied specifically to group_distance, independent of the
-    US/METRIC/METRICWX inference used for other purposes. "windrun" is always
-    present in the units block (§6 unit groups; group_distance always has a
-    system default), so no fallback branch is needed.
+    The units block stores display labels (e.g. " miles", "km") set by the
+    transformer, not the internal weewx unit names that convert() expects.
+    Map the display label back to the internal name.
     """
-    return get_units_block()["windrun"]
+    display = get_units_block().get("windrun", "km")
+    if display.strip().startswith("mi"):
+        return "mile"
+    return "km"
 
 
 def _apply_distance_conversion(
