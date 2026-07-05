@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -191,6 +192,21 @@ def _resolve_distance_unit() -> str:
     return "km"
 
 
+_PLACE_KM_RE = re.compile(r"^(\d+)\s+km\s+(.+)")
+_KM_TO_MI = 0.621371192
+
+
+def _convert_place_km(place: str | None, distance_unit: str) -> str | None:
+    """Convert '28 km WSW of City' → '17 mi WSW of City' when unit is mile."""
+    if place is None or distance_unit != "mile":
+        return place
+    m = _PLACE_KM_RE.match(place)
+    if not m:
+        return place
+    mi = round(int(m.group(1)) * _KM_TO_MI)
+    return f"{mi} mi {m.group(2)}"
+
+
 def _apply_distance_conversion(
     records: list[EarthquakeRecord],
     station_lat: float,
@@ -203,6 +219,9 @@ def _apply_distance_conversion(
     and distance are converted to *distance_unit* ("mile" or "km") using the
     canonical conversion registry (units/conversion.py) — never a hand-rolled
     factor, per API-MANUAL §6 "Conversion factor accuracy".
+
+    Also converts the provider's place string (e.g. "28 km W of City")
+    from km to miles when the operator uses miles.
     """
     for record in records:
         distance_km = _haversine_km(
@@ -210,6 +229,7 @@ def _apply_distance_conversion(
         )
         record.distance = _convert_unit(distance_km, "km", distance_unit)
         record.depth = _convert_unit(record.depth, "km", distance_unit)
+        record.place = _convert_place_km(record.place, distance_unit)
 
 
 # ---------------------------------------------------------------------------
