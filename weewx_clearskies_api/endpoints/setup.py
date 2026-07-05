@@ -416,11 +416,13 @@ class RestartResponse(BaseModel):
 
 
 class CurrentConfigDatabaseSection(BaseModel):
+    kind: str = "mysql"  # "sqlite" or "mysql"
     host: str
     port: int
     user: str
     password: str
     name: str
+    path: str = ""       # SQLite only — path to .sdb file
 
 
 class CurrentConfigProviderCredentials(BaseModel):
@@ -1358,10 +1360,12 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     secrets = _read_secrets_env(secrets_path)
 
     # --- Database ---
+    db_kind = "mysql"
     db_host = "localhost"
     db_port = 3306
     db_user = ""
     db_name = "weewx"
+    db_path = ""
 
     conf_path = config_dir / "api.conf"
     api_cfg: configobj.ConfigObj | None = None
@@ -1374,6 +1378,8 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     if api_cfg is not None:
         db_section = api_cfg.get("database", {})
         if isinstance(db_section, dict):
+            if db_section.get("kind"):
+                db_kind = str(db_section["kind"])
             if db_section.get("host"):
                 db_host = str(db_section["host"])
             if db_section.get("port"):
@@ -1383,6 +1389,8 @@ async def current_config(request: Request) -> CurrentConfigResponse:
                     pass
             if db_section.get("name"):
                 db_name = str(db_section["name"])
+            if db_kind == "sqlite" and db_section.get("path"):
+                db_path = str(db_section["path"])
 
     # DB user and password come from secrets.env (the authoritative source for
     # credentials; api.conf only stores the non-secret DB fields).
@@ -1390,11 +1398,13 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     db_password = secrets.get("WEEWX_CLEARSKIES_DB_PASSWORD", "")
 
     database = CurrentConfigDatabaseSection(
+        kind=db_kind,
         host=db_host,
         port=db_port,
         user=db_user,
         password=db_password,
         name=db_name,
+        path=db_path,
     )
 
     # --- Providers ---
