@@ -19,11 +19,21 @@ code -> locale-key-stem tables (:data:`WX_TYPE_NAMES`,
 These are new derived data, not duplicated threshold values — the
 threshold tables in `sse/gfe/thresholds.py` only carry the raw GFE codes.
 
-All display text resolves through ``i18n.t()`` against the caller-supplied
-locale. Locale JSON files do not yet carry the ``wx.*`` keys this module
-introduces (a separate i18n task); until they do, standalone label lookups
-fall through to a humanized (title-cased) rendering of the raw key, and
-sentence templates fall through to a literal English default.
+All display text resolves through ``i18n.t()``, ``i18n.t_inflected()``, or
+``i18n.t_case()`` against the caller-supplied locale, as appropriate. Locale
+JSON files carry the ``wx.*`` keys this module introduces for every
+supported locale (I18N T6.4); standalone label lookups fall through to a
+humanized (title-cased) rendering of the raw key, and sentence templates
+fall through to a literal English default, as a defensive path for any
+locale that omits an entry.
+
+Romance-language locales (French, Spanish, Italian, Portuguese) carry
+gender/number-coded dicts (``MS``/``MP``/``FS``/``FP``) for ``wx.coverage.*``
+and ``wx.intensity.*`` — coverage and intensity words agree in gender and
+number with the weather type they modify, mirroring the GFE source's
+``Translator.py`` gender-agreement pass (GFE source analysis SS14). Russian
+carries grammatical-case dicts (nominative/instrumental/genitive) for
+``wx.type.*``, resolved via ``i18n.t_case()``.
 """
 
 from __future__ import annotations
@@ -114,26 +124,151 @@ _HEAVY_PRECIP_MAP: dict[str, tuple[str, str]] = {
     "ZL": ("heavy_precip", "precipitation may be heavy at times"),
 }
 
+# Grammatical gender/number code per GFE weather-type code, per Romance
+# locale (GFE source analysis SS14, ``Translator.py``'s per-type gender
+# table for French/Spanish, extended here to Italian and Portuguese using
+# the grammatical gender of each locale's translated ``wx.type.*`` noun).
+# Selects which inflected form (MS/MP/FS/FP) of a ``wx.coverage.*`` or
+# ``wx.intensity.*`` dict to use via :func:`weewx_clearskies_api.i18n.t_inflected`.
+# Locales not listed here (English and all non-gendered locales) never
+# consult this table in practice: their coverage/intensity locale values
+# are plain strings, and ``t_inflected()`` returns a plain string unchanged
+# regardless of the gender code passed.
+WEATHER_TYPE_GENDER: dict[str, dict[str, str]] = {
+    "fr": {
+        "WP": "FP",  # trombes marines
+        "T": "MP",  # orages
+        "R": "FS",  # pluie
+        "RW": "FP",  # averses de pluie
+        "L": "FS",  # bruine
+        "ZR": "FS",  # pluie verglaçante
+        "ZL": "FS",  # bruine verglaçante
+        "S": "FS",  # neige
+        "SW": "FP",  # averses de neige
+        "IP": "MP",  # granules de glace
+        "F": "MS",  # brouillard
+        "ZF": "MS",  # brouillard givrant
+        "IF": "MS",  # brouillard glacé
+        "IC": "MP",  # cristaux de glace
+        "H": "FS",  # brume
+        "BS": "FS",  # neige soufflée
+        "BN": "MS",  # sable soufflé
+        "K": "FS",  # fumée
+        "BD": "FS",  # poussière soufflée
+        "FR": "FS",  # gelée
+        "ZY": "MP",  # embruns givrants
+        "BA": "FP",  # précipitations
+    },
+    "es": {
+        "WP": "FP",  # trombas marinas
+        "T": "FP",  # tormentas eléctricas
+        "R": "FS",  # lluvia
+        "RW": "MP",  # chubascos
+        "L": "FS",  # llovizna
+        "ZR": "FS",  # lluvia helada
+        "ZL": "FS",  # llovizna helada
+        "S": "FS",  # nieve
+        "SW": "MP",  # chubascos de nieve
+        "IP": "MS",  # granizo fino
+        "F": "FS",  # niebla
+        "ZF": "FS",  # niebla helada
+        "IF": "FS",  # niebla de hielo
+        "IC": "MP",  # cristales de hielo
+        "H": "FS",  # calima
+        "BS": "FS",  # nieve arrastrada por el viento
+        "BN": "FS",  # arena arrastrada por el viento
+        "K": "MS",  # humo
+        "BD": "MS",  # polvo arrastrado por el viento
+        "FR": "FS",  # escarcha
+        "ZY": "MS",  # rociado helado
+        "BA": "FS",  # precipitación
+    },
+    "it": {
+        "WP": "FP",  # trombe marine
+        "T": "MP",  # temporali
+        "R": "FS",  # pioggia
+        "RW": "MP",  # rovesci di pioggia
+        "L": "FS",  # pioviggine
+        "ZR": "FS",  # pioggia gelata
+        "ZL": "FS",  # pioviggine gelata
+        "S": "FS",  # neve
+        "SW": "MP",  # rovesci di neve
+        "IP": "MS",  # graupel
+        "F": "FS",  # nebbia
+        "ZF": "FS",  # nebbia gelata
+        "IF": "FS",  # nebbia ghiacciata
+        "IC": "MP",  # cristalli di ghiaccio
+        "H": "FS",  # foschia
+        "BS": "FS",  # neve sollevata dal vento
+        "BN": "FS",  # sabbia sollevata dal vento
+        "K": "MS",  # fumo
+        "BD": "FS",  # polvere sollevata dal vento
+        "FR": "FS",  # brina
+        "ZY": "MP",  # spruzzi ghiacciati
+        "BA": "FP",  # precipitazioni
+    },
+    "pt-BR": {
+        "WP": "FP",  # trombas d'água
+        "T": "FP",  # trovoadas
+        "R": "FS",  # chuva
+        "RW": "FP",  # pancadas de chuva
+        "L": "FS",  # garoa
+        "ZR": "FS",  # chuva congelante
+        "ZL": "FS",  # garoa congelante
+        "S": "FS",  # neve
+        "SW": "FP",  # pancadas de neve
+        "IP": "MS",  # granizo miúdo
+        "F": "MS",  # nevoeiro
+        "ZF": "MS",  # nevoeiro congelante
+        "IF": "FS",  # neblina de gelo
+        "IC": "MP",  # cristais de gelo
+        "H": "FS",  # neblina seca
+        "BS": "FS",  # neve levantada pelo vento
+        "BN": "FS",  # areia levantada pelo vento
+        "K": "FS",  # fumaça
+        "BD": "FS",  # poeira levantada pelo vento
+        "FR": "FS",  # geada
+        "ZY": "MS",  # borrifo congelante
+        "BA": "FS",  # precipitação
+    },
+    "pt-PT": {
+        "WP": "FP",  # trombas de água
+        "T": "FP",  # trovoadas
+        "R": "FS",  # chuva
+        "RW": "MP",  # aguaceiros
+        "L": "MS",  # chuvisco
+        "ZR": "FS",  # chuva gelada
+        "ZL": "MS",  # chuvisco gelado
+        "S": "FS",  # neve
+        "SW": "MP",  # aguaceiros de neve
+        "IP": "MS",  # granizo miúdo
+        "F": "MS",  # nevoeiro
+        "ZF": "MS",  # nevoeiro gelado
+        "IF": "MS",  # nevoeiro de gelo
+        "IC": "MP",  # cristais de gelo
+        "H": "FS",  # neblina
+        "BS": "FS",  # neve levantada pelo vento
+        "BN": "FS",  # areia levantada pelo vento
+        "K": "MS",  # fumo
+        "BD": "FS",  # poeira levantada pelo vento
+        "FR": "FS",  # geada
+        "ZY": "MS",  # borrifo gelado
+        "BA": "FS",  # precipitação
+    },
+}
 
-def _t(key: str, locale: str) -> str:
-    """Resolve *key* through i18n, falling back to a humanized key.
-
-    Used for standalone label lookups. When no translation exists yet, the
-    last dot-segment of the key is title-cased and underscores become
-    spaces (``"wx.type.rain_showers"`` -> ``"Rain Showers"``) rather than
-    surfacing the raw dotted key.
-    """
-    resolved = i18n.t(key, locale)
-    if resolved == key:
-        return key.rsplit(".", 1)[-1].replace("_", " ").title()
-    return resolved
+# Fallback gender/number code for weather types not listed for a given
+# Romance locale, and for locales entirely absent from
+# :data:`WEATHER_TYPE_GENDER` (harmless — see that table's docstring).
+_DEFAULT_GENDER_CODE = "MS"
 
 
 def _t_lower(key: str, fallback_word: str, locale: str) -> str:
     """Resolve *key* through i18n, falling back to a lowercase literal word.
 
     Used for conjunctions/connectors, which must stay lowercase mid-sentence
-    (unlike :func:`_t`'s title-cased fallback for standalone labels).
+    (unlike :func:`_t_case`/:func:`_t_inflected`'s title-cased fallback for
+    standalone labels).
     """
     resolved = i18n.t(key, locale)
     if resolved == key:
@@ -145,31 +280,86 @@ def _t_template(key: str, default: str, locale: str) -> str:
     """Resolve *key* through i18n, falling back to a literal *default* template.
 
     Used for sentence templates containing ``{placeholder}`` tokens, where
-    title-casing (as :func:`_t` does) would destroy the template.
+    title-casing (as :func:`_t_case`/:func:`_t_inflected` do) would destroy
+    the template.
     """
     resolved = i18n.t(key, locale)
     return default if resolved == key else resolved
 
 
-def _format_number(value: float) -> str:
-    """Render a numeric value without a trailing ``.0`` for whole numbers."""
-    return str(int(value)) if float(value).is_integer() else str(value)
+def _t_case(key: str, locale: str, case: str = "nominative") -> str:
+    """Resolve *key* through :func:`i18n.t_case`, falling back to a humanized key.
+
+    Used for weather-type label lookups, which carry grammatical-case dicts
+    (nominative/instrumental/genitive) in the Russian locale (GFE source
+    analysis SS14) and plain strings everywhere else — ``t_case()`` returns
+    plain strings unchanged regardless of *case*. Defaults to the
+    nominative case, matching this module's current usage (type words as
+    subjects/objects, not yet following a "with" construction).
+    """
+    resolved = i18n.t_case(key, case, locale)
+    if resolved == key:
+        return key.rsplit(".", 1)[-1].replace("_", " ").title()
+    return resolved
+
+
+def _t_inflected(key: str, gender: str, locale: str) -> str:
+    """Resolve *key* through :func:`i18n.t_inflected`, falling back to a humanized key.
+
+    Used for coverage/intensity label lookups, which carry gender/number
+    dicts (MS/MP/FS/FP) in Romance locales (GFE source analysis SS14) and
+    plain strings everywhere else — ``t_inflected()`` returns plain strings
+    unchanged regardless of *gender*.
+    """
+    resolved = i18n.t_inflected(key, gender, locale)
+    if resolved == key:
+        return key.rsplit(".", 1)[-1].replace("_", " ").title()
+    return resolved
+
+
+def _format_number(value: float, locale: str) -> str:
+    """Render a numeric value with locale-correct decimal separator.
+
+    Whole numbers render with no decimal places; fractional values render
+    with one decimal place. Delegates to
+    :func:`weewx_clearskies_api.i18n.format_number` so the decimal
+    separator follows locale conventions (comma vs period).
+    """
+    decimals = 0 if float(value).is_integer() else 1
+    return i18n.format_number(value, decimals, locale)
+
+
+def _gender_code(wx_type: str, locale: str) -> str:
+    """Return the grammatical gender/number code for *wx_type* in *locale*.
+
+    Looks up :data:`WEATHER_TYPE_GENDER`, falling back to
+    :data:`_DEFAULT_GENDER_CODE` for locales or types not listed — harmless
+    for non-Romance locales, whose coverage/intensity values are plain
+    strings that :func:`i18n.t_inflected` returns unchanged regardless of
+    the gender code passed.
+    """
+    return WEATHER_TYPE_GENDER.get(locale, {}).get(wx_type, _DEFAULT_GENDER_CODE)
 
 
 def _type_word(wx_type: str, locale: str) -> str:
     """Resolve the display word for *wx_type* from its hierarchy position."""
     if wx_type not in WX_TYPE_HIERARCHY:
-        return _t(f"wx.type.{wx_type}", locale)
+        return _t_case(f"wx.type.{wx_type}", locale)
     name_key = WX_TYPE_NAMES.get(wx_type, wx_type)
-    return _t(f"wx.type.{name_key}", locale)
+    return _t_case(f"wx.type.{name_key}", locale)
 
 
-def _coverage_word(coverage: str, locale: str) -> str:
-    """Resolve the display word for *coverage* from its hierarchy position."""
+def _coverage_word(coverage: str, locale: str, gender: str) -> str:
+    """Resolve the display word for *coverage* from its hierarchy position.
+
+    *gender* selects the inflected form for Romance locales whose
+    ``wx.coverage.*`` entries are gender/number dicts — see
+    :data:`WEATHER_TYPE_GENDER`.
+    """
     if coverage not in WX_COVERAGE_HIERARCHY:
-        return _t(f"wx.coverage.{coverage}", locale)
+        return _t_inflected(f"wx.coverage.{coverage}", gender, locale)
     name_key = WX_COVERAGE_NAMES.get(coverage, coverage)
-    return _t(f"wx.coverage.{name_key}", locale)
+    return _t_inflected(f"wx.coverage.{name_key}", gender, locale)
 
 
 def _suppress_intensity(wx_type: str, intensity: str) -> bool:
@@ -196,11 +386,12 @@ def weather_phrase(wx_type: str, coverage: str, intensity: str, pop: float, loca
     if wx_type in WX_POP_RELATED_TYPES and pop < POP_WX_LOWER_THRESHOLD:
         return ""
 
-    coverage_word = _coverage_word(coverage, locale)
+    gender = _gender_code(wx_type, locale)
+    coverage_word = _coverage_word(coverage, locale, gender)
 
     special = _SPECIAL_TYPE_DESCRIPTORS.get((wx_type, intensity))
     if special is not None:
-        type_word = _t(f"wx.type.{special}", locale)
+        type_word = _t_case(f"wx.type.{special}", locale)
         return f"{coverage_word} {type_word}".strip()
 
     type_word = _type_word(wx_type, locale)
@@ -209,7 +400,11 @@ def weather_phrase(wx_type: str, coverage: str, intensity: str, pop: float, loca
         parts = [coverage_word, type_word]
     else:
         intensity_key = WX_INTENSITY_CODES.get(intensity)
-        intensity_word = _t(f"wx.intensity.{intensity_key}", locale) if intensity_key else None
+        intensity_word = (
+            _t_inflected(f"wx.intensity.{intensity_key}", gender, locale)
+            if intensity_key
+            else None
+        )
         parts = (
             [coverage_word, intensity_word, type_word]
             if intensity_word
@@ -260,7 +455,7 @@ def pop_qualification(pop: float, wx_type: str, locale: str) -> str | None:
     type_key = POP_TYPE_QUALIFICATION.get(wx_type, "precipitation")
     type_word = _t_lower(f"wx.pop_type.{type_key}", type_key, locale)
     template = _t_template("wx.pop_qualification", "chance of {type} {pop} percent", locale)
-    return template.format(type=type_word, pop=_format_number(pop))
+    return template.format(type=type_word, pop=_format_number(pop, locale))
 
 
 def heavy_precip_phrase(wx_type: str, intensity: str, locale: str) -> str | None:
