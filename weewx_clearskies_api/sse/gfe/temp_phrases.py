@@ -24,7 +24,7 @@ from __future__ import annotations
 import operator
 from collections.abc import Callable
 
-from weewx_clearskies_api.i18n import t
+from weewx_clearskies_api.i18n import format_number, t
 from weewx_clearskies_api.sse.gfe.thresholds import (
     EXTREME_TEMP_DESCRIPTORS,
     TEMP_BOUNDARY_DICT,
@@ -70,11 +70,16 @@ def _word(key: str, locale: str) -> str:
     return key.replace("_", " ").title()
 
 
-def _fmt_number(value: float) -> str:
-    """Render *value* without a trailing '.0' for whole-number temperatures."""
-    if value == int(value):
-        return str(int(value))
-    return str(value)
+def _fmt_number(value: float, locale: str) -> str:
+    """Render *value* with locale-correct decimal separator for temperatures.
+
+    Whole numbers render with no decimal places; fractional values render
+    with one decimal place. Delegates to
+    :func:`weewx_clearskies_api.i18n.format_number` so the decimal
+    separator follows locale conventions (comma vs period).
+    """
+    decimals = 0 if value == int(value) else 1
+    return format_number(value, decimals, locale)
 
 
 def _in_bounds(value: float, bounds: tuple[int, int]) -> bool:
@@ -86,7 +91,7 @@ def _exception_phrase(key: str, locale: str, temp_min: float, temp_max: float) -
     dotted = f"forecast.temp.{key}"
     resolved = t(dotted, locale)
     template = resolved if resolved != dotted else _EXCEPTION_TEMPLATES[key]
-    return template.format(min=_fmt_number(temp_min), max=_fmt_number(temp_max))
+    return template.format(min=_fmt_number(temp_min, locale), max=_fmt_number(temp_max, locale))
 
 
 def _decade_of(value: float) -> int:
