@@ -64,10 +64,10 @@ _CLIENT_SECRET_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Match apiKey= query parameter value (Wunderground PWS API)
+# Match apiKey= query parameter value (generic query-param API key pattern).
 # Pattern mirrors _APPID_RE / _CLIENT_ID_RE shape; both are query-param
-# credentials.  Fires this round (3b-6) because Wunderground is the third
-# keyed provider on this project.  re.IGNORECASE covers apikey= and APIKEY=
+# credentials.  Retained as defense-in-depth for any keyed provider using an
+# apiKey= convention.  re.IGNORECASE covers apikey= and APIKEY=
 # variants that may appear in URL-encoded log lines.
 _APIKEY_RE = re.compile(
     r"((?:^|[?&])apiKey=)[^&\s\n\"']+",

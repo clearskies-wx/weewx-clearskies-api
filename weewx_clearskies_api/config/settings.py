@@ -875,7 +875,7 @@ class ForecastSettings:
     (fail-closed, same pattern as AlertsSettings).
     """
 
-    #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", "wunderground", or absent.
+    #: Provider id: "openmeteo", "nws", "aeris", "openweathermap", or absent.
     provider: str | None
     #: NWS User-Agent contact (email or URL).  Optional but recommended (ADR-006).
     nws_user_agent_contact: str | None
@@ -886,17 +886,6 @@ class ForecastSettings:
     #: OWM appid from env var WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID (ADR-027 §3).
     #: Long-form provider-scoped naming per brief Q2 user decision 2026-05-08.
     openweathermap_appid: str | None
-    #: Wunderground apiKey from env var WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY.
-    #: Long-form provider-scoped naming per 3b-4/3b-5 precedent (same deviation
-    #: from ADR-027 §3 literal schema as Aeris + OWM; no ADR amendment).
-    wunderground_api_key: str | None
-    #: Wunderground PWS station ID from env var WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID.
-    #: Required alongside the apiKey per ADR-007 line 79 defense-in-depth gate:
-    #: apiKeys are issued only to active PWS contributors, so requiring both env
-    #: vars ensures operator's mental model matches the gating reality.
-    #: PWS station ID isn't strictly a secret but is co-located with the apiKey
-    #: for operational simplicity (all Wunderground config in env vars together).
-    wunderground_pws_station_id: str | None
     #: Aeris forecast model: "standard" or "xcast" (ML-enhanced).
     #: Read from [forecast] section of api.conf. Default "xcast" (ADR-063).
     aeris_forecast_model: str
@@ -921,16 +910,6 @@ class ForecastSettings:
         raw_owm_appid = os.environ.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID", "").strip()
         self.openweathermap_appid = raw_owm_appid if raw_owm_appid else None
 
-        # Wunderground credentials — env vars only, never from INI.
-        # Long-form provider-scoped naming per 3b-4/3b-5 precedent.
-        # ADR-007 line 79 "config time" gate operationalized as fetch-time KeyInvalid
-        # (same precedent as Aeris/OWM; documented in wunderground.py module docstring).
-        raw_wu_key = os.environ.get("WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY", "").strip()
-        self.wunderground_api_key = raw_wu_key if raw_wu_key else None
-
-        raw_wu_pws = os.environ.get("WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID", "").strip()
-        self.wunderground_pws_station_id = raw_wu_pws if raw_wu_pws else None
-
         # Aeris forecast model — from INI (not a secret; config-time operator choice).
         # Default "xcast" per ADR-063. Normalise to lowercase; unknown values fall back to "xcast".
         raw_model = str(section.get("aeris_forecast_model", "xcast")).strip().lower()
@@ -938,11 +917,11 @@ class ForecastSettings:
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id or forecast model."""
-        valid_providers = {"openmeteo", "nws", "aeris", "openweathermap", "wunderground"}
+        valid_providers = {"openmeteo", "nws", "aeris", "openweathermap"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[forecast] provider {self.provider!r} not in {valid_providers}. "
-                "Supported values: 'openmeteo', 'nws', 'aeris', 'openweathermap', 'wunderground'."
+                "Supported values: 'openmeteo', 'nws', 'aeris', 'openweathermap'."
             )
         if self.aeris_forecast_model not in ("standard", "xcast"):
             raise ValueError(

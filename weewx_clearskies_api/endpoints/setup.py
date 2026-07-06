@@ -257,14 +257,13 @@ class ProviderConfig(BaseModel):
     Credential naming follows existing settings.py conventions (not domain-scoped):
       aeris      → WEEWX_CLEARSKIES_AERIS_CLIENT_ID / WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET
       openweathermap → WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID
-      wunderground   → WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY / WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID
       iqair      → WEEWX_CLEARSKIES_IQAIR_KEY
       nws        → no credentials; nws_user_agent_contact is non-secret (api.conf)
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    #: Provider id (e.g. "nws", "aeris", "openweathermap", "iqair", "wunderground",
+    #: Provider id (e.g. "nws", "aeris", "openweathermap", "iqair",
     #: "openmeteo", "rainviewer", "iem_nexrad", "noaa_mrms", "msc_geomet",
     #: "dwd_radolan", "usgs", "geonet", "emsc", "renass", "iframe").
     provider: str
@@ -272,8 +271,6 @@ class ProviderConfig(BaseModel):
     api_key: str | None = None
     #: Secondary credential (Aeris only: client_secret).
     api_secret: str | None = None
-    #: Wunderground PWS station ID (required alongside api_key for wunderground).
-    pws_station_id: str | None = None
     #: NWS User-Agent contact email or URL (non-secret; written to api.conf).
     nws_user_agent_contact: str | None = None
     #: Radar iframe embed URL (non-secret; written to api.conf [radar] section).
@@ -431,8 +428,6 @@ class CurrentConfigProviderCredentials(BaseModel):
     client_id: str | None = None       # Aeris: AERIS_CLIENT_ID
     client_secret: str | None = None   # Aeris: AERIS_CLIENT_SECRET
     appid: str | None = None           # OpenWeatherMap: OPENWEATHERMAP_APPID
-    api_key: str | None = None         # Wunderground: WUNDERGROUND_API_KEY
-    pws_station_id: str | None = None  # Wunderground: WUNDERGROUND_PWS_STATION_ID
     key: str | None = None             # IQAir: IQAIR_KEY
 
 
@@ -625,13 +620,6 @@ def _provider_secrets(domain: str, pc: ProviderConfig) -> dict[str, str]:
         # Provider-scoped; long-form appid naming per 3b-5 user decision.
         if pc.api_key:
             secrets["WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID"] = pc.api_key
-
-    elif p == "wunderground":
-        # Provider-scoped; two credentials required for ADR-007 gate.
-        if pc.api_key:
-            secrets["WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY"] = pc.api_key
-        if pc.pws_station_id:
-            secrets["WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID"] = pc.pws_station_id
 
     elif p == "iqair":
         # Domain-scoped (AQI-only provider; Q1 user decision 2026-05-11).
@@ -1429,9 +1417,6 @@ async def current_config(request: Request) -> CurrentConfigResponse:
             creds.client_secret = secrets.get("WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET") or None
         elif p == "openweathermap":
             creds.appid = secrets.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID") or None
-        elif p == "wunderground":
-            creds.api_key = secrets.get("WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY") or None
-            creds.pws_station_id = secrets.get("WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID") or None
         elif p == "iqair":
             creds.key = secrets.get("WEEWX_CLEARSKIES_IQAIR_KEY") or None
         # Keyless providers (nws, openmeteo, rainviewer, etc.) have no credential fields.

@@ -271,10 +271,10 @@ class ProviderHTTPClient:
                 # "reason": "..."}; Aeris: {"success": false, "error": {...}};
                 # NWS: {"title": "...", "detail": "..."}). Body is truncated to
                 # 500 chars to avoid log bloat. NOTE: when a future round adds
-                # a keyed forecast provider (Aeris/OWM/Wunderground), audit
-                # whether 4xx response bodies could echo back auth credentials
-                # — if so, the redaction filter or this log-body step needs an
-                # extension. Open-Meteo is keyless; this is safe today.
+                # a new keyed forecast provider, audit whether 4xx response
+                # bodies could echo back auth credentials — if so, the
+                # redaction filter or this log-body step needs an extension.
+                # Open-Meteo is keyless; this is safe today.
                 body_excerpt = response.text[:500] if response.text else ""
                 logger.error(
                     "Provider %s 4xx %d body: %s",

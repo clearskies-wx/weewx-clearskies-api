@@ -7,9 +7,10 @@ no runtime plugin loading; outside contributors PR into the bundled set).
 Adding a new provider = importing the new module and adding one row here.
 Aeris alerts wired in 3b round 7; OWM alerts wired in 3b round 8 (third and FINAL
 day-1 alerts provider per ADR-016).
-Forecast domain: five rows (one per provider per ADR-007 day-1 set).
-  Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5),
-  wunderground (3b-6 — fifth and FINAL day-1 forecast provider).
+Forecast domain: four rows (one per provider per ADR-007 day-1 set; the
+  fifth day-1 forecast provider was removed Phase 0 T0.1 2026-07-05 for
+  insufficient data quality).
+  Wired: openmeteo (3b-2), nws (3b-3), aeris (3b-4), openweathermap (3b-5).
 AQI domain: openmeteo (3b-9), aeris (3b-10), iqair (3b-12). openweathermap (3b-11) and
   openaq removed from AQI — OWM AQI returns SILAM model predictions, not observed PM
   data (Phase 2 API removals); openaq was never wired into dispatch.
@@ -41,7 +42,6 @@ from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
 from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
 from weewx_clearskies_api.providers.forecast import openweathermap as forecast_openweathermap
-from weewx_clearskies_api.providers.forecast import wunderground as forecast_wunderground
 from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
@@ -67,7 +67,6 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "nws"): forecast_nws,
     ("forecast", "aeris"): forecast_aeris,
     ("forecast", "openweathermap"): forecast_openweathermap,
-    ("forecast", "wunderground"): forecast_wunderground,
     ("radar", "aeris"): radar_aeris,          # keyed — 3b-15; deprecated from radar valid set (T1.2)
     ("radar", "dwd_radolan"): radar_dwd_radolan,
     ("radar", "iframe"): radar_iframe,        # iframe embed — 3b-16

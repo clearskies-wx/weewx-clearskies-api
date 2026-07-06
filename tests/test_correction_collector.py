@@ -69,8 +69,6 @@ class MockForecastSettings:
         self.aeris_client_secret = ""
         self.aeris_forecast_model = "standard"
         self.openweathermap_appid = ""
-        self.wunderground_api_key = ""
-        self.wunderground_pws_station_id = ""
 
 
 class MockStationInfo:

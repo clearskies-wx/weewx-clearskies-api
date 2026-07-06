@@ -172,14 +172,6 @@ def _fill_cloudcover_from_provider(observation: Observation) -> Observation:
                 target_unit=target_unit,
                 appid=_forecast_ep._openweathermap_appid,
             )
-        elif provider_id == "wunderground":
-            provider_conditions = provider_module.fetch_current_conditions(
-                lat=station.latitude,
-                lon=station.longitude,
-                target_unit=target_unit,
-                api_key=_forecast_ep._wunderground_api_key,
-                pws_station_id=_forecast_ep._wunderground_pws_station_id,
-            )
         else:
             logger.debug(
                 "No fetch_current_conditions dispatch for provider %r; "

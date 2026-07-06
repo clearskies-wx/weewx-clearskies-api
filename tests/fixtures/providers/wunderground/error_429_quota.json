@@ -1,5 +1,0 @@
-{
-  "statusCode": 429,
-  "error": "Too Many Requests",
-  "message": "API rate limit exceeded. The PWS-contributor tier allows 1500 calls/day and 30 calls/minute. Retry after 60 seconds."
-}

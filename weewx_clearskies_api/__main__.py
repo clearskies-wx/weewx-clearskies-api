@@ -523,7 +523,7 @@ def _wire_providers_from_config(settings: Settings) -> None:
                 "Check [forecast] provider in api.conf. "
                 "Currently wired: openmeteo, nws. "
                 "Accepted by config (ADR-007 day-1 set) but not yet wired: "
-                "aeris, openweathermap, wunderground.",
+                "aeris, openweathermap.",
                 provider_id,
                 exc,
             )

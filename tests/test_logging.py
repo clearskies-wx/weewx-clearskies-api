@@ -156,7 +156,7 @@ class TestRedactionFilter:
     def test_redaction_apikey_query_param_at_start(self) -> None:
         """URL with ?apiKey=ABC123 → apiKey=[REDACTED] in log output.
 
-        Covers Wunderground's apiKey= query param credential (F13, 3b-6).
+        Covers the generic apiKey= query param credential pattern (F13, 3b-6).
         Pattern: ?apiKey= at start of query string.
         """
         log, buf = self._make_redacting_logger("test_apikey_start_redact")
@@ -168,7 +168,7 @@ class TestRedactionFilter:
     def test_redaction_apikey_query_param_mid_string(self) -> None:
         """URL with ?stationId=K1&apiKey=XYZ789 → only apiKey value redacted.
 
-        Covers Wunderground's apiKey= when it appears mid-querystring after another param.
+        Covers apiKey= when it appears mid-querystring after another param.
         The stationId value must survive; only the apiKey value is redacted.
         """
         log, buf = self._make_redacting_logger("test_apikey_mid_redact")
@@ -255,9 +255,9 @@ class TestRedactionFilter:
     def test_existing_apikey_pattern_unaffected_by_key_re_addition(self) -> None:
         """_APIKEY_RE still fires correctly after _KEY_RE is added (no pattern regression)."""
         log, buf = self._make_redacting_logger("test_apikey_regression_guard")
-        log.info("Wunderground call: https://api.weather.com/v2/pws/observations/current?stationId=KMA10&apiKey=MY_WU_KEY")
+        log.info("PWS call: https://api.weather.com/v2/pws/observations/current?stationId=KMA10&apiKey=MY_SECRET_KEY")
         doc = json.loads(buf.getvalue().strip())
-        assert "MY_WU_KEY" not in doc["message"], (
+        assert "MY_SECRET_KEY" not in doc["message"], (
             "apiKey= value must still be redacted (no regression from _KEY_RE addition)"
         )
         assert "[REDACTED]" in doc["message"]

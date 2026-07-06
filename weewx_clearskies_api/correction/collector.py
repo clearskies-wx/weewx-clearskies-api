@@ -314,16 +314,6 @@ class ForecastCollector:
                     target_unit=target_unit,
                     appid=self._forecast_settings.openweathermap_appid,
                 )
-            elif provider_id == "wunderground":
-                from weewx_clearskies_api.providers.forecast import wunderground  # noqa: PLC0415
-
-                return wunderground.fetch(
-                    lat=lat,
-                    lon=lon,
-                    target_unit=target_unit,
-                    api_key=self._forecast_settings.wunderground_api_key,
-                    pws_station_id=self._forecast_settings.wunderground_pws_station_id,
-                )
             else:
                 logger.warning(
                     "Forecast collector: unknown provider %r; cannot fetch bundle",
