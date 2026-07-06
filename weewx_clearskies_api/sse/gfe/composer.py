@@ -45,6 +45,40 @@ via its own `configure(unit_system)` / `_f_to_c()` / `_mph_to_kmh()` /
 `temp_descriptor()`'s output is a categorical adjective with no embedded
 numeral, so it is always evaluated on the raw °F value with no conversion
 step needed.
+
+**Forecast-side unit rendering (ADR-082 T7.1 gap closure, 2026-07-06):**
+Unlike `Observation`, `ForecastPeriod` temperature/wind fields are NOT
+guaranteed raw °F/mph -- forecast providers fetch data already converted to
+the operator's configured `target_unit` (see `providers/forecast/*.py`),
+and `period_aggregator.py` does not convert it back, so a `ForecastPeriod`
+carries whatever unit the operator configured. `compose_forecast_text()`
+reads the same shared `_unit_system` state `configure()` sets (one
+operator-wide value wired once at startup by `__main__.py`, shared with
+the current-conditions path above) to correct for this:
+
+- `temp_phrase()` (decade phrasing) receives the `ForecastPeriod` value
+  unchanged. This mirrors `_current_temperature_sentence()`'s tested
+  precedent (`test_metric_converts_temperature_decade_phrase`): GFE's
+  decade/position math generalizes across unit systems, so no conversion
+  is needed for the decade phrase itself.
+- `temp_descriptor()` (extreme-temperature descriptor) needs a real °F
+  value for its Fahrenheit-calibrated thresholds (`temp > 99`,
+  `temp < 20`, `heat_index >= 108`, ...). `_to_fahrenheit_for_threshold()`
+  reverses the provider-side conversion via the canonical conversion
+  registry (`units/conversion.py`) before the call.
+- `wind_phrase()` (`sse/gfe/wind_phrases.py`) accepts a `unit_system`
+  argument: it converts `WIND_NULL_THRESHOLD`/`WIND_GUST_DIFFERENCE`
+  forward into that unit for its calm/gust comparisons and resolves a
+  locale-correct label for the `{unit}` placeholder in the `wind.*` locale
+  templates (I18N T6.4 follow-up) instead of the hardcoded "mph" suffix
+  those templates used to carry.
+
+Known remaining gap, not addressed in this round: snow/ice accumulation
+phrasing (`snow_ice_phrases.py`, driven by inch-calibrated
+`SNOW_ACCUMULATION_TIERS`/`ICE_ACCUMULATION_TIERS`) and the period
+aggregator's own `TEMP_TREND_THRESHOLD` comparison
+(`period_aggregator._temp_trend()`) have the same class of unit mismatch
+and are not corrected here -- flagged to the lead as a follow-up.
 """
 
 from __future__ import annotations
@@ -63,6 +97,7 @@ from weewx_clearskies_api.sse.gfe.temp_phrases import (
 from weewx_clearskies_api.sse.gfe.thresholds import WIND_GUST_DIFFERENCE, WIND_NULL_THRESHOLD
 from weewx_clearskies_api.sse.gfe.wind_phrases import wind_phrase
 from weewx_clearskies_api.sse.gfe.wx_phrases import weather_phrase
+from weewx_clearskies_api.units.conversion import convert as _convert_units
 
 if TYPE_CHECKING:
     from weewx_clearskies_api.sse.observation_model import Observation
@@ -139,6 +174,12 @@ def compose_forecast_text(period: ForecastPeriod, locale: str) -> str:
         )
 
     # 3. Wind — direction converted to cardinal before calling wind_phrase.
+    # ForecastPeriod wind values arrive pre-converted to the operator's
+    # configured unit system (see module docstring "Forecast-side unit
+    # rendering"); passing unit_system lets wind_phrase() convert its
+    # mph-calibrated GFE thresholds forward into that unit and render the
+    # matching unit label, instead of comparing mph thresholds against
+    # km/h or m/s numbers.
     if period.wind_speed_max is not None:
         cardinal = _degrees_to_cardinal(period.wind_direction)
         phrases.append(
@@ -148,6 +189,7 @@ def compose_forecast_text(period: ForecastPeriod, locale: str) -> str:
                 period.wind_gust,
                 cardinal,
                 locale,
+                unit_system=_unit_system,
             )
         )
 
@@ -179,12 +221,20 @@ def compose_forecast_text(period: ForecastPeriod, locale: str) -> str:
                 phrases.append(trend)
 
     # 7. Extreme-temperature descriptor (heat/cold advisories).
+    # EXTREME_TEMP_DESCRIPTORS' thresholds are Fahrenheit-calibrated; the
+    # (already operator-unit) ForecastPeriod values are converted back to
+    # Fahrenheit before evaluation -- see module docstring "Forecast-side
+    # unit rendering".
     extreme_value = period.temp_high if period.is_daytime else period.temp_low
     if extreme_value is not None:
         heat_index = period.feels_like_max if period.is_daytime else None
         wind_chill = period.feels_like_min if not period.is_daytime else None
         descriptor = temp_descriptor(
-            extreme_value, heat_index, wind_chill, period.is_daytime, locale
+            _to_fahrenheit_for_threshold(extreme_value),
+            _to_fahrenheit_for_threshold(heat_index),
+            _to_fahrenheit_for_threshold(wind_chill),
+            period.is_daytime,
+            locale,
         )
         if descriptor:
             phrases.append(descriptor)
@@ -214,13 +264,16 @@ _unit_system: str = "US"
 
 
 def configure(unit_system: str) -> None:
-    """Set the rendering unit system for current-conditions text output.
+    """Set the rendering unit system for current-conditions AND forecast text output.
 
-    Must be called at startup before any current-conditions text is
-    generated. Valid values: "US", "METRIC", "METRICWX". Mirrors the
-    `configure()` pattern the retired `sse/text_generator.py` module used
-    — see the module docstring above for why conversion happens here
-    (render time) rather than inside the GFE phrase generators.
+    Must be called at startup before any text is generated. Valid values:
+    "US", "METRIC", "METRICWX". Mirrors the `configure()` pattern the
+    retired `sse/text_generator.py` module used — see the module docstring
+    above for why conversion happens here (render time) rather than inside
+    the GFE phrase generators. `compose_forecast_text()` reads this same
+    module-level value (see the "Forecast-side unit rendering" module
+    docstring section) — one operator-wide unit system serves both paths,
+    matching the single-station contract (ADR-011).
     """
     global _unit_system  # noqa: PLW0603
     _unit_system = unit_system
@@ -250,6 +303,43 @@ def _convert_temp_for_display(value: float) -> float:
     if _unit_system in ("METRIC", "METRICWX"):
         return _f_to_c(value)
     return value
+
+
+# Maps the weewx-style unit_system string to the units/conversion.py unit
+# key for temperature. Used only to recover a Fahrenheit-equivalent value
+# for GFE's Fahrenheit-calibrated extreme-temperature thresholds — see
+# _to_fahrenheit_for_threshold() (forecast-side path only; current
+# conditions already has a genuine raw-°F value on hand, see
+# _current_temp_descriptor_sentence()).
+_TEMP_UNIT_FOR_SYSTEM: dict[str, str] = {
+    "US": "degree_F",
+    "METRIC": "degree_C",
+    "METRICWX": "degree_C",
+}
+
+
+def _to_fahrenheit_for_threshold(value: float | None) -> float | None:
+    """Reverse the provider-side unit conversion for GFE threshold checks.
+
+    Unlike `Observation.temperature` (always raw °F per
+    `observation_model.py`'s contract), `ForecastPeriod` temperature/
+    feels-like fields arrive pre-converted to the operator's configured
+    `target_unit` — forecast providers fetch data already converted (see
+    `providers/forecast/*.py`), and `period_aggregator.py` does not convert
+    it back. `EXTREME_TEMP_DESCRIPTORS`' thresholds (`temp > 99`,
+    `temp < 20`, `heat_index >= 108`, ...) are Fahrenheit-calibrated, so
+    `temp_descriptor()` needs the value converted back to °F before
+    evaluation. Uses the canonical conversion registry
+    (`units/conversion.py`) rather than a hand-rolled factor, per
+    API-MANUAL.md's conversion-factor-accuracy rule.
+
+    Returns None unchanged (absent feels-like/temperature inputs stay
+    absent).
+    """
+    if value is None:
+        return None
+    source_unit = _TEMP_UNIT_FOR_SYSTEM.get(_unit_system, "degree_F")
+    return _convert_units(value, source_unit, "degree_F")
 
 
 def _wind_unit_label() -> str:
