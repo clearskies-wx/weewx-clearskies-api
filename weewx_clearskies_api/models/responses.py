@@ -990,6 +990,7 @@ class HourlyForecastPoint(BaseModel):
     cloudCover: float | None = None          # 0-100
     weatherCode: str | None = None           # WMO code as string (opaque to api)
     weatherText: str | None = None           # Human-readable (decoded from WMO)
+    feelsLike: float | None = None           # Apparent temp (heat index / wind chill)
     source: str
     extras: dict[str, Any] = {}
 
@@ -1026,6 +1027,7 @@ class DailyForecastPoint(BaseModel):
     visibilityMax: float | None = None
     visibilityMin: float | None = None
     snowAmount: float | None = None
+    iceAccumulation: float | None = None     # inches (US) / mm (metric); Xweather only
     thunderRisk: float | None = None
     tornadoRisk: float | None = None
     hailRisk: float | None = None
