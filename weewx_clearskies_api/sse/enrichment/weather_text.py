@@ -12,10 +12,10 @@ from weewx_clearskies_api import i18n
 from weewx_clearskies_api.sse.conditions_text import _precip_label, build_weather_text
 from weewx_clearskies_api.sse.enrichment.input_smoother import get_smoothed
 from weewx_clearskies_api.sse.fog_condition import detect_fog_mist
+from weewx_clearskies_api.sse.gfe import generate_current_text
 from weewx_clearskies_api.sse.haze_condition import detect_haze
 from weewx_clearskies_api.sse.observation_model import build_observation
 from weewx_clearskies_api.sse.sky_condition import classify as sky_classify
-from weewx_clearskies_api.sse.text_generator import generate_standard, generate_verbose
 
 logger = logging.getLogger(__name__)
 
@@ -549,12 +549,16 @@ def enrich_weather_text(data: dict, locale: str | None = None) -> dict:  # type:
         else:
             data["weatherCode"] = weather_code
 
-        # Standard and verbose text generation (ADR-070, API-MANUAL §8).
+        # Standard and verbose text generation (ADR-082 T7.2, API-MANUAL §8).
         # Build the structured observation model, then generate the two
-        # additional verbosity levels.  Terse (weatherText) stays as-is above.
+        # additional verbosity levels via the GFE text engine (decade
+        # phrasing, extreme-temperature descriptors, hybrid wind scale +
+        # improved gust phrasing).  Terse (weatherText) stays as-is above —
+        # it is not touched by the GFE engine (ADR-082 decision #12).
         _observation = build_observation(obs_data)
-        _standard = generate_standard(_observation)
-        _verbose = generate_verbose(_observation)
+        _text_locale = locale or i18n.get_active_locale()
+        _standard = generate_current_text(_observation, "standard", _text_locale) or None
+        _verbose = generate_current_text(_observation, "verbose", _text_locale) or None
 
         if isinstance(obs, dict):
             obs["weatherTextStandard"] = _standard
