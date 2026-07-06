@@ -16,6 +16,7 @@ phrases to call and how to order and join them.
 
 from __future__ import annotations
 
+from weewx_clearskies_api.i18n import t
 from weewx_clearskies_api.sse.forecast_model import ForecastPeriod
 from weewx_clearskies_api.sse.gfe.sky_phrases import sky_phrase, sky_pop_suppression
 from weewx_clearskies_api.sse.gfe.snow_ice_phrases import ice_phrase, snow_phrase
@@ -92,7 +93,8 @@ def compose_forecast_text(period: ForecastPeriod, locale: str) -> str:
     temp_min = period.temp_low if period.temp_low is not None else period.temp_high
     temp_max = period.temp_high if period.temp_high is not None else period.temp_low
     if temp_min is not None and temp_max is not None:
-        prefix = "Highs" if period.is_daytime else "Lows"
+        prefix_key = "forecast.temp.highs" if period.is_daytime else "forecast.temp.lows"
+        prefix = t(prefix_key, locale)
         phrases.append(
             f"{prefix} {temp_phrase(temp_min, temp_max, period.is_daytime, locale)}"
         )

@@ -214,6 +214,8 @@
       "lower": "lower",
       "mid": "mid",
       "upper": "upper",
+      "highs": "Highs",
+      "lows": "Lows",
       "single_digits": "single digits",
       "teens": "teens",
       "teens_below_zero": "teens below zero",

@@ -211,9 +211,11 @@
       "trend_then_becoming": "puis devenant {sky}"
     },
     "temp": {
-      "lower": "bas des",
-      "mid": "milieu des",
-      "upper": "haut des",
+      "lower": "bas",
+      "mid": "milieu",
+      "upper": "haut",
+      "highs": "Maximales",
+      "lows": "Minimales",
       "single_digits": "un chiffre",
       "teens": "dix à dix-neuf",
       "teens_below_zero": "dix à dix-neuf sous zéro",

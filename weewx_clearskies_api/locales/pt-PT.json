@@ -211,9 +211,11 @@
       "trend_then_becoming": "tornando-se gradualmente {sky}"
     },
     "temp": {
-      "lower": "parte baixa dos",
-      "mid": "meio dos",
-      "upper": "parte alta dos",
+      "lower": "parte baixa",
+      "mid": "meio",
+      "upper": "parte alta",
+      "highs": "Máximas",
+      "lows": "Mínimas",
       "single_digits": "um dígito",
       "teens": "entre 10 e 19",
       "teens_below_zero": "entre 10 e 19 abaixo de zero",

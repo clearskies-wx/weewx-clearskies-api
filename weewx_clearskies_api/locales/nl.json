@@ -214,6 +214,8 @@
       "lower": "lage",
       "mid": "middelste",
       "upper": "hoge",
+      "highs": "Maxima",
+      "lows": "Minima",
       "single_digits": "eenlettergrapig bereik",
       "teens": "tienerbereik",
       "teens_below_zero": "tienerbereik onder nul",
