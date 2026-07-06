@@ -197,5 +197,337 @@
     "95": "Trovoada",
     "96": "Trovoada com granizo fraco",
     "99": "Trovoada com granizo forte"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "Ensolarado",
+      "clear": "Céu limpo",
+      "mostly_clear": "Poucas nuvens",
+      "mostly_sunny": "Predominantemente ensolarado",
+      "partly_sunny": "Parcialmente ensolarado",
+      "partly_cloudy": "Parcialmente nublado",
+      "mostly_cloudy": "Muito nublado",
+      "cloudy": "Nublado",
+      "trend_then_becoming": "passando a {sky}"
+    },
+    "temp": {
+      "lower": "parte baixa dos",
+      "mid": "meio dos",
+      "upper": "parte alta dos",
+      "single_digits": "um dígito",
+      "teens": "entre 10 e 19",
+      "teens_below_zero": "entre 10 e 19 abaixo de zero",
+      "decade_number": "{decade}",
+      "in_the_decade": "em torno de {decade}",
+      "in_the_position_decade": "na {position} dos {decade}",
+      "trend_phrase": "temperaturas {trend} até a {position} dos {decade} {time}",
+      "in_the_afternoon": "à tarde",
+      "after_midnight": "após a meia-noite",
+      "falling": "em declínio",
+      "rising": "em elevação",
+      "very_hot_and_humid": "muito quente e úmido",
+      "very_hot": "muito quente",
+      "hot_and_humid": "quente e úmido",
+      "hot": "quente",
+      "bitterly_cold": "extremamente frio",
+      "very_cold": "muito frio",
+      "around_min": "em torno de {min}",
+      "min_to_max": "{min} a {max}",
+      "near_zero": "próximo de zero",
+      "zero_to_max": "zero a {max}",
+      "min_to_zero": "{min} a zero",
+      "min_to_max_zero": "{min} a {max} abaixo de zero",
+      "max_to_min_zero": "{max} a {min} abaixo de zero"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "trombas d'água",
+      "thunderstorms": "trovoadas",
+      "rain": "chuva",
+      "rain_showers": "pancadas de chuva",
+      "drizzle": "garoa",
+      "freezing_rain": "chuva congelante",
+      "freezing_drizzle": "garoa congelante",
+      "snow": "neve",
+      "snow_showers": "pancadas de neve",
+      "ice_pellets": "granizo miúdo",
+      "fog": "nevoeiro",
+      "freezing_fog": "nevoeiro congelante",
+      "ice_fog": "neblina de gelo",
+      "ice_crystals": "cristais de gelo",
+      "haze": "neblina seca",
+      "blowing_snow": "neve levantada pelo vento",
+      "blowing_sand": "areia levantada pelo vento",
+      "smoke": "fumaça",
+      "blowing_dust": "poeira levantada pelo vento",
+      "frost": "geada",
+      "freezing_spray": "borrifo congelante",
+      "unknown_precipitation": "precipitação",
+      "flurries": "floco de neve ocasional",
+      "sprinkles": "garoa esparsa"
+    },
+    "coverage": {
+      "definite": {
+        "MS": "definido",
+        "MP": "definidos",
+        "FS": "definida",
+        "FP": "definidas"
+      },
+      "widespread": {
+        "MS": "generalizado",
+        "MP": "generalizados",
+        "FS": "generalizada",
+        "FP": "generalizadas"
+      },
+      "brief": {
+        "MS": "breve",
+        "MP": "breves",
+        "FS": "breve",
+        "FP": "breves"
+      },
+      "frequent": {
+        "MS": "frequente",
+        "MP": "frequentes",
+        "FS": "frequente",
+        "FP": "frequentes"
+      },
+      "occasional": {
+        "MS": "ocasional",
+        "MP": "ocasionais",
+        "FS": "ocasional",
+        "FP": "ocasionais"
+      },
+      "periods_of": {
+        "MS": "períodos de",
+        "MP": "períodos de",
+        "FS": "períodos de",
+        "FP": "períodos de"
+      },
+      "intermittent": {
+        "MS": "intermitente",
+        "MP": "intermitentes",
+        "FS": "intermitente",
+        "FP": "intermitentes"
+      },
+      "likely": {
+        "MS": "provável",
+        "MP": "prováveis",
+        "FS": "provável",
+        "FP": "prováveis"
+      },
+      "numerous": {
+        "MS": "numeroso",
+        "MP": "numerosos",
+        "FS": "numerosa",
+        "FP": "numerosas"
+      },
+      "scattered": {
+        "MS": "disperso",
+        "MP": "dispersos",
+        "FS": "dispersa",
+        "FP": "dispersas"
+      },
+      "chance_of": {
+        "MS": "chance de",
+        "MP": "chance de",
+        "FS": "chance de",
+        "FP": "chance de"
+      },
+      "areas_of": {
+        "MS": "áreas de",
+        "MP": "áreas de",
+        "FS": "áreas de",
+        "FP": "áreas de"
+      },
+      "slight_chance_of": {
+        "MS": "pequena chance de",
+        "MP": "pequena chance de",
+        "FS": "pequena chance de",
+        "FP": "pequena chance de"
+      },
+      "widely_scattered": {
+        "MS": "muito disperso",
+        "MP": "muito dispersos",
+        "FS": "muito dispersa",
+        "FP": "muito dispersas"
+      },
+      "isolated": {
+        "MS": "isolado",
+        "MP": "isolados",
+        "FS": "isolada",
+        "FP": "isoladas"
+      },
+      "patchy": {
+        "MS": "irregular",
+        "MP": "irregulares",
+        "FS": "irregular",
+        "FP": "irregulares"
+      }
+    },
+    "intensity": {
+      "heavy": {
+        "MS": "forte",
+        "MP": "fortes",
+        "FS": "forte",
+        "FP": "fortes"
+      },
+      "moderate": {
+        "MS": "moderado",
+        "MP": "moderados",
+        "FS": "moderada",
+        "FP": "moderadas"
+      },
+      "light": {
+        "MS": "fraco",
+        "MP": "fracos",
+        "FS": "fraca",
+        "FP": "fracas"
+      },
+      "very_light": {
+        "MS": "muito fraco",
+        "MP": "muito fracos",
+        "FS": "muito fraca",
+        "FP": "muito fracas"
+      }
+    },
+    "conjunction": {
+      "and": "e"
+    },
+    "pop_type": {
+      "rain": "chuva",
+      "showers": "pancadas de chuva",
+      "snow": "neve",
+      "thunderstorms": "trovoadas",
+      "precipitation": "precipitação"
+    },
+    "pop_qualification": "{pop} por cento de chance de {type}",
+    "heavy_rain": "a chuva pode ser forte em alguns momentos",
+    "heavy_snow": "a neve pode ser forte em alguns momentos",
+    "heavy_precip": "a precipitação pode ser forte em alguns momentos"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "Sem acúmulo de neve",
+      "little_or_no_accumulation": "Pouco ou nenhum acúmulo de neve",
+      "up_to_max": "até {max} polegadas",
+      "around_max": "cerca de {max} polegadas",
+      "min_to_max": "de {min} a {max} polegadas"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "Acúmulos leves de neve",
+      "moderate_snow_accumulations": "Acúmulos moderados de neve",
+      "heavy_snow_accumulations": "Acúmulos fortes de neve"
+    },
+    "ice": {
+      "less_than_one_quarter": "menos de um quarto de polegada",
+      "one_quarter": "um quarto de polegada",
+      "one_half": "meia polegada",
+      "three_quarters": "três quartos de polegada",
+      "one": "uma polegada",
+      "one_and_a_half": "uma polegada e meia",
+      "integer_rounded": "{value} polegadas"
+    },
+    "time": {
+      "today": "Hoje",
+      "tonight": "Hoje à noite",
+      "tomorrow": "Amanhã",
+      "tomorrow_night": "Amanhã à noite",
+      "night_suffix": "Noite",
+      "weekday": {
+        "monday": "segunda-feira",
+        "tuesday": "terça-feira",
+        "wednesday": "quarta-feira",
+        "thursday": "quinta-feira",
+        "friday": "sexta-feira",
+        "saturday": "sábado",
+        "sunday": "domingo"
+      },
+      "subperiod": {
+        "early_in_the_morning": "de manhã cedo",
+        "in_the_morning": "de manhã",
+        "until_late_afternoon": "até o final da tarde",
+        "until_early_evening": "até o início da noite",
+        "through_the_evening": "durante toda a noite",
+        "late_in_the_morning": "no final da manhã",
+        "in_the_late_morning_and_early_afternoon": "no final da manhã e início da tarde",
+        "in_the_late_morning_and_afternoon": "no final da manhã e à tarde",
+        "early_in_the_afternoon": "no início da tarde",
+        "in_the_afternoon": "à tarde",
+        "in_the_afternoon_and_evening": "à tarde e à noite",
+        "late_in_the_afternoon": "no final da tarde",
+        "early_in_the_evening": "no início da noite",
+        "in_the_evening": "à noite",
+        "until_early_morning": "até o início da manhã",
+        "late_in_the_evening": "no final da noite",
+        "in_the_late_evening_and_early_morning": "no final da noite e início da manhã",
+        "in_the_late_evening_and_overnight": "no final da noite e durante a madrugada",
+        "after_midnight": "após a meia-noite",
+        "until_afternoon": "até a tarde"
+      }
+    },
+    "connector": {
+      "then_becoming": "depois passando a",
+      "increasing_to": "aumentando para",
+      "decreasing_to": "diminuindo para",
+      "building_to": "intensificando para",
+      "subsiding_to": "enfraquecendo para",
+      "then": "depois",
+      "shifting_to_the": "virando para",
+      "becoming_dir_and_increasing_to": "virando para {dir} e aumentando para",
+      "becoming_dir_and_decreasing_to": "virando para {dir} e diminuindo para",
+      "becoming": "passando a",
+      "weather_then": ", depois"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "menos de 1 pé",
+        "1_foot_or_less": "1 pé ou menos",
+        "1_to_2_feet": "1 a 2 pés",
+        "1_to_3_feet": "1 a 3 pés",
+        "2_to_4_feet": "2 a 4 pés",
+        "3_to_6_feet": "3 a 6 pés",
+        "6_to_10_feet": "6 a 10 pés",
+        "10_to_14_feet": "10 a 14 pés",
+        "15_to_20_feet": "15 a 20 pés",
+        "over_20_feet": "mais de 20 pés"
+      },
+      "chop": {
+        "smooth": "calmo",
+        "light_chop": "levemente agitado",
+        "moderate_chop": "moderadamente agitado",
+        "choppy": "agitado",
+        "rough": "revolto",
+        "very_rough": "muito revolto",
+        "extremely_rough": "extremamente revolto"
+      },
+      "wind": {
+        "gales_to": "ventania a",
+        "storm_force_to": "força de tempestade a",
+        "hurricane_force_to": "força de furacão a"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "Excelente",
+        "unknown": "Desconhecido",
+        "poor": "Fraco",
+        "moderate": "Moderado",
+        "good": "Bom"
+      },
+      "smoke_dispersal": {
+        "poor": "Fraco",
+        "fair": "Razoável",
+        "good": "Bom",
+        "very_good": "Muito bom",
+        "excellent": "Excelente"
+      },
+      "haines_index": {
+        "very_low_potential": "Potencial muito baixo de propagação intensa de incêndio",
+        "low_potential": "Potencial baixo de propagação intensa de incêndio",
+        "moderate_potential": "Potencial moderado de propagação intensa de incêndio",
+        "high_potential": "Potencial alto de propagação intensa de incêndio"
+      }
+    }
   }
 }

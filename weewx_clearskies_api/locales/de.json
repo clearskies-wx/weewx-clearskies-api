@@ -197,5 +197,237 @@
     "95": "Gewitter",
     "96": "Gewitter mit leichtem Hagel",
     "99": "Gewitter mit starkem Hagel"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "Sonnig",
+      "clear": "Wolkenlos",
+      "mostly_clear": "Heiter",
+      "mostly_sunny": "Überwiegend sonnig",
+      "partly_sunny": "Teilweise sonnig",
+      "partly_cloudy": "Teilweise bewölkt",
+      "mostly_cloudy": "Überwiegend bewölkt",
+      "cloudy": "Bewölkt",
+      "trend_then_becoming": "dann {sky} werdend"
+    },
+    "temp": {
+      "lower": "niedrigen",
+      "mid": "mittleren",
+      "upper": "oberen",
+      "single_digits": "einstelligen Bereich",
+      "teens": "10er Bereich",
+      "teens_below_zero": "10er Bereich unter Null",
+      "decade_number": "{decade}er",
+      "in_the_decade": "im {decade}er Bereich",
+      "in_the_position_decade": "im {position} {decade}er Bereich",
+      "trend_phrase": "Temperaturen {trend} in den {position} {decade}er Bereich {time}",
+      "in_the_afternoon": "am Nachmittag",
+      "after_midnight": "nach Mitternacht",
+      "falling": "fallend",
+      "rising": "steigend",
+      "very_hot_and_humid": "sehr heiß und schwül",
+      "very_hot": "sehr heiß",
+      "hot_and_humid": "heiß und schwül",
+      "hot": "heiß",
+      "bitterly_cold": "bitterkalt",
+      "very_cold": "sehr kalt",
+      "around_min": "um {min}",
+      "min_to_max": "{min} bis {max}",
+      "near_zero": "nahe Null",
+      "zero_to_max": "Null bis {max}",
+      "min_to_zero": "{min} bis Null",
+      "min_to_max_zero": "{min} bis {max} unter Null",
+      "max_to_min_zero": "{max} bis {min} unter Null"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "Wasserhosen",
+      "thunderstorms": "Gewitter",
+      "rain": "Regen",
+      "rain_showers": "Regenschauer",
+      "drizzle": "Nieselregen",
+      "freezing_rain": "Gefrierender Regen",
+      "freezing_drizzle": "Gefrierender Nieselregen",
+      "snow": "Schnee",
+      "snow_showers": "Schneeschauer",
+      "ice_pellets": "Eiskörner",
+      "fog": "Nebel",
+      "freezing_fog": "Gefrierender Nebel",
+      "ice_fog": "Eisnebel",
+      "ice_crystals": "Eiskristalle",
+      "haze": "Dunst",
+      "blowing_snow": "Schneetreiben",
+      "blowing_sand": "Sandtreiben",
+      "smoke": "Rauch",
+      "blowing_dust": "Staubtreiben",
+      "frost": "Frost",
+      "freezing_spray": "Gefrierende Gischt",
+      "unknown_precipitation": "Niederschlag",
+      "flurries": "Schneeflocken",
+      "sprinkles": "Sprühregen"
+    },
+    "coverage": {
+      "definite": "eindeutig",
+      "widespread": "verbreitet",
+      "brief": "kurz",
+      "frequent": "häufig",
+      "occasional": "gelegentlich",
+      "periods_of": "zeitweise",
+      "intermittent": "unregelmäßig",
+      "likely": "wahrscheinlich",
+      "numerous": "zahlreich",
+      "scattered": "vereinzelt",
+      "chance_of": "Chance auf",
+      "areas_of": "gebietsweise",
+      "slight_chance_of": "geringe Chance auf",
+      "widely_scattered": "weit verstreut",
+      "isolated": "isoliert",
+      "patchy": "streckenweise"
+    },
+    "intensity": {
+      "heavy": "stark",
+      "moderate": "mäßig",
+      "light": "leicht",
+      "very_light": "sehr leicht"
+    },
+    "conjunction": {
+      "and": "und"
+    },
+    "pop_type": {
+      "rain": "Regen",
+      "showers": "Schauer",
+      "snow": "Schnee",
+      "thunderstorms": "Gewitter",
+      "precipitation": "Niederschlag"
+    },
+    "pop_qualification": "{pop} Prozent Chance auf {type}",
+    "heavy_rain": "Regen kann zeitweise stark ausfallen",
+    "heavy_snow": "Schnee kann zeitweise stark ausfallen",
+    "heavy_precip": "Niederschlag kann zeitweise stark ausfallen"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "Keine Schneeansammlung",
+      "little_or_no_accumulation": "Wenig oder keine Schneeansammlung",
+      "up_to_max": "bis zu {max} Zoll",
+      "around_max": "etwa {max} Zoll",
+      "min_to_max": "von {min} bis {max} Zoll"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "Leichte Schneeansammlungen",
+      "moderate_snow_accumulations": "Mäßige Schneeansammlungen",
+      "heavy_snow_accumulations": "Starke Schneeansammlungen"
+    },
+    "ice": {
+      "less_than_one_quarter": "weniger als ein Viertel Zoll",
+      "one_quarter": "ein Viertel Zoll",
+      "one_half": "ein halber Zoll",
+      "three_quarters": "drei Viertel Zoll",
+      "one": "ein Zoll",
+      "one_and_a_half": "eineinhalb Zoll",
+      "integer_rounded": "{value} Zoll"
+    },
+    "time": {
+      "today": "Heute",
+      "tonight": "Heute Nacht",
+      "tomorrow": "Morgen",
+      "tomorrow_night": "Morgen Nacht",
+      "night_suffix": "Nacht",
+      "weekday": {
+        "monday": "Montag",
+        "tuesday": "Dienstag",
+        "wednesday": "Mittwoch",
+        "thursday": "Donnerstag",
+        "friday": "Freitag",
+        "saturday": "Samstag",
+        "sunday": "Sonntag"
+      },
+      "subperiod": {
+        "early_in_the_morning": "früh am Morgen",
+        "in_the_morning": "am Morgen",
+        "until_late_afternoon": "bis zum späten Nachmittag",
+        "until_early_evening": "bis zum frühen Abend",
+        "through_the_evening": "den ganzen Abend über",
+        "late_in_the_morning": "spät am Vormittag",
+        "in_the_late_morning_and_early_afternoon": "am späten Vormittag und frühen Nachmittag",
+        "in_the_late_morning_and_afternoon": "am späten Vormittag und Nachmittag",
+        "early_in_the_afternoon": "früh am Nachmittag",
+        "in_the_afternoon": "am Nachmittag",
+        "in_the_afternoon_and_evening": "am Nachmittag und Abend",
+        "late_in_the_afternoon": "spät am Nachmittag",
+        "early_in_the_evening": "früh am Abend",
+        "in_the_evening": "am Abend",
+        "until_early_morning": "bis zum frühen Morgen",
+        "late_in_the_evening": "spät am Abend",
+        "in_the_late_evening_and_early_morning": "am späten Abend und frühen Morgen",
+        "in_the_late_evening_and_overnight": "am späten Abend und über Nacht",
+        "after_midnight": "nach Mitternacht",
+        "until_afternoon": "bis zum Nachmittag"
+      }
+    },
+    "connector": {
+      "then_becoming": "dann werdend",
+      "increasing_to": "zunehmend auf",
+      "decreasing_to": "abnehmend auf",
+      "building_to": "auffrischend auf",
+      "subsiding_to": "nachlassend auf",
+      "then": "dann",
+      "shifting_to_the": "drehend auf",
+      "becoming_dir_and_increasing_to": "auf {dir} drehend und zunehmend auf",
+      "becoming_dir_and_decreasing_to": "auf {dir} drehend und abnehmend auf",
+      "becoming": "werdend",
+      "weather_then": ", dann"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "weniger als 1 Fuß",
+        "1_foot_or_less": "1 Fuß oder weniger",
+        "1_to_2_feet": "1 bis 2 Fuß",
+        "1_to_3_feet": "1 bis 3 Fuß",
+        "2_to_4_feet": "2 bis 4 Fuß",
+        "3_to_6_feet": "3 bis 6 Fuß",
+        "6_to_10_feet": "6 bis 10 Fuß",
+        "10_to_14_feet": "10 bis 14 Fuß",
+        "15_to_20_feet": "15 bis 20 Fuß",
+        "over_20_feet": "über 20 Fuß"
+      },
+      "chop": {
+        "smooth": "ruhig",
+        "light_chop": "leicht bewegt",
+        "moderate_chop": "mäßig bewegt",
+        "choppy": "bewegt",
+        "rough": "rau",
+        "very_rough": "sehr rau",
+        "extremely_rough": "extrem rau"
+      },
+      "wind": {
+        "gales_to": "Sturm bis",
+        "storm_force_to": "Orkanartiger Sturm bis",
+        "hurricane_force_to": "Orkan bis"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "Ausgezeichnet",
+        "unknown": "Unbekannt",
+        "poor": "Schlecht",
+        "moderate": "Mäßig",
+        "good": "Gut"
+      },
+      "smoke_dispersal": {
+        "poor": "Schlecht",
+        "fair": "Mäßig",
+        "good": "Gut",
+        "very_good": "Sehr gut",
+        "excellent": "Ausgezeichnet"
+      },
+      "haines_index": {
+        "very_low_potential": "Sehr geringes Potenzial für starkes Feuerwachstum",
+        "low_potential": "Geringes Potenzial für starkes Feuerwachstum",
+        "moderate_potential": "Mäßiges Potenzial für starkes Feuerwachstum",
+        "high_potential": "Hohes Potenzial für starkes Feuerwachstum"
+      }
+    }
   }
 }

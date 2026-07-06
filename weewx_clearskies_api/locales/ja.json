@@ -201,5 +201,237 @@
     "95": "雷雨",
     "96": "小雹を伴う雷雨",
     "99": "大粒の雹を伴う雷雨"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "晴天",
+      "clear": "快晴",
+      "mostly_clear": "晴れ",
+      "mostly_sunny": "概ね晴れ",
+      "partly_sunny": "晴れ時々曇り",
+      "partly_cloudy": "薄曇り",
+      "mostly_cloudy": "曇り",
+      "cloudy": "曇りがち",
+      "trend_then_becoming": "のち{sky}"
+    },
+    "temp": {
+      "lower": "前半",
+      "mid": "半ば",
+      "upper": "後半",
+      "single_digits": "一桁",
+      "teens": "10度台",
+      "teens_below_zero": "氷点下10度台",
+      "decade_number": "{decade}度台",
+      "in_the_decade": "{decade}度台",
+      "in_the_position_decade": "{decade}度台{position}",
+      "trend_phrase": "{time}に気温は{decade}度台{position}まで{trend}",
+      "in_the_afternoon": "午後",
+      "after_midnight": "深夜",
+      "falling": "下がる",
+      "rising": "上がる",
+      "very_hot_and_humid": "非常に蒸し暑い",
+      "very_hot": "非常に暑い",
+      "hot_and_humid": "蒸し暑い",
+      "hot": "暑い",
+      "bitterly_cold": "厳しい寒さ",
+      "very_cold": "非常に寒い",
+      "around_min": "{min}前後",
+      "min_to_max": "{min}から{max}",
+      "near_zero": "0度近辺",
+      "zero_to_max": "0度から{max}",
+      "min_to_zero": "{min}から0度",
+      "min_to_max_zero": "氷点下{min}から{max}",
+      "max_to_min_zero": "氷点下{max}から{min}"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "水上竜巻",
+      "thunderstorms": "雷雨",
+      "rain": "雨",
+      "rain_showers": "にわか雨",
+      "drizzle": "霧雨",
+      "freezing_rain": "着氷性の雨",
+      "freezing_drizzle": "着氷性の霧雨",
+      "snow": "雪",
+      "snow_showers": "にわか雪",
+      "ice_pellets": "氷あられ",
+      "fog": "霧",
+      "freezing_fog": "着氷性の霧",
+      "ice_fog": "氷霧",
+      "ice_crystals": "氷晶",
+      "haze": "もや",
+      "blowing_snow": "地吹雪",
+      "blowing_sand": "砂じん",
+      "smoke": "煙霧",
+      "blowing_dust": "風じん",
+      "frost": "霜",
+      "freezing_spray": "着氷性の飛沫",
+      "unknown_precipitation": "降水",
+      "flurries": "小雪",
+      "sprinkles": "弱いにわか雨"
+    },
+    "coverage": {
+      "definite": "確実な",
+      "widespread": "広範囲の",
+      "brief": "一時的な",
+      "frequent": "頻繁な",
+      "occasional": "時々の",
+      "periods_of": "断続的な",
+      "intermittent": "断続的な",
+      "likely": "可能性が高い",
+      "numerous": "多数の",
+      "scattered": "所々の",
+      "chance_of": "の可能性",
+      "areas_of": "地域による",
+      "slight_chance_of": "わずかな可能性",
+      "widely_scattered": "広く散在する",
+      "isolated": "局地的な",
+      "patchy": "まだらな"
+    },
+    "intensity": {
+      "heavy": "強い",
+      "moderate": "並の",
+      "light": "弱い",
+      "very_light": "非常に弱い"
+    },
+    "conjunction": {
+      "and": "と"
+    },
+    "pop_type": {
+      "rain": "雨",
+      "showers": "にわか雨",
+      "snow": "雪",
+      "thunderstorms": "雷雨",
+      "precipitation": "降水"
+    },
+    "pop_qualification": "{type}の確率{pop}パーセント",
+    "heavy_rain": "雨は一時的に強まる可能性がある",
+    "heavy_snow": "雪は一時的に強まる可能性がある",
+    "heavy_precip": "降水は一時的に強まる可能性がある"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "積雪なし",
+      "little_or_no_accumulation": "積雪はわずかまたはなし",
+      "up_to_max": "{max}インチまで",
+      "around_max": "約{max}インチ",
+      "min_to_max": "{min}から{max}インチ"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "小規模な積雪",
+      "moderate_snow_accumulations": "中程度の積雪",
+      "heavy_snow_accumulations": "大規模な積雪"
+    },
+    "ice": {
+      "less_than_one_quarter": "4分の1インチ未満",
+      "one_quarter": "4分の1インチ",
+      "one_half": "2分の1インチ",
+      "three_quarters": "4分の3インチ",
+      "one": "1インチ",
+      "one_and_a_half": "1.5インチ",
+      "integer_rounded": "{value}インチ"
+    },
+    "time": {
+      "today": "今日",
+      "tonight": "今夜",
+      "tomorrow": "明日",
+      "tomorrow_night": "明日の夜",
+      "night_suffix": "夜",
+      "weekday": {
+        "monday": "月曜日",
+        "tuesday": "火曜日",
+        "wednesday": "水曜日",
+        "thursday": "木曜日",
+        "friday": "金曜日",
+        "saturday": "土曜日",
+        "sunday": "日曜日"
+      },
+      "subperiod": {
+        "early_in_the_morning": "未明",
+        "in_the_morning": "朝",
+        "until_late_afternoon": "夕方にかけて",
+        "until_early_evening": "夜のはじめ頃にかけて",
+        "through_the_evening": "夕方を通して",
+        "late_in_the_morning": "昼前",
+        "in_the_late_morning_and_early_afternoon": "昼前から昼過ぎ",
+        "in_the_late_morning_and_afternoon": "昼前から午後",
+        "early_in_the_afternoon": "昼過ぎ",
+        "in_the_afternoon": "午後",
+        "in_the_afternoon_and_evening": "午後から夕方",
+        "late_in_the_afternoon": "夕方",
+        "early_in_the_evening": "夜のはじめ頃",
+        "in_the_evening": "夜",
+        "until_early_morning": "明け方にかけて",
+        "late_in_the_evening": "夜遅く",
+        "in_the_late_evening_and_early_morning": "夜遅くから明け方",
+        "in_the_late_evening_and_overnight": "夜遅くから未明",
+        "after_midnight": "深夜",
+        "until_afternoon": "昼過ぎにかけて"
+      }
+    },
+    "connector": {
+      "then_becoming": "のち",
+      "increasing_to": "強まり",
+      "decreasing_to": "弱まり",
+      "building_to": "強まり",
+      "subsiding_to": "弱まり",
+      "then": "のち",
+      "shifting_to_the": "に変わり",
+      "becoming_dir_and_increasing_to": "{dir}に変わり強まり",
+      "becoming_dir_and_decreasing_to": "{dir}に変わり弱まり",
+      "becoming": "変わり",
+      "weather_then": "、のち"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "1フィート未満",
+        "1_foot_or_less": "1フィート以下",
+        "1_to_2_feet": "1から2フィート",
+        "1_to_3_feet": "1から3フィート",
+        "2_to_4_feet": "2から4フィート",
+        "3_to_6_feet": "3から6フィート",
+        "6_to_10_feet": "6から10フィート",
+        "10_to_14_feet": "10から14フィート",
+        "15_to_20_feet": "15から20フィート",
+        "over_20_feet": "20フィート超"
+      },
+      "chop": {
+        "smooth": "穏やか",
+        "light_chop": "軽い波",
+        "moderate_chop": "中程度の波",
+        "choppy": "波立つ",
+        "rough": "荒れた",
+        "very_rough": "非常に荒れた",
+        "extremely_rough": "猛烈に荒れた"
+      },
+      "wind": {
+        "gales_to": "強風から",
+        "storm_force_to": "暴風から",
+        "hurricane_force_to": "台風並みの風から"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "優良",
+        "unknown": "不明",
+        "poor": "不良",
+        "moderate": "中程度",
+        "good": "良好"
+      },
+      "smoke_dispersal": {
+        "poor": "不良",
+        "fair": "普通",
+        "good": "良好",
+        "very_good": "非常に良好",
+        "excellent": "優良"
+      },
+      "haines_index": {
+        "very_low_potential": "大規模火災の可能性は非常に低い",
+        "low_potential": "大規模火災の可能性は低い",
+        "moderate_potential": "大規模火災の可能性は中程度",
+        "high_potential": "大規模火災の可能性は高い"
+      }
+    }
   }
 }

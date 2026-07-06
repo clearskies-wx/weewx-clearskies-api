@@ -197,5 +197,237 @@
     "95": "Onweer",
     "96": "Onweer met lichte hagel",
     "99": "Onweer met zware hagel"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "Zonnig",
+      "clear": "Onbewolkt",
+      "mostly_clear": "Licht bewolkt",
+      "mostly_sunny": "Overwegend zonnig",
+      "partly_sunny": "Gedeeltelijk zonnig",
+      "partly_cloudy": "Half bewolkt",
+      "mostly_cloudy": "Zwaar bewolkt",
+      "cloudy": "Bewolkt",
+      "trend_then_becoming": "later {sky} wordend"
+    },
+    "temp": {
+      "lower": "lage",
+      "mid": "middelste",
+      "upper": "hoge",
+      "single_digits": "eenlettergrapig bereik",
+      "teens": "tienerbereik",
+      "teens_below_zero": "tienerbereik onder nul",
+      "decade_number": "{decade}",
+      "in_the_decade": "rond de {decade}",
+      "in_the_position_decade": "in de {position} {decade}",
+      "trend_phrase": "temperaturen {trend} naar de {position} {decade} {time}",
+      "in_the_afternoon": "in de middag",
+      "after_midnight": "na middernacht",
+      "falling": "dalend",
+      "rising": "stijgend",
+      "very_hot_and_humid": "zeer heet en drukkend",
+      "very_hot": "zeer heet",
+      "hot_and_humid": "heet en drukkend",
+      "hot": "heet",
+      "bitterly_cold": "bitter koud",
+      "very_cold": "zeer koud",
+      "around_min": "rond {min}",
+      "min_to_max": "{min} tot {max}",
+      "near_zero": "rond nul",
+      "zero_to_max": "nul tot {max}",
+      "min_to_zero": "{min} tot nul",
+      "min_to_max_zero": "{min} tot {max} onder nul",
+      "max_to_min_zero": "{max} tot {min} onder nul"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "waterhozen",
+      "thunderstorms": "onweer",
+      "rain": "regen",
+      "rain_showers": "regenbuien",
+      "drizzle": "motregen",
+      "freezing_rain": "ijzel",
+      "freezing_drizzle": "aanvriezende motregen",
+      "snow": "sneeuw",
+      "snow_showers": "sneeuwbuien",
+      "ice_pellets": "ijskorrels",
+      "fog": "mist",
+      "freezing_fog": "aanvriezende mist",
+      "ice_fog": "ijsmist",
+      "ice_crystals": "ijskristallen",
+      "haze": "nevel",
+      "blowing_snow": "opwaaiende sneeuw",
+      "blowing_sand": "opwaaiend zand",
+      "smoke": "rook",
+      "blowing_dust": "opwaaiend stof",
+      "frost": "vorst",
+      "freezing_spray": "aanvriezende gischt",
+      "unknown_precipitation": "neerslag",
+      "flurries": "sneeuwvlagen",
+      "sprinkles": "lichte motregen"
+    },
+    "coverage": {
+      "definite": "definitief",
+      "widespread": "wijdverspreid",
+      "brief": "kortstondig",
+      "frequent": "frequent",
+      "occasional": "incidenteel",
+      "periods_of": "perioden met",
+      "intermittent": "met onderbrekingen",
+      "likely": "waarschijnlijk",
+      "numerous": "talrijk",
+      "scattered": "verspreid",
+      "chance_of": "kans op",
+      "areas_of": "gebieden met",
+      "slight_chance_of": "kleine kans op",
+      "widely_scattered": "wijd verspreid",
+      "isolated": "geïsoleerd",
+      "patchy": "plaatselijk"
+    },
+    "intensity": {
+      "heavy": "zwaar",
+      "moderate": "matig",
+      "light": "licht",
+      "very_light": "zeer licht"
+    },
+    "conjunction": {
+      "and": "en"
+    },
+    "pop_type": {
+      "rain": "regen",
+      "showers": "buien",
+      "snow": "sneeuw",
+      "thunderstorms": "onweer",
+      "precipitation": "neerslag"
+    },
+    "pop_qualification": "{pop} procent kans op {type}",
+    "heavy_rain": "regen kan tijdelijk zwaar zijn",
+    "heavy_snow": "sneeuw kan tijdelijk zwaar zijn",
+    "heavy_precip": "neerslag kan tijdelijk zwaar zijn"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "Geen sneeuwaccumulatie",
+      "little_or_no_accumulation": "Weinig of geen sneeuwaccumulatie",
+      "up_to_max": "tot {max} inch",
+      "around_max": "ongeveer {max} inch",
+      "min_to_max": "van {min} tot {max} inch"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "Lichte sneeuwaccumulaties",
+      "moderate_snow_accumulations": "Matige sneeuwaccumulaties",
+      "heavy_snow_accumulations": "Zware sneeuwaccumulaties"
+    },
+    "ice": {
+      "less_than_one_quarter": "minder dan een kwart inch",
+      "one_quarter": "een kwart inch",
+      "one_half": "een halve inch",
+      "three_quarters": "driekwart inch",
+      "one": "een inch",
+      "one_and_a_half": "anderhalve inch",
+      "integer_rounded": "{value} inch"
+    },
+    "time": {
+      "today": "Vandaag",
+      "tonight": "Vannacht",
+      "tomorrow": "Morgen",
+      "tomorrow_night": "Morgennacht",
+      "night_suffix": "Nacht",
+      "weekday": {
+        "monday": "maandag",
+        "tuesday": "dinsdag",
+        "wednesday": "woensdag",
+        "thursday": "donderdag",
+        "friday": "vrijdag",
+        "saturday": "zaterdag",
+        "sunday": "zondag"
+      },
+      "subperiod": {
+        "early_in_the_morning": "vroeg in de ochtend",
+        "in_the_morning": "in de ochtend",
+        "until_late_afternoon": "tot laat in de middag",
+        "until_early_evening": "tot vroeg in de avond",
+        "through_the_evening": "gedurende de avond",
+        "late_in_the_morning": "laat in de ochtend",
+        "in_the_late_morning_and_early_afternoon": "laat in de ochtend en vroeg in de middag",
+        "in_the_late_morning_and_afternoon": "laat in de ochtend en in de middag",
+        "early_in_the_afternoon": "vroeg in de middag",
+        "in_the_afternoon": "in de middag",
+        "in_the_afternoon_and_evening": "in de middag en avond",
+        "late_in_the_afternoon": "laat in de middag",
+        "early_in_the_evening": "vroeg in de avond",
+        "in_the_evening": "in de avond",
+        "until_early_morning": "tot vroeg in de ochtend",
+        "late_in_the_evening": "laat in de avond",
+        "in_the_late_evening_and_early_morning": "laat in de avond en vroeg in de ochtend",
+        "in_the_late_evening_and_overnight": "laat in de avond en gedurende de nacht",
+        "after_midnight": "na middernacht",
+        "until_afternoon": "tot de middag"
+      }
+    },
+    "connector": {
+      "then_becoming": "later wordend",
+      "increasing_to": "toenemend tot",
+      "decreasing_to": "afnemend tot",
+      "building_to": "aanwakkerend tot",
+      "subsiding_to": "afnemend tot",
+      "then": "dan",
+      "shifting_to_the": "draaiend naar",
+      "becoming_dir_and_increasing_to": "draaiend naar {dir} en toenemend tot",
+      "becoming_dir_and_decreasing_to": "draaiend naar {dir} en afnemend tot",
+      "becoming": "wordend",
+      "weather_then": ", dan"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "minder dan 1 voet",
+        "1_foot_or_less": "1 voet of minder",
+        "1_to_2_feet": "1 tot 2 voet",
+        "1_to_3_feet": "1 tot 3 voet",
+        "2_to_4_feet": "2 tot 4 voet",
+        "3_to_6_feet": "3 tot 6 voet",
+        "6_to_10_feet": "6 tot 10 voet",
+        "10_to_14_feet": "10 tot 14 voet",
+        "15_to_20_feet": "15 tot 20 voet",
+        "over_20_feet": "meer dan 20 voet"
+      },
+      "chop": {
+        "smooth": "vlak",
+        "light_chop": "lichte golfslag",
+        "moderate_chop": "matige golfslag",
+        "choppy": "onstuimig",
+        "rough": "ruw",
+        "very_rough": "zeer ruw",
+        "extremely_rough": "extreem ruw"
+      },
+      "wind": {
+        "gales_to": "storm tot",
+        "storm_force_to": "zware storm tot",
+        "hurricane_force_to": "orkaankracht tot"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "Uitstekend",
+        "unknown": "Onbekend",
+        "poor": "Slecht",
+        "moderate": "Matig",
+        "good": "Goed"
+      },
+      "smoke_dispersal": {
+        "poor": "Slecht",
+        "fair": "Redelijk",
+        "good": "Goed",
+        "very_good": "Zeer goed",
+        "excellent": "Uitstekend"
+      },
+      "haines_index": {
+        "very_low_potential": "Zeer laag potentieel voor snelle brandontwikkeling",
+        "low_potential": "Laag potentieel voor snelle brandontwikkeling",
+        "moderate_potential": "Matig potentieel voor snelle brandontwikkeling",
+        "high_potential": "Hoog potentieel voor snelle brandontwikkeling"
+      }
+    }
   }
 }

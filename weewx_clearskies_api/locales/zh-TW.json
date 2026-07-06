@@ -198,5 +198,237 @@
     "95": "雷暴",
     "96": "雷暴伴小冰雹",
     "99": "雷暴伴大冰雹"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "晴朗",
+      "clear": "晴",
+      "mostly_clear": "多雲時晴",
+      "mostly_sunny": "晴時多雲",
+      "partly_sunny": "晴轉多雲",
+      "partly_cloudy": "多雲",
+      "mostly_cloudy": "陰時多雲",
+      "cloudy": "陰",
+      "trend_then_becoming": "後轉{sky}"
+    },
+    "temp": {
+      "lower": "偏低",
+      "mid": "中等",
+      "upper": "偏高",
+      "single_digits": "個位數",
+      "teens": "10多度",
+      "teens_below_zero": "零下10多度",
+      "decade_number": "{decade}多度",
+      "in_the_decade": "{decade}多度左右",
+      "in_the_position_decade": "{decade}多度{position}",
+      "trend_phrase": "{time}氣溫{trend}至{decade}多度{position}",
+      "in_the_afternoon": "下午",
+      "after_midnight": "午夜後",
+      "falling": "下降",
+      "rising": "上升",
+      "very_hot_and_humid": "非常悶熱",
+      "very_hot": "非常炎熱",
+      "hot_and_humid": "悶熱",
+      "hot": "炎熱",
+      "bitterly_cold": "嚴寒刺骨",
+      "very_cold": "非常寒冷",
+      "around_min": "{min}左右",
+      "min_to_max": "{min}到{max}",
+      "near_zero": "接近零度",
+      "zero_to_max": "零度到{max}",
+      "min_to_zero": "{min}到零度",
+      "min_to_max_zero": "零下{min}到{max}",
+      "max_to_min_zero": "零下{max}到{min}"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "水龍捲",
+      "thunderstorms": "雷暴",
+      "rain": "雨",
+      "rain_showers": "陣雨",
+      "drizzle": "毛毛雨",
+      "freezing_rain": "凍雨",
+      "freezing_drizzle": "凍毛毛雨",
+      "snow": "雪",
+      "snow_showers": "陣雪",
+      "ice_pellets": "冰粒",
+      "fog": "霧",
+      "freezing_fog": "凍霧",
+      "ice_fog": "冰霧",
+      "ice_crystals": "冰晶",
+      "haze": "霾",
+      "blowing_snow": "吹雪",
+      "blowing_sand": "揚沙",
+      "smoke": "煙",
+      "blowing_dust": "浮塵",
+      "frost": "霜",
+      "freezing_spray": "凍飛沫",
+      "unknown_precipitation": "降水",
+      "flurries": "小雪花",
+      "sprinkles": "零星小雨"
+    },
+    "coverage": {
+      "definite": "明確的",
+      "widespread": "大範圍",
+      "brief": "短暫的",
+      "frequent": "頻繁的",
+      "occasional": "偶爾的",
+      "periods_of": "陣性",
+      "intermittent": "間歇性",
+      "likely": "可能的",
+      "numerous": "大量",
+      "scattered": "分散的",
+      "chance_of": "有機率出現",
+      "areas_of": "局部地區",
+      "slight_chance_of": "小機率",
+      "widely_scattered": "分散",
+      "isolated": "局部",
+      "patchy": "零星"
+    },
+    "intensity": {
+      "heavy": "大",
+      "moderate": "中",
+      "light": "小",
+      "very_light": "極小"
+    },
+    "conjunction": {
+      "and": "和"
+    },
+    "pop_type": {
+      "rain": "雨",
+      "showers": "陣雨",
+      "snow": "雪",
+      "thunderstorms": "雷暴",
+      "precipitation": "降水"
+    },
+    "pop_qualification": "{type}機率{pop}%",
+    "heavy_rain": "雨有時會變大",
+    "heavy_snow": "雪有時會變大",
+    "heavy_precip": "降水有時會加強"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "無積雪",
+      "little_or_no_accumulation": "積雪很少或沒有",
+      "up_to_max": "最多{max}英吋",
+      "around_max": "約{max}英吋",
+      "min_to_max": "{min}至{max}英吋"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "小量積雪",
+      "moderate_snow_accumulations": "中量積雪",
+      "heavy_snow_accumulations": "大量積雪"
+    },
+    "ice": {
+      "less_than_one_quarter": "不到四分之一英吋",
+      "one_quarter": "四分之一英吋",
+      "one_half": "二分之一英吋",
+      "three_quarters": "四分之三英吋",
+      "one": "一英吋",
+      "one_and_a_half": "一英吋半",
+      "integer_rounded": "{value}英吋"
+    },
+    "time": {
+      "today": "今天",
+      "tonight": "今夜",
+      "tomorrow": "明天",
+      "tomorrow_night": "明晚",
+      "night_suffix": "夜",
+      "weekday": {
+        "monday": "星期一",
+        "tuesday": "星期二",
+        "wednesday": "星期三",
+        "thursday": "星期四",
+        "friday": "星期五",
+        "saturday": "星期六",
+        "sunday": "星期日"
+      },
+      "subperiod": {
+        "early_in_the_morning": "凌晨",
+        "in_the_morning": "上午",
+        "until_late_afternoon": "持續到傍晚前",
+        "until_early_evening": "持續到入夜",
+        "through_the_evening": "整個晚上",
+        "late_in_the_morning": "上午晚些時候",
+        "in_the_late_morning_and_early_afternoon": "上午晚些時候到下午早些時候",
+        "in_the_late_morning_and_afternoon": "上午晚些時候到下午",
+        "early_in_the_afternoon": "下午早些時候",
+        "in_the_afternoon": "下午",
+        "in_the_afternoon_and_evening": "下午到晚上",
+        "late_in_the_afternoon": "傍晚",
+        "early_in_the_evening": "入夜時分",
+        "in_the_evening": "晚上",
+        "until_early_morning": "持續到凌晨",
+        "late_in_the_evening": "深夜",
+        "in_the_late_evening_and_early_morning": "深夜到凌晨",
+        "in_the_late_evening_and_overnight": "深夜到整夜",
+        "after_midnight": "午夜後",
+        "until_afternoon": "持續到下午"
+      }
+    },
+    "connector": {
+      "then_becoming": "後轉",
+      "increasing_to": "增強至",
+      "decreasing_to": "減弱至",
+      "building_to": "增強至",
+      "subsiding_to": "減弱至",
+      "then": "然後",
+      "shifting_to_the": "轉為",
+      "becoming_dir_and_increasing_to": "轉為{dir}並增強至",
+      "becoming_dir_and_decreasing_to": "轉為{dir}並減弱至",
+      "becoming": "轉為",
+      "weather_then": "，然後"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "小於1英尺",
+        "1_foot_or_less": "1英尺或以下",
+        "1_to_2_feet": "1至2英尺",
+        "1_to_3_feet": "1至3英尺",
+        "2_to_4_feet": "2至4英尺",
+        "3_to_6_feet": "3至6英尺",
+        "6_to_10_feet": "6至10英尺",
+        "10_to_14_feet": "10至14英尺",
+        "15_to_20_feet": "15至20英尺",
+        "over_20_feet": "超過20英尺"
+      },
+      "chop": {
+        "smooth": "平靜",
+        "light_chop": "輕微波浪",
+        "moderate_chop": "中等波浪",
+        "choppy": "波濤起伏",
+        "rough": "波濤洶湧",
+        "very_rough": "非常洶湧",
+        "extremely_rough": "極度洶湧"
+      },
+      "wind": {
+        "gales_to": "大風至",
+        "storm_force_to": "暴風至",
+        "hurricane_force_to": "颶風至"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "優",
+        "unknown": "未知",
+        "poor": "差",
+        "moderate": "中等",
+        "good": "良好"
+      },
+      "smoke_dispersal": {
+        "poor": "差",
+        "fair": "一般",
+        "good": "良好",
+        "very_good": "很好",
+        "excellent": "優"
+      },
+      "haines_index": {
+        "very_low_potential": "大型火災蔓延可能性極低",
+        "low_potential": "大型火災蔓延可能性低",
+        "moderate_potential": "大型火災蔓延可能性中等",
+        "high_potential": "大型火災蔓延可能性高"
+      }
+    }
   }
 }

@@ -197,5 +197,333 @@
     "95": "Гроза",
     "96": "Гроза с небольшим градом",
     "99": "Гроза с сильным градом"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "Солнечно",
+      "clear": "Ясно",
+      "mostly_clear": "Малооблачно",
+      "mostly_sunny": "Преимущественно солнечно",
+      "partly_sunny": "Частично солнечно",
+      "partly_cloudy": "Переменная облачность",
+      "mostly_cloudy": "Значительная облачность",
+      "cloudy": "Облачно",
+      "trend_then_becoming": "затем {sky}"
+    },
+    "temp": {
+      "lower": "нижних",
+      "mid": "средних",
+      "upper": "верхних",
+      "single_digits": "однозначных значениях",
+      "teens": "10-19",
+      "teens_below_zero": "10-19 ниже нуля",
+      "decade_number": "{decade}",
+      "in_the_decade": "около {decade}",
+      "in_the_position_decade": "в {position} {decade}",
+      "trend_phrase": "температура {trend} до {position} {decade} {time}",
+      "in_the_afternoon": "днём",
+      "after_midnight": "после полуночи",
+      "falling": "понижающаяся",
+      "rising": "повышающаяся",
+      "very_hot_and_humid": "очень жарко и влажно",
+      "very_hot": "очень жарко",
+      "hot_and_humid": "жарко и влажно",
+      "hot": "жарко",
+      "bitterly_cold": "пронизывающе холодно",
+      "very_cold": "очень холодно",
+      "around_min": "около {min}",
+      "min_to_max": "от {min} до {max}",
+      "near_zero": "около нуля",
+      "zero_to_max": "от нуля до {max}",
+      "min_to_zero": "от {min} до нуля",
+      "min_to_max_zero": "от {min} до {max} ниже нуля",
+      "max_to_min_zero": "от {max} до {min} ниже нуля"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": {
+        "nominative": "водяной смерч",
+        "instrumental": "водяным смерчем",
+        "genitive": "водяного смерча"
+      },
+      "thunderstorms": {
+        "nominative": "гроза",
+        "instrumental": "грозой",
+        "genitive": "грозы"
+      },
+      "rain": {
+        "nominative": "дождь",
+        "instrumental": "дождём",
+        "genitive": "дождя"
+      },
+      "rain_showers": {
+        "nominative": "ливень",
+        "instrumental": "ливнем",
+        "genitive": "ливня"
+      },
+      "drizzle": {
+        "nominative": "морось",
+        "instrumental": "моросью",
+        "genitive": "мороси"
+      },
+      "freezing_rain": {
+        "nominative": "ледяной дождь",
+        "instrumental": "ледяным дождём",
+        "genitive": "ледяного дождя"
+      },
+      "freezing_drizzle": {
+        "nominative": "переохлаждённая морось",
+        "instrumental": "переохлаждённой моросью",
+        "genitive": "переохлаждённой мороси"
+      },
+      "snow": {
+        "nominative": "снег",
+        "instrumental": "снегом",
+        "genitive": "снега"
+      },
+      "snow_showers": {
+        "nominative": "снегопад",
+        "instrumental": "снегопадом",
+        "genitive": "снегопада"
+      },
+      "ice_pellets": {
+        "nominative": "ледяная крупа",
+        "instrumental": "ледяной крупой",
+        "genitive": "ледяной крупы"
+      },
+      "fog": {
+        "nominative": "туман",
+        "instrumental": "туманом",
+        "genitive": "тумана"
+      },
+      "freezing_fog": {
+        "nominative": "переохлаждённый туман",
+        "instrumental": "переохлаждённым туманом",
+        "genitive": "переохлаждённого тумана"
+      },
+      "ice_fog": {
+        "nominative": "ледяной туман",
+        "instrumental": "ледяным туманом",
+        "genitive": "ледяного тумана"
+      },
+      "ice_crystals": {
+        "nominative": "ледяные кристаллы",
+        "instrumental": "ледяными кристаллами",
+        "genitive": "ледяных кристаллов"
+      },
+      "haze": {
+        "nominative": "дымка",
+        "instrumental": "дымкой",
+        "genitive": "дымки"
+      },
+      "blowing_snow": {
+        "nominative": "позёмок",
+        "instrumental": "позёмком",
+        "genitive": "позёмка"
+      },
+      "blowing_sand": {
+        "nominative": "песчаная позёмка",
+        "instrumental": "песчаной позёмкой",
+        "genitive": "песчаной позёмки"
+      },
+      "smoke": {
+        "nominative": "дым",
+        "instrumental": "дымом",
+        "genitive": "дыма"
+      },
+      "blowing_dust": {
+        "nominative": "пыльная позёмка",
+        "instrumental": "пыльной позёмкой",
+        "genitive": "пыльной позёмки"
+      },
+      "frost": {
+        "nominative": "изморозь",
+        "instrumental": "изморозью",
+        "genitive": "изморози"
+      },
+      "freezing_spray": {
+        "nominative": "обледенение от брызг",
+        "instrumental": "обледенением от брызг",
+        "genitive": "обледенения от брызг"
+      },
+      "unknown_precipitation": {
+        "nominative": "осадки",
+        "instrumental": "осадками",
+        "genitive": "осадков"
+      },
+      "flurries": {
+        "nominative": "снежные заряды",
+        "instrumental": "снежными зарядами",
+        "genitive": "снежных зарядов"
+      },
+      "sprinkles": {
+        "nominative": "небольшая морось",
+        "instrumental": "небольшой моросью",
+        "genitive": "небольшой мороси"
+      }
+    },
+    "coverage": {
+      "definite": "явный",
+      "widespread": "повсеместный",
+      "brief": "кратковременный",
+      "frequent": "частый",
+      "occasional": "местами",
+      "periods_of": "периоды",
+      "intermittent": "временами",
+      "likely": "вероятный",
+      "numerous": "многочисленный",
+      "scattered": "рассеянный",
+      "chance_of": "вероятность",
+      "areas_of": "в отдельных районах",
+      "slight_chance_of": "небольшая вероятность",
+      "widely_scattered": "широко рассеянный",
+      "isolated": "отдельные очаги",
+      "patchy": "неравномерный"
+    },
+    "intensity": {
+      "heavy": "сильный",
+      "moderate": "умеренный",
+      "light": "небольшой",
+      "very_light": "очень небольшой"
+    },
+    "conjunction": {
+      "and": "и"
+    },
+    "pop_type": {
+      "rain": "дождь",
+      "showers": "ливни",
+      "snow": "снег",
+      "thunderstorms": "грозы",
+      "precipitation": "осадки"
+    },
+    "pop_qualification": "вероятность {type} {pop} процентов",
+    "heavy_rain": "дождь местами может быть сильным",
+    "heavy_snow": "снег местами может быть сильным",
+    "heavy_precip": "осадки местами могут быть сильными"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "Без снежных накоплений",
+      "little_or_no_accumulation": "Незначительные снежные накопления или их отсутствие",
+      "up_to_max": "до {max} дюймов",
+      "around_max": "около {max} дюймов",
+      "min_to_max": "от {min} до {max} дюймов"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "Небольшие снежные накопления",
+      "moderate_snow_accumulations": "Умеренные снежные накопления",
+      "heavy_snow_accumulations": "Сильные снежные накопления"
+    },
+    "ice": {
+      "less_than_one_quarter": "менее одной четверти дюйма",
+      "one_quarter": "одна четверть дюйма",
+      "one_half": "половина дюйма",
+      "three_quarters": "три четверти дюйма",
+      "one": "один дюйм",
+      "one_and_a_half": "полтора дюйма",
+      "integer_rounded": "{value} дюйма"
+    },
+    "time": {
+      "today": "Сегодня",
+      "tonight": "Сегодня ночью",
+      "tomorrow": "Завтра",
+      "tomorrow_night": "Завтра ночью",
+      "night_suffix": "Ночь",
+      "weekday": {
+        "monday": "понедельник",
+        "tuesday": "вторник",
+        "wednesday": "среда",
+        "thursday": "четверг",
+        "friday": "пятница",
+        "saturday": "суббота",
+        "sunday": "воскресенье"
+      },
+      "subperiod": {
+        "early_in_the_morning": "рано утром",
+        "in_the_morning": "утром",
+        "until_late_afternoon": "до позднего дня",
+        "until_early_evening": "до раннего вечера",
+        "through_the_evening": "весь вечер",
+        "late_in_the_morning": "поздним утром",
+        "in_the_late_morning_and_early_afternoon": "поздним утром и в начале дня",
+        "in_the_late_morning_and_afternoon": "поздним утром и днём",
+        "early_in_the_afternoon": "в начале дня",
+        "in_the_afternoon": "днём",
+        "in_the_afternoon_and_evening": "днём и вечером",
+        "late_in_the_afternoon": "в конце дня",
+        "early_in_the_evening": "ранним вечером",
+        "in_the_evening": "вечером",
+        "until_early_morning": "до раннего утра",
+        "late_in_the_evening": "поздним вечером",
+        "in_the_late_evening_and_early_morning": "поздним вечером и ранним утром",
+        "in_the_late_evening_and_overnight": "поздним вечером и в течение ночи",
+        "after_midnight": "после полуночи",
+        "until_afternoon": "до дня"
+      }
+    },
+    "connector": {
+      "then_becoming": "затем становясь",
+      "increasing_to": "усиливаясь до",
+      "decreasing_to": "ослабевая до",
+      "building_to": "усиливаясь до",
+      "subsiding_to": "стихая до",
+      "then": "затем",
+      "shifting_to_the": "меняясь на",
+      "becoming_dir_and_increasing_to": "меняясь на {dir} и усиливаясь до",
+      "becoming_dir_and_decreasing_to": "меняясь на {dir} и ослабевая до",
+      "becoming": "становясь",
+      "weather_then": ", затем"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "менее 1 фута",
+        "1_foot_or_less": "1 фут или менее",
+        "1_to_2_feet": "1-2 фута",
+        "1_to_3_feet": "1-3 фута",
+        "2_to_4_feet": "2-4 фута",
+        "3_to_6_feet": "3-6 футов",
+        "6_to_10_feet": "6-10 футов",
+        "10_to_14_feet": "10-14 футов",
+        "15_to_20_feet": "15-20 футов",
+        "over_20_feet": "более 20 футов"
+      },
+      "chop": {
+        "smooth": "спокойное",
+        "light_chop": "лёгкое волнение",
+        "moderate_chop": "умеренное волнение",
+        "choppy": "неспокойное",
+        "rough": "бурное",
+        "very_rough": "очень бурное",
+        "extremely_rough": "чрезвычайно бурное"
+      },
+      "wind": {
+        "gales_to": "шторм до",
+        "storm_force_to": "силы шторма до",
+        "hurricane_force_to": "силы урагана до"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "Отличное",
+        "unknown": "Неизвестно",
+        "poor": "Плохое",
+        "moderate": "Умеренное",
+        "good": "Хорошее"
+      },
+      "smoke_dispersal": {
+        "poor": "Плохое",
+        "fair": "Удовлетворительное",
+        "good": "Хорошее",
+        "very_good": "Очень хорошее",
+        "excellent": "Отличное"
+      },
+      "haines_index": {
+        "very_low_potential": "Очень низкая вероятность быстрого распространения пожара",
+        "low_potential": "Низкая вероятность быстрого распространения пожара",
+        "moderate_potential": "Умеренная вероятность быстрого распространения пожара",
+        "high_potential": "Высокая вероятность быстрого распространения пожара"
+      }
+    }
   }
 }
