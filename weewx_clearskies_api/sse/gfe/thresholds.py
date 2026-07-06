@@ -654,3 +654,64 @@ COVERAGE_WEIGHTS: Final[dict[str, int]] = {
     "Iso": 1,
     "Patchy": 1,
 }
+
+# ---------------------------------------------------------------------------
+# 10. Sub-period time descriptors (GFE source SS6, `TimeDescriptor.py`)
+# ---------------------------------------------------------------------------
+#
+# Preserved from the retired `sse/gfe/time_descriptors.py` module (LF-2
+# audit finding — that module had zero call sites; `sse/period_aggregator.py`
+# ships its own `_period_label()`, which is the one actually used). This
+# table is unique ported data not replicated anywhere else in the codebase,
+# so it is kept here as data-only rather than discarded, per the GFE source
+# analysis document's SS6.2 note (see below). No current caller consumes it.
+#
+# Each entry is (start_offset_hours, end_offset_hours, phrase_key), all
+# offsets in hours relative to a single 6:00 AM local anchor (GFE
+# `self.DAY()`, default 6). A day period (6 AM-6 PM) spans anchor offsets
+# 0-12; a night period (6 PM-6 AM) spans anchor offsets 12-24 (continuing
+# into 24-33 for sub-periods that run into the following morning).
+# ``phrase_key == ""`` means "full period, no descriptor needed" — the
+# 12-hour period itself carries no sub-period qualifier.
+#
+# Known source-documentation gap: the GFE source analysis document's SS6.2
+# only enumerates 29 of the 42 rows the underlying
+# `timePeriod_descriptor_list` table is said to contain. The remaining ~13
+# rows are 1- and 2-hour-granularity refinements (e.g. "8a-9a", "2a-3a")
+# that the analysis document names by clock time but does not give offset
+# pairs or phrase text for — porting them would mean inventing phrase
+# content not present in the source, which the GFE-fidelity directive
+# (see this module's docstring) forbids. The 29 documented entries below
+# give full coverage at the 3-hour-aligned resolution this pipeline
+# actually produces (periods split at 6 AM / 6 PM).
+SUB_PERIOD_TABLE: Final[list[tuple[int, int, str]]] = [
+    (0, 3, "early_in_the_morning"),
+    (0, 6, "in_the_morning"),
+    (0, 9, "until_late_afternoon"),
+    (0, 12, ""),
+    (0, 15, "until_early_evening"),
+    (0, 18, "through_the_evening"),
+    (3, 6, "late_in_the_morning"),
+    (3, 9, "in_the_late_morning_and_early_afternoon"),
+    (3, 12, "in_the_late_morning_and_afternoon"),
+    (6, 9, "early_in_the_afternoon"),
+    (6, 12, "in_the_afternoon"),
+    (6, 15, "in_the_afternoon_and_evening"),
+    (9, 12, "late_in_the_afternoon"),
+    (9, 15, "early_in_the_evening"),
+    (9, 18, "in_the_evening"),
+    (9, 21, "until_early_morning"),
+    (12, 15, "early_in_the_evening"),
+    (12, 18, "in_the_evening"),
+    (12, 21, "until_early_morning"),
+    (12, 24, ""),
+    (15, 18, "late_in_the_evening"),
+    (15, 21, "in_the_late_evening_and_early_morning"),
+    (15, 24, "in_the_late_evening_and_overnight"),
+    (18, 21, "after_midnight"),
+    (18, 24, "after_midnight"),
+    (21, 24, "early_in_the_morning"),
+    (21, 27, "early_in_the_morning"),
+    (21, 30, "early_in_the_morning"),
+    (21, 33, "until_afternoon"),
+]
