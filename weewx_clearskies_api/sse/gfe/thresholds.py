@@ -229,9 +229,9 @@ MARINE_WIND_DESCRIPTORS: Final[list[tuple[int, str]]] = [
 # `wxHierarchies` — weather type codes, highest priority first.
 WX_TYPE_HIERARCHY: Final[list[str]] = [
     "WP",
-    "T",
     "R",
     "RW",
+    "T",
     "L",
     "ZR",
     "ZL",

@@ -141,9 +141,9 @@ class TestWeatherTypeThresholds:
     def test_wx_type_hierarchy_first_entry(self):
         assert t.WX_TYPE_HIERARCHY[0] == "WP"
 
-    def test_wx_type_hierarchy_thunderstorms_near_top(self):
+    def test_wx_type_hierarchy_thunderstorms_after_rain(self):
         index = t.WX_TYPE_HIERARCHY.index("T")
-        assert index <= 2
+        assert index == 3, "T must follow WP, R, RW per GFE SS4.1 row-major order"
 
     def test_wx_coverage_hierarchy_entry_count(self):
         assert len(t.WX_COVERAGE_HIERARCHY) == 16
