@@ -27,10 +27,10 @@ Two independent public surfaces:
   (see PROVIDER-MANUAL.md SS4 "Marine data availability").
 
 All display text resolves through ``i18n.t()`` against the caller-supplied
-locale. Locale JSON files do not yet carry the ``wind.*`` keys this module
-introduces (a separate i18n task); until they do, every lookup falls
-through to a humanized (title-cased) rendering of the raw key so output is
-never a raw dotted key string.
+locale. Locale JSON files carry the ``wind.*`` keys this module introduces
+for every supported locale (I18N T6.4); the humanized (title-cased)
+rendering of the raw key is retained as a defensive fallback for any
+locale that omits an entry, so output is never a raw dotted key string.
 """
 
 from __future__ import annotations
@@ -85,9 +85,17 @@ def _t_template(key: str, default: str, locale: str) -> str:
     return default if resolved == key else resolved
 
 
-def _format_speed(value: float) -> str:
-    """Render a speed value without a trailing ``.0`` for whole numbers."""
-    return str(int(value)) if float(value).is_integer() else str(value)
+def _format_speed(value: float, locale: str) -> str:
+    """Render a speed value with locale-correct decimal separator.
+
+    Whole numbers render with no decimal places; fractional values render
+    with one decimal place, matching
+    :func:`weewx_clearskies_api.sse.gfe.snow_ice_phrases._format_inches`'s
+    convention. Delegates to :func:`weewx_clearskies_api.i18n.format_number`
+    so the decimal separator follows locale conventions (comma vs period).
+    """
+    decimals = 0 if float(value).is_integer() else 1
+    return i18n.format_number(value, decimals, locale)
 
 
 def wind_descriptor(speed_mph: float, locale: str) -> str:
@@ -128,15 +136,15 @@ def wind_phrase(
 
     if wind_min is not None and wind_max == wind_min:
         magnitude = _t_template("wind.magnitude_around", "around {speed} mph", locale).format(
-            speed=_format_speed(wind_max)
+            speed=_format_speed(wind_max, locale)
         )
     elif wind_min is None or wind_min < WIND_NULL_THRESHOLD:
         magnitude = _t_template("wind.magnitude_up_to", "up to {speed} mph", locale).format(
-            speed=_format_speed(wind_max)
+            speed=_format_speed(wind_max, locale)
         )
     else:
         magnitude = _t_template("wind.magnitude_range", "{min} to {max} mph", locale).format(
-            min=_format_speed(wind_min), max=_format_speed(wind_max)
+            min=_format_speed(wind_min, locale), max=_format_speed(wind_max, locale)
         )
 
     if wind_dir:
@@ -149,7 +157,7 @@ def wind_phrase(
     if wind_gust is not None and (wind_gust - wind_max) > WIND_GUST_DIFFERENCE:
         gust_phrase = _t_template(
             "wind.gust_suffix", "with gusts to around {gust} mph", locale
-        ).format(gust=_format_speed(wind_gust))
+        ).format(gust=_format_speed(wind_gust, locale))
         phrase = f"{phrase} {gust_phrase}"
 
     return phrase
