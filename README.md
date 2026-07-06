@@ -58,7 +58,7 @@ External data providers are internal plugin modules under `weewx_clearskies_api/
 
 | Domain | Keyless | Keyed |
 |---|---|---|
-| Forecast | Open-Meteo, NWS (US only) | Aeris, OpenWeatherMap, Weather Underground |
+| Forecast | Open-Meteo, NWS (US only) | Aeris, OpenWeatherMap |
 | Alerts | NWS (US only) | Aeris, OpenWeatherMap |
 | AQI | Open-Meteo | Aeris, OpenWeatherMap, IQAir |
 | Earthquakes | USGS, GeoNet (NZ), EMSC (Europe), RéNaSS (France) | — |

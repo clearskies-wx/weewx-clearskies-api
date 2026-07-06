@@ -171,7 +171,7 @@ One forecast provider is active per deployment. Select the provider that covers 
 
 | Key | Default | Description |
 |---|---|---|
-| `provider` | _(none)_ | Provider id: `openmeteo`, `nws`, `aeris`, `openweathermap`, or `wunderground`. Absent → `/forecast` returns `source: "none"`. |
+| `provider` | _(none)_ | Provider id: `openmeteo`, `nws`, `aeris`, or `openweathermap`. Absent → `/forecast` returns `source: "none"`. |
 | `nws_user_agent_contact` | _(none)_ | Your email or URL for the NWS `User-Agent` header. Required by NWS terms of service when using the `nws` provider. |
 
 **Credentials (environment variables):**
@@ -181,8 +181,6 @@ One forecast provider is active per deployment. Select the provider that covers 
 | `WEEWX_CLEARSKIES_AERIS_CLIENT_ID` | `aeris` | Aeris client ID |
 | `WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET` | `aeris` | Aeris client secret |
 | `WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID` | `openweathermap` | OpenWeatherMap API key |
-| `WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY` | `wunderground` | Weather Underground API key |
-| `WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID` | `wunderground` | Your PWS station ID |
 
 **Example — Open-Meteo (keyless, global coverage):**
 
@@ -385,8 +383,6 @@ Summary of all environment variables. Place these in `/etc/weewx-clearskies/secr
 | `WEEWX_CLEARSKIES_AERIS_CLIENT_ID` | `aeris` provider | Aeris client ID (shared: forecast, alerts, AQI, radar) |
 | `WEEWX_CLEARSKIES_AERIS_CLIENT_SECRET` | `aeris` provider | Aeris client secret |
 | `WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID` | `openweathermap` provider | OWM API key (shared: forecast, alerts, AQI, radar) |
-| `WEEWX_CLEARSKIES_WUNDERGROUND_API_KEY` | `wunderground` forecast | Weather Underground API key |
-| `WEEWX_CLEARSKIES_WUNDERGROUND_PWS_STATION_ID` | `wunderground` forecast | Your PWS station ID |
 | `WEEWX_CLEARSKIES_IQAIR_KEY` | `iqair` AQI | IQAir API key |
 | `CLEARSKIES_CACHE_URL` | Redis cache backend | `redis://127.0.0.1:6379/0` or `redis://[::1]:6379/0` |
 | `CLEARSKIES_LOG_LEVEL` | Optional | Overrides `[logging] level` in api.conf |

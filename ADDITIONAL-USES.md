@@ -26,7 +26,8 @@ Base License — even if they might otherwise be considered commercial:
 
 - **Amateur radio weather stations.** Weather stations operated by licensed
   amateur radio operators as part of their amateur radio activities, and citizen
-  science weather networks (e.g., CWOP, Weather Underground personal stations).
+  science weather networks (e.g., CWOP and similar personal weather station
+  networks).
 
 - **Agricultural cooperatives and CSA programs.** Agricultural cooperatives,
   community-supported agriculture (CSA) programs, and farmer's market
