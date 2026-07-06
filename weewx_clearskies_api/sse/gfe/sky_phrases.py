@@ -26,9 +26,8 @@ def _label(key: str, locale: str) -> str:
 
     Looks up ``forecast.sky.{key}`` via :func:`weewx_clearskies_api.i18n.t`.
     Falls back to a title-cased rendering of *key* (underscores replaced
-    with spaces) when the locale system has not yet been populated with
-    the corresponding string — see design note in the T4.1/T4.2 task
-    brief: locale JSON files do not carry `forecast.*` keys yet.
+    with spaces) for any locale that omits the corresponding
+    `forecast.sky.*` string, so output is never a raw dotted key string.
     """
     dotted = f"forecast.sky.{key}"
     resolved = t(dotted, locale)
