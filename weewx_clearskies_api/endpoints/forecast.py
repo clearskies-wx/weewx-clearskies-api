@@ -67,6 +67,7 @@ import pydantic
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
+from weewx_clearskies_api import i18n
 from weewx_clearskies_api.models.params import ForecastQueryParams
 from weewx_clearskies_api.models.responses import (
     DailyForecastPoint,
@@ -78,6 +79,7 @@ from weewx_clearskies_api.providers._common.capability import get_provider_regis
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_target_unit, get_units_block
+from weewx_clearskies_api.sse.forecast_text_enrichment import enrich_forecast_text
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +414,24 @@ def get_forecast(
         discussion=bundle.discussion,
         source=provider_id,
         generatedAt=bundle.generatedAt,
+    )
+
+    # --- Generate forecast text (ADR-082 T7.1-T7.3) ---
+    # Runs after the hours/days slice so forecastText is only computed for
+    # daily points that are actually returned. NWS pass-through (source ==
+    # "nws") is a no-op inside enrich_forecast_text -- narrative already
+    # carries NWS's own detailedForecast text (API-MANUAL SS15).
+    enrich_forecast_text(
+        {
+            "source": provider_id,
+            "hourly": sliced_bundle.hourly,
+            "daily": sliced_bundle.daily,
+            "sunrise": sliced_daily[0].sunrise if sliced_daily else None,
+            "sunset": sliced_daily[0].sunset if sliced_daily else None,
+            "current_time": datetime.now(tz=UTC),
+            "timezone": station.timezone,
+        },
+        i18n.get_active_locale(),
     )
 
     return ForecastResponse(

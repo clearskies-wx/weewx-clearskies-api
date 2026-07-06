@@ -23,11 +23,30 @@ and produce the full text string.
 
 from __future__ import annotations
 
-from . import sky_condition as _sky_condition_module
-from . import temperature_comfort as _temperature_comfort
 from weewx_clearskies_api import i18n
+from weewx_clearskies_api.sse.gfe.wind_phrases import wind_descriptor
 from weewx_clearskies_api.units.conversion import convert
 from weewx_clearskies_api.units.derived import beaufort
+
+from . import sky_condition as _sky_condition_module
+from . import temperature_comfort as _temperature_comfort
+
+# Hybrid Beaufort/GFE wind scale threshold (ADR-082, settled decision #11;
+# API-MANUAL.md SS8 "Wind"). At and above this speed, the GFE/NWS descriptor
+# (sse.gfe.wind_phrases.wind_descriptor) replaces the Beaufort label — a
+# Beaufort 12 "Hurricane" label misleadingly implies a tropical system for
+# straight-line thunderstorm winds or derechos. Below this speed, Beaufort
+# labels are unchanged (finer-grained than the GFE table at low speeds).
+_GFE_WIND_THRESHOLD_MPH = 30.0
+
+# Gust qualifier threshold (ADR-082; API-MANUAL.md SS8 "Wind"). Replaces the
+# old ADR-044 threshold (gust >= sustained + 12 mph AND gust >= 18 mph).
+_GUST_DIFFERENCE_MPH = 10.0
+
+
+def _format_gust_speed(value: float) -> str:
+    """Render a gust speed without a trailing ``.0`` for whole numbers."""
+    return str(int(value)) if float(value).is_integer() else str(round(value, 1))
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +288,21 @@ def build_weather_text(
     Beaufort 0 ("Calm") are included — calm is a real condition
     (ADR-044 §4, amended 2026-06-05).
 
-    The "and Gusty" qualifier is appended to the Beaufort label when:
-      windGust ≥ windSpeed + 12 mph AND windGust ≥ 18 mph  (ADR-044 §4)
+    **Hybrid Beaufort/GFE wind scale** (ADR-082, settled decision #11;
+    API-MANUAL.md SS8 "Wind"): below 30 mph, the Beaufort label is used
+    unchanged. At and above 30 mph, the wind label switches to the GFE/NWS
+    descriptor (``sse.gfe.wind_phrases.wind_descriptor``) — Beaufort 12
+    "Hurricane" would misleadingly imply a tropical system for straight-line
+    thunderstorm winds or derechos.
+
+    The gust qualifier is appended when:
+      windGust - windSpeed > 10 mph  (ADR-082; supersedes the old ADR-044
+      "and Gusty" rule of windGust >= windSpeed + 12 mph AND windGust >= 18 mph)
     Both thresholds are evaluated in mph regardless of source_unit.
-    The gusty check only fires when wind_speed is non-Calm (Beaufort > 0) —
-    "Calm and Gusty" is nonsensical.
+    The phrase is GFE-style: "with gusts to around {gust speed} mph" — it
+    states the gust speed rather than a bare "Gusty" adjective.
+    The gust check only fires when wind_speed is non-Calm (Beaufort > 0) —
+    a gust qualifier on "Calm" is nonsensical.
 
     Smoothed inputs from ``enrichment.input_smoother`` should be passed by
     the caller when available; this function performs no smoothing itself.
@@ -341,10 +370,7 @@ def build_weather_text(
     # 2. Sky condition: use local solar classification only during daytime.
     # At night, fall back to provider sky data (ADR-044 §1b).
     is_day = _sky_condition_module.is_daytime()
-    if sky is not None and is_day:
-        effective_sky = sky
-    else:
-        effective_sky = provider_sky
+    effective_sky = sky if sky is not None and is_day else provider_sky
     effective_sky = _to_display_label(effective_sky, is_day, locale)
 
     # Fog/mist override: when fog_mist_label is set ('Foggy' or 'Misty'),
@@ -366,25 +392,26 @@ def build_weather_text(
 
     components["sky"] = effective_sky
 
-    # 3. Wind (Beaufort label). All Beaufort values including 0 (Calm) are
-    # included — calm is a real condition (ADR-044 §4, amended 2026-06-05).
+    # 3. Wind. Below 30 mph: Beaufort label (all values including 0/Calm are
+    # included — calm is a real condition, ADR-044 §4 amended 2026-06-05).
+    # At/above 30 mph: GFE/NWS descriptor (ADR-082, settled decision #11).
     if wind_speed is not None:
         try:
             b = beaufort(wind_speed, wind_speed_unit, locale)
-            wind_label = str(b["label"])
+            speed_mph = convert(wind_speed, wind_speed_unit, "mile_per_hour")
 
-            if b["value"] > 0 and wind_gust is not None:
-                speed_mph = convert(wind_speed, wind_speed_unit, "mile_per_hour")
+            if speed_mph is not None and speed_mph >= _GFE_WIND_THRESHOLD_MPH:
+                wind_label = wind_descriptor(speed_mph, locale or i18n.get_active_locale())
+            else:
+                wind_label = str(b["label"])
+
+            if b["value"] > 0 and wind_gust is not None and speed_mph is not None:
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
-                if (
-                    speed_mph is not None
-                    and gust_mph is not None
-                    and gust_mph >= speed_mph + 12.0
-                    and gust_mph >= 18.0
-                ):
-                    connector = i18n.t("composition.connector_and", locale)
-                    gusty = i18n.t("wind.gusty", locale)
-                    wind_label = f"{wind_label} {connector} {gusty}"
+                if gust_mph is not None and (gust_mph - speed_mph) > _GUST_DIFFERENCE_MPH:
+                    gust_phrase = i18n.t("wind.gust_suffix", locale).format(
+                        gust=_format_gust_speed(gust_mph)
+                    )
+                    wind_label = f"{wind_label} {gust_phrase}"
 
             components["wind"] = wind_label
         except (ValueError, TypeError):

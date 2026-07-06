@@ -1003,6 +1003,9 @@ class DailyForecastPoint(BaseModel):
     validDate is station-local "YYYY-MM-DD" (ADR-020: date-only fields stay local).
     sunrise/sunset are UTC ISO-8601 with Z (full datetime fields).
     narrative is always None for Open-Meteo (no per-day narrative supplied).
+    forecastText is populated by sse/forecast_text_enrichment.py (ADR-082
+    T7.3) from GFE-composed period text; left None for the NWS provider,
+    which uses the narrative pass-through instead (API-MANUAL SS15).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1020,6 +1023,8 @@ class DailyForecastPoint(BaseModel):
     weatherCode: str | None = None           # WMO code as string
     weatherText: str | None = None
     narrative: str | None = None             # per-day summary (NWS/some Aeris plans; null here)
+    forecastText: str | None = None          # GFE text engine output (ADR-082 T7.3); null for
+                                              # the NWS pass-through path (see narrative above)
     dewpointMax: float | None = None
     dewpointMin: float | None = None
     humidityMax: float | None = None
