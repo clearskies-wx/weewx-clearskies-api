@@ -24,8 +24,9 @@ Mocking strategy
   `_sky_module.get_solar_elevation` → deterministic nighttime/no-Kcs defaults
   so haze/sky paths don't fire unexpectedly.
 - `detect_haze` → patched to return None (haze path is not under test here).
-- `build_observation`, `generate_standard`, `generate_verbose` → patched to
-  avoid ObservationModel dependency in pure cross-check tests.
+- `build_observation`, `generate_current_text` (ADR-082 T7.2 — replaces the
+  retired `generate_standard`/`generate_verbose` pair) → patched to avoid
+  ObservationModel dependency in pure cross-check tests.
 
 Autouse fixture `_reset_fog_condition` mirrors the pattern from
 test_fog_condition.py to clear fog_condition module state between tests.
@@ -65,8 +66,7 @@ _GET_SMOOTHED = "weewx_clearskies_api.sse.enrichment.weather_text.get_smoothed"
 _SKY_CLASSIFY = "weewx_clearskies_api.sse.enrichment.weather_text.sky_classify"
 _DETECT_HAZE = "weewx_clearskies_api.sse.enrichment.weather_text.detect_haze"
 _BUILD_OBS = "weewx_clearskies_api.sse.enrichment.weather_text.build_observation"
-_GEN_STANDARD = "weewx_clearskies_api.sse.enrichment.weather_text.generate_standard"
-_GEN_VERBOSE = "weewx_clearskies_api.sse.enrichment.weather_text.generate_verbose"
+_GEN_CURRENT_TEXT = "weewx_clearskies_api.sse.enrichment.weather_text.generate_current_text"
 
 # sky_module functions used directly as `_sky_module.<fn>` in weather_text.py
 _SKY_IS_DAYTIME = "weewx_clearskies_api.sse.sky_condition.is_daytime"
@@ -104,7 +104,7 @@ def _compose(
     - No Kcs (no solar classifier output).
     - sky_classify() returns None (no sky label from solar).
     - detect_haze() returns None (haze path not under test).
-    - build_observation / generate_standard / generate_verbose return stubs.
+    - build_observation / generate_current_text return stubs.
 
     The only signals that vary between test calls are fog_mist_result (what
     detect_fog_mist returns) and (provider_text, provider_age).
@@ -112,8 +112,7 @@ def _compose(
     from weewx_clearskies_api.sse.enrichment.weather_text import compose_weather_text
 
     mock_obs = MagicMock(return_value=MagicMock())
-    mock_std = MagicMock(return_value=None)
-    mock_verb = MagicMock(return_value=None)
+    mock_current_text = MagicMock(return_value=None)
     smoothed_side_effect = _smoothed_with_dewpoint if has_dewpoint else (lambda _: None)
 
     with (
@@ -126,8 +125,7 @@ def _compose(
         patch(_SKY_GET_KCS, return_value=None),
         patch(_SKY_GET_ELEV, return_value=None),
         patch(_BUILD_OBS, mock_obs),
-        patch(_GEN_STANDARD, mock_std),
-        patch(_GEN_VERBOSE, mock_verb),
+        patch(_GEN_CURRENT_TEXT, mock_current_text),
     ):
         return compose_weather_text(obs_data)
 
