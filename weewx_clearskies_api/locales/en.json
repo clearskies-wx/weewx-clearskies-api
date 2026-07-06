@@ -71,7 +71,27 @@
     "12": "Hurricane"
   },
   "wind": {
-    "gusty": "Gusty"
+    "gusty": "Gusty",
+    "calm": "Calm",
+    "very_light_breeze": "Very Light Breeze",
+    "light_breeze": "Light Breeze",
+    "gentle_breeze": "Gentle Breeze",
+    "moderate_breeze": "Moderate Breeze",
+    "fresh_breeze": "Fresh Breeze",
+    "strong_breeze": "Strong Breeze",
+    "windy": "Windy",
+    "very_windy": "Very Windy",
+    "strong_winds": "Strong Winds",
+    "hurricane_force_winds": "Hurricane Force Winds",
+    "null_phrase": "light winds",
+    "magnitude_around": "around {speed} mph",
+    "magnitude_up_to": "up to {speed} mph",
+    "magnitude_range": "{min} to {max} mph",
+    "with_direction": "{dir} winds {magnitude}",
+    "gust_suffix": "with gusts to around {gust} mph",
+    "marine_gales": "Gales",
+    "marine_storm_force": "Storm Force",
+    "marine_hurricane_force": "Hurricane Force"
   },
   "aqi": {
     "good": "Good",
@@ -192,5 +212,237 @@
     "95": "Thunderstorm",
     "96": "Thunderstorm with slight hail",
     "99": "Thunderstorm with heavy hail"
+  },
+  "forecast": {
+    "sky": {
+      "sunny": "Sunny",
+      "clear": "Clear",
+      "mostly_clear": "Mostly Clear",
+      "mostly_sunny": "Mostly Sunny",
+      "partly_sunny": "Partly Sunny",
+      "partly_cloudy": "Partly Cloudy",
+      "mostly_cloudy": "Mostly Cloudy",
+      "cloudy": "Cloudy",
+      "trend_then_becoming": "then becoming {sky}"
+    },
+    "temp": {
+      "lower": "lower",
+      "mid": "mid",
+      "upper": "upper",
+      "single_digits": "single digits",
+      "teens": "teens",
+      "teens_below_zero": "teens below zero",
+      "decade_number": "{decade}s",
+      "in_the_decade": "in the {decade}",
+      "in_the_position_decade": "in the {position} {decade}",
+      "trend_phrase": "temperatures {trend} into the {position} {decade} {time}",
+      "in_the_afternoon": "in the afternoon",
+      "after_midnight": "after midnight",
+      "falling": "falling",
+      "rising": "rising",
+      "very_hot_and_humid": "very hot and humid",
+      "very_hot": "very hot",
+      "hot_and_humid": "hot and humid",
+      "hot": "hot",
+      "bitterly_cold": "bitterly cold",
+      "very_cold": "very cold",
+      "around_min": "around {min}",
+      "min_to_max": "{min} to {max}",
+      "near_zero": "near zero",
+      "zero_to_max": "zero to {max}",
+      "min_to_zero": "{min} to zero",
+      "min_to_max_zero": "{min} to {max} below zero",
+      "max_to_min_zero": "{max} to {min} below zero"
+    }
+  },
+  "wx": {
+    "type": {
+      "waterspouts": "waterspouts",
+      "thunderstorms": "thunderstorms",
+      "rain": "rain",
+      "rain_showers": "rain showers",
+      "drizzle": "drizzle",
+      "freezing_rain": "freezing rain",
+      "freezing_drizzle": "freezing drizzle",
+      "snow": "snow",
+      "snow_showers": "snow showers",
+      "ice_pellets": "ice pellets",
+      "fog": "fog",
+      "freezing_fog": "freezing fog",
+      "ice_fog": "ice fog",
+      "ice_crystals": "ice crystals",
+      "haze": "haze",
+      "blowing_snow": "blowing snow",
+      "blowing_sand": "blowing sand",
+      "smoke": "smoke",
+      "blowing_dust": "blowing dust",
+      "frost": "frost",
+      "freezing_spray": "freezing spray",
+      "unknown_precipitation": "precipitation",
+      "flurries": "flurries",
+      "sprinkles": "sprinkles"
+    },
+    "coverage": {
+      "definite": "definite",
+      "widespread": "widespread",
+      "brief": "brief",
+      "frequent": "frequent",
+      "occasional": "occasional",
+      "periods_of": "periods of",
+      "intermittent": "intermittent",
+      "likely": "likely",
+      "numerous": "numerous",
+      "scattered": "scattered",
+      "chance_of": "chance of",
+      "areas_of": "areas of",
+      "slight_chance_of": "slight chance of",
+      "widely_scattered": "widely scattered",
+      "isolated": "isolated",
+      "patchy": "patchy"
+    },
+    "intensity": {
+      "heavy": "heavy",
+      "moderate": "moderate",
+      "light": "light",
+      "very_light": "very light"
+    },
+    "conjunction": {
+      "and": "and"
+    },
+    "pop_type": {
+      "rain": "rain",
+      "showers": "showers",
+      "snow": "snow",
+      "thunderstorms": "thunderstorms",
+      "precipitation": "precipitation"
+    },
+    "pop_qualification": "chance of {type} {pop} percent",
+    "heavy_rain": "rain may be heavy at times",
+    "heavy_snow": "snow may be heavy at times",
+    "heavy_precip": "precipitation may be heavy at times"
+  },
+  "gfe": {
+    "snow": {
+      "no_accumulation": "No snow accumulation",
+      "little_or_no_accumulation": "Little or no snow accumulation",
+      "up_to_max": "up to {max} inches",
+      "around_max": "around {max} inches",
+      "min_to_max": "of {min} to {max} inches"
+    },
+    "descriptive_snow": {
+      "light_snow_accumulations": "Light snow accumulations",
+      "moderate_snow_accumulations": "Moderate snow accumulations",
+      "heavy_snow_accumulations": "Heavy snow accumulations"
+    },
+    "ice": {
+      "less_than_one_quarter": "less than one quarter of an inch",
+      "one_quarter": "one quarter of an inch",
+      "one_half": "one half of an inch",
+      "three_quarters": "three quarters of an inch",
+      "one": "one inch",
+      "one_and_a_half": "one and a half inches",
+      "integer_rounded": "{value} inches"
+    },
+    "time": {
+      "today": "Today",
+      "tonight": "Tonight",
+      "tomorrow": "Tomorrow",
+      "tomorrow_night": "Tomorrow Night",
+      "night_suffix": "Night",
+      "weekday": {
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday",
+        "sunday": "Sunday"
+      },
+      "subperiod": {
+        "early_in_the_morning": "early in the morning",
+        "in_the_morning": "in the morning",
+        "until_late_afternoon": "until late afternoon",
+        "until_early_evening": "until early evening",
+        "through_the_evening": "through the evening",
+        "late_in_the_morning": "late in the morning",
+        "in_the_late_morning_and_early_afternoon": "in the late morning and early afternoon",
+        "in_the_late_morning_and_afternoon": "in the late morning and afternoon",
+        "early_in_the_afternoon": "early in the afternoon",
+        "in_the_afternoon": "in the afternoon",
+        "in_the_afternoon_and_evening": "in the afternoon and evening",
+        "late_in_the_afternoon": "late in the afternoon",
+        "early_in_the_evening": "early in the evening",
+        "in_the_evening": "in the evening",
+        "until_early_morning": "until early morning",
+        "late_in_the_evening": "late in the evening",
+        "in_the_late_evening_and_early_morning": "in the late evening and early morning",
+        "in_the_late_evening_and_overnight": "in the late evening and overnight",
+        "after_midnight": "after midnight",
+        "until_afternoon": "until afternoon"
+      }
+    },
+    "connector": {
+      "then_becoming": "then becoming",
+      "increasing_to": "increasing to",
+      "decreasing_to": "decreasing to",
+      "building_to": "building to",
+      "subsiding_to": "subsiding to",
+      "then": "then",
+      "shifting_to_the": "shifting to the",
+      "becoming_dir_and_increasing_to": "becoming {dir} and increasing to",
+      "becoming_dir_and_decreasing_to": "becoming {dir} and decreasing to",
+      "becoming": "becoming",
+      "weather_then": ", then"
+    },
+    "marine": {
+      "wave_height": {
+        "less_than_1_foot": "less than 1 foot",
+        "1_foot_or_less": "1 foot or less",
+        "1_to_2_feet": "1 to 2 feet",
+        "1_to_3_feet": "1 to 3 feet",
+        "2_to_4_feet": "2 to 4 feet",
+        "3_to_6_feet": "3 to 6 feet",
+        "6_to_10_feet": "6 to 10 feet",
+        "10_to_14_feet": "10 to 14 feet",
+        "15_to_20_feet": "15 to 20 feet",
+        "over_20_feet": "over 20 feet"
+      },
+      "chop": {
+        "smooth": "smooth",
+        "light_chop": "light chop",
+        "moderate_chop": "moderate chop",
+        "choppy": "choppy",
+        "rough": "rough",
+        "very_rough": "very rough",
+        "extremely_rough": "extremely rough"
+      },
+      "wind": {
+        "gales_to": "gales to",
+        "storm_force_to": "storm force to",
+        "hurricane_force_to": "hurricane force to"
+      }
+    },
+    "fire": {
+      "humidity_recovery": {
+        "excellent": "Excellent",
+        "unknown": "Unknown",
+        "poor": "Poor",
+        "moderate": "Moderate",
+        "good": "Good"
+      },
+      "smoke_dispersal": {
+        "poor": "Poor",
+        "fair": "Fair",
+        "good": "Good",
+        "very_good": "Very Good",
+        "excellent": "Excellent"
+      },
+      "haines_index": {
+        "very_low_potential": "Very Low potential for large fire growth",
+        "low_potential": "Low potential for large fire growth",
+        "moderate_potential": "Moderate potential for large fire growth",
+        "high_potential": "High potential for large fire growth"
+      }
+    }
   }
 }

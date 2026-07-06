@@ -144,6 +144,59 @@ def t_case(key: str, case: str = "nominative", locale: str | None = None) -> str
     return key
 
 
+def t_inflected(key: str, gender_code: str, locale: str) -> str:
+    """Look up a translated string with gender/number inflection (GFE T6.4).
+
+    Mirrors :func:`t_case`'s resolution chain, but keys on grammatical
+    gender/number instead of case. When the value at *key* is a dict of
+    ``gender_code -> string`` (e.g. ``{"MS": "...", "FS": "..."}``),
+    returns the matching form for *gender_code*. Recognized codes: ``MS``
+    (masculine singular), ``MP`` (masculine plural), ``FS`` (feminine
+    singular), ``FP`` (feminine plural) — see GFE source analysis SS14.
+
+    When *gender_code* is not present in the dict, falls back to ``"MS"``,
+    then to the first available form. When the value is a plain string
+    (the case for English, which has no grammatical gender), returns it
+    unchanged regardless of *gender_code*. Falls back to English, then to
+    the key itself, using the same dict-or-string handling at each stage.
+
+    As with :func:`t`, an empty string is treated as "not translated" and
+    falls through to the next stage.
+    """
+    _ensure_locales_loaded()
+    loc = locale or _active_locale
+
+    value = _resolve_key(_locales.get(loc, {}), key)
+    resolved = _gender_or_string(value, gender_code)
+    if resolved is not None:
+        return resolved
+
+    if loc != "en":
+        value = _resolve_key(_locales.get("en", {}), key)
+        resolved = _gender_or_string(value, gender_code)
+        if resolved is not None:
+            return resolved
+
+    return key
+
+
+def _gender_or_string(value: Any, gender_code: str) -> str | None:
+    """Extract a display string from a resolved locale value, or None.
+
+    Mirrors :func:`_case_or_string`'s empty-string-as-untranslated handling,
+    but falls back to the ``"MS"`` (masculine singular) form, then to the
+    first available form, when *gender_code* is absent from a dict value.
+    """
+    if isinstance(value, dict):
+        result = value.get(gender_code) or value.get("MS")
+        if not result:
+            result = next((v for v in value.values() if v), None)
+        return str(result) if result else None
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def _case_or_string(value: Any, case: str, key: str) -> str | None:
     """Extract a display string from a resolved locale value, or None.
 
