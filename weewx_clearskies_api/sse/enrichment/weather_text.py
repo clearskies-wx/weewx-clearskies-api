@@ -48,6 +48,84 @@ def _is_haze_eligible_sky(effective_sky: str | None) -> bool:
     return any(sub in effective_sky for sub in _HAZE_ELIGIBLE_SKY_SUBSTRINGS)
 
 
+# Keywords checked against provider weather text for the haze/smoke
+# deferral paths (nighttime + missing-pyranometer) in
+# _apply_weather_text_deferrals().
+_HAZE_DEFERRAL_KEYWORDS: tuple[str, ...] = ("haze", "hazy", "smoke", "smoky")
+
+
+def _provider_text_matches(keywords: tuple[str, ...]) -> bool:
+    """Return True when the current provider weather text contains any of *keywords*.
+
+    Case-insensitive substring match. Returns False when the provider text
+    feed has no current value (stale/unavailable) — absence of provider
+    data is not evidence of the condition being present.
+    """
+    from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+        get_provider_weather_text,
+    )
+
+    pw_text, _pw_age = get_provider_weather_text()
+    if pw_text is None:
+        return False
+    pw_lower = pw_text.lower()
+    return any(kw in pw_lower for kw in keywords)
+
+
+def _apply_weather_text_deferrals(
+    *,
+    is_day: bool,
+    haze_active: bool,
+    fog_mist_state: str | None,
+    dewpoint: float | None,
+    kcs: float | None,
+) -> tuple[bool, str | None]:
+    """Apply the provider-weather-text deferrals shared by weatherText and
+    weatherCode derivation (compose_weather_text() / enrich_weather_text()).
+
+    Local sensor-based detection cannot fire under three conditions; in
+    each case this defers to the provider's own current-conditions weather
+    text for a corroborating keyword rather than silently omitting the
+    condition:
+
+    - **Nighttime haze deferral** (API-MANUAL §8 nighttime mode, ADR-071):
+      local haze detection is inactive at night (solar elevation <= 10°).
+    - **Missing-pyranometer haze deferral** (ADR-068 v2): daytime but no
+      Kcs data means the station lacks a pyranometer, so Channel 1 of
+      local haze detection cannot fire. Same provider-text keyword check
+      as the nighttime case.
+    - **Missing-hygrometer fog/mist deferral** (ADR-068 v2): no dewpoint
+      means local fog/mist detection cannot fire (it requires dewpoint for
+      the temperature-depression algorithm).
+
+    Values already established by local detection are never overridden —
+    each deferral only fires when the corresponding input (*haze_active*
+    False, *fog_mist_state* None) shows local detection has not already
+    produced a result.
+
+    Returns ``(haze_active, fog_mist_state)`` reflecting any deferrals that
+    fired, in the same shape as the inputs.
+    """
+    missing_pyranometer = is_day and kcs is None
+    if not haze_active and (not is_day or missing_pyranometer):
+        haze_active = _provider_text_matches(_HAZE_DEFERRAL_KEYWORDS)
+
+    if fog_mist_state is None and dewpoint is None:
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text,
+        )
+
+        pw_text, _pw_age = get_provider_weather_text()
+        if pw_text is not None:
+            pw_lower = pw_text.lower()
+            if "fog" in pw_lower:
+                fog_mist_state = "Foggy"
+            elif "mist" in pw_lower:
+                fog_mist_state = "Misty"
+
+    return haze_active, fog_mist_state
+
+
 def _cloud_pct_to_sky(
     pct: float | None, *, is_day: bool = False, locale: str | None = None
 ) -> str | None:
@@ -288,50 +366,17 @@ def compose_weather_text(obs_data: dict | None = None, locale: str | None = None
     # Merge haze signals: either source may trigger "Hazy".
     _effective_haze_label: str | None = _haze_label if (_haze_label is not None) else ("Hazy" if _fog_is_hazy else None)
 
-    # Nighttime provider deferral (API-MANUAL §8 nighttime mode, ADR-071):
-    # When it's nighttime, local haze detection is inactive (el ≤ 10°).
-    # Check provider weather text for haze/smoke indicators.  Fog/mist
-    # continues from local detection unaffected; this block only fires when
-    # no haze label has been established yet.
-    if not _is_day and _effective_haze_label is None:
-        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-            get_provider_weather_text,
-        )
-        _pw_text, _pw_age = get_provider_weather_text()
-        if _pw_text is not None:
-            _pw_lower = _pw_text.lower()
-            if any(kw in _pw_lower for kw in ("haze", "hazy", "smoke", "smoky")):
-                _effective_haze_label = "Hazy"
-
-    # Missing-pyranometer deferral (ADR-068 v2): daytime but no Kcs data
-    # means the station lacks a pyranometer.  Local haze detection (Channel 1)
-    # cannot fire without Kcs, so defer to provider weather text for
-    # haze/smoke indicators — same mechanism as nighttime deferral.
-    if _is_day and _effective_haze_label is None and _sky_module.get_current_kcs() is None:
-        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-            get_provider_weather_text as _get_pwt_rad,
-        )
-        _pw_text_rad, _pw_age_rad = _get_pwt_rad()
-        if _pw_text_rad is not None:
-            _pw_lower_rad = _pw_text_rad.lower()
-            if any(kw in _pw_lower_rad for kw in ("haze", "hazy", "smoke", "smoky")):
-                _effective_haze_label = "Hazy"
-
-    # Missing-hygrometer deferral (ADR-068 v2): no dewpoint means local
-    # fog/mist detection cannot fire (it requires dewpoint for the
-    # temperature-depression algorithm).  Defer to provider weather text
-    # for fog/mist indicators.
-    if _fog_mist_label is None and _dewpoint is None:
-        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-            get_provider_weather_text as _get_pwt_fog,
-        )
-        _pw_text_fog, _pw_age_fog = _get_pwt_fog()
-        if _pw_text_fog is not None:
-            _pw_lower_fog = _pw_text_fog.lower()
-            if "fog" in _pw_lower_fog:
-                _fog_mist_label = "Foggy"
-            elif "mist" in _pw_lower_fog:
-                _fog_mist_label = "Misty"
+    # Provider weather text deferrals (nighttime haze, missing-pyranometer
+    # haze, missing-hygrometer fog/mist) — shared with enrich_weather_text()'s
+    # weatherCode derivation path; see _apply_weather_text_deferrals().
+    _haze_active, _fog_mist_label = _apply_weather_text_deferrals(
+        is_day=_is_day,
+        haze_active=_effective_haze_label is not None,
+        fog_mist_state=_fog_mist_label,
+        dewpoint=_dewpoint,
+        kcs=_sky_module.get_current_kcs(),
+    )
+    _effective_haze_label = "Hazy" if _haze_active else None
 
     _precip_type = obs_data.get("precipType") if obs_data else None
     _snow_rate = get_smoothed("snowRate")
@@ -496,45 +541,22 @@ def enrich_weather_text(data: dict, locale: str | None = None) -> dict:  # type:
         # Merge haze signals from both detection paths.
         _is_hazy_code = (_haze_label_code is not None) or _fog_is_hazy2
 
-        # Nighttime provider deferral (API-MANUAL §8 nighttime mode, ADR-071):
-        # Mirror the same logic used in compose_weather_text() for code derivation.
-        if not _sky_module.is_daytime() and not _is_hazy_code:
-            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-                get_provider_weather_text,
-            )
-            _pw_text2, _pw_age2 = get_provider_weather_text()
-            if _pw_text2 is not None:
-                _pw_lower2 = _pw_text2.lower()
-                if any(kw in _pw_lower2 for kw in ("haze", "hazy", "smoke", "smoky")):
-                    _is_hazy_code = True
-
-        # Missing-pyranometer deferral (ADR-068 v2): mirror compose_weather_text().
-        if _sky_module.is_daytime() and not _is_hazy_code and _sky_module.get_current_kcs() is None:
-            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-                get_provider_weather_text as _get_pwt_rad2,
-            )
-            _pw_text_rad2, _pw_age_rad2 = _get_pwt_rad2()
-            if _pw_text_rad2 is not None:
-                _pw_lower_rad2 = _pw_text_rad2.lower()
-                if any(kw in _pw_lower_rad2 for kw in ("haze", "hazy", "smoke", "smoky")):
-                    _is_hazy_code = True
-
-        # Missing-hygrometer deferral (ADR-068 v2): mirror compose_weather_text().
-        # When _dewpoint is None, fog/mist detection cannot fire.  Defer to
-        # provider weather text to supply fog/mist state for code derivation.
-        if _fog_mist_state2 is None and _dewpoint is None:
-            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-                get_provider_weather_text as _get_pwt_fog2,
-            )
-            _pw_text_fog2, _pw_age_fog2 = _get_pwt_fog2()
-            if _pw_text_fog2 is not None:
-                _pw_lower_fog2 = _pw_text_fog2.lower()
-                if "fog" in _pw_lower_fog2:
-                    _fog_mist_state2 = "Foggy"
-                    _effective_sky = "Foggy"
-                elif "mist" in _pw_lower_fog2:
-                    _fog_mist_state2 = "Misty"
-                    _effective_sky = "Misty"
+        # Provider weather text deferrals (nighttime haze, missing-pyranometer
+        # haze, missing-hygrometer fog/mist) — shared with
+        # compose_weather_text(); see _apply_weather_text_deferrals().
+        _is_hazy_code, _fog_mist_state2 = _apply_weather_text_deferrals(
+            is_day=_sky_module.is_daytime(),
+            haze_active=_is_hazy_code,
+            fog_mist_state=_fog_mist_state2,
+            dewpoint=_dewpoint,
+            kcs=_sky_module.get_current_kcs(),
+        )
+        # Re-sync effective_sky if the hygrometer deferral just populated
+        # fog_mist_state2 -- effective_sky was computed earlier in this
+        # function, before deferrals ran (mirrors the pre-extraction
+        # behavior where this assignment lived inside the deferral block).
+        if _fog_mist_state2 is not None:
+            _effective_sky = _fog_mist_state2
 
         weather_code = _derive_weather_code(
             effective_sky=_effective_sky,
