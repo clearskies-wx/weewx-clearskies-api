@@ -76,6 +76,7 @@ def aggregate_periods(
     current_time: datetime,
     timezone: str,
     locale: str = "en",
+    unit_system: str = "US",
 ) -> list[ForecastPeriod]:
     """Aggregate hourly forecast points into day/night ForecastPeriod instances.
 
@@ -87,4 +88,4 @@ def aggregate_periods(
         aggregate_periods as _agg,
     )
 
-    return _agg(hourly_data, sunrise, sunset, current_time, timezone, locale)
+    return _agg(hourly_data, sunrise, sunset, current_time, timezone, locale, unit_system)

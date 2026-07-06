@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 from weewx_clearskies_api.sse.gfe import aggregate_periods, generate_forecast_text
+from weewx_clearskies_api.sse.gfe import composer as _composer
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ def enrich_forecast_text(bundle: dict[str, Any], locale: str) -> dict[str, Any]:
             current_time,
             timezone,
             locale,
+            unit_system=_composer._unit_system,
         )
         if not periods:
             return bundle

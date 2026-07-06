@@ -198,6 +198,7 @@ def _temp_trend(
     outtemps_chronological: list[float | None],
     is_day_bucket: bool,
     extreme: float | None,
+    unit_system: str = "US",
 ) -> str | None:
     if extreme is None:
         return None
@@ -206,13 +207,18 @@ def _temp_trend(
         return None
     latter_half = non_none[len(non_none) // 2 :]
     latter_temps = [t for _, t in latter_half]
+    # TEMP_TREND_THRESHOLD is 20°F. For Celsius operators, convert the
+    # threshold (a delta, not an absolute) to °C: 20°F diff = 11.11°C diff.
+    threshold = TEMP_TREND_THRESHOLD
+    if unit_system in ("METRIC", "METRICWX"):
+        threshold = TEMP_TREND_THRESHOLD * 5.0 / 9.0
     if is_day_bucket:
         max_diff = max((extreme - t) for t in latter_temps)
-        if max_diff > TEMP_TREND_THRESHOLD:
+        if max_diff > threshold:
             return "falling"
     else:
         max_diff = max((t - extreme) for t in latter_temps)
-        if max_diff > TEMP_TREND_THRESHOLD:
+        if max_diff > threshold:
             return "rising"
     return None
 
@@ -224,6 +230,7 @@ def aggregate_periods(
     current_time: datetime,
     timezone: str,
     locale: str = "en",
+    unit_system: str = "US",
 ) -> list[ForecastPeriod]:
     """Aggregate hourly forecast points into day/night ForecastPeriod instances.
 
@@ -327,7 +334,7 @@ def aggregate_periods(
         feels_like_min = min(feels_likes) if feels_likes else None
 
         extreme = temp_high if is_day_bucket else temp_low
-        temp_trend = _temp_trend(outtemps, is_day_bucket, extreme)
+        temp_trend = _temp_trend(outtemps, is_day_bucket, extreme, unit_system)
 
         label = _period_label(period_date, is_day_bucket, current_local_date)
 
