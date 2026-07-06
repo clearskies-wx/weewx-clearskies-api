@@ -80,7 +80,27 @@
     "12": "颶風"
   },
   "wind": {
-    "gusty": "突風"
+    "gusty": "突風",
+    "calm": "静穏",
+    "very_light_breeze": "至軽風",
+    "light_breeze": "軽風",
+    "gentle_breeze": "軟風",
+    "moderate_breeze": "和風",
+    "fresh_breeze": "疾風",
+    "strong_breeze": "雄風",
+    "windy": "風が強い",
+    "very_windy": "非常に風が強い",
+    "strong_winds": "暴風",
+    "hurricane_force_winds": "猛烈な風",
+    "null_phrase": "弱い風",
+    "magnitude_around": "{speed}mph前後",
+    "magnitude_up_to": "{speed}mphまで",
+    "magnitude_range": "{min}から{max}mph",
+    "with_direction": "{dir}の風 {magnitude}",
+    "gust_suffix": "{gust}mphの突風を伴う",
+    "marine_gales": "強風",
+    "marine_storm_force": "暴風",
+    "marine_hurricane_force": "台風並みの風"
   },
   "aqi": {
     "good": "良好",

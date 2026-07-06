@@ -76,7 +76,27 @@
     "12": "Temporal huracanado"
   },
   "wind": {
-    "gusty": "Rachado"
+    "gusty": "Rachado",
+    "calm": "Calma",
+    "very_light_breeze": "Ventolina",
+    "light_breeze": "Brisa muy débil",
+    "gentle_breeze": "Brisa ligera",
+    "moderate_breeze": "Brisa moderada",
+    "fresh_breeze": "Brisa fresca",
+    "strong_breeze": "Brisa fuerte",
+    "windy": "Ventoso",
+    "very_windy": "Muy ventoso",
+    "strong_winds": "Vientos fuertes",
+    "hurricane_force_winds": "Vientos huracanados",
+    "null_phrase": "vientos ligeros",
+    "magnitude_around": "alrededor de {speed} mph",
+    "magnitude_up_to": "hasta {speed} mph",
+    "magnitude_range": "{min} a {max} mph",
+    "with_direction": "vientos del {dir} {magnitude}",
+    "gust_suffix": "con ráfagas de hasta {gust} mph",
+    "marine_gales": "Temporal",
+    "marine_storm_force": "Temporal duro",
+    "marine_hurricane_force": "Huracanado"
   },
   "aqi": {
     "good": "Buena",

@@ -76,7 +76,27 @@
     "12": "Hurricane"
   },
   "wind": {
-    "gusty": "Gusty"
+    "gusty": "Gusty",
+    "calm": "Calm",
+    "very_light_breeze": "Very Light Breeze",
+    "light_breeze": "Light Breeze",
+    "gentle_breeze": "Gentle Breeze",
+    "moderate_breeze": "Moderate Breeze",
+    "fresh_breeze": "Fresh Breeze",
+    "strong_breeze": "Strong Breeze",
+    "windy": "Windy",
+    "very_windy": "Very Windy",
+    "strong_winds": "Strong Winds",
+    "hurricane_force_winds": "Hurricane Force Winds",
+    "null_phrase": "light winds",
+    "magnitude_around": "around {speed} mph",
+    "magnitude_up_to": "up to {speed} mph",
+    "magnitude_range": "{min} to {max} mph",
+    "with_direction": "{dir} winds {magnitude}",
+    "gust_suffix": "with gusts to around {gust} mph",
+    "marine_gales": "Gales",
+    "marine_storm_force": "Storm Force",
+    "marine_hurricane_force": "Hurricane Force"
   },
   "aqi": {
     "good": "Good",

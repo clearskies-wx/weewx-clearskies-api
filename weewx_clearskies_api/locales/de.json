@@ -76,7 +76,27 @@
     "12": "Orkan"
   },
   "wind": {
-    "gusty": "Böig"
+    "gusty": "Böig",
+    "calm": "Windstille",
+    "very_light_breeze": "Leiser Zug",
+    "light_breeze": "Leichte Brise",
+    "gentle_breeze": "Schwache Brise",
+    "moderate_breeze": "Mäßige Brise",
+    "fresh_breeze": "Frische Brise",
+    "strong_breeze": "Starker Wind",
+    "windy": "Windig",
+    "very_windy": "Sehr windig",
+    "strong_winds": "Starke Winde",
+    "hurricane_force_winds": "Orkanartige Winde",
+    "null_phrase": "leichter Wind",
+    "magnitude_around": "um {speed} mph",
+    "magnitude_up_to": "bis zu {speed} mph",
+    "magnitude_range": "{min} bis {max} mph",
+    "with_direction": "{dir} Wind {magnitude}",
+    "gust_suffix": "mit Böen bis zu {gust} mph",
+    "marine_gales": "Sturm",
+    "marine_storm_force": "Orkanartiger Sturm",
+    "marine_hurricane_force": "Orkan"
   },
   "aqi": {
     "good": "Gut",

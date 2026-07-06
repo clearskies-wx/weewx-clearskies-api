@@ -76,7 +76,27 @@
     "12": "Furacão"
   },
   "wind": {
-    "gusty": "Rajadas"
+    "gusty": "Rajadas",
+    "calm": "Calmaria",
+    "very_light_breeze": "Aragem",
+    "light_breeze": "Brisa leve",
+    "gentle_breeze": "Brisa fraca",
+    "moderate_breeze": "Brisa moderada",
+    "fresh_breeze": "Brisa fresca",
+    "strong_breeze": "Brisa forte",
+    "windy": "Ventoso",
+    "very_windy": "Muito ventoso",
+    "strong_winds": "Ventos fortes",
+    "hurricane_force_winds": "Ventos de força de furacão",
+    "null_phrase": "ventos fracos",
+    "magnitude_around": "cerca de {speed} mph",
+    "magnitude_up_to": "até {speed} mph",
+    "magnitude_range": "{min} a {max} mph",
+    "with_direction": "ventos de {dir} {magnitude}",
+    "gust_suffix": "com rajadas até {gust} mph",
+    "marine_gales": "Ventania",
+    "marine_storm_force": "Força de tempestade",
+    "marine_hurricane_force": "Força de furacão"
   },
   "aqi": {
     "good": "Boa",

@@ -76,7 +76,27 @@
     "12": "Ураган"
   },
   "wind": {
-    "gusty": "Порывистый"
+    "gusty": "Порывистый",
+    "calm": "Штиль",
+    "very_light_breeze": "Тихий ветер",
+    "light_breeze": "Лёгкий ветер",
+    "gentle_breeze": "Слабый ветер",
+    "moderate_breeze": "Умеренный ветер",
+    "fresh_breeze": "Свежий ветер",
+    "strong_breeze": "Сильный ветер",
+    "windy": "Ветрено",
+    "very_windy": "Очень ветрено",
+    "strong_winds": "Штормовой ветер",
+    "hurricane_force_winds": "Ураганный ветер",
+    "null_phrase": "слабый ветер",
+    "magnitude_around": "около {speed} миль/ч",
+    "magnitude_up_to": "до {speed} миль/ч",
+    "magnitude_range": "от {min} до {max} миль/ч",
+    "with_direction": "ветер {dir} {magnitude}",
+    "gust_suffix": "с порывами до {gust} миль/ч",
+    "marine_gales": "Шторм",
+    "marine_storm_force": "Сила шторма",
+    "marine_hurricane_force": "Сила урагана"
   },
   "aqi": {
     "good": "Хорошо",

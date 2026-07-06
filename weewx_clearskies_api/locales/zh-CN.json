@@ -77,7 +77,27 @@
     "12": "飓风"
   },
   "wind": {
-    "gusty": "阵风"
+    "gusty": "阵风",
+    "calm": "无风",
+    "very_light_breeze": "软风",
+    "light_breeze": "轻风",
+    "gentle_breeze": "微风",
+    "moderate_breeze": "和风",
+    "fresh_breeze": "清风",
+    "strong_breeze": "强风",
+    "windy": "大风",
+    "very_windy": "烈风",
+    "strong_winds": "暴风",
+    "hurricane_force_winds": "飓风",
+    "null_phrase": "风力较弱",
+    "magnitude_around": "约{speed}英里/时",
+    "magnitude_up_to": "最高{speed}英里/时",
+    "magnitude_range": "{min}至{max}英里/时",
+    "with_direction": "{dir}风{magnitude}",
+    "gust_suffix": "阵风达{gust}英里/时",
+    "marine_gales": "大风",
+    "marine_storm_force": "暴风",
+    "marine_hurricane_force": "飓风"
   },
   "aqi": {
     "good": "优",

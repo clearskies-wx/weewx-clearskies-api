@@ -76,7 +76,27 @@
     "12": "Uragano"
   },
   "wind": {
-    "gusty": "Raffiche"
+    "gusty": "Raffiche",
+    "calm": "Calma",
+    "very_light_breeze": "Bava di vento",
+    "light_breeze": "Brezza leggera",
+    "gentle_breeze": "Brezza tesa",
+    "moderate_breeze": "Vento moderato",
+    "fresh_breeze": "Vento teso",
+    "strong_breeze": "Vento fresco",
+    "windy": "Ventoso",
+    "very_windy": "Molto ventoso",
+    "strong_winds": "Venti forti",
+    "hurricane_force_winds": "Venti di forza uragano",
+    "null_phrase": "venti deboli",
+    "magnitude_around": "intorno a {speed} mph",
+    "magnitude_up_to": "fino a {speed} mph",
+    "magnitude_range": "da {min} a {max} mph",
+    "with_direction": "venti da {dir} {magnitude}",
+    "gust_suffix": "con raffiche fino a {gust} mph",
+    "marine_gales": "Burrasca",
+    "marine_storm_force": "Tempesta",
+    "marine_hurricane_force": "Uragano"
   },
   "aqi": {
     "good": "Buona",

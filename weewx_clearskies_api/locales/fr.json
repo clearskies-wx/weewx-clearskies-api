@@ -76,7 +76,27 @@
     "12": "Ouragan"
   },
   "wind": {
-    "gusty": "Rafales"
+    "gusty": "Rafales",
+    "calm": "Calme",
+    "very_light_breeze": "Très légère brise",
+    "light_breeze": "Légère brise",
+    "gentle_breeze": "Petite brise",
+    "moderate_breeze": "Jolie brise",
+    "fresh_breeze": "Bonne brise",
+    "strong_breeze": "Vent frais",
+    "windy": "Venteux",
+    "very_windy": "Très venteux",
+    "strong_winds": "Vents forts",
+    "hurricane_force_winds": "Vents de force ouragan",
+    "null_phrase": "vents légers",
+    "magnitude_around": "autour de {speed} mph",
+    "magnitude_up_to": "jusqu'à {speed} mph",
+    "magnitude_range": "{min} à {max} mph",
+    "with_direction": "vents du {dir} {magnitude}",
+    "gust_suffix": "avec des rafales à {gust} mph",
+    "marine_gales": "Coup de vent",
+    "marine_storm_force": "Force de tempête",
+    "marine_hurricane_force": "Force ouragan"
   },
   "aqi": {
     "good": "Bon",

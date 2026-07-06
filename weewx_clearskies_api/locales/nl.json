@@ -76,7 +76,27 @@
     "12": "Orkaan"
   },
   "wind": {
-    "gusty": "Windvlagen"
+    "gusty": "Windvlagen",
+    "calm": "Windstil",
+    "very_light_breeze": "Flauwe wind",
+    "light_breeze": "Zwakke wind",
+    "gentle_breeze": "Lichte wind",
+    "moderate_breeze": "Matige wind",
+    "fresh_breeze": "Vrij krachtige wind",
+    "strong_breeze": "Krachtige wind",
+    "windy": "Winderig",
+    "very_windy": "Erg winderig",
+    "strong_winds": "Zware wind",
+    "hurricane_force_winds": "Orkaankracht wind",
+    "null_phrase": "lichte wind",
+    "magnitude_around": "rond {speed} mph",
+    "magnitude_up_to": "tot {speed} mph",
+    "magnitude_range": "{min} tot {max} mph",
+    "with_direction": "wind uit het {dir} {magnitude}",
+    "gust_suffix": "met windstoten tot {gust} mph",
+    "marine_gales": "Storm",
+    "marine_storm_force": "Zware storm",
+    "marine_hurricane_force": "Orkaankracht"
   },
   "aqi": {
     "good": "Goed",
