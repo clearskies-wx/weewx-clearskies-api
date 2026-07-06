@@ -86,7 +86,7 @@ _GFE_SKY_BUCKETS: list[tuple[float, str, str]] = [
 
 # ---------------------------------------------------------------------------
 # Day/night sky label mapping
-# CAELUS labels use the neutral/night form; daytime variants map "Clear"→"Sunny"
+# SkyPyEye Technology labels use the neutral/night form; daytime variants map "Clear"→"Sunny"
 # and "Mostly Clear"→"Mostly Sunny" to follow NWS day/night convention.
 # "Partly Cloudy" at daytime becomes "Partly Sunny" per NWS convention.
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ def _sky_label_for_output(obs: Observation) -> str | None:
     """Resolve the sky label to use for text output.
 
     Priority:
-    1. obs.sky_label (from CAELUS classify()) — apply day/night mapping
+    1. obs.sky_label (from SkyPyEye classify()) — apply day/night mapping
     2. obs.cloud_cover_pct with GFE bucket table as fallback
 
     Returns None when neither source is available.

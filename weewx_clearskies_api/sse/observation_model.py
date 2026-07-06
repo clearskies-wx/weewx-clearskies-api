@@ -4,7 +4,7 @@ METAR-like intermediate representation populated from the enrichment pipeline
 on each observation cycle, before text generation.  All fields are nullable.
 
 Maps local sensor data (weewx loop packets, smoothed via input_smoother) to
-WMO/METAR fields with CAELUS-to-okta conversion.
+WMO/METAR fields with SkyPyEye-to-okta conversion.
 
 Module provides a single public function: build_observation().
 """
@@ -24,7 +24,7 @@ from weewx_clearskies_api.sse.sky_condition import classify as sky_classify
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CAELUS display-label → METAR sky code and representative okta value
+# SkyPyEye display-label → METAR sky code and representative okta value
 #
 # classify() returns display string labels (not enum names).  Day-variant
 # labels ("Sunny", "Mostly Sunny") are NOT produced by classify() directly —
@@ -83,7 +83,7 @@ class Observation:
 
     # Sky condition — METAR code and supporting detail
     sky_condition: str | None = None          # CLR / FEW / SCT / BKN / OVC
-    sky_label: str | None = None              # Original CAELUS display label (for text gen)
+    sky_label: str | None = None              # Original SkyPyEye display label (for text gen)
     oktas: int | None = None                  # 0–8
 
     # Present weather — raw detection results (list of active phenomenon strings).

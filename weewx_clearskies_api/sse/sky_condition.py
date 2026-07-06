@@ -1,8 +1,9 @@
 """Sky condition classification from solar radiation (ADR-073).
 
 Kv-first decision tree in the Duchon & O'Malley (1999) tradition —
-variability-primary, clearness-secondary — using CAELUS-derived indices
-(Ruiz-Arias & Gueymard 2023) at 1-minute resolution.
+variability-primary, clearness-secondary — using SkyPyEye Technology indices
+(adapted from CAELUS research library; Ruiz-Arias & Gueymard 2023) at
+1-minute resolution.
 
 Four indices computed from a 30-minute rolling window of 1-minute
 averaged GHI data:
@@ -55,17 +56,20 @@ Data flow: 5-second LOOP packets → 1-minute bins → 30-minute ring buffer
 Startup backfill: archive records can seed the ring buffer for immediate
 (if coarser) classification on API restart.
 
-Index computation from CAELUS (classification tree is ours):
-  - maxSolarRad used as clear-sky reference (CAELUS uses ghicda)
+Index computation (adapted from CAELUS research library; classification
+tree is ours):
+  - maxSolarRad used as clear-sky reference (CAELUS library uses ghicda)
   - Solar zenith angle computed via Skyfield (station coords from configure())
-  - GHI mirroring adapted from CAELUS mirror_ghi_with_pandas() — synthetic
-    pre-sunrise entries extend the Km baseline at sunrise using cos(zenith)
-    interpolation.  Only affects Km; Kv/Kvf use real ring data only.
+  - GHI mirroring adapted from CAELUS library's mirror_ghi_with_pandas() —
+    synthetic pre-sunrise entries extend the Km baseline at sunrise using
+    cos(zenith) interpolation.  Only affects Km; Kv/Kvf use real ring data
+    only.
   - SZA < 75° guard (15° elevation): classify() returns None when solar
     elevation < 15°, preventing classification at low sun angles.
   - Trailing window instead of centered (necessary for real-time)
-  - Kv/Kvf detrended by clear-sky model (CAELUS relies on centered windows
-    to suppress the solar geometry signal; our trailing window requires
+  - Kv/Kvf detrended by clear-sky model (the CAELUS library relies on
+    centered windows to suppress the solar geometry signal; our trailing
+    window requires
     explicit detrending — subtract the predicted maxSolarRad delta from
     the observed GHI delta before accumulating).  This is standard practice
     in solar variability research: Stein et al. 2012 (Sandia Variability
@@ -75,7 +79,7 @@ Index computation from CAELUS (classification tree is ours):
     geometry changes.
 
 Reference: Ruiz-Arias & Gueymard (2023), Solar Energy 263, 111895.
-CAELUS source: github.com/jararias/caelus
+SkyPyEye Technology — adapted from CAELUS (github.com/jararias/caelus)
 
 Module-level state is intentional — the API is a single-process service;
 the buffer must persist across requests. Use reset() in tests.
@@ -519,7 +523,7 @@ def _mirror_for_km(
     inflating Km.  Mirroring extends the window backward using cos(zenith)
     interpolation so that Km sees a longer, more representative baseline.
 
-    Algorithm (adapted from CAELUS mirror_ghi_with_pandas()):
+    Algorithm (adapted from CAELUS library's mirror_ghi_with_pandas()):
     - Compute cos(zenith) for each ring entry.
     - Post-sunrise entries: cos_z > 0 (real data, sun above horizon).
     - Pre-sunrise entries: cos_z <= 0 (synthetic needed).
@@ -590,7 +594,7 @@ def _mirror_for_km(
             # mirror_cz outside interpolatable range; keep real entry.
             continue
 
-        # Negate GHI to follow CAELUS sign convention for pre-sunrise synthetic
+        # Negate GHI to follow CAELUS library's sign convention for pre-sunrise synthetic
         # data, then take absolute value for the Km ratio.  Under overcast,
         # mirrored_ghi is small (low real post-sunrise GHI), so abs keeps Km low.
         # Use the interpolated maxSolarRad (not zero) to avoid diluting the
@@ -665,7 +669,7 @@ def _compute_indices() -> tuple[float, float, float, float, float, float] | None
     # signal cancels out.  Without this, a clear afternoon's steady GHI decline
     # produces non-zero Kv that exceeds the CLOUDLESS threshold (0.03).
     #
-    # CAELUS uses centered rolling windows (batch mode) which partially suppress
+    # The CAELUS library uses centered rolling windows (batch mode) which partially suppress
     # the geometry trend.  In real-time streaming we use a trailing window; the
     # clear-sky detrending compensates for the loss of centering.
     #

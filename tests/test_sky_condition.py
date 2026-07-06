@@ -1,8 +1,8 @@
 """Unit tests for weewx_clearskies_api.sse.sky_condition.
 
-Validates the CAELUS-based Variability Index (VI) system:
+Validates the SkyPyEye Technology Variability Index (VI) system:
   - Four-index computation (Kcs, Km, Kv, Kvf)
-  - Six CAELUS classification classes mapped to NWS labels
+  - Seven SkyPyEye classification classes mapped to NWS labels
   - 1-minute binning from 5-second LOOP packets
   - Archive backfill (ring buffer seeding)
   - Temporal coherence filter (15-min persistence, 3-min startup grace)
@@ -356,7 +356,7 @@ def test_marine_layer_classifies_overcast():
 
     Marine layer: uniform coverage, moderate transmittance.
     GHI=550, msr=900 → Km ≈ 0.611, Kv ≈ 0 < 0.05 (uniform).
-    Old CAELUS tree: Km 0.611 > 0.3 (not OVERCAST), falls to
+    Old classification tree (pre-SkyPyEye): Km 0.611 > 0.3 (not OVERCAST), falls to
     SCATTER_CLOUDS → "Mostly Cloudy" (WRONG).
     New Kv-first tree: Kv < 0.05 (uniform), Km > 0.35 → "Overcast" (CORRECT).
     """
