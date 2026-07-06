@@ -60,11 +60,14 @@ class ForecastPeriod:
     weather_codes: list[str] = field(default_factory=list)
 
     # Snow / ice accumulation. NOT guaranteed inches -- same target_unit
-    # caveat as the temperature/wind groups above (mm for METRIC/METRICWX).
-    # Unlike temperature/wind, sse/gfe/composer.py does NOT currently
-    # correct for this -- see its module docstring "Forecast-side unit
-    # rendering" known-gap note.
-    snow_amount: float | None = None       # inches (US) / mm (METRIC, METRICWX)
+    # caveat as the temperature/wind groups above, but snow and ice use
+    # DIFFERENT metric units from each other (verified against
+    # providers/forecast/aeris.py's snowCM/iceaccumMM daily fields and
+    # Open-Meteo's snowfall_sum, 2026-07-06 -- an earlier version of this
+    # comment incorrectly claimed mm for both). sse/gfe/composer.py corrects
+    # for this at render time -- see sse/gfe/snow_ice_phrases.py's module
+    # docstring "Unit-system awareness".
+    snow_amount: float | None = None       # inches (US) / cm (METRIC, METRICWX)
     ice_accumulation: float | None = None  # inches (US) / mm (METRIC, METRICWX); from Xweather daily
 
     # Humidity group

@@ -432,9 +432,10 @@
     "snow": {
       "no_accumulation": "Pas d'accumulation de neige",
       "little_or_no_accumulation": "Peu ou pas d'accumulation de neige",
-      "up_to_max": "jusqu'à {max} pouces",
-      "around_max": "environ {max} pouces",
-      "min_to_max": "de {min} à {max} pouces"
+      "up_to_max": "jusqu'à {max} {unit}",
+      "around_max": "environ {max} {unit}",
+      "min_to_max": "de {min} à {max} {unit}",
+      "unit_inches": "pouces"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "Accumulations de neige légères",
@@ -448,7 +449,8 @@
       "three_quarters": "trois quarts de pouce",
       "one": "un pouce",
       "one_and_a_half": "un pouce et demi",
-      "integer_rounded": "{value} pouces"
+      "integer_rounded": "{value} {unit}",
+      "unit_inches": "pouces"
     },
     "time": {
       "today": "Aujourd'hui",

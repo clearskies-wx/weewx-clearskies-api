@@ -327,9 +327,10 @@
     "snow": {
       "no_accumulation": "No snow accumulation",
       "little_or_no_accumulation": "Little or no snow accumulation",
-      "up_to_max": "up to {max} inches",
-      "around_max": "around {max} inches",
-      "min_to_max": "of {min} to {max} inches"
+      "up_to_max": "up to {max} {unit}",
+      "around_max": "around {max} {unit}",
+      "min_to_max": "of {min} to {max} {unit}",
+      "unit_inches": "inches"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "Light snow accumulations",
@@ -343,7 +344,8 @@
       "three_quarters": "three quarters of an inch",
       "one": "one inch",
       "one_and_a_half": "one and a half inches",
-      "integer_rounded": "{value} inches"
+      "integer_rounded": "{value} {unit}",
+      "unit_inches": "inches"
     },
     "time": {
       "today": "Today",

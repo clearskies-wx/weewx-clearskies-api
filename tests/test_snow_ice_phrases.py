@@ -99,5 +99,76 @@ class TestSnowIcePhraseLocale:
         assert sip.ice_phrase(0.1, "fr") == "moins d'un quart de pouce"
 
 
+class TestSnowPhraseMetric:
+    def test_default_unit_system_is_us_and_unchanged(self):
+        # unit_system omitted entirely -> identical to pre-fix behavior.
+        assert sip.snow_phrase(2.5, 0.5, 70, LOCALE) == "up to 2.5 inches"
+
+    def test_metric_tier_selection_uses_cm_converted_to_inches(self):
+        # max=5cm (~1.97in, < 3in) and min=1cm (~0.39in, < 1in) satisfy the
+        # "up_to_max" tier's inch-calibrated bounds only once converted from
+        # cm; the phrase renders the original cm values, not the inches
+        # used for tier selection.
+        result = sip.snow_phrase(5, 1, 70, LOCALE, unit_system="METRIC")
+        assert result == "up to 5 cm"
+
+    def test_metric_renders_original_cm_value_not_converted_inches(self):
+        # max=max=10cm -> delta=0 < 2in delta threshold -> "around_max",
+        # rendered with the original cm value, not the inches conversion.
+        result = sip.snow_phrase(10, 10, 70, LOCALE, unit_system="METRIC")
+        assert result == "around 10 cm"
+
+    def test_metric_wide_range_renders_min_to_max_in_cm(self):
+        # max=30cm (~11.8in), min=5cm (~1.97in): delta ~9.8in >= 2in ->
+        # falls through to the exact min-to-max tier.
+        result = sip.snow_phrase(30, 5, 70, LOCALE, unit_system="METRIC")
+        assert result == "of 5 to 30 cm"
+
+    def test_metric_no_accumulation_tier_still_reached_via_cm_conversion(self):
+        # max=1cm (~0.39in) < 0.5in -> "no accumulation" tier.
+        assert (
+            sip.snow_phrase(1, 0.5, 70, LOCALE, unit_system="METRIC")
+            == "No snow accumulation"
+        )
+
+    def test_metricwx_behaves_the_same_as_metric_for_snow(self):
+        result = sip.snow_phrase(10, 10, 70, LOCALE, unit_system="METRICWX")
+        assert result == "around 10 cm"
+
+    def test_metric_french_locale_unit_word_is_cm_not_pouces(self):
+        result = sip.snow_phrase(10, 10, 70, "fr", unit_system="METRIC")
+        assert result == "environ 10 cm"
+
+
+class TestIcePhraseMetric:
+    def test_default_unit_system_is_us_and_unchanged(self):
+        assert sip.ice_phrase(0.1, LOCALE) == "less than one quarter of an inch"
+
+    def test_metric_bypasses_fractional_tiers_and_renders_mm(self):
+        # 6mm ~= 0.236in, which under the US tier ladder would resolve to
+        # "less than one quarter of an inch" -- but METRIC bypasses the
+        # fractional English tiers entirely (no natural cm/mm equivalent)
+        # and renders the integer-rounded mm value instead.
+        assert sip.ice_phrase(6, LOCALE, unit_system="METRIC") == "6 mm"
+
+    def test_metric_rounds_to_nearest_whole_mm(self):
+        assert sip.ice_phrase(12.6, LOCALE, unit_system="METRIC") == "13 mm"
+
+    def test_metricwx_behaves_the_same_as_metric_for_ice(self):
+        assert sip.ice_phrase(6, LOCALE, unit_system="METRICWX") == "6 mm"
+
+    def test_metric_does_not_apply_the_10x_cm_conversion_factor(self):
+        # Regression guard: ice_accumulation is millimeters, not
+        # centimeters, for METRIC/METRICWX (confirmed with lead 2026-07-06).
+        # 25.4mm is exactly 1 inch; converting it as if it were 25.4cm
+        # (10 inches) would be a 10x error and would NOT round-trip back to
+        # "25 mm" -- it would produce a wildly different phrase via the
+        # cm-scaled inches value feeding the wrong tier math.
+        assert sip.ice_phrase(25.4, LOCALE, unit_system="METRIC") == "25 mm"
+
+    def test_metric_french_locale_unit_word_is_mm_not_pouce(self):
+        assert sip.ice_phrase(6, "fr", unit_system="METRIC") == "6 mm"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

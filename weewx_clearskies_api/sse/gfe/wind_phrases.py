@@ -105,7 +105,7 @@ def _format_speed(value: float, locale: str) -> str:
 
     Whole numbers render with no decimal places; fractional values render
     with one decimal place, matching
-    :func:`weewx_clearskies_api.sse.gfe.snow_ice_phrases._format_inches`'s
+    :func:`weewx_clearskies_api.sse.gfe.snow_ice_phrases._format_amount`'s
     convention. Delegates to :func:`weewx_clearskies_api.i18n.format_number`
     so the decimal separator follows locale conventions (comma vs period).
     """

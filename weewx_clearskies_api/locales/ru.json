@@ -428,9 +428,10 @@
     "snow": {
       "no_accumulation": "Без снежных накоплений",
       "little_or_no_accumulation": "Незначительные снежные накопления или их отсутствие",
-      "up_to_max": "до {max} дюймов",
-      "around_max": "около {max} дюймов",
-      "min_to_max": "от {min} до {max} дюймов"
+      "up_to_max": "до {max} {unit}",
+      "around_max": "около {max} {unit}",
+      "min_to_max": "от {min} до {max} {unit}",
+      "unit_inches": "дюймов"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "Небольшие снежные накопления",
@@ -444,7 +445,8 @@
       "three_quarters": "три четверти дюйма",
       "one": "один дюйм",
       "one_and_a_half": "полтора дюйма",
-      "integer_rounded": "{value} дюйма"
+      "integer_rounded": "{value} {unit}",
+      "unit_inches": "дюйма"
     },
     "time": {
       "today": "Сегодня",

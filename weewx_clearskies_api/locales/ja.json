@@ -336,9 +336,10 @@
     "snow": {
       "no_accumulation": "積雪なし",
       "little_or_no_accumulation": "積雪はわずかまたはなし",
-      "up_to_max": "{max}インチまで",
-      "around_max": "約{max}インチ",
-      "min_to_max": "{min}から{max}インチ"
+      "up_to_max": "{max}{unit}まで",
+      "around_max": "約{max}{unit}",
+      "min_to_max": "{min}から{max}{unit}",
+      "unit_inches": "インチ"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "小規模な積雪",
@@ -352,7 +353,8 @@
       "three_quarters": "4分の3インチ",
       "one": "1インチ",
       "one_and_a_half": "1.5インチ",
-      "integer_rounded": "{value}インチ"
+      "integer_rounded": "{value}{unit}",
+      "unit_inches": "インチ"
     },
     "time": {
       "today": "今日",

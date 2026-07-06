@@ -333,9 +333,10 @@
     "snow": {
       "no_accumulation": "无积雪",
       "little_or_no_accumulation": "积雪很少或没有",
-      "up_to_max": "最多{max}英寸",
-      "around_max": "约{max}英寸",
-      "min_to_max": "{min}至{max}英寸"
+      "up_to_max": "最多{max}{unit}",
+      "around_max": "约{max}{unit}",
+      "min_to_max": "{min}至{max}{unit}",
+      "unit_inches": "英寸"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "小量积雪",
@@ -349,7 +350,8 @@
       "three_quarters": "四分之三英寸",
       "one": "一英寸",
       "one_and_a_half": "一英寸半",
-      "integer_rounded": "{value}英寸"
+      "integer_rounded": "{value}{unit}",
+      "unit_inches": "英寸"
     },
     "time": {
       "today": "今天",

@@ -332,9 +332,10 @@
     "snow": {
       "no_accumulation": "Geen sneeuwaccumulatie",
       "little_or_no_accumulation": "Weinig of geen sneeuwaccumulatie",
-      "up_to_max": "tot {max} inch",
-      "around_max": "ongeveer {max} inch",
-      "min_to_max": "van {min} tot {max} inch"
+      "up_to_max": "tot {max} {unit}",
+      "around_max": "ongeveer {max} {unit}",
+      "min_to_max": "van {min} tot {max} {unit}",
+      "unit_inches": "inch"
     },
     "descriptive_snow": {
       "light_snow_accumulations": "Lichte sneeuwaccumulaties",
@@ -348,7 +349,8 @@
       "three_quarters": "driekwart inch",
       "one": "een inch",
       "one_and_a_half": "anderhalve inch",
-      "integer_rounded": "{value} inch"
+      "integer_rounded": "{value} {unit}",
+      "unit_inches": "inch"
     },
     "time": {
       "today": "Vandaag",

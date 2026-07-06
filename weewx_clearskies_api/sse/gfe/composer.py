@@ -73,12 +73,22 @@ the current-conditions path above) to correct for this:
   templates (I18N T6.4 follow-up) instead of the hardcoded "mph" suffix
   those templates used to carry.
 
-Known remaining gap, not addressed in this round: snow/ice accumulation
-phrasing (`snow_ice_phrases.py`, driven by inch-calibrated
-`SNOW_ACCUMULATION_TIERS`/`ICE_ACCUMULATION_TIERS`) and the period
-aggregator's own `TEMP_TREND_THRESHOLD` comparison
-(`period_aggregator._temp_trend()`) have the same class of unit mismatch
-and are not corrected here -- flagged to the lead as a follow-up.
+**Snow/ice accumulation unit rendering (ADR-082 T7.1 gap closure,
+2026-07-06):** `snow_phrase()`/`ice_phrase()` (`sse/gfe/snow_ice_phrases.py`)
+accept a `unit_system` argument. `ForecastPeriod.snow_amount` arrives in
+centimeters and `ForecastPeriod.ice_accumulation` arrives in millimeters
+for METRIC/METRICWX (two DIFFERENT metric units — confirmed with the lead
+before implementing, since the two providers that populate these fields
+use different metric field names; see `snow_ice_phrases.py`'s module
+docstring for the full citation). Both are converted to inches for GFE
+threshold-tier selection (`SNOW_ACCUMULATION_TIERS`/
+`ICE_ACCUMULATION_TIERS` are inch-calibrated) and rendered using the
+original cm/mm value with the corresponding unit label.
+
+Known remaining gap, not addressed in this round: the period aggregator's
+own `TEMP_TREND_THRESHOLD` comparison (`period_aggregator._temp_trend()`)
+has the same class of unit mismatch and is not corrected here -- flagged to
+the lead as a follow-up.
 """
 
 from __future__ import annotations
@@ -204,13 +214,23 @@ def compose_forecast_text(period: ForecastPeriod, locale: str) -> str:
             if wx:
                 phrases.append(wx)
 
-    # 5. Snow / ice accumulation.
+    # 5. Snow / ice accumulation. ForecastPeriod values arrive in the
+    # operator's configured unit system (cm for snow, mm for ice under
+    # METRIC/METRICWX — see module docstring "Snow/ice accumulation unit
+    # rendering"); unit_system lets each phrase generator convert for GFE
+    # threshold selection and render the correct unit label.
     if period.snow_amount is not None and period.pop is not None:
-        snow = snow_phrase(period.snow_amount, period.snow_amount, period.pop, locale)
+        snow = snow_phrase(
+            period.snow_amount,
+            period.snow_amount,
+            period.pop,
+            locale,
+            unit_system=_unit_system,
+        )
         if snow:
             phrases.append(snow)
     if period.ice_accumulation is not None and period.ice_accumulation > 0:
-        phrases.append(ice_phrase(period.ice_accumulation, locale))
+        phrases.append(ice_phrase(period.ice_accumulation, locale, unit_system=_unit_system))
 
     # 6. Temperature trend across the period.
     if period.temp_trend is not None:
