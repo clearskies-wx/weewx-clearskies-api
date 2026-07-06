@@ -139,6 +139,7 @@ CAPABILITY = ProviderCapability(
         "cloudCover",
         "weatherCode",
         "weatherText",
+        "feelsLike",
         # DailyForecastPoint fields (canonical §4.1.3 OWM column)
         "validDate",
         "tempMax",
@@ -247,6 +248,7 @@ class _OWMHourlyPeriod(BaseModel):
 
     dt: int                           # Unix UTC seconds
     temp: float | None = None         # °F (imperial) or °C (metric)
+    feels_like: float | None = None   # °F (imperial) or °C (metric) — apparent temperature
     humidity: float | None = None     # 0-100 percent (always percent, no unit change)
     wind_speed: float | None = None   # mph (imperial) or m/s (metric)
     wind_deg: float | None = None     # degrees (always degrees)
@@ -260,7 +262,7 @@ class _OWMHourlyPeriod(BaseModel):
     # Precipitation: may be absent when no precipitation (gotcha!)
     rain: dict[str, float] | None = None   # {"1h": <mm>}
     snow: dict[str, float] | None = None   # {"1h": <mm>}
-    # dew_point, feels_like present but not mapped to canonical (extras={} per lead-call 32)
+    # dew_point present but not mapped to canonical (extras={} per lead-call 32)
     dew_point: float | None = None    # ignored; kept for extras={} future
 
 
@@ -614,7 +616,10 @@ def _owm_to_hourly_point(
       openweathermap.md gotchas §"pop is 0–1, not percent"; brief lead-call 22).
     weatherCode: str(weather[0].id) — opaque pass-through per brief lead-call 16.
     weatherText: weather[0].description per canonical §4.1.2 OWM column.
-    extras: {} per brief lead-call 32 (dew_point, feels_like, visibility not in canonical).
+    feelsLike: period.feels_like passed through as-is (already in target_unit's
+      temperature scale — imperial °F or metric °C — same as outTemp; no
+      post-conversion needed, matching temp field handling).
+    extras: {} per brief lead-call 32 (dew_point, visibility not in canonical).
     """
     valid_time = epoch_to_utc_iso8601(
         period.dt, provider_id=PROVIDER_ID, domain=DOMAIN
@@ -655,6 +660,7 @@ def _owm_to_hourly_point(
         cloudCover=period.clouds,
         weatherCode=weather_code,
         weatherText=weather_text,
+        feelsLike=period.feels_like,
         source=PROVIDER_ID,
     )
 

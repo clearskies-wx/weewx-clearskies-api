@@ -126,6 +126,7 @@ CAPABILITY = ProviderCapability(
         "cloudCover",
         "weatherCode",
         "weatherText",
+        "feelsLike",
         # DailyForecastPoint fields
         "validDate",
         "tempMax",
@@ -264,6 +265,7 @@ _HOURLY_VARS = (
     "precipitation",
     "weather_code",
     "cloud_cover",
+    "apparent_temperature",
 )
 
 _DAILY_VARS = (
@@ -313,6 +315,7 @@ class _OpenMeteoHourlyBlock(BaseModel):
     precipitation: list[float | None] = Field(default_factory=list)
     weather_code: list[int | None] = Field(default_factory=list)
     cloud_cover: list[float | None] = Field(default_factory=list)
+    apparent_temperature: list[float | None] = Field(default_factory=list)
 
 
 class _OpenMeteoDailyBlock(BaseModel):
@@ -559,6 +562,7 @@ def _zip_hourly(
                 cloudCover=_get_at(hourly.cloud_cover, i),
                 weatherCode=code_str,
                 weatherText=weather_text,
+                feelsLike=_get_at(hourly.apparent_temperature, i),
                 source=PROVIDER_ID,
             )
         )

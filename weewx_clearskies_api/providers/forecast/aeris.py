@@ -149,6 +149,7 @@ CAPABILITY = ProviderCapability(
         "cloudCover",
         "weatherCode",
         "weatherText",
+        "feelsLike",
         # DailyForecastPoint
         "validDate",
         "tempMax",
@@ -166,6 +167,7 @@ CAPABILITY = ProviderCapability(
         "humidityMin",
         "visibilityMax",
         "snowAmount",
+        "iceAccumulation",
         "thunderRisk",
         "tornadoRisk",
         "hailRisk",
@@ -301,6 +303,9 @@ class _AerisHourlyPeriod(BaseModel):
     weatherPrimary: str | None = None
     uvi: float | None = None
     isDay: bool | None = None
+    # Feels-like (apparent) temperature — both unit systems
+    feelslikeC: float | None = None
+    feelslikeF: float | None = None
     # Xcast ML-enhanced confidence limits — present only on /xcast/forecasts responses.
     # null where no Xcast sensors are deployed. Not present on standard /forecasts.
     tempConfidenceLimit: dict[str, float] | None = None
@@ -359,6 +364,9 @@ class _AerisDayNightPeriod(BaseModel):
     # Snow accumulation — both unit systems
     snowIN: float | None = Field(default=None)
     snowCM: float | None = Field(default=None)
+    # Ice accumulation — both unit systems (Xweather only; canonical §4.1.3)
+    iceaccumIN: float | None = Field(default=None)
+    iceaccumMM: float | None = Field(default=None)
     # Weather codes
     weatherPrimaryCoded: str | None = None
     weather: str | None = None
@@ -642,16 +650,19 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         wind_speed = period.windSpeedMPH
         wind_gust = period.windGustMPH
         precip_amount = period.precipIN
+        feels_like = period.feelslikeF
     elif target_unit == "METRICWX":
         temp = period.tempC
         wind_speed = period.windSpeedMPS
         wind_gust = period.windGustMPS
         precip_amount = period.precipMM
+        feels_like = period.feelslikeC
     else:  # METRIC
         temp = period.tempC
         wind_speed = period.windSpeedKPH
         wind_gust = period.windGustKPH
         precip_amount = period.precipMM
+        feels_like = period.feelslikeC
 
     # Pass xcast confidence limits through extras when non-null.
     # These are present only on /xcast/forecasts responses; null where no sensors deployed.
@@ -674,6 +685,7 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         cloudCover=period.sky,
         weatherCode=period.weatherPrimaryCoded,
         weatherText=period.weather,
+        feelsLike=feels_like,
         source=PROVIDER_ID,
         extras=extras,
     )
@@ -740,6 +752,7 @@ def _daynight_periods_to_daily(
             dewpoint_min = day_period.minDewpointF
             visibility_max = day_period.visibilityMI
             snow_amount = day_period.snowIN
+            ice_accumulation = day_period.iceaccumIN
         elif target_unit == "METRICWX":
             temp_max = day_period.maxTempC
             temp_min = night_period.minTempC if night_period is not None else None
@@ -750,6 +763,7 @@ def _daynight_periods_to_daily(
             dewpoint_min = day_period.minDewpointC
             visibility_max = day_period.visibilityKM
             snow_amount = day_period.snowCM
+            ice_accumulation = day_period.iceaccumMM
         else:  # METRIC
             temp_max = day_period.maxTempC
             temp_min = night_period.minTempC if night_period is not None else None
@@ -760,6 +774,7 @@ def _daynight_periods_to_daily(
             dewpoint_min = day_period.minDewpointC
             visibility_max = day_period.visibilityKM
             snow_amount = day_period.snowCM
+            ice_accumulation = day_period.iceaccumMM
 
         # Sunrise/sunset: convert from local ISO-with-offset to UTC Z
         sunrise_utc: str | None = None
@@ -799,6 +814,7 @@ def _daynight_periods_to_daily(
                 humidityMin=day_period.minHumidity,
                 visibilityMax=visibility_max,
                 snowAmount=snow_amount,
+                iceAccumulation=ice_accumulation,
                 source=PROVIDER_ID,
                 extras=extras,
             )
