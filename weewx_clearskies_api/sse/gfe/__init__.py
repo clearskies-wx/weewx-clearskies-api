@@ -22,7 +22,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from weewx_clearskies_api.sse.gfe.composer import compose_forecast_text, compose_nws_passthrough
+from weewx_clearskies_api.sse.gfe.composer import (
+    compose_current_text,
+    compose_forecast_text,
+    compose_nws_passthrough,
+    configure,
+)
 
 if TYPE_CHECKING:
     from weewx_clearskies_api.models.responses import HourlyForecastPoint
@@ -31,8 +36,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "aggregate_periods",
+    "compose_current_text",
     "compose_forecast_text",
     "compose_nws_passthrough",
+    "configure",
     "generate_current_text",
     "generate_forecast_text",
 ]
@@ -50,11 +57,16 @@ def generate_forecast_text(period: ForecastPeriod, locale: str) -> str:
 def generate_current_text(obs: Observation, verbosity: str, locale: str) -> str:
     """Generate current-conditions text for one Observation.
 
-    Placeholder for Phase 7 — will delegate to the existing
-    `sse.conditions_text` composer once current-conditions text is wired
-    into the GFE package's public surface.
+    Thin public wrapper over :func:`composer.compose_current_text` — the
+    stable entry point downstream current-conditions enrichment code
+    (`sse/enrichment/weather_text.py`) should import. Current-conditions
+    detection/composition systems are preserved per ADR-082 settled
+    decision #12; only the standard/verbose temperature and wind phrase
+    content is upgraded (see `composer.py` module docstring). The terse
+    tier is not handled here — it remains
+    `sse.conditions_text.build_weather_text()`.
     """
-    raise NotImplementedError("Current-text composition wired in Phase 7")
+    return compose_current_text(obs, verbosity, locale)
 
 
 def aggregate_periods(
