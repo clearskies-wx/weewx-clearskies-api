@@ -31,6 +31,20 @@ locale. Locale JSON files carry the ``wind.*`` keys this module introduces
 for every supported locale (I18N T6.4); the humanized (title-cased)
 rendering of the raw key is retained as a defensive fallback for any
 locale that omits an entry, so output is never a raw dotted key string.
+
+**Unit-system awareness (ADR-082 T7.1 gap closure, 2026-07-06):**
+:func:`wind_phrase` accepts a ``unit_system`` argument (``"US"`` /
+``"METRIC"`` / ``"METRICWX"``, default ``"US"``). The ``wind.magnitude_*``
+and ``wind.gust_suffix`` locale templates carry a ``{unit}`` placeholder
+resolved from the same ``unit_labels.*`` keys the API's ``units`` response
+block uses (e.g. Russian "миль/ч", Chinese "英里/时") — see
+:func:`_wind_unit_label`. The GFE mph-calibrated thresholds
+(:data:`WIND_NULL_THRESHOLD`, :data:`WIND_GUST_DIFFERENCE`) are converted
+forward into the requested unit system via the canonical conversion
+registry (``units/conversion.py``) before the calm/gust comparisons run —
+see :func:`_wind_threshold`. Callers that already have mph-scale values and
+want mph output can omit ``unit_system`` entirely; the default reproduces
+the pre-T7.1 behavior exactly.
 """
 
 from __future__ import annotations
@@ -41,6 +55,7 @@ from weewx_clearskies_api.sse.gfe.thresholds import (
     WIND_GUST_DIFFERENCE,
     WIND_NULL_THRESHOLD,
 )
+from weewx_clearskies_api.units.conversion import convert as _convert_units
 
 # Hybrid Beaufort/GFE wind scale (ADR-082, settled decision #11).
 # ``upper_bound`` is the exclusive upper bound (mph) of the speed range this
@@ -98,6 +113,47 @@ def _format_speed(value: float, locale: str) -> str:
     return i18n.format_number(value, decimals, locale)
 
 
+# Maps the weewx-style unit_system string ("US" / "METRIC" / "METRICWX") to
+# the units/conversion.py unit key used both for threshold conversion and
+# for the locale unit_labels.* lookup. Unrecognized values fall back to US.
+_WIND_UNIT_KEY_FOR_SYSTEM: dict[str, str] = {
+    "US": "mile_per_hour",
+    "METRIC": "km_per_hour",
+    "METRICWX": "meter_per_second",
+}
+
+
+def _wind_unit_label(unit_system: str, locale: str) -> str:
+    """Resolve the locale-correct wind-speed unit label for *unit_system*.
+
+    Looks up ``unit_labels.<key>`` (already populated for all 13 locales —
+    the same resource the API's ``units`` response block draws from, e.g.
+    Russian "миль/ч", Chinese "英里/时") rather than a hardcoded ASCII
+    abbreviation, so the {unit} placeholder renders in the locale's
+    existing convention. Falls back to the US (mph) key for any
+    unrecognized *unit_system* value.
+    """
+    unit_key = _WIND_UNIT_KEY_FOR_SYSTEM.get(unit_system, _WIND_UNIT_KEY_FOR_SYSTEM["US"])
+    return i18n.t(f"unit_labels.{unit_key}", locale).strip()
+
+
+def _wind_threshold(threshold_mph: float, unit_system: str) -> float:
+    """Convert a GFE mph-calibrated wind threshold into *unit_system*.
+
+    :data:`WIND_NULL_THRESHOLD`/:data:`WIND_GUST_DIFFERENCE` are mph
+    constants from the GFE source. Callers passing forecast-period wind
+    values that already arrived pre-converted to the operator's configured
+    unit system (providers fetch in ``target_unit`` — see
+    ``providers/forecast/*.py``) need the threshold converted forward into
+    that same unit, rather than converting every value backward to mph.
+    Uses the canonical conversion registry (``units/conversion.py``) per
+    API-MANUAL.md's conversion-factor-accuracy rule, not a hand-rolled
+    factor.
+    """
+    unit_key = _WIND_UNIT_KEY_FOR_SYSTEM.get(unit_system, _WIND_UNIT_KEY_FOR_SYSTEM["US"])
+    return _convert_units(threshold_mph, "mile_per_hour", unit_key)
+
+
 def wind_descriptor(speed_mph: float, locale: str) -> str:
     """Return the hybrid Beaufort/GFE descriptor for *speed_mph*.
 
@@ -117,34 +173,52 @@ def wind_phrase(
     wind_gust: float | None,
     wind_dir: str | None,
     locale: str,
+    unit_system: str = "US",
 ) -> str:
     """Compose a full wind phrase: direction + magnitude + optional gust.
 
     Algorithm (GFE SS3.1, `VectorRelatedPhrases.py`):
 
-    - ``wind_max`` absent or below :data:`WIND_NULL_THRESHOLD` -> the null
-      phrase ("light winds").
-    - Magnitude: ``"around {max} mph"`` when min == max; ``"up to {max}
-      mph"`` when min is absent or below the null threshold; otherwise
-      ``"{min} to {max} mph"``.
+    - ``wind_max`` absent or below the (unit-converted) null threshold ->
+      the null phrase ("light winds").
+    - Magnitude: ``"around {max} {unit}"`` when min == max; ``"up to {max}
+      {unit}"`` when min is absent or below the null threshold; otherwise
+      ``"{min} to {max} {unit}"``.
     - Direction, when present, prefixes the magnitude phrase.
     - A gust qualifier is appended when the gust exceeds the sustained max
-      by more than :data:`WIND_GUST_DIFFERENCE`.
+      by more than the (unit-converted) gust-difference threshold.
+
+    *unit_system* (``"US"`` / ``"METRIC"`` / ``"METRICWX"``, default
+    ``"US"``) controls both the ``{unit}`` label rendered in the locale
+    templates and the unit :data:`WIND_NULL_THRESHOLD`/
+    :data:`WIND_GUST_DIFFERENCE` are converted into before comparison —
+    see :func:`_wind_unit_label` / :func:`_wind_threshold`. Callers must
+    pass *wind_min*/*wind_max*/*wind_gust* already expressed in
+    *unit_system*'s unit; the default ``"US"`` reproduces the pre-T7.1
+    mph-only behavior exactly (identity conversion, "mph" label).
     """
-    if wind_max is None or wind_max < WIND_NULL_THRESHOLD:
+    null_threshold = _wind_threshold(WIND_NULL_THRESHOLD, unit_system)
+    gust_difference = _wind_threshold(WIND_GUST_DIFFERENCE, unit_system)
+    unit = _wind_unit_label(unit_system, locale)
+
+    if wind_max is None or wind_max < null_threshold:
         return _t_template("wind.null_phrase", "light winds", locale)
 
     if wind_min is not None and wind_max == wind_min:
-        magnitude = _t_template("wind.magnitude_around", "around {speed} mph", locale).format(
-            speed=_format_speed(wind_max, locale)
-        )
-    elif wind_min is None or wind_min < WIND_NULL_THRESHOLD:
-        magnitude = _t_template("wind.magnitude_up_to", "up to {speed} mph", locale).format(
-            speed=_format_speed(wind_max, locale)
-        )
+        magnitude = _t_template(
+            "wind.magnitude_around", "around {speed} {unit}", locale
+        ).format(speed=_format_speed(wind_max, locale), unit=unit)
+    elif wind_min is None or wind_min < null_threshold:
+        magnitude = _t_template(
+            "wind.magnitude_up_to", "up to {speed} {unit}", locale
+        ).format(speed=_format_speed(wind_max, locale), unit=unit)
     else:
-        magnitude = _t_template("wind.magnitude_range", "{min} to {max} mph", locale).format(
-            min=_format_speed(wind_min, locale), max=_format_speed(wind_max, locale)
+        magnitude = _t_template(
+            "wind.magnitude_range", "{min} to {max} {unit}", locale
+        ).format(
+            min=_format_speed(wind_min, locale),
+            max=_format_speed(wind_max, locale),
+            unit=unit,
         )
 
     if wind_dir:
@@ -154,10 +228,10 @@ def wind_phrase(
     else:
         phrase = magnitude
 
-    if wind_gust is not None and (wind_gust - wind_max) > WIND_GUST_DIFFERENCE:
+    if wind_gust is not None and (wind_gust - wind_max) > gust_difference:
         gust_phrase = _t_template(
-            "wind.gust_suffix", "with gusts to around {gust} mph", locale
-        ).format(gust=_format_speed(wind_gust, locale))
+            "wind.gust_suffix", "with gusts to around {gust} {unit}", locale
+        ).format(gust=_format_speed(wind_gust, locale), unit=unit)
         phrase = f"{phrase} {gust_phrase}"
 
     return phrase
