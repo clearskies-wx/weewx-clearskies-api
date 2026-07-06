@@ -42,9 +42,9 @@ from zoneinfo import ZoneInfo
 
 from weewx_clearskies_api.models.responses import HourlyForecastPoint
 from weewx_clearskies_api.sse.forecast_model import ForecastPeriod
+from weewx_clearskies_api.sse.gfe.sky_phrases import sky_key
 from weewx_clearskies_api.sse.gfe.thresholds import (
     POP_TO_COVERAGE_TABLE,
-    SKY_VALUE_LIST,
     TEMP_TREND_THRESHOLD,
 )
 
@@ -87,12 +87,17 @@ def _skip_none(values: list) -> list:  # type: ignore[type-arg]
 
 
 def _sky_label(sky_percent: float | None, is_daytime: bool) -> str | None:
+    """Return the locale-independent sky-coverage key for *sky_percent*.
+
+    Delegates the 6-bucket GFE lookup to
+    :func:`weewx_clearskies_api.sse.gfe.sky_phrases.sky_key` — the single
+    shared implementation of `SKY_VALUE_LIST` bucket resolution (FC-3
+    audit finding). This module only adds the ``None``-passthrough for
+    absent cloud cover data.
+    """
     if sky_percent is None:
         return None
-    for bucket in SKY_VALUE_LIST:
-        if sky_percent <= bucket.upper_pct:
-            return bucket.day_key if is_daytime else bucket.night_key
-    return SKY_VALUE_LIST[-1].day_key if is_daytime else SKY_VALUE_LIST[-1].night_key
+    return sky_key(sky_percent, is_daytime)
 
 
 def _precip_coverage(pop: float | None) -> str | None:

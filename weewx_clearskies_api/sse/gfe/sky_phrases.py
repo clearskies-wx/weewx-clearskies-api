@@ -36,25 +36,35 @@ def _label(key: str, locale: str) -> str:
     return key.replace("_", " ").title()
 
 
-def sky_phrase(sky_percent: float, is_daytime: bool, locale: str) -> str:
-    """Return the sky coverage phrase for *sky_percent* (0-100).
+def sky_key(sky_percent: float, is_daytime: bool) -> str:
+    """Return the locale-independent sky-coverage key for *sky_percent* (0-100).
 
     Iterates the 6-bucket `SKY_VALUE_LIST` table (GFE `sky_valueList()`)
     and returns the first bucket whose inclusive upper bound is greater
     than or equal to *sky_percent*, using the daytime or nighttime key per
-    *is_daytime*.
+    *is_daytime*. This is the single shared bucket lookup — callers that
+    need the raw key (e.g. `sse/period_aggregator.py`, which stores it on
+    `ForecastPeriod` for later locale-aware rendering) call this directly;
+    callers that need the resolved display string call :func:`sky_phrase`.
     """
     for bucket in SKY_VALUE_LIST:
         if sky_percent <= bucket.upper_pct:
-            key = bucket.day_key if is_daytime else bucket.night_key
-            return _label(key, locale)
+            return bucket.day_key if is_daytime else bucket.night_key
 
     # Defensive fallback for out-of-range input (> 100): use the cloudiest
     # (final) bucket rather than raising, since callers may pass unclamped
     # provider data.
     last = SKY_VALUE_LIST[-1]
-    key = last.day_key if is_daytime else last.night_key
-    return _label(key, locale)
+    return last.day_key if is_daytime else last.night_key
+
+
+def sky_phrase(sky_percent: float, is_daytime: bool, locale: str) -> str:
+    """Return the sky coverage phrase for *sky_percent* (0-100).
+
+    Resolves the bucket key via :func:`sky_key` and renders it through the
+    locale file.
+    """
+    return _label(sky_key(sky_percent, is_daytime), locale)
 
 
 def sky_trend_phrase(prev_sky: str, curr_sky: str, is_daytime: bool, locale: str) -> str | None:
