@@ -437,8 +437,7 @@ def get_planets(
 ) -> PlanetResponse:
     """Evening/morning/all-night planet visibility for a given date.
 
-    Returns Mercury through Saturn classified by visibility period.
-    Only planets with apparent magnitude < 6.0 are included.
+    Returns Mercury through Neptune classified by visibility period.
     Each planet entry includes altitude (degrees) and compass direction.
     """
     target_date = params.date if params.date is not None else _today_in_station_tz()
