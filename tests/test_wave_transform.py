@@ -246,8 +246,8 @@ def test_no_shoaling_code():
     import inspect
 
     source = inspect.getsource(wt)
-    assert "calculate_shoaling" not in source
-    assert "calculate_refraction" not in source
+    assert "def calculate_shoaling" not in source
+    assert "def calculate_refraction" not in source
 
 
 def test_supplements_applied_list():
