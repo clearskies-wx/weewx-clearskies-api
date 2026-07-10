@@ -7,16 +7,27 @@
 # ── builder ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim-bookworm AS builder
 
+# ADR-085: eccodes C library for GRIB2 processing (NWPS nearshore data).
+# Installed in the builder stage; the shared library is copied to runtime below.
+RUN apt-get update && apt-get install -y --no-install-recommends libeccodes-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 COPY pyproject.toml .
 COPY README.md .
 COPY weewx_clearskies_api/ weewx_clearskies_api/
 
-RUN pip install --no-cache-dir .
+# Install with [marine] extra so eccodes Python binding is included.
+RUN pip install --no-cache-dir ".[marine]"
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim-bookworm AS runtime
+
+# ADR-085: eccodes shared library needed at runtime for GRIB2 processing.
+# Only the runtime library — no headers or dev tools.
+RUN apt-get update && apt-get install -y --no-install-recommends libeccodes0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy only the installed package artifacts; leave build tools behind.
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages

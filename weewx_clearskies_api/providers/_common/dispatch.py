@@ -22,10 +22,11 @@ Radar domain:
   Keyless + Caddy-proxied tile (T1.2): librewxr (configurable endpoint; no get_tile()).
   mapbox_jma deferred per ADR-015 2026-05-11 amendment (raster-array shape;
     requires Mapbox GL JS, incompatible with Leaflet).
-Marine domains (Phase 1 — Marine Plan):
+Marine domains (Phase 1–2 — Marine Plan):
   Buoy: ndbc (NDBC flat-file observations, keyless).
   Marine: wavewatch (WaveWatch III ERDDAP, keyless), nws_marine (NWS zone text forecast, keyless),
-    nws_srf (NWS Surf Zone Forecast text product, keyless).
+    nws_srf (NWS Surf Zone Forecast text product, keyless),
+    nwps (NWPS GRIB2 nearshore data, keyless, requires eccodes — CAPABILITY=None when unavailable).
   Tides: coops (CO-OPS predictions + water levels, keyless).
 """
 
@@ -36,6 +37,7 @@ from types import ModuleType
 from weewx_clearskies_api.providers.buoy import ndbc as buoy_ndbc
 from weewx_clearskies_api.providers.marine import nws_marine as marine_nws_marine
 from weewx_clearskies_api.providers.marine import nws_srf as marine_nws_srf
+from weewx_clearskies_api.providers.marine import nwps as marine_nwps
 from weewx_clearskies_api.providers.marine import wavewatch as marine_wavewatch
 from weewx_clearskies_api.providers.tides import coops as tides_coops
 
@@ -67,6 +69,7 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("buoy", "ndbc"): buoy_ndbc,
     ("marine", "nws_marine"): marine_nws_marine,
     ("marine", "nws_srf"): marine_nws_srf,
+    ("marine", "nwps"): marine_nwps,
     ("marine", "wavewatch"): marine_wavewatch,
     ("tides", "coops"): tides_coops,
     ("alerts", "aeris"): alerts_aeris,
