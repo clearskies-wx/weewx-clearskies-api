@@ -1417,3 +1417,316 @@ class RadarFramesResponse(BaseModel):
     stationClock: StationClock | None = None
     freshness: FreshnessInfo | None = None
 
+
+# ---------------------------------------------------------------------------
+# Marine (ADR-083..090, API-MANUAL §16 "Marine Data Model")
+# ---------------------------------------------------------------------------
+
+# ruff: noqa: N815  (canonical fields use weewx-aligned camelCase: windSpeed, etc.)
+
+
+class SpectralWaveComponent(BaseModel):
+    """Single swell system from NDBC spectral decomposition (API-MANUAL §16).
+
+    height/period/direction/energy describe one decomposed swell system;
+    classification is derived from period per NOAA convention.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    height: float               # group_wave_height; significant wave height (Hs = 4*sqrt(m0))
+    period: float                # group_wave_period; peak period (Tp = 1/fp)
+    direction: float              # degrees true north; energy-weighted circular mean
+    energy: float                 # zeroth spectral moment m0 (m^2)
+    frequencyRange: list[float]   # [min_hz, max_hz] bounds of this spectral partition
+    classification: str           # "groundswell" (>=12s) | "swell" (8-12s) | "wind_swell" (<8s)
+
+
+class MarineObservation(BaseModel):
+    """Single buoy observation snapshot from NDBC standard met data (API-MANUAL §16).
+
+    extra="ignore" so provider wire shapes that have extra fields don't break
+    normalization.  Required fields: stationId, time.  Everything else may be
+    genuinely absent from a given buoy's payload.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    windSpeed: float | None = None        # group_ocean_speed; sustained wind speed
+    windDirection: float | None = None    # degrees true north, meteorological convention
+    windGust: float | None = None         # group_ocean_speed
+    waveHeight: float | None = None       # group_wave_height; significant wave height (Hs)
+    dominantPeriod: float | None = None   # group_wave_period
+    averagePeriod: float | None = None    # group_wave_period
+    meanWaveDirection: float | None = None  # degrees true north
+    pressure: float | None = None         # group_pressure; sea-level pressure
+    airTemp: float | None = None          # group_temperature
+    waterTemp: float | None = None        # group_temperature; sea surface temperature
+    dewpoint: float | None = None         # group_temperature
+    visibility: float | None = None       # group_visibility
+    pressureTendency: float | None = None  # group_pressure; 3-hour tendency
+    tideLevel: float | None = None        # group_water_level; where reported
+    stationId: str
+    time: str  # UTC ISO-8601 with Z
+    spectralComponents: list[SpectralWaveComponent] | None = None  # decomposed swell systems
+
+
+class TidePrediction(BaseModel):
+    """Predicted tide event from CO-OPS harmonic predictions (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str  # UTC ISO-8601 with Z
+    height: float  # group_water_level; relative to datum
+    type: str | None = None  # "high" | "low" | None for interpolated points
+
+
+class WaterLevel(BaseModel):
+    """Observed water level from CO-OPS gauges (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str  # UTC ISO-8601 with Z
+    height: float  # group_water_level; relative to datum
+    datum: str  # reference datum, e.g. "MLLW", "MSL", "NAVD88"
+    quality: str | None = None  # CO-OPS quality flag, e.g. "v" verified, "p" preliminary
+
+
+class MarineForecastPoint(BaseModel):
+    """Single timestep from a WaveWatch III wave forecast (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str  # UTC ISO-8601 with Z; forecast valid time
+    waveHeight: float | None = None       # group_wave_height; significant wave height
+    wavePeriod: float | None = None       # group_wave_period; peak wave period
+    waveDirection: float | None = None    # degrees true north; peak wave direction
+    windSpeed: float | None = None        # group_ocean_speed; 10m wind speed
+    windDirection: float | None = None    # degrees true north
+    swellHeight: float | None = None      # group_wave_height; primary swell height
+    swellPeriod: float | None = None      # group_wave_period; primary swell period
+    swellDirection: float | None = None   # degrees true north; primary swell direction
+    windWaveHeight: float | None = None   # group_wave_height
+    windWavePeriod: float | None = None   # group_wave_period
+
+
+class MarineTextForecast(BaseModel):
+    """Single period from an NWS marine zone text forecast (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    periodName: str  # e.g. "Tonight", "Thursday"
+    text: str        # full forecast narrative
+    wind: str | None = None         # wind description extracted from narrative
+    seas: str | None = None         # seas description
+    visibility: str | None = None   # visibility description
+    weather: str | None = None      # weather description
+
+
+class SurfForecast(BaseModel):
+    """Surf quality forecast for one spot at one timestep (API-MANUAL §16).
+
+    Produced by enrichment/surf_scorer.py, after wave_transform.py has
+    applied the NWPS supplements (see API-MANUAL §17).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    time: str  # UTC ISO-8601 with Z; forecast valid time
+    waveHeightAtBreak: float  # group_wave_height; after NWPS supplements
+    period: float              # group_wave_period; dominant period
+    direction: float            # degrees true north; dominant swell direction
+    qualityStars: int           # 1-5 star rating
+    qualityLabel: str           # "Poor" | "Fair" | "Good" | "Very Good" | "Epic"
+    conditionsText: str         # natural-language conditions summary
+    windQuality: str            # offshore | cross_offshore | cross | cross_onshore | onshore
+    swellDominance: float       # ratio of primary swell energy to total energy (0.0-1.0)
+    multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
+
+
+class FishingForecast(BaseModel):
+    """Fishing conditions forecast for one spot for one period (API-MANUAL §16).
+
+    Produced by enrichment/fishing_scorer.py.  Wind/swell fields are
+    informational only — not inputs to overallScore.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    periodStart: str  # UTC ISO-8601 with Z
+    periodEnd: str     # UTC ISO-8601 with Z
+    periodLabel: str   # e.g. "Early Morning", "Late Afternoon"
+    overallScore: int         # composite score 0-100
+    pressureScore: int        # pressure component sub-score 0-100
+    tideScore: int             # tide component sub-score 0-100
+    solunarScore: int          # solunar component sub-score 0-100
+    waterTempScore: int        # water temperature component sub-score 0-100
+    timeofdayScore: int        # time-of-day component sub-score 0-100
+    speciesScores: list[dict[str, Any]] | None = None  # per-species score adjustments
+    conditionsText: str        # natural-language conditions summary
+    windSpeed: float | None = None      # group_ocean_speed; informational, not scored
+    windDirection: float | None = None  # degrees true north; informational
+    windGust: float | None = None       # group_ocean_speed; informational
+    swellHeight: float | None = None    # group_wave_height; informational, not scored
+    swellPeriod: float | None = None    # group_wave_period; informational
+
+
+class SolunarTimes(BaseModel):
+    """Solunar major/minor feeding periods for one date at one location (API-MANUAL §16).
+
+    Computed via Skyfield — no external API (enrichment/solunar.py).
+    Not gated by the marine feature; also backs GET /api/v1/almanac/solunar.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    date: str  # YYYY-MM-DD
+    moonPhase: str  # "new" | "waxing_crescent" | "first_quarter" | "waxing_gibbous" |
+                    # "full" | "waning_gibbous" | "last_quarter" | "waning_crescent"
+    moonIllumination: float  # 0.0-1.0
+    moonrise: str | None = None  # UTC ISO-8601 with Z; None if moon doesn't rise
+    moonset: str | None = None   # UTC ISO-8601 with Z; None if moon doesn't set
+    moonTransit: str      # UTC ISO-8601 with Z; highest point
+    moonUnderfoot: str    # UTC ISO-8601 with Z; opposite transit
+    majorPeriods: list[dict[str, str]]  # 2/day, on transit/underfoot: [{start, end}, ...]
+    minorPeriods: list[dict[str, str]]  # 2/day, on moonrise/moonset: [{start, end}, ...]
+    intensity: float  # 0.0-1.0; driven by moon phase (new/full = 1.0, quarter = 0.7, between = 0.5)
+
+
+class SurfZoneForecast(BaseModel):
+    """NWS Surf Zone Forecast (SRF) per county zone per day (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    date: str        # YYYY-MM-DD
+    countyZone: str  # NWS county zone identifier
+    ripCurrentRisk: str  # "low" | "moderate" | "high"
+    surfHeightMin: float | None = None  # group_wave_height
+    surfHeightMax: float | None = None  # group_wave_height
+    uvIndex: int | None = None          # 1-11+
+    waterTemp: float | None = None      # group_temperature
+    windText: str | None = None         # wind description
+    hazardsText: str | None = None      # hazard statements
+
+
+class BeachSafetyAssessment(BaseModel):
+    """Composite beach safety assessment per location (API-MANUAL §16).
+
+    ripCurrentRisk is sourced from SRF or NWPS v1.5, whichever is configured.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    safetyLevel: str  # "safe" | "caution" | "dangerous"
+    waveHeight: float | None = None       # group_wave_height; current/forecast
+    wavePeriod: float | None = None       # group_wave_period; current/forecast
+    ripCurrentRisk: str | None = None     # "low" | "moderate" | "high"
+    waterTemp: float | None = None        # group_temperature
+    comfortLevel: str | None = None       # "comfortable" | "cool" | "cold" | "dangerous"
+    uvIndex: int | None = None
+    visibility: float | None = None       # group_visibility
+    windSpeed: float | None = None        # group_ocean_speed
+    windDirection: float | None = None    # degrees true north
+    activeAlerts: list[str]  # alert headlines relevant to beach safety
+
+
+class MarineLocationSummary(BaseModel):
+    """Summary snapshot for one marine location, used by the Now page summary card.
+
+    API-MANUAL §16.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str    # location slug from config
+    name: str           # display name
+    coordinates: dict[str, float]  # {lat, lon}
+    activities: list[str]           # enabled activities for this location
+    currentConditions: MarineObservation | None = None  # latest buoy obs, if buoy enabled
+    currentTide: dict[str, Any] | None = None  # next high/low tide {type, time, height}
+    activeAlerts: list[str] | None = None       # active marine alert headlines
+    surfRating: int | None = None               # current surf quality stars (1-5), if surf enabled
+    beachSafetyLevel: str | None = None         # current safety level, if beach_safety enabled
+
+
+# ---------------------------------------------------------------------------
+# Marine bundles (API-MANUAL §16 "Bundle types")
+#
+# Bundles wrap domain-specific models with location metadata, following the
+# existing ForecastBundle/AlertList pattern: `source` + `generatedAt` are
+# mirrored inside the bundle; `stationClock`/`freshness`/`units` live only on
+# the outer *Response envelope (added when the corresponding endpoint ships).
+# ---------------------------------------------------------------------------
+
+
+class MarineBundle(BaseModel):
+    """MarineBundle container for GET /api/v1/marine[/{locationId}] (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str
+    locationName: str
+    coordinates: dict[str, float]  # {lat, lon}
+    observation: MarineObservation | None = None  # latest buoy observation, if available
+    forecast: list[MarineForecastPoint] = []       # WaveWatch III timesteps
+    textForecast: list[MarineTextForecast] = []    # NWS marine zone text periods
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+class TideBundle(BaseModel):
+    """TideBundle container for GET /api/v1/tides[/{locationId}] (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str
+    locationName: str
+    coordinates: dict[str, float]  # {lat, lon}
+    predictions: list[TidePrediction] = []  # CO-OPS harmonic predictions
+    waterLevels: list[WaterLevel] = []       # CO-OPS observed water levels
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+class SurfBundle(BaseModel):
+    """SurfBundle container for GET /api/v1/surf[/{locationId}] (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str
+    locationName: str
+    coordinates: dict[str, float]  # {lat, lon}
+    forecast: list[SurfForecast] = []                 # per-timestep surf quality forecast
+    zoneForecast: SurfZoneForecast | None = None       # NWS SRF for the covering county zone
+    spectralComponents: list[SpectralWaveComponent] = []  # current decomposed swell systems
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+class FishingBundle(BaseModel):
+    """FishingBundle container for GET /api/v1/fishing[/{locationId}] (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str
+    locationName: str
+    coordinates: dict[str, float]  # {lat, lon}
+    forecast: list[FishingForecast] = []  # per-period fishing conditions forecast
+    solunar: SolunarTimes | None = None    # solunar major/minor periods for the current date
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
+
+class BeachSafetyBundle(BaseModel):
+    """BeachSafetyBundle container for GET /api/v1/beach-safety[/{locationId}] (API-MANUAL §16)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    locationId: str
+    locationName: str
+    coordinates: dict[str, float]  # {lat, lon}
+    assessment: BeachSafetyAssessment
+    zoneForecast: SurfZoneForecast | None = None  # NWS SRF for the covering county zone
+    source: str
+    generatedAt: str  # UTC ISO-8601 with Z
+
