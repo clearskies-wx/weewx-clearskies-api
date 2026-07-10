@@ -1506,8 +1506,9 @@ class MarineForecastPoint(BaseModel):
     swellHeight: float | None = None      # group_wave_height; primary swell height
     swellPeriod: float | None = None      # group_wave_period; primary swell period
     swellDirection: float | None = None   # degrees true north; primary swell direction
-    windWaveHeight: float | None = None   # group_wave_height
-    windWavePeriod: float | None = None   # group_wave_period
+    windWaveHeight: float | None = None      # group_wave_height
+    windWavePeriod: float | None = None      # group_wave_period
+    windWaveDirection: float | None = None   # degrees true north
 
 
 class MarineTextForecast(BaseModel):
