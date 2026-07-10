@@ -481,6 +481,13 @@ class PlanetEntry(BaseModel):
     rightAscension: float | None = None     # RA in degrees (0-360)
     declination: float | None = None        # Dec in degrees (-90 to +90)
     elongation: float | None = None         # Angular distance from Sun in degrees
+    viewingQuality: str | None = None       # excellent|good|fair|poor|not_visible
+    viewingScore: float | None = None       # 0.0–1.0 composite score
+    viewingNote: str | None = None          # e.g. "Bright moon nearby"
+    bestViewingTime: str | None = None      # ISO-8601 UTC optimal viewing time
+    conjunction: str | None = None          # e.g. "Near Moon"
+    clearWindowStart: str | None = None     # ISO-8601 UTC start of clear window
+    clearWindowEnd: str | None = None       # ISO-8601 UTC end of clear window
 
 
 class PlanetVisibility(BaseModel):
