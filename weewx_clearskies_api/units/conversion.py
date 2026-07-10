@@ -123,6 +123,19 @@ _CONVERSIONS: dict[tuple[str, str], Callable[[float], float]] = {
     # --- Distance ---
     ("mile", "km"): lambda x: x * 1.609344,
     ("km", "mile"): lambda x: x * 0.621371192,
+
+    # --- Marine: wave height / water level (meter <-> foot) ---
+    # Reuses the existing ("meter", "foot") / ("foot", "meter") pair defined
+    # under "Altitude" above — unit names are identical, no group-specific
+    # entry needed.
+
+    # --- Marine: visibility ---
+    ("nautical_mile", "statute_mile"): lambda x: x * 1.15078,
+    ("statute_mile", "nautical_mile"): lambda x: x / 1.15078,
+    ("nautical_mile", "kilometer"):    lambda x: x * 1.852,
+    ("kilometer", "nautical_mile"):    lambda x: x / 1.852,
+    ("statute_mile", "kilometer"):     lambda x: x * 1.609344,
+    ("kilometer", "statute_mile"):     lambda x: x / 1.609344,
 }
 
 

@@ -162,6 +162,12 @@ _SYSTEM_PRESETS: Final[dict[str, _GroupUnitMap]] = {
         "group_interval": "minute",
         "group_length": "inch",
         "group_volume": "gallon",
+        # --- Marine unit groups (Phase 0C) ---
+        "group_wave_height": "ft",
+        "group_wave_period": "s",
+        "group_water_level": "ft",
+        "group_ocean_speed": "kt",
+        "group_visibility": "nm",
     },
     "METRIC": {
         "group_temperature": "°C",
@@ -195,6 +201,12 @@ _SYSTEM_PRESETS: Final[dict[str, _GroupUnitMap]] = {
         "group_interval": "minute",
         "group_length": "cm",
         "group_volume": "liter",
+        # --- Marine unit groups (Phase 0C) ---
+        "group_wave_height": "m",
+        "group_wave_period": "s",
+        "group_water_level": "m",
+        "group_ocean_speed": "kt",
+        "group_visibility": "nm",
     },
     "METRICWX": {
         "group_temperature": "°C",
@@ -228,6 +240,12 @@ _SYSTEM_PRESETS: Final[dict[str, _GroupUnitMap]] = {
         "group_interval": "minute",
         "group_length": "cm",
         "group_volume": "liter",
+        # --- Marine unit groups (Phase 0C) ---
+        "group_wave_height": "m",
+        "group_wave_period": "s",
+        "group_water_level": "m",
+        "group_ocean_speed": "kt",
+        "group_visibility": "nm",
     },
 }
 

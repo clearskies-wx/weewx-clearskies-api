@@ -28,6 +28,14 @@ VALID_UNITS: dict[str, set[str]] = {
     "group_percent": {"percent"},
     "group_moisture": {"centibar"},
     "group_volt": {"volt"},
+    # --- Marine unit groups (Phase 0C) ---
+    "group_wave_height": {"meter", "foot"},
+    "group_wave_period": {"second"},
+    "group_water_level": {"meter", "foot"},
+    "group_ocean_speed": {
+        "meter_per_second", "knot", "mile_per_hour", "km_per_hour",
+    },
+    "group_visibility": {"nautical_mile", "statute_mile", "kilometer"},
 }
 
 # ---------------------------------------------------------------------------
@@ -108,6 +116,12 @@ US_UNITS: dict[str, str] = {
     "group_temperature": "degree_F",
     "group_uv":          "uv_index",
     "group_volt":        "volt",
+    # --- Marine unit groups (Phase 0C) ---
+    "group_wave_height": "foot",
+    "group_wave_period": "second",
+    "group_water_level": "foot",
+    "group_ocean_speed": "knot",
+    "group_visibility":  "nautical_mile",
 }
 
 METRIC_UNITS: dict[str, str] = {
@@ -126,6 +140,12 @@ METRIC_UNITS: dict[str, str] = {
     "group_temperature": "degree_C",
     "group_uv":          "uv_index",
     "group_volt":        "volt",
+    # --- Marine unit groups (Phase 0C) ---
+    "group_wave_height": "meter",
+    "group_wave_period": "second",
+    "group_water_level": "meter",
+    "group_ocean_speed": "knot",
+    "group_visibility":  "nautical_mile",
 }
 
 METRICWX_UNITS: dict[str, str] = {
