@@ -471,7 +471,7 @@ def get_planets(
                     for p in raw_list
                 ]
 
-            return PlanetResponse(
+            cached_response = PlanetResponse(
                 data=PlanetVisibility(
                     evening=_to_entries_cached(visibility_raw["evening"]),
                     morning=_to_entries_cached(visibility_raw["morning"]),
@@ -481,6 +481,9 @@ def get_planets(
                 stationClock=build_station_clock(),
                 freshness=build_freshness("almanac_daily"),
             )
+            from weewx_clearskies_api.sse.endpoint_enrichment import apply_enrichments  # noqa: PLC0415
+            cached_dict = cached_response.model_dump(by_alias=True, exclude_none=True)
+            return apply_enrichments("almanac/planets", cached_dict)
     except Exception:
         logger.debug("planets cache miss or error: date=%s", target_date.isoformat(), exc_info=True)
 
