@@ -1171,6 +1171,13 @@ def compute_planets(
             if morning_set_iso is not None and planet_set_iso is None:
                 effective_set_iso = morning_set_iso
 
+        # Guard: if the effective set is before the effective rise, the set
+        # is from a previous daytime pass and is irrelevant to tonight's
+        # viewing window.  Drop it — the dashboard clamps the bar to sunrise.
+        if (effective_rise_iso is not None and effective_set_iso is not None
+                and effective_set_iso < effective_rise_iso):
+            effective_set_iso = None
+
         # Compute altitude and compass direction at the reference time.
         ref_alt, ref_az = _alt_az_at(ref_time)
         entry = {
