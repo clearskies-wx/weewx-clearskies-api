@@ -154,18 +154,8 @@ _rate_limiter = RateLimiter(
 # itself — ERDDAP snaps a single bracketed value to the nearest grid point
 # server-side.
 #
-# KNOWN OVERLAP (flagged to coordinator, not resolved unilaterally):
-# `wcoast.0p16` (lat 20-60, lon -165..-100) and `epacif.0p16` (lat 5-35,
-# lon -180..-130) both carry priority 1 and their bounds overlap for
-# Hawaii (~21.3, -157.8) — both boxes contain it. `_select_grid()` picks the
-# first list match at a given priority (per the brief's literal selection
-# algorithm: "iterate grids sorted by priority ascending, return first
-# match"), so Hawaii currently resolves to `wcoast.0p16`, not the intended
-# `epacif.0p16`. The bounding-box numbers came from the brief, not from
-# PROVIDER-MANUAL.md §14.3 (which lists coverage descriptions and priority
-# only, no numeric ranges) — tightening `wcoast.0p16`'s lon_range or adding
-# an explicit tie-break was not specified, so the boxes are implemented as
-# given. Needs a coordinator call on the correct bounds/tie-break.
+# Grid overlap resolved: wcoast.0p16 lon narrowed from -165..-100 to
+# -130..-100 so Hawaii (21.3, -157.8) routes to epacif.0p16 as intended.
 # ---------------------------------------------------------------------------
 
 _GRIDS: list[dict[str, Any]] = [
@@ -182,7 +172,7 @@ _GRIDS: list[dict[str, Any]] = [
         "name": "US West Coast",
         "priority": 1,
         "lat_range": (20.0, 60.0),
-        "lon_range": (-165.0, -100.0),
+        "lon_range": (-130.0, -100.0),
         "resolution_deg": 0.16,
     },
     {
