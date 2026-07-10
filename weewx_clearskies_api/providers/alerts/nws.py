@@ -25,6 +25,16 @@ Cache layer (ADR-017):
   Key: SHA-256 of (provider_id, endpoint, {"point": "<lat4>,<lon4>"}).
   TTL: 300s (5 min per ADR-016 + ADR-017 defaults table).
 
+Marine zone alerts (ADR-089, PROVIDER-MANUAL §8):
+  NWS marine alerts (Small Craft Advisory, Gale Warning, etc.) are issued
+  against marine zone polygons, not lat/lon points — a point query on land
+  never matches a water polygon.  When fetch() is called with a non-empty
+  marine_zone_ids list, supplemental `?zone={zoneId}` queries run after the
+  point query, using the same rate limiter/client/wire models, cached under
+  a separate key per zone.  Results are merged with the point query and
+  de-duplicated by alert `id`.  marine_zone_ids is None/empty by default —
+  zero regression to the point-only query.
+
 Wire-shape Pydantic (security-baseline §3.5):
   _NwsAlertProperties validates every property field from the real fixture
   at tests/fixtures/providers/nws/alerts_active.json — not a synthetic subset.
@@ -268,6 +278,24 @@ def _build_cache_key(lat: float, lon: float) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _build_zone_cache_key(zone_id: str) -> str:
+    """Build a deterministic cache key for (provider_id, endpoint, {zone}).
+
+    Distinct from _build_cache_key (point query) so point and zone queries
+    never collide (ADR-089).  Each zone gets its own cache entry so one
+    zone's cache expiry doesn't force a re-fetch of the others.
+    """
+    payload = json.dumps(
+        {
+            "provider_id": PROVIDER_ID,
+            "endpoint": NWS_ALERTS_PATH,
+            "params": {"zone": zone_id},
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Datetime normalization (ADR-020)
 # ---------------------------------------------------------------------------
@@ -367,6 +395,78 @@ def _to_canonical(props: _NwsAlertProperties) -> AlertRecord:
 
 
 # ---------------------------------------------------------------------------
+# Marine zone query helper (ADR-089)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_zone_alerts(zone_id: str, client: ProviderHTTPClient) -> list[AlertRecord]:
+    """Fetch, cache, and normalize alerts for a single NWS marine zone.
+
+    Mirrors the point-query flow in fetch() but keyed/cached separately
+    (ADR-089 §Cache key).  Uses the same rate limiter, HTTP client, wire
+    models, and normalization as the point query — no new infrastructure.
+
+    Raises the same canonical exceptions as fetch() (propagated, not
+    re-wrapped, from ProviderHTTPClient / response validation).
+    """
+    zone_cache_key = _build_zone_cache_key(zone_id)
+    cached_dicts = get_cache().get(zone_cache_key)
+    if cached_dicts is not None:
+        return [AlertRecord.model_validate(d) for d in cached_dicts]
+
+    _rate_limiter.acquire()
+
+    response = client.get(
+        f"{NWS_BASE_URL}{NWS_ALERTS_PATH}",
+        params={"zone": zone_id},
+        headers={"Accept": "application/geo+json"},
+    )
+
+    try:
+        wire = _NwsAlertsActiveResponse.model_validate(response.json())
+    except (ValidationError, ValueError) as exc:
+        logger.error(
+            "NWS zone response validation failed for zone=%s: %s. "
+            "Response body (first 2000 chars): %.2000s",
+            zone_id,
+            exc,
+            response.text,
+        )
+        raise ProviderProtocolError(
+            f"NWS zone response validation failed: {exc}",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        ) from exc
+
+    zone_records = [_to_canonical(feature.properties) for feature in wire.features]
+
+    get_cache().set(
+        zone_cache_key,
+        [record.model_dump() for record in zone_records],
+        ttl_seconds=_NWS_CACHE_TTL,
+    )
+
+    return zone_records
+
+
+def _deduplicate_by_id(records: list[AlertRecord]) -> list[AlertRecord]:
+    """De-duplicate AlertRecord list by canonical `id` field, keeping first occurrence.
+
+    The same alert can appear in both the point query and a zone query
+    (e.g. a Coastal Flood Warning that touches both a land public zone and
+    an overlapping marine zone).  Order-preserving so point-query results
+    (which come first) win ties (ADR-089).
+    """
+    seen_ids: set[str] = set()
+    unique_records: list[AlertRecord] = []
+    for record in records:
+        if record.id not in seen_ids:
+            seen_ids.add(record.id)
+            unique_records.append(record)
+    return unique_records
+
+
+# ---------------------------------------------------------------------------
 # Public fetch entrypoint (ADR-038 §2)
 # ---------------------------------------------------------------------------
 
@@ -376,12 +476,22 @@ def fetch(
     lat: float,
     lon: float,
     user_agent_contact: str | None,
+    marine_zone_ids: list[str] | None = None,
 ) -> list[AlertRecord]:
     """Call NWS /alerts/active and return canonical AlertRecord models.
 
     Cache stores post-normalization dicts (JSON-serialisable for Redis per
     ADR-017); on cache hit the dicts are reconstructed into AlertRecord models
     before returning.  Callers always receive list[AlertRecord].
+
+    Marine zone supplementation (ADR-089): when marine_zone_ids is a non-empty
+    list, additional `?zone={zoneId}` queries are made for each configured
+    NWS marine zone (Small Craft Advisory, Gale Warning, etc. are issued
+    against marine zone polygons, not point coordinates — a point query on
+    land never matches a water polygon).  Results are merged with the
+    point-based results and de-duplicated by alert `id`.  When
+    marine_zone_ids is None or empty, behavior is identical to the
+    point-only query (zero regression).
 
     Returns:
         List of canonical AlertRecord models, possibly empty.
@@ -399,49 +509,68 @@ def fetch(
     cached_dicts = get_cache().get(cache_key)
     if cached_dicts is not None:
         # Cache always stores list[dict] (post model_dump()); reconstruct models.
-        return [AlertRecord.model_validate(d) for d in cached_dicts]
+        point_records = [AlertRecord.model_validate(d) for d in cached_dicts]
+    else:
+        _rate_limiter.acquire()
 
-    _rate_limiter.acquire()
+        user_agent = _build_user_agent(user_agent_contact)
+        client = _get_http_client(user_agent)
 
+        point_str = f"{round(lat, 4)},{round(lon, 4)}"
+        response = client.get(
+            f"{NWS_BASE_URL}{NWS_ALERTS_PATH}",
+            params={"point": point_str},
+            headers={"Accept": "application/geo+json"},
+        )
+
+        try:
+            wire = _NwsAlertsActiveResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as exc:
+            logger.error(
+                "NWS response validation failed: %s. Response body (first 2000 chars): %.2000s",
+                exc,
+                response.text,
+            )
+            raise ProviderProtocolError(
+                f"NWS response validation failed: {exc}",
+                provider_id=PROVIDER_ID,
+                domain=DOMAIN,
+            ) from exc
+
+        point_records = [_to_canonical(feature.properties) for feature in wire.features]
+
+        # Store as list of dicts for JSON-serialisable caching (ADR-017 §Decision).
+        get_cache().set(
+            cache_key,
+            [record.model_dump() for record in point_records],
+            ttl_seconds=_NWS_CACHE_TTL,
+        )
+
+        logger.info(
+            "NWS alerts fetched: %d alert(s) for point=%s",
+            len(point_records),
+            point_str,
+        )
+
+    if not marine_zone_ids:
+        return point_records
+
+    # Marine zone supplementation (ADR-089).  Same client/UA as the point
+    # query above; construct if the point query hit cache and skipped it.
     user_agent = _build_user_agent(user_agent_contact)
     client = _get_http_client(user_agent)
 
-    point_str = f"{round(lat, 4)},{round(lon, 4)}"
-    response = client.get(
-        f"{NWS_BASE_URL}{NWS_ALERTS_PATH}",
-        params={"point": point_str},
-        headers={"Accept": "application/geo+json"},
-    )
-
-    try:
-        wire = _NwsAlertsActiveResponse.model_validate(response.json())
-    except (ValidationError, ValueError) as exc:
-        logger.error(
-            "NWS response validation failed: %s. Response body (first 2000 chars): %.2000s",
-            exc,
-            response.text,
-        )
-        raise ProviderProtocolError(
-            f"NWS response validation failed: {exc}",
-            provider_id=PROVIDER_ID,
-            domain=DOMAIN,
-        ) from exc
-
-    canonical_records = [_to_canonical(feature.properties) for feature in wire.features]
-
-    # Store as list of dicts for JSON-serialisable caching (ADR-017 §Decision).
-    get_cache().set(
-        cache_key,
-        [record.model_dump() for record in canonical_records],
-        ttl_seconds=_NWS_CACHE_TTL,
-    )
+    zone_records: list[AlertRecord] = []
+    for zone_id in marine_zone_ids:
+        zone_records.extend(_fetch_zone_alerts(zone_id, client))
 
     logger.info(
-        "NWS alerts fetched: %d alert(s) for point=%s",
-        len(canonical_records),
-        point_str,
+        "NWS marine zone alerts fetched: %d alert(s) from %d zone(s)",
+        len(zone_records),
+        len(marine_zone_ids),
     )
-    return canonical_records
+
+    return _deduplicate_by_id(point_records + zone_records)
 
 
 def _reset_http_client_for_tests() -> None:

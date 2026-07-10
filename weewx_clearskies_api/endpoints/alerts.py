@@ -41,6 +41,14 @@ OWM credentials: wired via wire_openweathermap_credentials() called from
   wire_openweathermap_credentials(). Tests that don't exercise the OWM path
   leave _openweathermap_appid as None; openweathermap.fetch() will raise
   KeyInvalid if invoked.
+
+Marine zone alerts (ADR-089): wired via wire_marine_alert_zone_ids() called
+  from wire_alerts_settings() at startup.  Passed through to nws.fetch() as
+  marine_zone_ids so NWS marine zone queries (Small Craft Advisory, Gale
+  Warning, etc.) supplement the point-based query for coastal stations.
+  Empty list (default) means no supplemental queries — identical to
+  pre-ADR-089 behavior.  Only the NWS path is supplemented; Aeris/OWM
+  marine-zone supplementation is deferred pending live testing.
 """
 
 from __future__ import annotations
@@ -83,6 +91,24 @@ def wire_nws_user_agent_contact(contact: str | None) -> None:
     """
     global _nws_user_agent_contact  # noqa: PLW0603
     _nws_user_agent_contact = contact
+
+
+# ---------------------------------------------------------------------------
+# Module-level marine zone alert wiring (populated at startup, ADR-089)
+# ---------------------------------------------------------------------------
+
+_marine_alert_zone_ids: list[str] = []
+
+
+def wire_marine_alert_zone_ids(zone_ids: list[str]) -> None:
+    """Store the configured NWS marine zone IDs for use by the NWS alerts path.
+
+    Called from wire_alerts_settings() at startup. Empty list (default)
+    means no supplemental marine zone queries — identical to pre-ADR-089
+    behavior. Tests that don't exercise the marine zone path leave this as [].
+    """
+    global _marine_alert_zone_ids  # noqa: PLW0603
+    _marine_alert_zone_ids = zone_ids
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +167,9 @@ def wire_alerts_settings(settings: object) -> None:
 
     owm_appid = getattr(alerts_section, "openweathermap_appid", None)
     wire_openweathermap_credentials(owm_appid)
+
+    marine_zone_ids = getattr(alerts_section, "marine_alert_zone_ids", None) or []
+    wire_marine_alert_zone_ids(marine_zone_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +289,7 @@ def get_alerts(
             lat=station.latitude,
             lon=station.longitude,
             user_agent_contact=_nws_user_agent_contact,
+            marine_zone_ids=_marine_alert_zone_ids,
         )
     elif provider_id == "aeris":
         from weewx_clearskies_api.providers.alerts import aeris  # noqa: PLC0415

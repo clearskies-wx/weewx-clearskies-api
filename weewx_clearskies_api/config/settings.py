@@ -351,6 +351,13 @@ class AlertsSettings:
 
     nws_user_agent_contact: operator's email or URL for NWS User-Agent.
     Per ADR-006, NO project-level default — operator responsibility.
+
+    Marine zone alerts (ADR-089): marine_alert_radius_miles and
+    marine_alert_zone_ids are general alerts config, NOT gated behind the
+    marine feature.  A coastal station benefits from marine zone alerts
+    (Small Craft Advisory, Gale Warning, etc.) even without marine pages
+    enabled.  Default radius 0.0 (disabled) and empty zone list preserve
+    the existing point-only alert query — zero regression when unset.
     """
 
     #: Provider id: "nws", "aeris", "openweathermap", or absent.
@@ -366,6 +373,11 @@ class AlertsSettings:
     #: Provider-scoped per 3b-5 brief Q2 user decision 2026-05-08; same key works
     #: for forecast + alerts (mirrors 3b-7 Aeris precedent).
     openweathermap_appid: str | None
+    #: Marine zone alert discovery radius in miles (ADR-089).  0.0 = disabled.
+    marine_alert_radius_miles: float
+    #: Pre-discovered NWS marine zone IDs within marine_alert_radius_miles
+    #: (ADR-089).  Empty list = no supplemental zone queries.
+    marine_alert_zone_ids: list[str]
 
     def __init__(self, section: dict[str, Any]) -> None:
         raw_provider = str(section.get("provider", "")).strip()
@@ -388,6 +400,22 @@ class AlertsSettings:
         # dispatch key). Same env var as ForecastSettings.openweathermap_appid.
         raw_owm_appid = os.environ.get("WEEWX_CLEARSKIES_OPENWEATHERMAP_APPID", "").strip()
         self.openweathermap_appid = raw_owm_appid if raw_owm_appid else None
+
+        # Marine zone alerts (ADR-089) — general alerts config, not marine-feature config.
+        # marine_alert_radius_miles: operator-defined radius for marine zone discovery.
+        # Default 0.0 (disabled). Set by wizard when station is near coast.
+        raw_radius = str(section.get("marine_alert_radius_miles", "0")).strip()
+        self.marine_alert_radius_miles: float = float(raw_radius) if raw_radius else 0.0
+
+        # marine_alert_zone_ids: pre-discovered NWS marine zone IDs within radius.
+        # Stored as comma-separated string in api.conf, parsed to list here.
+        # Empty list when disabled. Populated by wizard/admin at setup time.
+        raw_zones = str(section.get("marine_alert_zone_ids", "")).strip()
+        self.marine_alert_zone_ids: list[str] = (
+            [z.strip() for z in raw_zones.split(",") if z.strip()]
+            if raw_zones
+            else []
+        )
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id."""
