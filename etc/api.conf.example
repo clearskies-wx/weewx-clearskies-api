@@ -245,3 +245,95 @@ path = /var/lib/weewx/weewx.sdb
 # db_path = /etc/weewx-clearskies/forecast_correction.db
 # model_path = /etc/weewx-clearskies/forecast_correction_model.pkl
 
+
+[marine]
+# Marine/coastal locations (ADR-083). This entire section is additive and
+# OPTIONAL — its absence has zero impact on the rest of the API: no marine
+# provider modules register, no /api/v1/marine|tides|surf|fishing|beach-safety
+# endpoints appear, and the dashboard shows no Marine nav item. Requires
+# eccodes for the NWPS nearshore provider (see OPERATIONS-MANUAL "eccodes
+# native dependency"); NWPS degrades gracefully to WaveWatch III offshore
+# data when eccodes is missing or NWPS itself is unavailable.
+#
+# Full field reference (valid values, required/optional): OPERATIONS-MANUAL.md
+# "Marine location configuration". Uncomment and adapt the example below —
+# each location is its own [[[<location_id>]]] sub-section under [[locations]].
+# <location_id> must be a lowercase slug: ^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$
+#
+# [[locations]]
+#   [[[wrightsville_beach]]]
+#     # Display name shown on the dashboard.
+#     name = Wrightsville Beach
+#
+#     # Coordinates, decimal degrees. lat in [-90, 90], lon in [-180, 180].
+#     lat = 34.2085
+#     lon = -77.7964
+#
+#     # Which activity tabs to enable for this location. 1-4 of:
+#     # marine (boating), surf, fishing, beach_safety.
+#     activities = marine, surf, fishing, beach_safety
+#
+#     # NDBC buoy station id(s) — nearest first. Discover via
+#     # GET /setup/marine/discover-stations (wizard) or
+#     # https://www.ndbc.noaa.gov/activestations.xml (manual). Only the
+#     # first id is used per fetch; list additional ids for future fallback.
+#     ndbc_station_ids = 41110, 41037
+#
+#     # NOAA CO-OPS tide/water-level station id(s) — nearest first.
+#     # Discover the same way as ndbc_station_ids.
+#     coops_station_ids = 8658163
+#
+#     # NWS coastal marine zone id (prefix AMZ/GMZ/PZZ/ANZ/PKZ/PHZ + 3 digits).
+#     # Powers the NWS marine zone text forecast (nws_marine provider).
+#     nws_marine_zone_id = AMZ250
+#
+#     # NWPS WFO domain (3-letter code) and computational grid (CG1-CG5).
+#     # Auto-determined from coordinates at setup/apply time — set manually
+#     # only when overriding the auto-resolved value.
+#     nwps_wfo = ILM
+#     nwps_cg_grid = CG1
+#
+#     # --- Surf sub-block: required when "surf" is in activities above ---
+#     [[[[surf]]]]
+#       # Compass direction the beach faces, degrees [0, 360).
+#       beach_facing_degrees = 135
+#
+#       # Seabed composition: sand | rock | coral_reef | mixed.
+#       bottom_type = sand
+#
+#       # Coastal morphology: point_break | bay_break | headland | straight_beach.
+#       topographic_feature = straight_beach
+#
+#       # Which compass directions' swell reaches this spot (all 8 required;
+#       # unlisted directions default to false).
+#       directional_exposure = N:false, NE:false, E:true, SE:true, S:true, SW:true, W:false, NW:false
+#
+#       # Optional: nearby coastal structures affecting wave transmission.
+#       # Uncomment and repeat [[[[[<structure_id>]]]]] blocks as needed.
+#       # [[[[[jetty_north]]]]]
+#       #   # jetty | pier | breakwater | seawall | groin
+#       #   type = jetty
+#       #   # impermeable | semi_permeable | permeable
+#       #   material = semi_permeable
+#       #   length_m = 150
+#       #   bearing_degrees = 90
+#       #   distance_m = 400
+#
+#     # --- Fishing sub-block: required when "fishing" is in activities above ---
+#     [[[[fishing]]]]
+#       # Primary target category: saltwater_inshore | bottom_fish |
+#       # freshwater_sport | salmonids. species/biogeographic_region are
+#       # auto-populated from this + coordinates — do not set manually.
+#       target_category = saltwater_inshore
+#
+#     # --- Beach safety sub-block: optional even when "beach_safety" is
+#     # in activities above (external_links has no required fields) ---
+#     [[[[beach_safety]]]]
+#       # Operator-provided informational links shown on the beach safety
+#       # page (state water-quality dashboards, lifeguard schedules, etc.).
+#       # Repeat [[[[[<link_id>]]]]] blocks as needed.
+#       [[[[[external_links]]]]]
+#         [[[[[[water_quality]]]]]]
+#           label = NC Beach Water Quality
+#           url = https://ncdeq.gov/beach-water-quality
+
