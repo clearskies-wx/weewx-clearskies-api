@@ -1,11 +1,11 @@
 """WaveWatch III (NOAA GFS Wave) forecast provider module (PROVIDER-MANUAL §14.3).
 
 Five responsibilities per PROVIDER-MANUAL §1:
-  1. Outbound API call — NOAA ERDDAP griddap JSON access, one of 7 regional/
-     global wave-model grids selected by lat/lon, with model-cycle fallback.
+  1. Outbound API call — NOAA ERDDAP griddap JSON access, single global
+     wave-model grid, with model-cycle fallback.
   2. Response parsing — ERDDAP's generic `{"table": {"columnNames", "rows"}}`
      JSON table shape, wire-validated via a small Pydantic envelope.
-  3. Canonical field translation — 10 ERDDAP wave/wind variables mapped to
+  3. Canonical field translation — 9 ERDDAP wave variables mapped to
      `MarineForecastPoint` fields; NaN → None per ERDDAP's missing-value
      convention.
   4. Capability declaration — CAPABILITY symbol consumed at startup.
@@ -24,18 +24,54 @@ Resolved divergence — `wind_wave_direction` (recorded for history):
   cleanly. This module requests `wvdir` from ERDDAP and maps it to
   `windWaveDirection` (Option C).
 
-Known open item — ERDDAP grid dataset names:
-  PROVIDER-MANUAL.md §14.3's own table already uses dot-separated dataset
-  identifiers (`atlocn.0p16`, `wcoast.0p16`, `epacif.0p16`, `arctic.9km`,
-  `global.0p16`, `gsouth.0p25`, `global.0p25`) and this module follows that
-  table.  These identifiers have not been live-verified against
-  https://erddap.aoml.noaa.gov/hdb/erddap/griddap/ as of this round — confirm
-  during integration testing and adjust `_GRIDS` if the server's actual
-  dataset IDs differ.
+Resolved divergence — ERDDAP server unreachable, switched to PacIOOS
+(recorded for history):
+  The originally documented ERDDAP base (`erddap.aoml.noaa.gov`) and its
+  7-grid regional/global dataset table were never live-verified and turned
+  out to be completely unreachable (connection timeout). NOAA CoastWatch's
+  ERDDAP (`coastwatch.pfeg.noaa.gov`) IS reachable and hosts a WaveWatch III
+  dataset alias (`NWW3_Global_Best`, PacIOOS/Univ. Hawaii, GFS-forced), but
+  it is a single GLOBAL grid — no regional US-coast/Alaska/Pacific subsets
+  exist on this server. Flagged to the coordinator before implementation;
+  the coordinator approved collapsing `_GRIDS` to one global entry and
+  dropping the priority-based multi-grid selection.
 
-Grid coverage gap: all 7 grids bottom out at -78° latitude (no grid covers
-Antarctic waters south of -78°S). `fetch()` raises `GeographicallyUnsupported`
-for coordinates outside every grid's bounds.
+  Further live-testing (2026-07-11) found that CoastWatch's `NWW3_Global_Best`
+  is itself a mirror alias: griddap requests return HTTP 302 redirecting to
+  the true origin, `pae-paha.pacioos.hawaii.edu/erddap/griddap/ww3_global`
+  (PacIOOS's own ERDDAP). `ProviderHTTPClient` deliberately defaults
+  `follow_redirects=False` (security-baseline: prevents token-leak via
+  accidental 30x redirect) — following the CoastWatch alias would either
+  require a per-module redirect opt-in or silently return an empty body
+  (observed: `JSONDecodeError` on an empty 302 response). Querying the
+  origin `pae-paha.pacioos.hawaii.edu` directly (dataset ID `ww3_global`,
+  confirmed identical variables/dimensions/coverage via its own `/info/`
+  endpoint) avoids the redirect entirely — no client security posture
+  change needed. `ERDDAP_BASE` and `_GRIDS[0]["dataset"]` reflect the origin
+  server, not the CoastWatch alias.
+
+  This dataset also does not carry true 10m wind speed/direction as separate
+  variables (the old `ws`/`wdir` from the undocumented aoml dataset). It
+  offers exactly 9 wave-derived variables: `Thgt/Tper/Tdir` (primary wave),
+  `whgt/wper/wdir` (wind-driven wave height/period/**direction** — note this
+  server's `wdir` means wind-*wave* direction, not true wind direction),
+  `shgt/sper/sdir` (swell). No suitable paired GFS wind forecast product
+  exists on this ERDDAP server (only CCMP, a satellite NRT reanalysis product
+  — wrong cadence/purpose). Coordinator approved dropping `windSpeed` and
+  `windDirection` from `CAPABILITY.supplied_canonical_fields` and from
+  `_VAR_TO_CANONICAL`; both fields remain declared as optional on
+  `MarineForecastPoint` (unaffected — simply stay `None` for this provider).
+
+  Additional technical differences from the old (unverified) contract:
+    - Longitude convention is 0..360 on this server, not -180..180. Callers
+      still pass -180..180; `_build_griddap_url()` converts internally.
+    - The dataset has a `depth` dimension (`[time][depth][lat][lon]`), fixed
+      at the single surface value `0.0`; every variable subset includes a
+      literal `[(0.0)]` depth selector.
+    - Native time resolution is hourly, not 3-hourly. A stride of 3 in the
+      ERDDAP bracket syntax (`[(t0):3:(t1)]`) recovers 3-hour forecast steps.
+    - Coverage bound is -77.5°S (dataset's actual `geospatial_lat_min`), not
+      -78°S.
 
 supplied_canonical_fields naming: listed in canonical camelCase
 (`waveHeight`, `windWaveHeight`, ...) matching `MarineForecastPoint`'s actual
@@ -80,7 +116,16 @@ logger = logging.getLogger(__name__)
 PROVIDER_ID = "wavewatch"
 DOMAIN = "marine"
 
-ERDDAP_BASE = "https://erddap.aoml.noaa.gov/hdb/erddap/griddap"
+ERDDAP_BASE = "https://pae-paha.pacioos.hawaii.edu/erddap/griddap"
+
+# ERDDAP's `[time][depth][latitude][longitude]` dimension order requires a
+# literal depth selector even though the dataset has only one depth value
+# (0.0, surface). Fixed constant, not derived from lat/lon.
+_DEPTH_SELECTOR = "[(0.0)]"
+
+# Native time resolution on this dataset is hourly; a stride of 3 recovers
+# the documented 3-hour forecast steps (PROVIDER-MANUAL §14.3).
+_TIME_STRIDE = 3
 
 _API_VERSION = "0.1.0"
 _USER_AGENT = f"weewx-clearskies-api/{_API_VERSION} (WaveWatch III marine provider)"
@@ -115,15 +160,14 @@ CAPABILITY = ProviderCapability(
         "swellHeight",
         "swellPeriod",
         "swellDirection",
-        "windSpeed",
-        "windDirection",
     ),
-    geographic_coverage="global",  # excludes waters south of -78°S; see module docstring
+    geographic_coverage="global",  # excludes waters south of -77.5°S; see module docstring
     auth_required=(),
     default_poll_interval_seconds=_CACHE_TTL_SECONDS,
     operator_notes=(
         "NOAA WaveWatch III via ERDDAP. Global coverage (except south of "
-        "-78°S). No API key required."
+        "-77.5°S). No API key required. Does not supply true 10m wind speed/"
+        "direction — see the NDBC buoy provider for observed wind."
     ),
     refresh_interval=_CACHE_TTL_SECONDS,
     attribution=ProviderAttribution(
@@ -154,66 +198,20 @@ _rate_limiter = RateLimiter(
 # itself — ERDDAP snaps a single bracketed value to the nearest grid point
 # server-side.
 #
-# Grid overlap resolved: wcoast.0p16 lon narrowed from -165..-100 to
-# -130..-100 so Hawaii (21.3, -157.8) routes to epacif.0p16 as intended.
+# Single global entry: CoastWatch's ERDDAP hosts only one WaveWatch III
+# dataset (NWW3_Global_Best) — no regional US-coast/Alaska/Pacific subsets
+# exist on this server, unlike the originally documented (unreachable) aoml
+# ERDDAP's 7-grid table. See module docstring "Resolved divergence" entry.
 # ---------------------------------------------------------------------------
 
 _GRIDS: list[dict[str, Any]] = [
     {
-        "dataset": "atlocn.0p16",
-        "name": "US East Coast",
+        "dataset": "ww3_global",
+        "name": "Global",
         "priority": 1,
-        "lat_range": (0.0, 55.0),
-        "lon_range": (-100.0, -5.0),
-        "resolution_deg": 0.16,
-    },
-    {
-        "dataset": "wcoast.0p16",
-        "name": "US West Coast",
-        "priority": 1,
-        "lat_range": (20.0, 60.0),
-        "lon_range": (-130.0, -100.0),
-        "resolution_deg": 0.16,
-    },
-    {
-        "dataset": "epacif.0p16",
-        "name": "Hawaii/Pacific",
-        "priority": 1,
-        "lat_range": (5.0, 35.0),
-        "lon_range": (-180.0, -130.0),
-        "resolution_deg": 0.16,
-    },
-    {
-        "dataset": "arctic.9km",
-        "name": "Alaska/Arctic",
-        "priority": 1,
-        "lat_range": (55.0, 90.0),
+        "lat_range": (-77.5, 77.5),
         "lon_range": (-180.0, 180.0),
-        "resolution_deg": 0.09,  # ~9km at these latitudes
-    },
-    {
-        "dataset": "global.0p16",
-        "name": "Global primary",
-        "priority": 2,
-        "lat_range": (-78.0, 78.0),
-        "lon_range": (-180.0, 180.0),
-        "resolution_deg": 0.16,
-    },
-    {
-        "dataset": "gsouth.0p25",
-        "name": "Southern Hemisphere",
-        "priority": 2,
-        "lat_range": (-78.0, 0.0),
-        "lon_range": (-180.0, 180.0),
-        "resolution_deg": 0.25,
-    },
-    {
-        "dataset": "global.0p25",
-        "name": "Global fallback",
-        "priority": 3,
-        "lat_range": (-78.0, 78.0),
-        "lon_range": (-180.0, 180.0),
-        "resolution_deg": 0.25,
+        "resolution_deg": 0.5,
     },
 ]
 
@@ -236,17 +234,13 @@ _VAR_TO_CANONICAL: dict[str, str] = {
     "Thgt": "waveHeight",
     "Tper": "wavePeriod",
     "Tdir": "waveDirection",
-    "shww": "windWaveHeight",
-    "mpww": "windWavePeriod",
-    "wvdir": "windWaveDirection",
-    "shts": "swellHeight",
-    "mpts": "swellPeriod",
-    "swdir": "swellDirection",
-    "ws": "windSpeed",
-    "wdir": "windDirection",
+    "whgt": "windWaveHeight",
+    "wper": "windWavePeriod",
+    "wdir": "windWaveDirection",  # this server's `wdir` = wind-WAVE direction, not true wind
+    "shgt": "swellHeight",
+    "sper": "swellPeriod",
+    "sdir": "swellDirection",
 }
-
-_VARIABLES = ",".join(_VAR_TO_CANONICAL)
 
 # ---------------------------------------------------------------------------
 # Wire-shape Pydantic models (PROVIDER-MANUAL §11 fixture-first / security-
@@ -327,6 +321,16 @@ def _build_cache_key(dataset: str, lat: float, lon: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _to_erddap_longitude(lon: float) -> float:
+    """Convert a -180..180 longitude to this server's 0..360 convention.
+
+    CoastWatch's `NWW3_Global_Best` dataset uses 0..360 (`geospatial_lon_min
+    = 0.0`, `geospatial_lon_max = 359.5`); callers of this module pass
+    standard -180..180 (API-MANUAL convention). Live-verified 2026-07-11.
+    """
+    return lon if lon >= 0 else lon + 360.0
+
+
 def _build_griddap_url(
     dataset: str,
     time_start: datetime,
@@ -337,14 +341,26 @@ def _build_griddap_url(
     """Build the ERDDAP griddap JSON access URL for one model-cycle attempt.
 
     ERDDAP's bracketed dimension-subsetting syntax
-    (`[(t0):1:(t1)][(lat)][(lon)]`) is passed as a literal query string rather
-    than via ProviderHTTPClient's `params=` dict — httpx would otherwise
-    percent-encode the brackets/parens/colons that ERDDAP requires literally,
-    per the convention used by every ERDDAP client (erddapy, rerddapXtracto).
+    (`[(t0):stride:(t1)][(depth)][(lat)][(lon)]`) is passed as a literal
+    query string rather than via ProviderHTTPClient's `params=` dict — httpx
+    would otherwise percent-encode the brackets/parens/colons that ERDDAP
+    requires literally, per the convention used by every ERDDAP client
+    (erddapy, rerddapXtracto).
+
+    Each requested variable gets its own dimension-subset suffix (ERDDAP
+    griddap multi-variable syntax: `var1[dims],var2[dims],...` — a single
+    subset shared across a bare comma-separated variable list is NOT valid
+    and returns an ERDDAP 500 "wasn't found" error; live-verified 2026-07-11).
+
+    `NWW3_Global_Best` has a `[time][depth][latitude][longitude]` dimension
+    order — `_DEPTH_SELECTOR` supplies the fixed surface (0.0) depth value.
     """
     t0 = time_start.strftime("%Y-%m-%dT%H:%M:%SZ")
     t1 = time_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return f"{ERDDAP_BASE}/{dataset}.json?{_VARIABLES}[({t0}):1:({t1})][({lat})][({lon})]"
+    erddap_lon = _to_erddap_longitude(lon)
+    subset = f"[({t0}):{_TIME_STRIDE}:({t1})]{_DEPTH_SELECTOR}[({lat})][({erddap_lon})]"
+    variables = ",".join(f"{var}{subset}" for var in _VAR_TO_CANONICAL)
+    return f"{ERDDAP_BASE}/{dataset}.json?{variables}"
 
 
 # ---------------------------------------------------------------------------
@@ -469,8 +485,8 @@ def fetch(
             used, or the most recently attempted cycle if none had data.
 
     Raises:
-        GeographicallyUnsupported: (lat, lon) falls outside all 7 grids
-            (currently: south of -78°S).
+        GeographicallyUnsupported: (lat, lon) falls outside the global grid
+            (currently: south of -77.5°S).
         QuotaExhausted: ERDDAP rate-limited the request.
         KeyInvalid: unexpected auth failure (ERDDAP is keyless; exotic).
         TransientNetworkError: network/DNS failure or 5xx after retries.
@@ -480,7 +496,7 @@ def fetch(
     if grid is None:
         raise GeographicallyUnsupported(
             f"No WaveWatch III grid covers lat={lat}, lon={lon} "
-            "(coverage is global except waters south of -78°S)",
+            "(coverage is global except waters south of -77.5°S)",
             provider_id=PROVIDER_ID,
             domain=DOMAIN,
         )
