@@ -684,6 +684,8 @@ class CurrentConfigProviderSection(BaseModel):
     iframe_url: str | None = None
     aeris_forecast_model: str | None = None
     nws_user_agent_contact: str | None = None
+    marine_alert_radius_miles: int | None = None
+    marine_alert_zone_ids: list[str] | None = None
 
 
 class CurrentConfigStationSection(BaseModel):
@@ -1853,6 +1855,14 @@ async def current_config(request: Request) -> CurrentConfigResponse:
             extra["aeris_forecast_model"] = str(domain_section.get("aeris_forecast_model", "")).strip() or None
         if domain in ("forecast", "alerts"):
             extra["nws_user_agent_contact"] = str(domain_section.get("nws_user_agent_contact", "")).strip() or None
+        if domain == "alerts":
+            raw_radius = str(domain_section.get("marine_alert_radius_miles", "0")).strip()
+            try:
+                extra["marine_alert_radius_miles"] = int(raw_radius) if raw_radius else 0
+            except (ValueError, TypeError):
+                extra["marine_alert_radius_miles"] = 0
+            raw_zones = str(domain_section.get("marine_alert_zone_ids", "")).strip()
+            extra["marine_alert_zone_ids"] = [z.strip() for z in raw_zones.split(",") if z.strip()] if raw_zones else []
 
         providers[domain] = CurrentConfigProviderSection(
             provider=provider_id,
