@@ -741,6 +741,7 @@ class CurrentConfigResponse(BaseModel):
     column_mapping: dict[str, str] | None = None
     column_units: dict[str, str] | None = None
     openaq_api_key: str | None = None
+    marine: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1970,6 +1971,13 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     # --- OpenAQ API key (bootstrap + AQI provider) ---
     openaq_key = secrets.get("WEEWX_CLEARSKIES_OPENAQ_API_KEY") or None
 
+    # --- Marine (nested ConfigObj dict, returned as-is for admin UI) ---
+    marine_config: dict[str, Any] | None = None
+    if api_cfg is not None:
+        marine_section = api_cfg.get("marine")
+        if isinstance(marine_section, dict) and marine_section:
+            marine_config = dict(marine_section)
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -1981,6 +1989,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         column_mapping=col_mapping,
         column_units=col_units,
         openaq_api_key=openaq_key,
+        marine=marine_config,
     )
 
 
