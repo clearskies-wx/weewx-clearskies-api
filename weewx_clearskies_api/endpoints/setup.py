@@ -303,6 +303,13 @@ class ProviderConfig(BaseModel):
     librewxr_endpoint: str | None = None
     #: LibreWxR geographic bounds "south,west,north,east" (non-secret; api.conf).
     librewxr_bounds: str | None = None
+    #: Marine alert radius in miles (ADR-089). Written to api.conf [alerts]
+    #: marine_alert_radius_miles. Only sent for the "alerts" domain.
+    marine_alert_radius_miles: int | None = None
+    #: Pre-discovered marine zone IDs (ADR-089). Written to api.conf [alerts]
+    #: marine_alert_zone_ids. Populated by the API at apply time via zone
+    #: discovery — the wizard does not send this field directly.
+    marine_alert_zone_ids: list[str] | None = None
 
 
 class BrandingApplyConfig(BaseModel):
@@ -1080,6 +1087,37 @@ def _write_api_conf(
             # Aeris forecast model (ADR-063; non-secret).
             if pc.aeris_forecast_model and section == "forecast":
                 cfg[section]["aeris_forecast_model"] = pc.aeris_forecast_model
+
+            # Marine alert radius + zone discovery (ADR-089; alerts domain only).
+            if section == "alerts" and pc.marine_alert_radius_miles is not None:
+                cfg[section]["marine_alert_radius_miles"] = str(pc.marine_alert_radius_miles)
+                if pc.marine_alert_radius_miles > 0:
+                    from weewx_clearskies_api.providers._common.nws_zones import (  # noqa: PLC0415
+                        discover_marine_zones,
+                    )
+
+                    station_cfg = apply.station
+                    if station_cfg.latitude and station_cfg.longitude:
+                        try:
+                            zones = discover_marine_zones(
+                                station_cfg.latitude,
+                                station_cfg.longitude,
+                                radius_miles=float(pc.marine_alert_radius_miles),
+                            )
+                            zone_ids = [z["zone_id"] for z in zones]
+                            cfg[section]["marine_alert_zone_ids"] = ", ".join(zone_ids)
+                            logger.info(
+                                "Marine zone discovery: %d zone(s) within %d miles",
+                                len(zone_ids),
+                                pc.marine_alert_radius_miles,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Marine zone discovery failed; marine_alert_zone_ids not set",
+                                exc_info=True,
+                            )
+                else:
+                    cfg[section]["marine_alert_zone_ids"] = ""
 
     # [branding] — optional; only written when wizard sends this block.
     if apply.branding is not None:
