@@ -5,12 +5,14 @@ initial setup.  After initial setup, endpoints accept re-runs authenticated via
 X-Clearskies-Proxy-Auth (the same shared secret used for normal API requests).
 
 Endpoints:
-  POST /setup/handshake    — exchange trust token for a session_id
-  GET  /setup/db-defaults  — return weewx.conf DB connection defaults
-  POST /setup/db-test      — test a DB connection with supplied credentials
-  GET  /setup/schema       — reflect DB schema using stored db_params
-  GET  /setup/station      — return weewx.conf station identity
-  POST /setup/apply        — write api.conf + secrets.env, mark setup complete
+  POST /setup/handshake                  — exchange trust token for a session_id
+  GET  /setup/db-defaults                — return weewx.conf DB connection defaults
+  POST /setup/db-test                    — test a DB connection with supplied credentials
+  GET  /setup/schema                     — reflect DB schema using stored db_params
+  GET  /setup/station                    — return weewx.conf station identity
+  POST /setup/apply                      — write api.conf + secrets.env, mark setup complete
+  GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
+  POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile (T6.3)
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -33,13 +35,22 @@ from typing import Any
 from urllib.parse import quote_plus
 
 import configobj
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
+from weewx_clearskies_api.config.marine_config import (
+    _COMPASS_DIRECTIONS,
+    _VALID_ACTIVITIES,
+    _VALID_BOTTOM_TYPES,
+    _VALID_STRUCTURE_MATERIALS,
+    _VALID_STRUCTURE_TYPES,
+    _VALID_TARGET_CATEGORIES,
+    _VALID_TOPOGRAPHIC_FEATURES,
+)
 from weewx_clearskies_api.correction.models import (
     CorrectionStatusResponse,
     CorrectionToggleRequest,
@@ -47,10 +58,20 @@ from weewx_clearskies_api.correction.models import (
     RetrainResponse,
 )
 from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, SchemaReflector
+from weewx_clearskies_api.enrichment.bathymetry import (
+    ATTRIBUTION as _BATHYMETRY_ATTRIBUTION,
+    DISCLAIMER as _BATHYMETRY_DISCLAIMER,
+    download_bathymetric_profile,
+)
+from weewx_clearskies_api.providers._common.errors import ProviderError
+from weewx_clearskies_api.providers._common.nws_zones import get_cwa
+from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
+from weewx_clearskies_api.providers.tides.coops import discover_stations as _coops_discover_stations
 from weewx_clearskies_api.services.station import _get_str_field, _parse_altitude
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, get_weewx_conf, load_weewx_conf
 from weewx_clearskies_api.services.weewx_metadata import get_unit_for_group
 from weewx_clearskies_api.trust import TrustManager, _read_secrets_env, _write_secrets_env
+from weewx_clearskies_api.units.conversion import convert
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +355,217 @@ class EarthquakeApplyConfig(BaseModel):
     default_days: int | None = None
 
 
+_NDBC_STATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9]{3,10}$")
+_COOPS_STATION_ID_PATTERN = re.compile(r"^\d{5,8}$")
+_NWS_MARINE_ZONE_ID_PATTERN = re.compile(r"^(AMZ|GMZ|PZZ|ANZ|PKZ|PHZ)\d{3}$")
+_MARINE_LOCATION_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
+
+
+class MarineBathymetryPointApplyConfig(BaseModel):
+    """One ``{distance_m, depth_m}`` point of an operator-supplied or
+    CUDEM-downloaded bathymetric profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    distance_m: float = Field(ge=0)
+    depth_m: float = Field(ge=0)
+
+
+class MarineStructureApplyConfig(BaseModel):
+    """A coastal structure (jetty/pier/breakwater/seawall/groin) near a surf spot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    material: str
+    length_m: float = Field(gt=0)
+    bearing_degrees: float = Field(ge=0, lt=360)
+    distance_m: float = Field(gt=0)
+
+    @field_validator("type")
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
+        if v not in _VALID_STRUCTURE_TYPES:
+            raise ValueError(f"structure type {v!r} not in {sorted(_VALID_STRUCTURE_TYPES)}")
+        return v
+
+    @field_validator("material")
+    @classmethod
+    def _validate_material(cls, v: str) -> str:
+        if v not in _VALID_STRUCTURE_MATERIALS:
+            raise ValueError(f"structure material {v!r} not in {sorted(_VALID_STRUCTURE_MATERIALS)}")
+        return v
+
+
+class MarineSurfSpotApplyConfig(BaseModel):
+    """``[[[[surf]]]]`` sub-block for one marine location (PROVIDER-MANUAL §14,
+    OPERATIONS-MANUAL.md "Marine location configuration")."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    beach_facing_degrees: float = Field(ge=0, lt=360)
+    bottom_type: str
+    topographic_feature: str
+    directional_exposure: dict[str, bool] | None = None
+    #: Nested-subsection shape when written to api.conf — see
+    #: _build_marine_conf_section() for the T6.3 divergence note (the round
+    #: brief's flat-CSV example does not match config/marine_config.py's
+    #: SurfSpotConfig.__init__ loader, which is authoritative).
+    bathymetric_profile: list[MarineBathymetryPointApplyConfig] | None = None
+    structures: list[MarineStructureApplyConfig] | None = None
+
+    @field_validator("bottom_type")
+    @classmethod
+    def _validate_bottom_type(cls, v: str) -> str:
+        if v not in _VALID_BOTTOM_TYPES:
+            raise ValueError(f"bottom_type {v!r} not in {sorted(_VALID_BOTTOM_TYPES)}")
+        return v
+
+    @field_validator("topographic_feature")
+    @classmethod
+    def _validate_topographic_feature(cls, v: str) -> str:
+        if v not in _VALID_TOPOGRAPHIC_FEATURES:
+            raise ValueError(
+                f"topographic_feature {v!r} not in {sorted(_VALID_TOPOGRAPHIC_FEATURES)}"
+            )
+        return v
+
+    @field_validator("directional_exposure")
+    @classmethod
+    def _validate_directional_exposure(cls, v: dict[str, bool] | None) -> dict[str, bool] | None:
+        if v is None:
+            return v
+        bad = sorted(k for k in v if k not in _COMPASS_DIRECTIONS)
+        if bad:
+            raise ValueError(f"directional_exposure keys {bad!r} not in {list(_COMPASS_DIRECTIONS)}")
+        return v
+
+
+class MarineFishingSpotApplyConfig(BaseModel):
+    """``[[[[fishing]]]]`` sub-block for one marine location."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_category: str
+    #: Auto-classified from coordinates when omitted (OPERATIONS-MANUAL.md);
+    #: the wizard may also send an operator-confirmed value.
+    biogeographic_region: str | None = None
+
+    @field_validator("target_category")
+    @classmethod
+    def _validate_target_category(cls, v: str) -> str:
+        if v not in _VALID_TARGET_CATEGORIES:
+            raise ValueError(f"target_category {v!r} not in {sorted(_VALID_TARGET_CATEGORIES)}")
+        return v
+
+
+class MarineExternalLinkApplyConfig(BaseModel):
+    """One operator-provided informational link (beach safety resources)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    url: str
+
+
+class MarineBeachSafetyApplyConfig(BaseModel):
+    """``[[[[beach_safety]]]]`` sub-block for one marine location."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    external_links: list[MarineExternalLinkApplyConfig] | None = None
+
+
+class MarineLocationApplyConfig(BaseModel):
+    """One ``[[[<id>]]]`` entry under ``[marine][[locations]]``.
+
+    ``id`` becomes the configobj section key — must be a lowercase slug
+    (letters, digits, hyphen, underscore).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    activities: list[str]
+    ndbc_station_ids: list[str] = []
+    coops_station_ids: list[str] = []
+    nws_marine_zone_id: str | None = None
+    surf: MarineSurfSpotApplyConfig | None = None
+    fishing: MarineFishingSpotApplyConfig | None = None
+    beach_safety: MarineBeachSafetyApplyConfig | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, v: str) -> str:
+        if not _MARINE_LOCATION_ID_PATTERN.match(v):
+            raise ValueError(
+                f"marine location id {v!r} must be a lowercase slug "
+                "(letters, digits, hyphen, underscore; 1-64 chars)"
+            )
+        return v
+
+    @field_validator("activities")
+    @classmethod
+    def _validate_activities(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("activities must not be empty")
+        bad = sorted(a for a in v if a not in _VALID_ACTIVITIES)
+        if bad:
+            raise ValueError(f"activities {bad!r} not in {sorted(_VALID_ACTIVITIES)}")
+        return v
+
+    @field_validator("ndbc_station_ids")
+    @classmethod
+    def _validate_ndbc_ids(cls, v: list[str]) -> list[str]:
+        bad = sorted(s for s in v if not _NDBC_STATION_ID_PATTERN.match(s))
+        if bad:
+            raise ValueError(f"ndbc_station_ids {bad!r} are not valid NDBC station id formats")
+        return v
+
+    @field_validator("coops_station_ids")
+    @classmethod
+    def _validate_coops_ids(cls, v: list[str]) -> list[str]:
+        bad = sorted(s for s in v if not _COOPS_STATION_ID_PATTERN.match(s))
+        if bad:
+            raise ValueError(f"coops_station_ids {bad!r} are not valid CO-OPS station id formats")
+        return v
+
+    @field_validator("nws_marine_zone_id")
+    @classmethod
+    def _validate_zone_id(cls, v: str | None) -> str | None:
+        if v is not None and not _NWS_MARINE_ZONE_ID_PATTERN.match(v):
+            raise ValueError(f"nws_marine_zone_id {v!r} does not match a known marine zone prefix")
+        return v
+
+
+class MarineApplyConfig(BaseModel):
+    """Top-level ``[marine]`` apply payload (T6.3).
+
+    Additive/optional — omitting this field (or sending an empty
+    ``locations`` list) leaves any existing ``[marine]`` section in api.conf
+    untouched (see the apply handler: the section is only rewritten when
+    ``apply.marine is not None``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    locations: list[MarineLocationApplyConfig] = []
+
+    @field_validator("locations")
+    @classmethod
+    def _validate_unique_ids(
+        cls, v: list[MarineLocationApplyConfig]
+    ) -> list[MarineLocationApplyConfig]:
+        ids = [loc.id for loc in v]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"duplicate marine location ids: {dupes}")
+        return v
+
+
 class UnitsApplyConfig(BaseModel):
     """Unit configuration for api.conf [units] (ADR-042).
 
@@ -396,6 +628,12 @@ class ApplyRequest(BaseModel):
     #: OpenAQ API key for calibration bootstrap and AQI provider.  Written to
     #: secrets.env as WEEWX_CLEARSKIES_OPENAQ_API_KEY.
     openaq_api_key: str | None = None
+    #: Optional marine location configuration (T6.3).  When present, written to
+    #: the [marine] section of api.conf (additive — a station with no marine
+    #: locations configured behaves identically to a non-marine installation,
+    #: per API-MANUAL §18 "Capability gating"). NWPS WFO domain is resolved
+    #: per-location at apply time via nws_zones.get_cwa() before writing.
+    marine: MarineApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -633,7 +871,130 @@ def _provider_secrets(domain: str, pc: ProviderConfig) -> dict[str, str]:
     return secrets
 
 
-def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
+def _resolve_marine_wfo(
+    marine: MarineApplyConfig, nws_user_agent_contact: str | None
+) -> dict[str, str | None]:
+    """Resolve the NWPS WFO domain per marine location via nws_zones.get_cwa().
+
+    One NWS ``/points`` lookup per location — a setup-time operation, not a
+    per-request one (PROVIDER-MANUAL §14.8 "Invocation context"; §14.6 "WFO
+    domain determination"). A per-location failure (location outside NWS
+    coverage -> GeographicallyUnsupported, or a transient NWS error) is logged
+    at WARNING and that location's WFO is left ``None`` rather than failing
+    the whole ``/setup/apply`` call — one bad or unreachable location must not
+    block saving the rest of the payload. Exceptions from get_cwa() are the
+    canonical ProviderError taxonomy already (ProviderHTTPClient never lets
+    upstream exception types leak) — caught here, never re-wrapped.
+    """
+    result: dict[str, str | None] = {}
+    for location in marine.locations:
+        try:
+            result[location.id] = get_cwa(
+                location.lat, location.lon, user_agent_contact=nws_user_agent_contact
+            )
+        except ProviderError as exc:
+            logger.warning(
+                "Marine location %r: NWPS WFO lookup failed (%s: %s); nwps_wfo will be unset.",
+                location.id,
+                type(exc).__name__,
+                exc,
+            )
+            result[location.id] = None
+    return result
+
+
+def _build_marine_conf_section(
+    marine: MarineApplyConfig, wfo_by_location: dict[str, str | None]
+) -> dict[str, Any]:
+    """Build the ``[marine]`` configobj section dict from the validated apply payload.
+
+    Mirrors config/marine_config.py's loader shape exactly (also documented in
+    OPERATIONS-MANUAL.md "Marine location configuration"): ``surf`` / ``fishing``
+    / ``beach_safety`` sub-blocks nest INSIDE each location's own
+    ``[[[<id>]]]`` section as ``[[[[surf]]]]`` / ``[[[[fishing]]]]`` /
+    ``[[[[beach_safety]]]]`` — there is no separate top-level
+    ``[[surf_spots]]``/``[[fishing_spots]]`` section, and
+    ``bathymetric_profile``/``structures`` are nested subsections (one per
+    point/structure), not flat CSV strings. (T6.3 divergence from the round
+    brief's illustrative api.conf example — config/marine_config.py's
+    ``SurfSpotConfig.__init__``/``MarineLocation.__init__`` loader is
+    authoritative per lead ruling 2026-07-10.) A ``[[weather]]`` section is
+    intentionally NOT written: it is not part of MarineConfig's loader and has
+    no runtime consumer (also lead-confirmed 2026-07-10) — MarineWeatherConfig's
+    hardcoded defaults are used until an operator-configurable loader exists.
+    """
+    locations: dict[str, Any] = {}
+    for loc in marine.locations:
+        loc_section: dict[str, Any] = {
+            "name": loc.name,
+            "lat": str(loc.lat),
+            "lon": str(loc.lon),
+            "activities": list(loc.activities),
+        }
+        if loc.ndbc_station_ids:
+            loc_section["ndbc_station_ids"] = list(loc.ndbc_station_ids)
+        if loc.coops_station_ids:
+            loc_section["coops_station_ids"] = list(loc.coops_station_ids)
+        if loc.nws_marine_zone_id:
+            loc_section["nws_marine_zone_id"] = loc.nws_marine_zone_id
+        wfo = wfo_by_location.get(loc.id)
+        if wfo:
+            loc_section["nwps_wfo"] = wfo
+
+        if loc.surf is not None:
+            surf = loc.surf
+            surf_section: dict[str, Any] = {
+                "beach_facing_degrees": str(surf.beach_facing_degrees),
+                "bottom_type": surf.bottom_type,
+                "topographic_feature": surf.topographic_feature,
+            }
+            if surf.directional_exposure:
+                surf_section["directional_exposure"] = [
+                    f"{direction}:{str(value).lower()}"
+                    for direction, value in surf.directional_exposure.items()
+                ]
+            if surf.bathymetric_profile:
+                surf_section["bathymetric_profile"] = {
+                    str(i): {"distance_m": str(p.distance_m), "depth_m": str(p.depth_m)}
+                    for i, p in enumerate(surf.bathymetric_profile)
+                }
+            if surf.structures:
+                surf_section["structures"] = {
+                    str(i): {
+                        "type": s.type,
+                        "material": s.material,
+                        "length_m": str(s.length_m),
+                        "bearing_degrees": str(s.bearing_degrees),
+                        "distance_m": str(s.distance_m),
+                    }
+                    for i, s in enumerate(surf.structures)
+                }
+            loc_section["surf"] = surf_section
+
+        if loc.fishing is not None:
+            fishing_section: dict[str, Any] = {"target_category": loc.fishing.target_category}
+            if loc.fishing.biogeographic_region:
+                fishing_section["biogeographic_region"] = loc.fishing.biogeographic_region
+            loc_section["fishing"] = fishing_section
+
+        if loc.beach_safety is not None and loc.beach_safety.external_links:
+            loc_section["beach_safety"] = {
+                "external_links": {
+                    link.label: {"label": link.label, "url": link.url}
+                    for link in loc.beach_safety.external_links
+                }
+            }
+
+        locations[loc.id] = loc_section
+
+    return {"locations": locations}
+
+
+def _write_api_conf(
+    config_dir: Path,
+    apply: ApplyRequest,
+    marine_wfo_by_location: dict[str, str | None] | None = None,
+) -> None:
     """Write (or update) api.conf in config_dir with non-secret settings from apply."""
     conf_path = config_dir / "api.conf"
 
@@ -785,6 +1146,13 @@ def _write_api_conf(config_dir: Path, apply: ApplyRequest) -> None:
             cfg["units"]["labels"] = dict(u.labels)
         if u.ordinates is not None:
             cfg["units"]["ordinates"] = list(u.ordinates)
+
+    # [marine] — optional; only written when the wizard sends this block (T6.3).
+    # Additive/replace-whole-section on re-run, same precedent as [units]/
+    # [column_mapping] above, so stale locations from a prior run don't persist.
+    # Structure/format notes: see _build_marine_conf_section() docstring.
+    if apply.marine is not None:
+        cfg["marine"] = _build_marine_conf_section(apply.marine, marine_wfo_by_location or {})
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1252,9 +1620,24 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         if not wcp.startswith("/") or not wcp.endswith(".conf") or not Path(wcp).exists():
             raise HTTPException(422, detail="Invalid weewx.conf path")
 
+    # 0b. Resolve NWPS WFO domain per marine location (T6.3), before writing.
+    # A per-location NWS lookup failure is logged and leaves that location's
+    # nwps_wfo unset — see _resolve_marine_wfo() docstring — it never fails
+    # the whole apply.
+    marine_wfo_by_location: dict[str, str | None] = {}
+    if body.marine is not None:
+        nws_contact: str | None = None
+        if body.providers:
+            for domain in ("forecast", "alerts"):
+                pc = body.providers.get(domain)
+                if pc is not None and pc.nws_user_agent_contact:
+                    nws_contact = pc.nws_user_agent_contact
+                    break
+        marine_wfo_by_location = _resolve_marine_wfo(body.marine, nws_contact)
+
     # 1. Write non-secret settings to api.conf.
     try:
-        _write_api_conf(config_dir, body)
+        _write_api_conf(config_dir, body, marine_wfo_by_location)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write api.conf during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write configuration file.") from exc
@@ -1641,6 +2024,175 @@ async def get_skin_file(
         raise HTTPException(404, detail="File not found in skin directory")
 
     return FileResponse(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Marine setup endpoints (T6.3)
+# ---------------------------------------------------------------------------
+
+
+class MarineNdbcStationEntry(BaseModel):
+    station_id: str
+    name: str
+    lat: float
+    lon: float
+    distance_miles: float
+    capabilities: list[str]
+    quality: str
+
+
+class MarineCoopsStationEntry(BaseModel):
+    station_id: str
+    name: str
+    lat: float
+    lon: float
+    distance_miles: float
+    products: list[str]
+    quality: str
+
+
+class MarineStationDiscoveryResponse(BaseModel):
+    ndbc_stations: list[MarineNdbcStationEntry]
+    coops_stations: list[MarineCoopsStationEntry]
+
+
+def _ndbc_quality(distance_miles: float) -> str:
+    """NDBC wave buoy quality tier (PROVIDER-MANUAL §14 round brief spec)."""
+    if distance_miles <= 25:
+        return "excellent"
+    if distance_miles <= 50:
+        return "good"
+    return "fair"
+
+
+def _coops_quality(distance_miles: float) -> str:
+    """CO-OPS tide station quality tier (PROVIDER-MANUAL §14 round brief spec)."""
+    if distance_miles <= 20:
+        return "excellent"
+    if distance_miles <= 40:
+        return "good"
+    return "fair"
+
+
+def _ndbc_capabilities(capability_guess: str) -> list[str]:
+    """Map ndbc.py's best-effort capabilityGuess to a capability-string list.
+
+    ndbc.discover_stations() already filters out stations with no atmospheric
+    data (capabilityGuess == "none" never reaches this function).
+    """
+    if capability_guess == "atmospheric_only":
+        return ["atmospheric"]
+    if capability_guess == "wave_atmospheric":
+        return ["waves", "atmospheric", "water_temp"]
+    return []
+
+
+@router.get("/marine/discover-stations", response_model=MarineStationDiscoveryResponse)
+async def marine_discover_stations(
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    radius_miles: float = Query(50.0, gt=0, le=500),
+) -> MarineStationDiscoveryResponse:
+    """Discover nearby NDBC buoy and CO-OPS tide/water-level stations for
+    marine location setup (OPERATIONS-MANUAL.md "Marine location setup
+    procedure" steps 3-4; PROVIDER-MANUAL §14.1, §14.2).
+
+    Delegates entirely to the existing provider discovery functions
+    (ndbc.discover_stations / coops.discover_stations, both already
+    implemented and radius_km-based) — this endpoint only converts units and
+    applies the quality-tier scoring. Any ProviderError raised by either
+    provider call propagates unmodified to the RFC 9457 error handler
+    (ADR-018) — never re-wrapped, per the ProviderHTTPClient contract.
+    """
+    await require_setup_session(request)
+
+    radius_km = convert(radius_miles, "mile", "km") or 0.0
+
+    ndbc_raw = _ndbc_discover_stations(lat, lon, radius_km)
+    coops_raw = _coops_discover_stations(lat, lon, radius_km)
+
+    ndbc_stations: list[MarineNdbcStationEntry] = []
+    for s in ndbc_raw:
+        distance_miles = round(convert(float(s["distanceKm"]), "km", "mile") or 0.0, 1)
+        ndbc_stations.append(
+            MarineNdbcStationEntry(
+                station_id=str(s["stationId"]),
+                name=str(s["name"]),
+                lat=float(s["lat"]),
+                lon=float(s["lon"]),
+                distance_miles=distance_miles,
+                capabilities=_ndbc_capabilities(str(s["capabilityGuess"])),
+                quality=_ndbc_quality(distance_miles),
+            )
+        )
+
+    coops_stations: list[MarineCoopsStationEntry] = []
+    for s in coops_raw:
+        distance_miles = round(convert(float(s["distance_km"]), "km", "mile") or 0.0, 1)
+        coops_stations.append(
+            MarineCoopsStationEntry(
+                station_id=str(s["id"]),
+                name=str(s["name"] or s["id"]),
+                lat=float(s["lat"]),
+                lon=float(s["lon"]),
+                distance_miles=distance_miles,
+                products=list(s["products"]),
+                quality=_coops_quality(distance_miles),
+            )
+        )
+
+    return MarineStationDiscoveryResponse(ndbc_stations=ndbc_stations, coops_stations=coops_stations)
+
+
+class MarineBathymetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    beach_facing_degrees: float = Field(ge=0, lt=360)
+
+
+class MarineBathymetryPointResponse(BaseModel):
+    distance_m: float
+    depth_m: float
+
+
+class MarineBathymetryResponse(BaseModel):
+    profile: list[MarineBathymetryPointResponse]
+    #: NOAA CUDEM attribution — required wherever bathymetric data is
+    #: displayed (PROVIDER-MANUAL §14.7).
+    attribution: str
+    disclaimer: str
+
+
+@router.post("/marine/bathymetry", response_model=MarineBathymetryResponse)
+async def marine_bathymetry(body: MarineBathymetryRequest, request: Request) -> MarineBathymetryResponse:
+    """Download (or compute a regional fallback for) a bathymetric depth
+    profile for a surf/fishing spot (PROVIDER-MANUAL §14.7).
+
+    Synchronous — bathymetry downloads take seconds, not minutes (round brief
+    spec). Delegates to the existing enrichment/bathymetry.py module, which
+    never raises for upstream provider failures: on any network/quota/protocol
+    error it logs a WARNING internally and returns a hardcoded regional
+    fallback profile instead (see that module's docstring — "best-effort
+    setup-time convenience, not a request-path operation that must surface
+    errors to a caller"). This endpoint therefore always returns 200 with a
+    profile; lat/lon/beach_facing_degrees range validation (the only way this
+    endpoint can fail) happens at the Pydantic request-model boundary above.
+    """
+    await require_setup_session(request)
+
+    profile = download_bathymetric_profile(body.lat, body.lon, body.beach_facing_degrees)
+
+    return MarineBathymetryResponse(
+        profile=[
+            MarineBathymetryPointResponse(distance_m=p.distance_m, depth_m=p.depth_m)
+            for p in profile
+        ],
+        attribution=_BATHYMETRY_ATTRIBUTION,
+        disclaimer=_BATHYMETRY_DISCLAIMER,
+    )
 
 
 def _check_restart_token(request: Request) -> bool:
