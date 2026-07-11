@@ -925,7 +925,10 @@ def fetch(*, station_id: str, include_spectral: bool = True) -> dict[str, object
 
     spectral: list[SpectralWaveComponent] = []
     if include_spectral:
-        spectral = _fetch_spectral(station_id)
+        try:
+            spectral = _fetch_spectral(station_id)
+        except Exception:
+            logger.warning("NDBC spectral fetch failed for %s; returning observation only", station_id, exc_info=True)
         if observation is not None and spectral:
             observation = observation.model_copy(update={"spectralComponents": spectral})
 
