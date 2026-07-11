@@ -1319,6 +1319,12 @@ class FreshnessSettings:
     charts_config: int
     station_metadata: int
     seeing: int
+    marine: int
+    tides: int
+    buoy: int
+    surf: int
+    fishing: int
+    beach_safety: int
     idle_timeout: int  # minutes; 0 = disabled
     idle_refresh_factor: int
 
@@ -1335,6 +1341,12 @@ class FreshnessSettings:
         self.charts_config = int(section.get("charts_config", 86400))
         self.station_metadata = int(section.get("station_metadata", 86400))
         self.seeing = int(section.get("seeing", 10800))
+        self.marine = int(section.get("marine", 1800))
+        self.tides = int(section.get("tides", 600))
+        self.buoy = int(section.get("buoy", 3600))
+        self.surf = int(section.get("surf", 1800))
+        self.fishing = int(section.get("fishing", 3600))
+        self.beach_safety = int(section.get("beach_safety", 1800))
         self.idle_timeout = int(section.get("idle_timeout", 30))
         self.idle_refresh_factor = int(section.get("idle_refresh_factor", 10))
 
@@ -1342,7 +1354,9 @@ class FreshnessSettings:
         for attr in ("current_observation", "forecast", "alerts", "aqi",
                      "almanac_daily", "almanac_positions", "radar",
                      "earthquakes", "records", "charts_config",
-                     "station_metadata", "seeing"):
+                     "station_metadata", "seeing",
+                     "marine", "tides", "buoy", "surf", "fishing",
+                     "beach_safety"):
             if getattr(self, attr) < 1:
                 raise ValueError(f"[freshness] {attr} must be >= 1")
         if self.idle_timeout < 0:

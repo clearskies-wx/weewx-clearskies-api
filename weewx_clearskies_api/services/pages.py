@@ -1,6 +1,6 @@
 """Pages service — built-in page list per ADR-024 (3a-2).
 
-The 9 built-in pages are baked as a constant. Page visibility filtering
+The 13 built-in pages are baked as a constant. Page visibility filtering
 is the dashboard's responsibility via pages.json (static config served
 by Caddy). GET /pages returns all 9 pages unconditionally.
 
@@ -43,6 +43,12 @@ _BUILTIN_PAGES: Final[tuple[PageEntry, ...]] = (
     PageEntry(slug="reports", name="Reports", icon="file-text", nav_position=7, built_in=True),
     PageEntry(slug="about", name="About", icon="info", nav_position=8, built_in=True),
     PageEntry(slug="legal", name="Legal", icon="scale", nav_position=9, built_in=True),
+    PageEntry(slug="marine", name="Marine", icon="anchor", nav_position=10, built_in=True),
+    PageEntry(slug="surf", name="Surf", icon="waves", nav_position=11, built_in=True),
+    PageEntry(slug="fishing", name="Fishing", icon="fish", nav_position=12, built_in=True),
+    PageEntry(
+        slug="beach-safety", name="Beach Safety", icon="umbrella", nav_position=13, built_in=True
+    ),
 )
 
 # ---------------------------------------------------------------------------
