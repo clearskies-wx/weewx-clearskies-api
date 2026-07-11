@@ -2,14 +2,33 @@
 
 **Not a dispatch-registered provider module.** No CAPABILITY symbol is
 exported and this file is never passed to `wire_providers()`. It is a
-shared building block consumed by three call sites:
+shared building block consumed by four call sites:
   1. NWS marine zone text forecast provider (`providers/marine/nws_marine.py`,
-     PROVIDER-MANUAL §14.4) — resolves a marine zone ID from coordinates.
+     PROVIDER-MANUAL §14.4) — resolves the WFO that issues the CWF (Coastal
+     Waters Forecast) text product covering a given `zone_id` via
+     `get_wfo_for_zone()`, so the provider can fetch by zone_id alone
+     without requiring lat/lon at call time.
   2. NWS Surf Zone Forecast provider (`providers/marine/nws_srf.py`,
      PROVIDER-MANUAL §14.5) — resolves the WFO (CWA) covering a spot via
      `get_cwa()`.
   3. Marine zone alerts extension (PROVIDER-MANUAL §8, ADR-089) — discovers
      zone IDs within the operator's configured alert radius at setup time.
+  4. NWPS nearshore wave data provider (`providers/marine/nwps.py`,
+     PROVIDER-MANUAL §14.6) — first attempt at WFO determination via
+     `get_cwa()`, falling back to a bounding-box lookup.
+
+`get_wfo_for_zone()` (2026-07-11, NWS marine zone text forecast fix):
+  The NWS API has no `/zones/coastal/{zoneId}/forecast` endpoint (confirmed
+  404 "Forecasts for marine areas are not yet supported by this API" against
+  live api.weather.gov) — marine forecasts are only published as CWF free
+  text products keyed by WFO, not by zone. `get_wfo_for_zone()` reuses the
+  existing 24h-cached `type=coastal` zone list (`_fetch_coastal_zone_list`,
+  originally added for `discover_marine_zones()`) and looks up the
+  `cwa` array for the matching zone, returning its first entry. This keeps
+  `nws_marine.fetch(zone_id=...)` a single-argument call (no lat/lon
+  needed) and costs nothing extra after the first lookup in a given 24h
+  cache window, since the same zone list is already fetched for zone
+  discovery. See PROVIDER-MANUAL §14.4 for the updated wire format.
 
 Algorithm (PROVIDER-MANUAL §14.8):
   1. GET /points/{lat},{lon}                      -> cwa (WFO office ID, e.g. "ILM")
@@ -529,6 +548,58 @@ def _fetch_zone_detail(client: ProviderHTTPClient, zone_id: str) -> dict[str, An
     }
     get_cache().set(cache_key, result, ttl_seconds=_ZONE_CACHE_TTL_SECONDS)
     return result
+
+
+# ---------------------------------------------------------------------------
+# get_wfo_for_zone — zone_id -> WFO via the cached coastal zone list
+# (shared by nws_marine.py; see module docstring "get_wfo_for_zone()")
+# ---------------------------------------------------------------------------
+
+
+def get_wfo_for_zone(zone_id: str, *, user_agent_contact: str | None = None) -> str:
+    """Return the NWS WFO (CWA) office ID whose CWF text product covers `zone_id`.
+
+    Looks up `zone_id` in the 24h-cached `type=coastal` zone list and
+    returns the first entry of its `cwa` array (the same field
+    `discover_marine_zones()` filters candidates by). This is the WFO to
+    use with `GET /products/types/CWF/locations/{wfo}`.
+
+    Raises:
+        ProviderProtocolError: `zone_id` is not present in the NWS coastal
+            zone list, or its `cwa` array is empty — either an
+            operator-configured zone_id that isn't a valid NWS coastal
+            zone, or an unexpected NWS schema change.
+        QuotaExhausted: NWS returned 429 (rate limit), propagated from the
+            underlying `/zones` list fetch.
+        TransientNetworkError: Network/DNS failure or 5xx after retries.
+    """
+    if not zone_id or not zone_id.strip():
+        raise ValueError("zone_id must not be empty")
+    zone_id = zone_id.strip()
+
+    user_agent = _build_user_agent(user_agent_contact)
+    client = _get_http_client(user_agent)
+    zone_list = _fetch_coastal_zone_list(client)
+
+    for entry in zone_list:
+        if entry.get("id") != zone_id:
+            continue
+        cwa_list = entry.get("cwa") or []
+        if not cwa_list:
+            raise ProviderProtocolError(
+                f"NWS coastal zone {zone_id!r} has no cwa (WFO) mapping in "
+                "the /zones?type=coastal response.",
+                provider_id=PROVIDER_ID,
+                domain=DOMAIN,
+            )
+        return cast(str, cwa_list[0])
+
+    raise ProviderProtocolError(
+        f"Zone id {zone_id!r} not found in the NWS type=coastal zone list; "
+        "cannot determine the covering WFO for its CWF text product.",
+        provider_id=PROVIDER_ID,
+        domain=DOMAIN,
+    )
 
 
 # ---------------------------------------------------------------------------
