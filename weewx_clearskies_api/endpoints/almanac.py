@@ -1,10 +1,11 @@
-"""Almanac endpoints (3a-2).
+"""Almanac endpoints.
 
 GET /almanac              — sun + moon snapshot for one date
 GET /almanac/sun-times    — year-long sunrise/sunset/daylight series
 GET /almanac/moon-phases  — per-day moon-phase grid (month or full year)
+GET /almanac/solunar      — solunar major/minor feeding periods (1–30 days)
 
-All three are pure-compute: no DB hit, no provider dependency.
+All are pure-compute: no DB hit, no provider dependency.
 Params validated via Depends(_get_*_params) pattern per security-baseline §3.5.
 """
 
@@ -26,6 +27,7 @@ from weewx_clearskies_api.models.params import (
     EclipsesQueryParams,
     MeteorShowersQueryParams,
     MoonNamesQueryParams,
+    SolunarQueryParams,
 )
 from weewx_clearskies_api.models.responses import (
     AlmanacResponse,
@@ -52,6 +54,7 @@ from weewx_clearskies_api.models.responses import (
     SolarEclipseEntry,
     SolarEclipseList,
     SolarEclipseResponse,
+    SolunarTimes,
     SpecialMoonEntry,
     SunPosition,
     SunSnapshot,
@@ -127,6 +130,14 @@ def _get_moon_names_params(request: Request) -> MoonNamesQueryParams:
     """Validate GET /almanac/moon-names query parameters."""
     try:
         return MoonNamesQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _get_solunar_params(request: Request) -> SolunarQueryParams:
+    """Validate GET /almanac/solunar query parameters."""
+    try:
+        return SolunarQueryParams.model_validate(dict(request.query_params))
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
@@ -888,3 +899,41 @@ def get_positions() -> PositionsResponse:
         stationClock=build_station_clock(),
         freshness=build_freshness("almanac_positions"),
     )
+
+
+@router.get("/almanac/solunar", summary="Solunar feeding periods", tags=["Almanac"])
+def get_solunar(
+    params: Annotated[SolunarQueryParams, Depends(_get_solunar_params)],
+) -> dict:
+    """Solunar major/minor feeding periods (Skyfield-computed, no DB hit).
+
+    Not gated by the marine feature — useful for fishing, hunting, wildlife
+    photography, and general outdoor planning.  Returns one SolunarTimes per
+    requested day.
+    """
+    from datetime import timedelta
+
+    from weewx_clearskies_api.enrichment.solunar import compute_solunar
+
+    target_date = params.date if params.date is not None else _today_in_station_tz()
+    days = params.days if params.days is not None else 1
+
+    info = get_station_info()
+    lat = params.lat if params.lat is not None else info.latitude
+    lon = params.lon if params.lon is not None else info.longitude
+    station_tz = info.timezone
+
+    results = [
+        compute_solunar(target_date + timedelta(days=i), lat, lon, station_tz)
+        for i in range(days)
+    ]
+
+    data = results[0] if days == 1 else results
+
+    return {
+        "data": data.model_dump(by_alias=True, exclude_none=True) if days == 1
+        else [r.model_dump(by_alias=True, exclude_none=True) for r in results],
+        "generatedAt": utc_isoformat(datetime.now(tz=UTC)),
+        "stationClock": build_station_clock().model_dump(by_alias=True),
+        "freshness": build_freshness("almanac_daily").model_dump(by_alias=True),
+    }

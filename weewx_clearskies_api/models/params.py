@@ -250,6 +250,31 @@ class MoonNamesQueryParams(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# /almanac/solunar query params
+# ---------------------------------------------------------------------------
+
+
+class SolunarQueryParams(BaseModel):
+    """Validated query parameters for GET /almanac/solunar."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: _datetime_mod.date | None = None
+    lat: float | None = None
+    lon: float | None = None
+    days: int | None = Field(default=None, ge=1, le=30)
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def validate_date_field(cls, v: object) -> object:
+        if v is None:
+            return v
+        if isinstance(v, str):
+            return _datetime_mod.date.fromisoformat(v)
+        return v
+
+
+# ---------------------------------------------------------------------------
 # /almanac/planets query params
 # ---------------------------------------------------------------------------
 
