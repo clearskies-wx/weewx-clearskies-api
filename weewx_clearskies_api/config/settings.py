@@ -1469,6 +1469,7 @@ class Settings:
     #: after the wizard's column-mapping step.  Empty dict when the section
     #: is absent (fresh install or pre-T2.6 config).
     column_units: dict[str, str]
+    marine_config: "MarineConfig | None"
 
     def __init__(
         self,
@@ -1500,6 +1501,7 @@ class Settings:
         forecast_correction: ForecastCorrectionSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
+        marine_config: "MarineConfig | None" = None,
         configured: bool = True,
     ) -> None:
         self.configured = configured
@@ -1537,6 +1539,7 @@ class Settings:
         )
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
+        self.marine_config = marine_config
 
     def validate(self) -> None:
         """Validate all sections. Raises ValueError on the first failure."""
@@ -1673,6 +1676,14 @@ def load_settings(config_path: Path | None = None) -> Settings:
         dict(cfg.get("forecast_correction", {}))
     )
 
+    from weewx_clearskies_api.config.marine_config import load_marine_config  # noqa: PLC0415
+
+    try:
+        marine_cfg = load_marine_config(cfg)
+    except (ValueError, KeyError):
+        logger.warning("Invalid [marine] configuration; marine features disabled", exc_info=True)
+        marine_cfg = None
+
     settings = Settings(
         api=api_cfg,
         health=health_cfg,
@@ -1702,6 +1713,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         forecast_correction=forecast_correction_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
+        marine_config=marine_cfg,
     )
     settings.validate()
 

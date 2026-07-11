@@ -84,7 +84,12 @@ from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_f
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.setup import wire_forecast_correction_settings
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
+from weewx_clearskies_api.endpoints.beach_safety import wire_beach_safety_config
+from weewx_clearskies_api.endpoints.fishing import wire_fishing_config
+from weewx_clearskies_api.endpoints.marine import wire_marine_config
 from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
+from weewx_clearskies_api.endpoints.surf import wire_surf_config
+from weewx_clearskies_api.endpoints.tides import wire_tides_config
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.logging.setup import setup_logging
 from weewx_clearskies_api.providers._common.cache import ConfigError as CacheConfigError
@@ -1003,6 +1008,15 @@ def main() -> None:
 
     # Step 6o½: Pass settings to seeing endpoint (keyless — no credentials).
     wire_seeing_settings(settings)
+
+    # Step 6o¾: Wire marine/tides/surf/fishing/beach-safety endpoints.
+    # Settings.marine_config is populated from [marine] in api.conf by
+    # load_settings(); None when the section is absent (zero impact).
+    wire_marine_config(settings)
+    wire_tides_config(settings)
+    wire_surf_config(settings)
+    wire_fishing_config(settings)
+    wire_beach_safety_config(settings)
 
     # Step 6p: Wire branding settings (ADR-022, Gap #10).
     wire_branding_settings(settings.branding)
