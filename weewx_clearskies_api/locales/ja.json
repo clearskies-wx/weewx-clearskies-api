@@ -457,5 +457,70 @@
         "high_potential": "大規模火災の可能性は高い"
       }
     }
+  },
+  "surf": {
+    "quality": {
+      "1": "Poor",
+      "2": "Fair",
+      "3": "Good",
+      "4": "Very Good",
+      "5": "Epic"
+    },
+    "wind_quality": {
+      "offshore": "Offshore",
+      "cross_offshore": "Cross-offshore",
+      "cross": "Cross-shore",
+      "cross_onshore": "Cross-onshore",
+      "onshore": "Onshore",
+      "glassy": "Glassy"
+    }
+  },
+  "fishing": {
+    "period": {
+      "early_morning": "Early Morning",
+      "morning": "Morning",
+      "midday": "Midday",
+      "afternoon": "Afternoon",
+      "evening": "Evening",
+      "night": "Night"
+    },
+    "species_status": {
+      "active": "active",
+      "less_active": "less active",
+      "inactive": "inactive"
+    },
+    "habitat": {
+      "dropoff": "Drop-off",
+      "ledge": "Ledge",
+      "reef": "Reef",
+      "channel": "Channel",
+      "pinnacle": "Pinnacle"
+    },
+    "solunar_caveat": "Solunar theory suggests feeding activity correlates with moon position. Scientific evidence is mixed; environmental conditions (pressure, temperature, tides) have stronger research support."
+  },
+  "beach_safety": {
+    "level": {
+      "safe": "Safe",
+      "caution": "Caution",
+      "dangerous": "Dangerous"
+    },
+    "comfort": {
+      "comfortable": "Comfortable",
+      "cool": "Cool",
+      "cold": "Cold",
+      "dangerous": "Dangerous"
+    },
+    "rip_risk": {
+      "low": "Low",
+      "moderate": "Moderate",
+      "high": "High"
+    }
+  },
+  "marine": {
+    "swell_class": {
+      "groundswell": "Groundswell",
+      "swell": "Swell",
+      "wind_swell": "Wind Swell"
+    }
   }
 }
