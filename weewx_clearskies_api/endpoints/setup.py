@@ -82,7 +82,10 @@ from weewx_clearskies_api.enrichment.bathymetry import (
     classify_region,
     download_bathymetric_profile,
 )
-from weewx_clearskies_api.enrichment.fishing_species import SPECIES_BY_REGION
+from weewx_clearskies_api.enrichment.fishing_species import (
+    SPECIES_BY_REGION,
+    classify_region as _classify_fishing_region,
+)
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -2423,7 +2426,7 @@ async def marine_species(
             detail=f"category {category!r} not in {sorted(_VALID_TARGET_CATEGORIES)}",
         )
 
-    region = classify_region(lat, lon)
+    region = _classify_fishing_region(lat, lon)
     species = SPECIES_BY_REGION.get(region, {}).get(category, [])
     return MarineSpeciesResponse(region=region, species=species)
 
