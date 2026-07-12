@@ -51,23 +51,61 @@ Wire format (PROVIDER-MANUAL §14.5):
   fallback: f"{NWS_BASE_URL}/products/{id}"). Fetching that URL returns the
   full product record, including `productText` — the raw SRF text.
 
-SRF text parsing:
-  The SRF is a free-text product with day-period markers (".TODAY...",
-  ".TONIGHT...", ".TOMORROW...", etc.), each containing one or more
-  per-county-zone sections. A zone section is identified by a line that
-  ends in "..." with nothing following on that line (field lines like
-  "SURF HEIGHT...2 TO 4 FEET." always have trailing content after the
-  "...", which is what distinguishes them from zone-header lines).
-  Recognized period labels are mapped to a day offset from the product's
-  `issuanceTime`; only TODAY/TONIGHT/THIS AFTERNOON/THIS MORNING (offset 0)
-  and TOMORROW/TOMORROW NIGHT (offset 1) are recognized — an unrecognized
-  period label is logged at WARNING and that block is skipped (partial
-  result), per PROVIDER-MANUAL §14.5's "text parsing failure -> log
-  WARNING ... return partial result" instruction. Likewise, a zone section
-  missing a parseable RIP CURRENT RISK (the one non-optional canonical
-  field on SurfZoneForecast) is logged at WARNING and skipped; all other
-  fields are optional on the canonical model and are simply None when not
+SRF text parsing (rewritten 2026-07-11, Marine Remediation Plan T1.1 — the
+prior period-then-zone design returned empty results against every real
+SRF product; see docs/planning/MARINE-REMEDIATION-PLAN.md T1.1 for the P1,
+P2, P4, P5, P6 defects this fixed):
+  The real wire format is zone-then-period, not period-then-zone. The
+  product text is one or more county-zone sections separated by "$$",
+  each starting with a UGC line (e.g. "NCZ108-120515-", or a compressed
+  multi-zone line "NCZ106-107-108-236230-" covering several zones with
+  identical text), followed by the zone name, a beach list, and then
+  day-period blocks (".REST OF TODAY...", ".SUNDAY...", ".EXTENDED...",
+  etc.) each holding the labeled fields. Footnote definitions follow "&&"
+  at the end of each zone section and are stripped before period parsing.
+
+  Zone-section selection (_find_target_zone_section): primary match is by
+  UGC zone code — the target zone ID's 2-letter-state+"Z" prefix and
+  3-digit suffix are looked for among a section's UGC line(s), expanding
+  compressed multi-zone lines to their individual codes
+  (_expand_ugc_codes). Fallback 1: when the product has exactly one "$$"
+  section, treat it as the target zone (single-zone SRF, no UGC needed).
+  Fallback 2: fuzzy-match the resolved zone *name* (_zone_header_matches)
+  against each section's header text only — the text before that
+  section's first day-period marker (UGC line + zone name + beach list).
+  Restricting the name fallback to the pre-period header area is
+  deliberate: matching zone-name text anywhere in the section (the old
+  design) false-matched field-adjacent lines like "Tides...",
+  "Remarks...", "Weather..." (P2) and mixed data across zones (P6).
+
+  Within the matched zone section, day-period labels are mapped to a day
+  offset from the product's `issuanceTime` (_resolve_period_offset):
+  TODAY/REST OF TODAY/THIS AFTERNOON/THIS MORNING/TONIGHT -> 0,
+  TOMORROW/TOMORROW NIGHT -> 1, and the seven weekday names (SUNDAY
+  through SATURDAY) -> computed dynamically as
+  (target_weekday - issuance_weekday) % 7. A same-weekday label (e.g. an
+  early-morning reissue labeling today ".SATURDAY..." instead of ".REST
+  OF TODAY...") therefore resolves to offset 0 — NWS does label the
+  issuance day by weekday name on some reissues (lead clarification,
+  2026-07-11); there is no "assume next week" special case. "EXTENDED"
+  and any other unrecognized label fall through to None and that block is
+  logged at WARNING and skipped (partial result), per PROVIDER-MANUAL
+  §14.5's "text parsing failure -> log WARNING ... return partial result"
+  instruction. Likewise, a zone-period block missing a parseable RIP
+  CURRENT RISK (the one non-optional canonical field on
+  SurfZoneForecast) is logged at WARNING and skipped; all other fields
+  are optional on the canonical model and are simply None when not
   parseable.
+
+  Field labels use dot-leaders with 0-3 optional asterisk footnote
+  markers between the label and the leading dots (e.g. "Rip Current
+  Risk*...........Moderate.", "UV Index**...5."), and WIND's label is
+  optionally plural ("Winds....." as well as "Wind..."). All six field
+  regexes tolerate both. When a zone splits a field into sub-regions
+  (e.g. "East of Ocean Isle Beach" / "Ocean Isle Beach West" each with
+  their own "Rip Current Risk..." line), `_extract_field`'s `re.search`
+  is leftmost-match by construction, so the first sub-region's value wins
+  without any extra code — no averaging or last-match behavior.
 
   Compound rip-current-risk values (e.g. "MODERATE TO HIGH", which NWS
   forecasters use when risk increases through the period) resolve to the
@@ -556,16 +594,19 @@ def _fetch_latest_srf_product(
 # SRF free-text parsing (module docstring "SRF text parsing")
 # ---------------------------------------------------------------------------
 
-# A day-period marker line, e.g. ".TODAY...", ".TONIGHT...", ".TOMORROW..."
+# A day-period marker line, e.g. ".TODAY...", ".REST OF TODAY...",
+# ".SUNDAY...", ".EXTENDED..."
 _PERIOD_MARKER_RE = re.compile(r"^\.([A-Z][A-Z .]*?)\.\.\.[ \t]*$", re.MULTILINE)
 
-# A zone-header line: ends in "..." with nothing following on the line, and
-# does not start with "." (which would make it a period marker instead).
-# Field lines (SURF HEIGHT...2 TO 4 FEET.) always have trailing content
-# after "...", so they never match this pattern.
-_ZONE_HEADER_RE = re.compile(r"^(?!\.)([A-Za-z][^\n]*?)\.\.\.[ \t]*$", re.MULTILINE)
-
 _ZONE_HEADER_PREFIX_RE = re.compile(r"^SURF ZONE FORECAST FOR\s+", re.IGNORECASE)
+
+# UGC zone-header line, e.g. "NCZ108-120515-" (single zone) or
+# "NCZ106-107-108-236230-" (compressed multi-zone: first code carries the
+# full state+"Z"+3-digit prefix, later 3-digit groups are additional zone
+# suffixes sharing that prefix, and the final group is a 6-digit purge
+# time stamp, not a zone code). See _expand_ugc_codes.
+_UGC_LINE_RE = re.compile(r"^([A-Z]{2}Z\d{3}(?:-\d{3,6})+-)[ \t]*$", re.MULTILINE)
+_ZONE_ID_RE = re.compile(r"^([A-Z]{2}Z)(\d{3})$")
 
 _NUMBER_RE = re.compile(r"(\d+(?:\.\d+)?)")
 
@@ -573,19 +614,41 @@ _NUMBER_RE = re.compile(r"(\d+(?:\.\d+)?)")
 # This (rather than a bare "\.") avoids stopping mid-value on a decimal
 # point, e.g. "SURF HEIGHT...2.5 TO 4.5 FEET." would incorrectly truncate
 # to "2" with a naive non-greedy "\." terminator.
-_SURF_HEIGHT_RE = re.compile(r"SURF\s+HEIGHT\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL)
+#
+# All field labels tolerate 0-3 optional asterisk footnote markers between
+# the label and the dot-leaders (e.g. "Rip Current Risk*...........
+# Moderate.", "UV Index**...5.") — real NWS SRF products annotate several
+# fields with footnote references. WIND's label is also optionally plural
+# ("Winds....." as well as "Wind...").
+#
+# The dot-leader itself is "\.\.\.+" (3+ dots, greedy) rather than a fixed
+# "\.\.\." — live products pad the leader to align values (often 8-11+
+# dots), and a fixed-3 separator combined with the lazy "(.*?)" value
+# capture would leave the extra leader dots inside the captured group
+# (they'd only get swallowed once the lazy match walks past them looking
+# for the terminating "\.(?=\s|$)", by which point they're already part
+# of group(1)). Greedily consuming the whole leader as the separator keeps
+# the capture group starting exactly at the value.
+_SURF_HEIGHT_RE = re.compile(
+    r"SURF\s+HEIGHT\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
+)
 _RIP_RISK_RE = re.compile(
-    r"RIP\s+CURRENT\s+RISK\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
+    r"RIP\s+CURRENT\s+RISK\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
 )
-_UV_INDEX_RE = re.compile(r"UV\s+INDEX\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL)
+_UV_INDEX_RE = re.compile(
+    r"UV\s+INDEX\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
+)
 _WATER_TEMP_RE = re.compile(
-    r"WATER\s+TEMPERATURE\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
+    r"WATER\s+TEMPERATURE\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
 )
-_WIND_RE = re.compile(r"WIND\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL)
-_HAZARDS_RE = re.compile(r"HAZARDS\.\.\.(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL)
+_WIND_RE = re.compile(r"WINDS?\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL)
+_HAZARDS_RE = re.compile(
+    r"HAZARDS\*{0,3}\.\.\.+(.*?)\.(?=\s|$)", re.IGNORECASE | re.DOTALL
+)
 
 _DAY_OFFSET_BY_LABEL: dict[str, int] = {
     "TODAY": 0,
+    "REST OF TODAY": 0,
     "THIS MORNING": 0,
     "THIS AFTERNOON": 0,
     "TONIGHT": 0,
@@ -593,16 +656,38 @@ _DAY_OFFSET_BY_LABEL: dict[str, int] = {
     "TOMORROW NIGHT": 1,
 }
 
+# Monday=0 ... Sunday=6, matching datetime.weekday(). Used to compute a
+# dynamic offset for weekday-name period labels (e.g. "SUNDAY"), which real
+# SRF products use for days beyond tomorrow and, on some early-morning
+# reissues, for the issuance day itself (see module docstring).
+_WEEKDAYS: tuple[str, ...] = (
+    "MONDAY",
+    "TUESDAY",
+    "WEDNESDAY",
+    "THURSDAY",
+    "FRIDAY",
+    "SATURDAY",
+    "SUNDAY",
+)
 
-def _resolve_period_offset(period_label: str) -> int | None:
+
+def _resolve_period_offset(period_label: str, issuance_dt: datetime) -> int | None:
     """Map a day-period label to a day offset from the product's issuance date.
 
-    Returns None for unrecognized labels (e.g. a weekday name used on a
-    late-night reissue) — the caller logs a WARNING and skips that block
-    rather than guessing at an offset.
+    Returns None for unrecognized labels (e.g. "EXTENDED", a multi-day
+    summary block that isn't a single dated forecast) — the caller logs a
+    WARNING and skips that block rather than guessing at an offset.
     """
     normalized = re.sub(r"\s+", " ", period_label.strip().upper()).rstrip(".")
-    return _DAY_OFFSET_BY_LABEL.get(normalized)
+    if normalized in _DAY_OFFSET_BY_LABEL:
+        return _DAY_OFFSET_BY_LABEL[normalized]
+    if normalized in _WEEKDAYS:
+        issuance_weekday = issuance_dt.weekday()
+        target_weekday = _WEEKDAYS.index(normalized)
+        # Same weekday as issuance -> offset 0 (NWS labels the issuance day
+        # by weekday name on some reissues; lead clarification 2026-07-11).
+        return (target_weekday - issuance_weekday) % 7
+    return None
 
 
 def _normalize_zone_text(text: str) -> str:
@@ -630,7 +715,10 @@ def _extract_field(pattern: re.Pattern[str], block: str) -> str | None:
     match = pattern.search(block)
     if not match:
         return None
-    return re.sub(r"\s+", " ", match.group(1)).strip()
+    # Defensive: the dot-leader regexes are greedy over the separator so
+    # this shouldn't happen, but strip any stray leading dots/whitespace
+    # rather than surface them in a canonical field value (e.g. windText).
+    return re.sub(r"\s+", " ", match.group(1)).strip(" .")
 
 
 def _parse_surf_height_range(raw: str | None) -> tuple[float | None, float | None]:
@@ -721,31 +809,63 @@ def _extract_zone_fields(sub_block: str, target_zone_id: str) -> dict[str, Any] 
     }
 
 
-def _parse_zone_block(
-    block_text: str, target_zone_id: str, target_zone_name: str
-) -> dict[str, Any] | None:
-    """Find the target zone's section within one day-period block and extract its fields.
+def _expand_ugc_codes(ugc_line: str) -> tuple[str | None, set[str]]:
+    """Expand a UGC zone-header line to its (prefix, {zone-code-suffixes}).
 
-    Returns None when the block has zone headers but none match the target
-    zone (this WFO's SRF doesn't cover the spot's zone on this day), or
-    when no headers are found at all and field extraction on the whole
-    block still fails.
+    "NCZ108-120515-" -> ("NCZ", {"108"}). "NCZ106-107-108-236230-" (a
+    compressed multi-zone line covering several zones with identical
+    forecast text) -> ("NCZ", {"106", "107", "108"}) — the trailing
+    6-digit group is a purge time stamp, not a zone code, and is dropped
+    by the len==3 check.
     """
-    header_matches = list(_ZONE_HEADER_RE.finditer(block_text))
-    if not header_matches:
-        # No explicit per-zone header (e.g. a single-zone SRF product) —
-        # treat the entire block as the target zone's data.
-        return _extract_zone_fields(block_text, target_zone_id)
+    parts = ugc_line.strip().rstrip("-").split("-")
+    if not parts:
+        return None, set()
+    first_match = _ZONE_ID_RE.match(parts[0])
+    if not first_match:
+        return None, set()
+    prefix = first_match.group(1)
+    codes = {first_match.group(2)}
+    for part in parts[1:]:
+        if len(part) == 3 and part.isdigit():
+            codes.add(part)
+    return prefix, codes
 
-    for i, header_match in enumerate(header_matches):
-        header_text = header_match.group(1)
-        if not _zone_header_matches(header_text, target_zone_name):
-            continue
-        sub_start = header_match.end()
-        sub_end = (
-            header_matches[i + 1].start() if i + 1 < len(header_matches) else len(block_text)
-        )
-        return _extract_zone_fields(block_text[sub_start:sub_end], target_zone_id)
+
+def _find_target_zone_section(
+    text: str, target_zone_id: str, target_zone_name: str
+) -> str | None:
+    """Find the "$$"-delimited zone section covering `target_zone_id`.
+
+    Primary: match a UGC zone-header line's expanded codes against the
+    target zone ID. Fallback 1: a single-section product (no per-zone UGC
+    needed) is assumed to be the target zone. Fallback 2: fuzzy-match the
+    resolved zone name against each section's pre-first-period header text
+    only (never the field-heavy period blocks — see module docstring "SRF
+    text parsing" for why that scoping matters, P2).
+    """
+    sections = [s for s in text.split("$$") if s.strip()]
+    if not sections:
+        return None
+
+    zone_id_match = _ZONE_ID_RE.match(target_zone_id.strip().upper())
+    if zone_id_match:
+        target_prefix, target_suffix = zone_id_match.group(1), zone_id_match.group(2)
+        for section in sections:
+            for ugc_line in _UGC_LINE_RE.findall(section):
+                prefix, codes = _expand_ugc_codes(ugc_line)
+                if prefix == target_prefix and target_suffix in codes:
+                    return section
+
+    if len(sections) == 1:
+        return sections[0]
+
+    for section in sections:
+        first_period = _PERIOD_MARKER_RE.search(section)
+        header_area = section[: first_period.start()] if first_period else section
+        for line in header_area.splitlines():
+            if _zone_header_matches(line, target_zone_name):
+                return section
 
     return None
 
@@ -759,33 +879,50 @@ def _parse_srf_text(
     """Parse a full SRF product text into per-day SurfZoneForecast records
     for the target zone.
 
-    Unrecognized day-period labels and zone sections missing RIP CURRENT
-    RISK are logged at WARNING and skipped (partial result), per
-    PROVIDER-MANUAL §14.5.
+    Zone-then-period: first isolate the target zone's "$$"-delimited
+    section (_find_target_zone_section), strip its trailing footnotes
+    (everything after "&&"), then walk that section's day-period markers
+    only — never another zone's data (fixes P6). Unrecognized day-period
+    labels and zone-period blocks missing RIP CURRENT RISK are logged at
+    WARNING and skipped (partial result), per PROVIDER-MANUAL §14.5.
     """
     results: list[SurfZoneForecast] = []
-    period_matches = list(_PERIOD_MARKER_RE.finditer(text))
-    if not period_matches:
+
+    section = _find_target_zone_section(text, target_zone_id, target_zone_name)
+    if section is None:
         logger.warning(
-            "NWS SRF text for zone %s contained no recognizable day-period "
-            "markers (.TODAY..., .TOMORROW..., etc). "
+            "NWS SRF text contained no zone section matching %s (UGC code "
+            "or zone name %r); returning empty result. "
             "Raw text (first 2000 chars): %.2000s",
             target_zone_id,
+            target_zone_name,
             text,
         )
         return results
 
-    sign_off = text.find("$$")
-    text_end = sign_off if sign_off != -1 else len(text)
+    # Footnote definitions follow "&&" at the end of a zone section — strip
+    # before period parsing so footnote text never leaks into field values.
+    section = section.split("&&", 1)[0]
+
+    period_matches = list(_PERIOD_MARKER_RE.finditer(section))
+    if not period_matches:
+        logger.warning(
+            "NWS SRF zone section for %s contained no recognizable "
+            "day-period markers (.REST OF TODAY..., .SUNDAY..., etc). "
+            "Raw section (first 2000 chars): %.2000s",
+            target_zone_id,
+            section,
+        )
+        return results
 
     for i, match in enumerate(period_matches):
         period_label = match.group(1)
-        offset = _resolve_period_offset(period_label)
+        offset = _resolve_period_offset(period_label, issuance_dt)
         block_start = match.end()
         block_end = (
-            period_matches[i + 1].start() if i + 1 < len(period_matches) else text_end
+            period_matches[i + 1].start() if i + 1 < len(period_matches) else len(section)
         )
-        block_text = text[block_start:block_end]
+        block_text = section[block_start:block_end]
 
         if offset is None:
             logger.warning(
@@ -797,7 +934,7 @@ def _parse_srf_text(
             )
             continue
 
-        fields = _parse_zone_block(block_text, target_zone_id, target_zone_name)
+        fields = _extract_zone_fields(block_text, target_zone_id)
         if fields is None:
             continue
 
