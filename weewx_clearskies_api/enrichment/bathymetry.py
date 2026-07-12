@@ -1,4 +1,5 @@
-"""NOAA CUDEM bathymetry setup utility (Phase 3, T3.1; PROVIDER-MANUAL §14.7).
+"""NOAA CUDEM bathymetry setup utility (Phase 3, T3.1; Marine Remediation T1.2;
+PROVIDER-MANUAL §14.7).
 
 **Not a dispatch-registered provider module.** This is a one-time,
 per-spot data-access utility invoked from the wizard/admin surf-spot
@@ -9,24 +10,36 @@ configuration flow — never per-request. Its output (a list of
 (T3.2) for the Battjes gamma formula, and by the fishing habitat-annotation
 pipeline.
 
-Data source (v1 decision, lead confirmed 2026-07-10):
-    v1 uses the OpenTopoData CUDEM REST endpoint
-    (``https://api.opentopodata.org/v1/cudem``), which serves NOAA's
-    Continuously Updated Digital Elevation Model at 1/3 arc-second
-    resolution (~10m). This is a simple, stable, keyless REST API.
+Data source (T1.2 remediation, superseding the original v1 decision):
+    The original v1 access method (OpenTopoData's ``/v1/cudem`` REST
+    endpoint) does not actually exist — OpenTopoData's public deployment
+    never hosted a ``cudem`` dataset and the endpoint returns 404 "Dataset
+    'cudem' not in config" for every request. No real bathymetric data was
+    ever retrieved through it; every download silently fell back to the
+    hardcoded regional profile.
 
-    Future upgrade: NCEI THREDDS/OPeNDAP direct access to the full-resolution
-    CUDEM dataset at 1/9 arc-second (~3.4m) — finer detail on reef structures,
-    ledges, and channel edges. THREDDS OPeNDAP subsetting is materially more
-    complex to integrate (NetCDF/OPeNDAP client, dataset/grid discovery per
-    region) and was deferred out of v1 scope; OpenTopoData is sufficient for
-    slope computation and large habitat features at v1.
+    This module now queries the NCEI ArcGIS ImageServer ``identify``
+    endpoint directly:
+    ``https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_all/ImageServer/identify``.
+    This is a free, keyless, government-hosted REST point-query service that
+    serves NOAA's Continuously Updated Digital Elevation Model (CUDEM) at
+    1/9 arc-second resolution (~3.4m) — finer than the originally-planned
+    1/3 arc-second (~10m) OpenTopoData resolution, so reef structures,
+    ledges, and channel edges are more clearly visible in addition to the
+    larger drop-off/shelf features the v1 brief targeted.
 
-Elevation sign convention: OpenTopoData/CUDEM elevation is relative to
-Mean Sea Level (MSL). Negative elevation = underwater depth. Depth values
-returned by this module are always non-negative meters (``depth_m = max(0,
+    Unlike OpenTopoData's (nonexistent) batched ``locations=lat,lon|lat,lon``
+    request shape, the NCEI ImageServer ``identify`` endpoint is a
+    single-point query API: one HTTP request per (lat, lon) sample. See
+    ``_query_depths_m`` below.
+
+Elevation sign convention: NCEI/CUDEM elevation is relative to Mean Sea
+Level (MSL). Negative elevation = underwater depth. Depth values returned
+by this module are always non-negative meters (``depth_m = max(0,
 -elevation)``); points that come back with positive elevation (land) are
-treated as zero depth.
+treated as zero depth. A ``value`` of ``"NoData"`` (or a missing/null
+value) means the queried point falls outside CUDEM's data coverage and is
+treated as an unknown reading (``None``), not zero depth.
 
 Regional deep-water thresholds and hardcoded fallback profiles encode
 rough, non-authoritative continental-shelf characteristics (steep Pacific
@@ -34,11 +47,11 @@ shelf vs. gradual Gulf shelf, etc.) — see ``REGION_DEEP_WATER_THRESHOLDS_M``
 and ``FALLBACK_DEPTH_PROFILES_M`` below.
 
 Units: this module works exclusively in meters (depth, distance) throughout.
-No unit conversion is performed or required here — CUDEM/OpenTopoData
-elevations are always meters, and stored profile distances are always
-meters; the project's ``UnitTransformer`` only enters the picture at API
-response time when a request is scoped to a non-metric unit system, which
-is out of scope for this setup-time module.
+No unit conversion is performed or required here — CUDEM/NCEI elevations
+are always meters, and stored profile distances are always meters; the
+project's ``UnitTransformer`` only enters the picture at API response time
+when a request is scoped to a non-metric unit system, which is out of scope
+for this setup-time module.
 
 Attribution (PROVIDER-MANUAL §14.7): NOAA CUDEM data requires attribution
 and a navigation disclaimer wherever bathymetric data is displayed — see
@@ -49,13 +62,18 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from weewx_clearskies_api.config.marine_config import BathymetryPoint
-from weewx_clearskies_api.providers._common.errors import ProviderError
+from weewx_clearskies_api.providers._common.errors import (
+    ProviderError,
+    ProviderProtocolError,
+    QuotaExhausted,
+)
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 
@@ -70,23 +88,56 @@ ATTRIBUTION = "NOAA National Centers for Environmental Information"
 DISCLAIMER = "Not for navigation"
 
 # ---------------------------------------------------------------------------
-# OpenTopoData CUDEM endpoint (v1 data source — see module docstring)
+# NCEI ArcGIS ImageServer CUDEM endpoint (T1.2 — see module docstring for why
+# this replaced the nonexistent OpenTopoData ``/v1/cudem`` endpoint).
 # ---------------------------------------------------------------------------
 
 PROVIDER_ID = "cudem"
 DOMAIN = "bathymetry"
-_OPENTOPODATA_URL = "https://api.opentopodata.org/v1/cudem"
-_USER_AGENT = "weewx-clearskies-api-bathymetry/0.1 (NOAA CUDEM via OpenTopoData)"
-_MAX_LOCATIONS_PER_REQUEST = 100  # OpenTopoData hard cap
+_NCEI_IMAGESERVER_URL = (
+    "https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_all/ImageServer/identify"
+)
+_USER_AGENT = "weewx-clearskies-api-bathymetry/0.1 (NOAA CUDEM via NCEI ArcGIS)"
 
-# 1 call/sec per OpenTopoData's documented rate limit for the free tier.
+# 2 calls/sec courtesy limit. The NCEI ImageServer identify endpoint has no
+# documented rate limit (it's a free, keyless government REST service), but
+# it is a single-point query API (no batching — see module docstring), so a
+# single profile download issues many sequential requests. 2 req/s is a
+# conservative, courteous budget for a service with no published limit.
 _rate_limiter = RateLimiter(
-    name="opentopodata-cudem",
+    name="ncei-cudem",
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
-    max_calls=1,
+    max_calls=2,
     window_seconds=1,
 )
+
+
+def _acquire_rate_limit_slot() -> None:
+    """Block until the local ``ncei-cudem`` rate-limit budget allows another call.
+
+    ``RateLimiter.acquire()`` is non-blocking by design (ADR-038 §3): it
+    raises ``QuotaExhausted`` immediately when the in-process budget is
+    exhausted rather than sleeping, so that request-path callers can decide
+    how to react. This module is different: because the NCEI ImageServer has
+    no batch query shape, a single ``download_bathymetric_profile`` call
+    issues dozens of sequential per-point requests, and without pacing here
+    almost every download would immediately exceed the 2 req/s courtesy
+    budget on its second or third request. This helper turns the local,
+    self-imposed limiter into a blocking pacer by sleeping and retrying on
+    ``QuotaExhausted`` — this is *not* a canonical ``ProviderHTTPClient``
+    exception being re-wrapped (the hard constraint against that concerns
+    exceptions raised at the HTTP boundary); ``QuotaExhausted`` here is
+    raised by our own in-process ``RateLimiter`` *before* any HTTP request is
+    made, purely to pace our own outbound call rate.
+    """
+    while True:
+        try:
+            _rate_limiter.acquire()
+            return
+        except QuotaExhausted as exc:
+            time.sleep(max(0.1, float(exc.retry_after_seconds or 1)))
+
 
 _http_client: ProviderHTTPClient | None = None
 
@@ -114,21 +165,47 @@ def _reset_http_client_for_tests() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _OpenTopoDataResult(BaseModel):
-    """One location result from the OpenTopoData ``/v1/cudem`` response."""
+class _NceiCatalogItemAttributes(BaseModel):
+    """``catalogItems.features[].attributes`` — identifies the source CUDEM
+    tile (e.g. ``"ncei19_n34x25_w078x00_2019v1"``), used only for logging/
+    verification that a 1/9 arc-second CUDEM tile actually backed the reading."""
 
     model_config = ConfigDict(extra="ignore")
 
-    elevation: float | None = None
+    name: str | None = Field(default=None, alias="Name")
 
 
-class _OpenTopoDataResponse(BaseModel):
-    """OpenTopoData ``/v1/cudem`` response envelope."""
+class _NceiCatalogItemFeature(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    attributes: _NceiCatalogItemAttributes | None = None
+
+
+class _NceiCatalogItems(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    features: list[_NceiCatalogItemFeature] = Field(default_factory=list)
+
+
+class _NceiIdentifyResponse(BaseModel):
+    """NCEI ArcGIS ImageServer ``/identify`` response envelope.
+
+    Example live response::
+
+        {"value": "-3.30559", "objectId": 0, "name": "Pixel",
+         "location": {...}, "properties": null,
+         "catalogItems": {"features": [{"attributes":
+             {"Name": "ncei19_n34x25_w078x00_2019v1"}}]}}
+
+    ``value`` is a *string* representation of the elevation in meters
+    (negative = underwater depth); it is also the sentinel string
+    ``"NoData"`` for points outside CUDEM's data coverage.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    status: str | None = None
-    results: list[_OpenTopoDataResult] = Field(default_factory=list)
+    value: str | None = None
+    catalog_items: _NceiCatalogItems | None = Field(default=None, alias="catalogItems")
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +229,7 @@ REGION_DEEP_WATER_THRESHOLDS_M: dict[str, float] = {
 _DEFAULT_DEEP_WATER_THRESHOLD_M = REGION_DEEP_WATER_THRESHOLDS_M[REGION_ATLANTIC]
 
 # Hardcoded fallback depth profiles (meters), ordered offshore -> nearshore,
-# used when CUDEM/OpenTopoData is unavailable (network failure, quota, etc.).
+# used when CUDEM/NCEI is unavailable (network failure, quota, etc.).
 FALLBACK_DEPTH_PROFILES_M: dict[str, list[float]] = {
     REGION_PACIFIC: [50.0, 40.0, 30.0, 20.0, 12.0, 6.0, 3.0],
     REGION_ATLANTIC: [35.0, 28.0, 22.0, 16.0, 10.0, 5.0, 2.5],
@@ -207,7 +284,7 @@ def _fallback_profile(region: str) -> list[BathymetryPoint]:
     """Return the hardcoded fallback profile for *region*, logged at WARNING."""
     depths = FALLBACK_DEPTH_PROFILES_M.get(region, FALLBACK_DEPTH_PROFILES_M[REGION_ATLANTIC])
     logger.warning(
-        "Bathymetry: CUDEM/OpenTopoData unavailable for region=%r; "
+        "Bathymetry: CUDEM/NCEI unavailable for region=%r; "
         "using hardcoded fallback depth profile.",
         region,
     )
@@ -254,22 +331,20 @@ def _linspace(start: float, stop: float, num: int) -> list[float]:
     return [start + step * i for i in range(num)]
 
 
-def _chunked(items: list[Any], size: int) -> list[list[Any]]:
-    return [items[i : i + size] for i in range(0, len(items), size)]
-
-
 # ---------------------------------------------------------------------------
-# Depth query (batched OpenTopoData call)
+# Depth query (per-point NCEI ImageServer identify calls)
 # ---------------------------------------------------------------------------
 
 
 def _query_depths_m(points: list[tuple[float, float]]) -> list[float | None]:
     """Query depth (meters, non-negative) at each (lat, lon) in *points*.
 
-    Batches into groups of at most ``_MAX_LOCATIONS_PER_REQUEST`` locations
-    per OpenTopoData request. Returns ``None`` for any location OpenTopoData
-    didn't return an elevation for (should not normally happen for valid
-    coastal coordinates, but handled defensively).
+    The NCEI ImageServer ``identify`` endpoint has no batch query shape
+    (unlike the originally-planned OpenTopoData endpoint, which never
+    actually existed) — one HTTP GET per point, paced by
+    ``_acquire_rate_limit_slot()`` (2 req/s courtesy budget). Returns
+    ``None`` for any point CUDEM has no coverage for (``value == "NoData"``)
+    or where the identify call returned no ``value`` at all.
 
     Raises the canonical ``ProviderError`` taxonomy on any network/protocol
     failure — never re-wrapped, propagates as-is per project convention.
@@ -279,35 +354,57 @@ def _query_depths_m(points: list[tuple[float, float]]) -> list[float | None]:
     client = _get_http_client()
     depths: list[float | None] = []
 
-    for batch in _chunked(points, _MAX_LOCATIONS_PER_REQUEST):
-        _rate_limiter.acquire()
-        locations_param = "|".join(f"{lat:.6f},{lon:.6f}" for lat, lon in batch)
-        response = client.get(_OPENTOPODATA_URL, params={"locations": locations_param})
+    for lat, lon in points:
+        _acquire_rate_limit_slot()
+        params = {
+            "geometry": f"{lon:.6f},{lat:.6f}",
+            "geometryType": "esriGeometryPoint",
+            "returnGeometry": "false",
+            "f": "json",
+        }
+        response = client.get(_NCEI_IMAGESERVER_URL, params=params)
 
         try:
-            wire = _OpenTopoDataResponse.model_validate(response.json())
+            wire = _NceiIdentifyResponse.model_validate(response.json())
         except (ValidationError, ValueError) as exc:
-            from weewx_clearskies_api.providers._common.errors import ProviderProtocolError
-
             logger.error(
-                "OpenTopoData CUDEM response validation failed: %s. "
-                "Response body (first 2000 chars): %.2000s",
+                "NCEI ImageServer identify response validation failed for "
+                "lat=%.6f,lon=%.6f: %s. Response body (first 2000 chars): %.2000s",
+                lat,
+                lon,
                 exc,
                 response.text,
             )
             raise ProviderProtocolError(
-                f"OpenTopoData CUDEM response validation failed: {exc}",
+                f"NCEI ImageServer identify response validation failed: {exc}",
                 provider_id=PROVIDER_ID,
                 domain=DOMAIN,
             ) from exc
 
-        for result in wire.results:
-            if result.elevation is None:
-                depths.append(None)
-            else:
-                # Negative elevation = underwater depth (MSL-relative).
-                # Positive elevation (land) clamps to zero depth.
-                depths.append(max(0.0, -result.elevation))
+        raw_value = wire.value
+        if raw_value is None or raw_value.strip().lower() == "nodata":
+            depths.append(None)
+            continue
+
+        try:
+            elevation_m = float(raw_value)
+        except ValueError as exc:
+            logger.error(
+                "NCEI ImageServer identify returned non-numeric value %r for "
+                "lat=%.6f,lon=%.6f",
+                raw_value,
+                lat,
+                lon,
+            )
+            raise ProviderProtocolError(
+                f"NCEI ImageServer identify returned non-numeric value {raw_value!r}",
+                provider_id=PROVIDER_ID,
+                domain=DOMAIN,
+            ) from exc
+
+        # Negative elevation = underwater depth (MSL-relative). Positive
+        # elevation (land) clamps to zero depth.
+        depths.append(max(0.0, -elevation_m))
 
     return depths
 

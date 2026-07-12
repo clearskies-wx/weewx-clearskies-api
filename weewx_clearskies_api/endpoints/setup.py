@@ -12,7 +12,10 @@ Endpoints:
   GET  /setup/station                    — return weewx.conf station identity
   POST /setup/apply                      — write api.conf + secrets.env, mark setup complete
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
-  POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile (T6.3)
+  POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile for one
+                                            surf spot (T6.3; admin/individual re-download —
+                                            POST /setup/apply auto-downloads for all
+                                            configured surf spots in one pass, T1.2)
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -43,6 +46,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 
 from weewx_clearskies_api.config.marine_config import (
+    BathymetryPoint,
     _COMPASS_DIRECTIONS,
     _VALID_ACTIVITIES,
     _VALID_BOTTOM_TYPES,
@@ -913,8 +917,49 @@ def _resolve_marine_wfo(
     return result
 
 
+def _resolve_marine_bathymetry(marine: MarineApplyConfig) -> dict[str, list[BathymetryPoint]]:
+    """Auto-download a CUDEM bathymetric profile for every marine location's
+    surf spot that doesn't already carry an operator-supplied profile
+    (Marine Remediation T1.2 "unified bounding box" apply flow).
+
+    There is no longer a separate wizard "download bathymetry" step per
+    spot: saving marine locations via ``POST /setup/apply`` now triggers the
+    download for every configured surf spot in a single pass here, sharing
+    the ``enrichment/bathymetry.py`` module-level HTTP client and its
+    ``ncei-cudem`` rate-limit budget across all locations (the NCEI
+    ImageServer ``identify`` endpoint is a point-query API with no area/
+    bounding-box export shape — see that module's docstring — so "unified"
+    here means one apply action triggers all per-location downloads, not a
+    single combined-area HTTP request).
+
+    A location whose ``surf.bathymetric_profile`` is already populated
+    (e.g. an admin re-download via ``POST /setup/marine/bathymetry``, whose
+    result the wizard then includes in this apply payload) is left
+    untouched — this function never overwrites an operator-confirmed
+    profile.
+
+    ``download_bathymetric_profile`` never raises for upstream provider
+    failures — it catches the canonical ``ProviderError`` taxonomy
+    internally and returns a hardcoded regional fallback profile instead
+    (see that module's docstring, "best-effort setup-time convenience").
+    One location's provider trouble therefore cannot block the rest of the
+    payload from saving, mirroring ``_resolve_marine_wfo``'s per-location
+    isolation above.
+    """
+    result: dict[str, list[BathymetryPoint]] = {}
+    for location in marine.locations:
+        if location.surf is None or location.surf.bathymetric_profile:
+            continue
+        result[location.id] = download_bathymetric_profile(
+            location.lat, location.lon, location.surf.beach_facing_degrees
+        )
+    return result
+
+
 def _build_marine_conf_section(
-    marine: MarineApplyConfig, wfo_by_location: dict[str, str | None]
+    marine: MarineApplyConfig,
+    wfo_by_location: dict[str, str | None],
+    bathymetry_by_location: dict[str, list[BathymetryPoint]] | None = None,
 ) -> dict[str, Any]:
     """Build the ``[marine]`` configobj section dict from the validated apply payload.
 
@@ -932,7 +977,14 @@ def _build_marine_conf_section(
     intentionally NOT written: it is not part of MarineConfig's loader and has
     no runtime consumer (also lead-confirmed 2026-07-10) — MarineWeatherConfig's
     hardcoded defaults are used until an operator-configurable loader exists.
+
+    ``bathymetry_by_location`` (T1.2): auto-downloaded profiles from
+    ``_resolve_marine_bathymetry``, keyed by location id. Used as a fallback
+    for any location whose ``surf.bathymetric_profile`` the operator did not
+    supply directly in the payload — an operator-supplied profile always
+    wins.
     """
+    bathymetry_by_location = bathymetry_by_location or {}
     locations: dict[str, Any] = {}
     for loc in marine.locations:
         loc_section: dict[str, Any] = {
@@ -963,10 +1015,17 @@ def _build_marine_conf_section(
                     f"{direction}:{str(value).lower()}"
                     for direction, value in surf.directional_exposure.items()
                 ]
-            if surf.bathymetric_profile:
+            # Operator-supplied profile wins; otherwise fall back to the
+            # profile auto-downloaded by _resolve_marine_bathymetry() (T1.2).
+            # Both MarineBathymetryPointApplyConfig (operator-supplied) and
+            # BathymetryPoint (auto-downloaded) expose the same
+            # distance_m/depth_m attributes, so the same comprehension
+            # handles either source.
+            profile_points = surf.bathymetric_profile or bathymetry_by_location.get(loc.id)
+            if profile_points:
                 surf_section["bathymetric_profile"] = {
                     str(i): {"distance_m": str(p.distance_m), "depth_m": str(p.depth_m)}
-                    for i, p in enumerate(surf.bathymetric_profile)
+                    for i, p in enumerate(profile_points)
                 }
             if surf.structures:
                 surf_section["structures"] = {
@@ -1004,6 +1063,7 @@ def _write_api_conf(
     config_dir: Path,
     apply: ApplyRequest,
     marine_wfo_by_location: dict[str, str | None] | None = None,
+    marine_bathymetry_by_location: dict[str, list[BathymetryPoint]] | None = None,
 ) -> None:
     """Write (or update) api.conf in config_dir with non-secret settings from apply."""
     conf_path = config_dir / "api.conf"
@@ -1193,7 +1253,9 @@ def _write_api_conf(
     # [column_mapping] above, so stale locations from a prior run don't persist.
     # Structure/format notes: see _build_marine_conf_section() docstring.
     if apply.marine is not None:
-        cfg["marine"] = _build_marine_conf_section(apply.marine, marine_wfo_by_location or {})
+        cfg["marine"] = _build_marine_conf_section(
+            apply.marine, marine_wfo_by_location or {}, marine_bathymetry_by_location or {}
+        )
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1676,9 +1738,18 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
                     break
         marine_wfo_by_location = _resolve_marine_wfo(body.marine, nws_contact)
 
+    # 0c. Auto-download CUDEM bathymetric profiles for marine surf spots
+    # (Marine Remediation T1.2 "unified bounding box" apply flow) — one pass
+    # across all configured locations, before writing. See
+    # _resolve_marine_bathymetry() docstring: never overwrites an
+    # operator-supplied profile, never fails the whole apply.
+    marine_bathymetry_by_location: dict[str, list[BathymetryPoint]] = {}
+    if body.marine is not None:
+        marine_bathymetry_by_location = _resolve_marine_bathymetry(body.marine)
+
     # 1. Write non-secret settings to api.conf.
     try:
-        _write_api_conf(config_dir, body, marine_wfo_by_location)
+        _write_api_conf(config_dir, body, marine_wfo_by_location, marine_bathymetry_by_location)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write api.conf during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write configuration file.") from exc
@@ -2226,7 +2297,15 @@ class MarineBathymetryResponse(BaseModel):
 @router.post("/marine/bathymetry", response_model=MarineBathymetryResponse)
 async def marine_bathymetry(body: MarineBathymetryRequest, request: Request) -> MarineBathymetryResponse:
     """Download (or compute a regional fallback for) a bathymetric depth
-    profile for a surf/fishing spot (PROVIDER-MANUAL §14.7).
+    profile for a single surf/fishing spot (PROVIDER-MANUAL §14.7).
+
+    T1.2: ``POST /setup/apply`` now auto-downloads a profile for every
+    configured marine surf spot in one pass (see
+    ``_resolve_marine_bathymetry``), so the wizard no longer needs a
+    separate "download bathymetry" button per spot. This endpoint remains
+    for the individual/admin re-download case (e.g. an operator wants a
+    fresh profile for one spot after moving it, without re-running the
+    whole apply flow).
 
     Synchronous — bathymetry downloads take seconds, not minutes (round brief
     spec). Delegates to the existing enrichment/bathymetry.py module, which
