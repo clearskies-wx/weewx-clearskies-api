@@ -479,21 +479,32 @@ class MarineSurfSpotApplyConfig(BaseModel):
 
 
 class MarineFishingSpotApplyConfig(BaseModel):
-    """``[[[[fishing]]]]`` sub-block for one marine location."""
+    """``[[[[fishing]]]]`` sub-block for one marine location.
+
+    ``target_categories`` (T6.3, 2026-07-11) replaces the earlier single
+    ``target_category: str`` — anglers may target species from multiple
+    categories at the same spot. Accepts either a bare string (from an
+    older wizard/admin client, or a single-category selection) or a list;
+    the validator normalizes a bare string to a one-element list.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    target_category: str
+    target_categories: list[str] | str
     #: Auto-classified from coordinates when omitted (OPERATIONS-MANUAL.md);
     #: the wizard may also send an operator-confirmed value.
     biogeographic_region: str | None = None
 
-    @field_validator("target_category")
+    @field_validator("target_categories")
     @classmethod
-    def _validate_target_category(cls, v: str) -> str:
-        if v not in _VALID_TARGET_CATEGORIES:
-            raise ValueError(f"target_category {v!r} not in {sorted(_VALID_TARGET_CATEGORIES)}")
-        return v
+    def _validate_target_categories(cls, v: list[str] | str) -> list[str]:
+        categories = [v] if isinstance(v, str) else v
+        if not categories:
+            raise ValueError("target_categories must not be empty")
+        bad = sorted(c for c in categories if c not in _VALID_TARGET_CATEGORIES)
+        if bad:
+            raise ValueError(f"target_categories {bad!r} not in {sorted(_VALID_TARGET_CATEGORIES)}")
+        return categories
 
 
 class MarineExternalLinkApplyConfig(BaseModel):
@@ -1067,7 +1078,9 @@ def _build_marine_conf_section(
             loc_section["surf"] = surf_section
 
         if loc.fishing is not None:
-            fishing_section: dict[str, Any] = {"target_category": loc.fishing.target_category}
+            fishing_section: dict[str, Any] = {
+                "target_categories": list(loc.fishing.target_categories)
+            }
             if loc.fishing.biogeographic_region:
                 fishing_section["biogeographic_region"] = loc.fishing.biogeographic_region
             loc_section["fishing"] = fishing_section
@@ -2406,10 +2419,17 @@ async def marine_species(
     request: Request,
     lat: float = Query(..., ge=-90, le=90, description="Spot latitude"),
     lon: float = Query(..., ge=-180, le=180, description="Spot longitude"),
-    category: str = Query("saltwater_inshore", description="Target fishing category"),
+    category: str = Query(
+        "saltwater_inshore",
+        description=(
+            "Target fishing category. Accepts a comma-separated list "
+            "(T6.3) — e.g. 'saltwater_inshore,bottom_fish' — to select "
+            "species from multiple categories at once."
+        ),
+    ),
 ) -> MarineSpeciesResponse:
-    """Return available species for a coordinate + fishing target category
-    (T2.5).
+    """Return available species for a coordinate + one or more fishing
+    target categories (T2.5; multi-category union added T6.3).
 
     Used by the wizard to populate species checkboxes for a marine fishing
     spot, based on the biogeographic region covering the spot's coordinates.
@@ -2417,17 +2437,32 @@ async def marine_species(
     ``enrichment/fishing_species.py`` (API-MANUAL §17: "Species data is
     hardcoded lookup tables ... keyed by biogeographic region and target
     category. No external API.") — this endpoint performs no I/O.
+
+    ``category`` accepts a comma-separated list of categories; the response
+    is the deduplicated union of species across all of them, order
+    preserved by first appearance.
     """
     await require_setup_session(request)
 
-    if category not in _VALID_TARGET_CATEGORIES:
+    categories = [c.strip() for c in category.split(",") if c.strip()]
+    if not categories:
+        raise HTTPException(422, detail="category must not be empty")
+    bad = sorted(c for c in categories if c not in _VALID_TARGET_CATEGORIES)
+    if bad:
         raise HTTPException(
             422,
-            detail=f"category {category!r} not in {sorted(_VALID_TARGET_CATEGORIES)}",
+            detail=f"category {bad!r} not in {sorted(_VALID_TARGET_CATEGORIES)}",
         )
 
     region = _classify_fishing_region(lat, lon)
-    species = SPECIES_BY_REGION.get(region, {}).get(category, [])
+    region_species = SPECIES_BY_REGION.get(region, {})
+    species: list[str] = []
+    seen: set[str] = set()
+    for cat in categories:
+        for name in region_species.get(cat, []):
+            if name not in seen:
+                seen.add(name)
+                species.append(name)
     return MarineSpeciesResponse(region=region, species=species)
 
 

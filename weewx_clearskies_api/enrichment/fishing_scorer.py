@@ -8,23 +8,36 @@ all sourced upstream by their own providers/processors per API-MANUAL.md
 §17). This module does not fetch data itself; it is a pure scoring
 function plus a small habitat-feature helper.
 
-**Five-component weighted scoring** (API-MANUAL.md §17):
+**Four-component weighted scoring** (T6.2, 2026-07-11 — water temperature
+removed from this shared base; see below):
 
-    pressure trend    (0.30) — 3-hour barometric delta
-    tide state        (0.25) — position in the tidal cycle
-    water temperature (0.20) — vs. the target category's typical range
-    solunar intensity (0.15) — major/minor period + moon-phase intensity
-    time of day        (0.10) — dawn/dusk/morning/night/midday
+    pressure trend (0.375) — 3-hour barometric delta
+    tide state     (0.3125) — position in the tidal cycle
+    solunar intensity (0.1875) — major/minor period + moon-phase intensity
+    time of day    (0.125) — dawn/dusk/morning/night/midday
 
-``overallScore`` is the weighted sum of these five components only — it is
-species-agnostic (one score per period, not per species). Per-species
-adjustment (pressure sensitivity, temperature preference, tide preference,
-time-of-day preference, seasonal behavior) is applied independently to each
-entry in ``speciesScores``, starting from the same weighted base score.
-This split was confirmed with the lead 2026-07-10: API-MANUAL.md §17's
-single-sentence formula ("Final score = Σ(component × weight) ×
-species_modifier × seasonal_multiplier") describes the *per-species*
-computation, not a modifier on the shared ``overallScore``.
+``overallScore`` is the weighted sum of these four components only — it is
+species-agnostic (one score per period, not per species) and carries no
+temperature signal. Per-species adjustment (pressure sensitivity,
+temperature preference, tide preference, time-of-day preference, seasonal
+behavior) is applied independently to each entry in ``speciesScores``,
+starting from the same weighted base score. This split was confirmed with
+the lead 2026-07-10: API-MANUAL.md §17's single-sentence formula ("Final
+score = Σ(component × weight) × species_modifier × seasonal_multiplier")
+describes the *per-species* computation, not a modifier on the shared
+``overallScore``.
+
+**Water temperature (T6.2, 2026-07-11):** Formerly a fifth component
+(weight 0.20) scored against the target category's typical range and baked
+into ``weighted_base`` — this double-counted temperature alongside the
+per-species ``_species_temp_multiplier()`` adjustment below, and the
+category-level ranges were coarser than the per-species profiles.
+Temperature scoring now lives *only* in per-species scoring
+(``fishing_species.SPECIES_PROFILES`` optimal/good/marginal ranges); the
+former weight was redistributed proportionally across the remaining four
+components (see ``_WEIGHT_*`` constants below). ``FishingForecast
+.waterTempScore`` is always ``None`` in the response — it no longer has a
+single species-agnostic value.
 
 **Habitat features:** ``bathymetry.py`` (Phase 3, T3.1) already implements
 ``identify_habitat_features()`` against a ``list[BathymetryPoint]`` —
@@ -102,14 +115,24 @@ _LOCALE_KEYS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Component weights (API-MANUAL.md §17 "Fishing scorer")
+# Component weights (API-MANUAL.md §17 "Fishing scorer").
+#
+# Water temperature is no longer a component of the shared weighted_base —
+# it is scored purely per-species (via _species_temp_multiplier(), using
+# each species' own SPECIES_PROFILES temp ranges) to avoid double-counting
+# temperature once at the category level and again per species. The former
+# _WEIGHT_WATER_TEMP (0.20) has been redistributed proportionally across
+# the remaining four weights so they still sum to 1.0:
+#   original: pressure .30, tide .25, solunar .15, time_of_day .10 (sum .80)
+#   factor = 1.0 / .80 = 1.25
+#   pressure .30*1.25=.375, tide .25*1.25=.3125, solunar .15*1.25=.1875,
+#   time_of_day .10*1.25=.125 (sum 1.0)
 # ---------------------------------------------------------------------------
 
-_WEIGHT_PRESSURE = 0.30
-_WEIGHT_TIDE = 0.25
-_WEIGHT_WATER_TEMP = 0.20
-_WEIGHT_SOLUNAR = 0.15
-_WEIGHT_TIME_OF_DAY = 0.10
+_WEIGHT_PRESSURE = 0.375
+_WEIGHT_TIDE = 0.3125
+_WEIGHT_SOLUNAR = 0.1875
+_WEIGHT_TIME_OF_DAY = 0.125
 
 # ---------------------------------------------------------------------------
 # Pressure trend component
@@ -173,44 +196,14 @@ def _score_tide(tide_state: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Water temperature component — category-level typical ranges (API-MANUAL.md
-# §17 species profile table: "Typical temp range (°F)" per target category).
-# This is distinct from the per-species optimal/good/marginal ranges in
-# fishing_species.SPECIES_PROFILES, which drive the per-species multiplier
-# instead (this component score is species-agnostic, like overallScore).
+# Water temperature is intentionally NOT a component here. It was formerly
+# scored at the category level via _score_water_temp()/_CATEGORY_TEMP_RANGES_F
+# and baked into weighted_base — that double-counted temperature alongside
+# the per-species _species_temp_multiplier() below, and the category-level
+# ranges were coarser than the per-species profiles. Removed (T6.2,
+# 2026-07-11): temperature scoring now lives solely in _score_one_species()
+# via fishing_species.SPECIES_PROFILES per-species temp ranges.
 # ---------------------------------------------------------------------------
-
-_CATEGORY_TEMP_RANGES_F: dict[str, dict[str, tuple[float, float]]] = {
-    "saltwater_inshore": {"optimal": (65.0, 80.0), "good": (55.0, 85.0), "marginal": (45.0, 90.0)},
-    "bottom_fish": {"optimal": (68.0, 80.0), "good": (60.0, 85.0), "marginal": (50.0, 90.0)},
-    "freshwater_sport": {"optimal": (62.0, 72.0), "good": (55.0, 75.0), "marginal": (45.0, 80.0)},
-    "salmonids": {"optimal": (50.0, 60.0), "good": (45.0, 65.0), "marginal": (38.0, 70.0)},
-}
-
-_WATER_TEMP_SCORE_OPTIMAL = 100
-_WATER_TEMP_SCORE_GOOD = 80
-_WATER_TEMP_SCORE_MARGINAL = 50
-_WATER_TEMP_SCORE_OUTSIDE = 10
-_WATER_TEMP_SCORE_NEUTRAL = 50  # None/unknown, or unrecognized category
-
-
-def _score_water_temp(water_temp_f: float | None, target_category: str) -> int:
-    if water_temp_f is None:
-        return _WATER_TEMP_SCORE_NEUTRAL
-    ranges = _CATEGORY_TEMP_RANGES_F.get(target_category)
-    if ranges is None:
-        return _WATER_TEMP_SCORE_NEUTRAL
-    lo, hi = ranges["optimal"]
-    if lo <= water_temp_f <= hi:
-        return _WATER_TEMP_SCORE_OPTIMAL
-    lo, hi = ranges["good"]
-    if lo <= water_temp_f <= hi:
-        return _WATER_TEMP_SCORE_GOOD
-    lo, hi = ranges["marginal"]
-    if lo <= water_temp_f <= hi:
-        return _WATER_TEMP_SCORE_MARGINAL
-    return _WATER_TEMP_SCORE_OUTSIDE
-
 
 # ---------------------------------------------------------------------------
 # Solunar component
@@ -635,8 +628,9 @@ def score_fishing(
             species without a profile get a neutral default).
         target_category: one of "saltwater_inshore", "bottom_fish",
             "freshwater_sport", "salmonids" (config/marine_config.py
-            FishingSpotConfig.target_category) — drives the generic
-            water-temperature component's typical range.
+            FishingSpotConfig.target_categories). Retained for signature
+            compatibility; not used in scoring — temperature is per-species
+            via SPECIES_PROFILES (T6.2, 2026-07-11).
         month: 1-12; drives per-species seasonal adjustment.
         bathymetric_profile: accepted for signature fidelity with the
             brief; not threaded into the returned FishingForecast (see
@@ -657,7 +651,6 @@ def score_fishing(
 
     pressure_score = _score_pressure(pressure_trend_hpa_3hr)
     tide_score = _score_tide(tide_state)
-    water_temp_score = _score_water_temp(water_temp_f, target_category)
     solunar_score = _score_solunar(
         is_during_major_period, is_during_minor_period, solunar_intensity
     )
@@ -666,7 +659,6 @@ def score_fishing(
     weighted_base = (
         pressure_score * _WEIGHT_PRESSURE
         + tide_score * _WEIGHT_TIDE
-        + water_temp_score * _WEIGHT_WATER_TEMP
         + solunar_score * _WEIGHT_SOLUNAR
         + time_score * _WEIGHT_TIME_OF_DAY
     )
@@ -701,7 +693,7 @@ def score_fishing(
         pressureScore=pressure_score,
         tideScore=tide_score,
         solunarScore=solunar_score,
-        waterTempScore=water_temp_score,
+        waterTempScore=None,
         timeofdayScore=time_score,
         speciesScores=species_scores or None,
         conditionsText=conditions_text,

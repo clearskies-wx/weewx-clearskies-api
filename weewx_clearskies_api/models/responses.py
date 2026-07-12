@@ -1561,7 +1561,10 @@ class FishingForecast(BaseModel):
     pressureScore: int        # pressure component sub-score 0-100
     tideScore: int             # tide component sub-score 0-100
     solunarScore: int          # solunar component sub-score 0-100
-    waterTempScore: int        # water temperature component sub-score 0-100
+    waterTempScore: int | None = None  # always None (T6.2): temperature is scored
+    # purely per-species (speciesScores) since 2026-07-11, not as a shared
+    # component of overallScore — see enrichment/fishing_scorer.py module
+    # docstring for why the category-level component was removed.
     timeofdayScore: int        # time-of-day component sub-score 0-100
     speciesScores: list[dict[str, Any]] | None = None  # per-species score adjustments
     conditionsText: str        # natural-language conditions summary

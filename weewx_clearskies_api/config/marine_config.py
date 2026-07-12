@@ -32,7 +32,7 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
                 S:true, SW:true, W:false, NW:false
 
           [[[[fishing]]]]
-            target_category = saltwater_inshore
+            target_categories = saltwater_inshore, bottom_fish
 
           [[[[beach_safety]]]]
             [[[[[external_links]]]]]
@@ -245,14 +245,29 @@ class SurfSpotConfig:
 
 
 class FishingSpotConfig:
-    """``[[fishing]]`` sub-block settings for a marine location."""
+    """``[[fishing]]`` sub-block settings for a marine location.
 
-    target_category: str
+    ``target_categories`` (T6.3, 2026-07-11) replaces the earlier single
+    ``target_category: str`` — anglers may target species from multiple
+    categories at the same spot (e.g. saltwater_inshore + bottom_fish).
+    Backward compat: existing api.conf files with a bare
+    ``target_category = saltwater_inshore`` key still load without error,
+    normalized to a one-element list.
+    """
+
+    target_categories: list[str]
     species: list[str]
     biogeographic_region: str
 
     def __init__(self, section: dict[str, Any]) -> None:
-        self.target_category = str(section.get("target_category", "")).strip()
+        if "target_categories" in section:
+            self.target_categories = _as_list(section.get("target_categories", []))
+        elif "target_category" in section:
+            # Old single-value config key — wrap in a list.
+            raw = str(section.get("target_category", "")).strip()
+            self.target_categories = [raw] if raw else []
+        else:
+            self.target_categories = []
         # Auto-populated from biogeographic region based on coordinates —
         # may be pre-empty at config-parse time and filled in later.
         self.species = _as_list(section.get("species", []))
@@ -260,11 +275,16 @@ class FishingSpotConfig:
 
     def validate(self, location_id: str) -> None:
         """Raise ValueError naming the field + location on bad values."""
-        if self.target_category not in _VALID_TARGET_CATEGORIES:
+        if not self.target_categories:
             raise ValueError(
-                f"[marine.locations.{location_id}.fishing] target_category "
-                f"{self.target_category!r} not in {sorted(_VALID_TARGET_CATEGORIES)}"
+                f"[marine.locations.{location_id}.fishing] target_categories must not be empty"
             )
+        for category in self.target_categories:
+            if category not in _VALID_TARGET_CATEGORIES:
+                raise ValueError(
+                    f"[marine.locations.{location_id}.fishing] target_categories entry "
+                    f"{category!r} not in {sorted(_VALID_TARGET_CATEGORIES)}"
+                )
 
 
 class BeachSafetyConfig:

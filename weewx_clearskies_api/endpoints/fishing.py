@@ -28,7 +28,11 @@ Data flow per API-MANUAL §17/§18:
          water_temperature.
        - solunar_intensity / is_during_major_period / is_during_minor_period:
          from the day's SolunarTimes.
-       - species / target_category: from FishingSpotConfig.
+       - species: from FishingSpotConfig. target_category passed to
+         score_fishing() is the first entry of FishingSpotConfig
+         .target_categories (T6.3) — retained for signature compat only,
+         since the scorer no longer scores by category (T6.2; temperature
+         is per-species now).
        - bathymetric_profile: reused from the location's SurfSpotConfig (if
          the location also has "surf" configured) since FishingSpotConfig
          itself carries no bathymetric_profile field (config/marine_config.py)
@@ -365,7 +369,15 @@ def get_fishing(location_id: str) -> dict:
     habitat_features = get_habitat_features(bathymetric_profile)
 
     species = fishing_config.species
-    target_category = fishing_config.target_category
+    # T6.3: FishingSpotConfig.target_category (str) -> target_categories
+    # (list[str]) so anglers can target species from multiple categories.
+    # score_fishing()'s target_category kwarg is retained for signature
+    # compat only (the scorer no longer reads it, T6.2) — pass the first
+    # configured category, or "" if none configured. Also used for the
+    # bundle's "targetCategory" wire field, unchanged from its prior shape
+    # (a single category value) since that field isn't part of this task's
+    # scope.
+    target_category = fishing_config.target_categories[0] if fishing_config.target_categories else ""
 
     today = datetime.now(tz=UTC).date()
 
