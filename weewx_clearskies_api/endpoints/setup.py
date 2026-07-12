@@ -23,6 +23,10 @@ Endpoints:
   GET  /setup/marine/species             — species checklist for a coordinate + fishing
                                             target category, keyed by biogeographic region
                                             (T2.5)
+  GET  /setup/marine/discover-structures — discover nearby coastal structures (jetties,
+                                            piers, breakwaters, seawalls, groins) via the
+                                            OpenStreetMap Overpass API, for surf spot
+                                            wave-physics setup (T5.2)
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -31,9 +35,12 @@ in app.py.  All endpoints live directly under /setup/...
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import ipaddress
+import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -76,8 +83,11 @@ from weewx_clearskies_api.enrichment.bathymetry import (
     download_bathymetric_profile,
 )
 from weewx_clearskies_api.enrichment.fishing_species import SPECIES_BY_REGION
+from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
+from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.nws_zones import get_cwa
+from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
 from weewx_clearskies_api.providers.marine.grib_processor import (
     GRIB_AVAILABLE,
@@ -2416,6 +2426,347 @@ async def marine_species(
     region = classify_region(lat, lon)
     species = SPECIES_BY_REGION.get(region, {}).get(category, [])
     return MarineSpeciesResponse(region=region, species=species)
+
+
+# ---------------------------------------------------------------------------
+# Coastal structure discovery via OpenStreetMap Overpass API (T5.2)
+#
+# Not a dispatch-registered provider module (no CAPABILITY, no
+# PROVIDER_MODULES entry) — same "supporting component" category as
+# enrichment/bathymetry.py (PROVIDER-MANUAL §14.7) and
+# providers/_common/nws_zones.py (PROVIDER-MANUAL §14.8): a setup-time-only
+# data-access helper. It still goes through ProviderHTTPClient (retry/
+# backoff/canonical error taxonomy) and get_cache() (pluggable memory/Redis
+# backend, ADR-017) rather than raw httpx or a hand-rolled Redis client —
+# PROVIDER-MANUAL §1 "ProviderHTTPClient" and §3 "Cache key construction"
+# apply to every outbound HTTP call in this codebase, not just
+# dispatch-registered provider modules (lead-confirmed 2026-07-11, this
+# round: the original brief's "use httpx directly" + raw-Redis-key
+# instructions predated that check and were superseded).
+# ---------------------------------------------------------------------------
+
+_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+_OVERPASS_USER_AGENT = "ClearSkies-WeatherStation/1.0 (structure-discovery)"
+_OVERPASS_PROVIDER_ID = "overpass"
+_OVERPASS_DOMAIN = "marine"
+_STRUCTURE_DISCOVERY_CACHE_TTL_SECONDS = 86400  # 24h — coastal structures rarely change
+_MIN_STRUCTURE_LENGTH_M = 5.0  # filter out sub-5m ways as digitisation noise
+_EARTH_RADIUS_M = 6371000.0
+
+# OSM tag value -> our StructureConfig.type (config/marine_config.py
+# _VALID_STRUCTURE_TYPES). "seawall" is reachable via two different OSM tag
+# spellings (wall=seawall, man_made=dyke); osm_type on the response preserves
+# which raw OSM value produced the match.
+_OSM_STRUCTURE_TYPE_MAP: dict[str, str] = {
+    "breakwater": "breakwater",
+    "groyne": "groin",
+    "pier": "pier",
+    "seawall": "seawall",
+    "dyke": "seawall",
+}
+
+# OSM material tag -> our StructureConfig.material (config/marine_config.py
+# _VALID_STRUCTURE_MATERIALS). Values not present here (missing tag, or an
+# OSM value we don't recognise) map to None — the operator must choose.
+_OSM_MATERIAL_MAP: dict[str, str] = {
+    "concrete": "impermeable",
+    "rock": "semi_permeable",
+    "stone": "semi_permeable",
+    "wood": "permeable",
+    "metal": "semi_permeable",
+}
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in meters.
+
+    Local to this module — no project-wide haversine helper exists (every
+    other module that needs one, e.g. providers/buoy/ndbc.py, providers/
+    tides/coops.py, providers/_common/nws_zones.py, services/faults.py,
+    endpoints/earthquakes.py, implements its own private copy; same
+    established pattern, see rules/coding.md §3 DRY rule discussion in
+    nws_zones.py's module docstring).
+    """
+    lat1_r, lon1_r, lat2_r, lon2_r = (math.radians(v) for v in (lat1, lon1, lat2, lon2))
+    dlat = lat2_r - lat1_r
+    dlon = lon2_r - lon1_r
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return _EARTH_RADIUS_M * c
+
+
+def _initial_bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial compass bearing from point 1 to point 2, in degrees [0, 360).
+
+    Standard forward-azimuth (geodesic bearing) formula: 0=N, 90=E, 180=S,
+    270=W.
+    """
+    lat1_r, lat2_r = math.radians(lat1), math.radians(lat2)
+    dlon_r = math.radians(lon2 - lon1)
+    x = math.sin(dlon_r) * math.cos(lat2_r)
+    y = math.cos(lat1_r) * math.sin(lat2_r) - math.sin(lat1_r) * math.cos(lat2_r) * math.cos(dlon_r)
+    bearing = math.degrees(math.atan2(x, y))
+    return (bearing + 360.0) % 360.0
+
+
+_overpass_rate_limiter = RateLimiter(
+    # Polite-use guard for the free, shared overpass-api.de instance — this
+    # is a setup-time-only endpoint (called once per surf spot, then cached
+    # 24h), so 1 req/s never trips in normal use. Same "be polite" rationale
+    # as providers/buoy/ndbc.py's NDBC limiter and enrichment/bathymetry.py's
+    # ncei-cudem limiter.
+    name="overpass-structures",
+    provider_id=_OVERPASS_PROVIDER_ID,
+    domain=_OVERPASS_DOMAIN,
+    max_calls=1,
+    window_seconds=1,
+)
+
+_overpass_http_client: ProviderHTTPClient | None = None
+
+
+def _get_overpass_http_client() -> ProviderHTTPClient:
+    """Return the module-level HTTP client (one instance, not per-request)."""
+    global _overpass_http_client  # noqa: PLW0603
+    if _overpass_http_client is None:
+        _overpass_http_client = ProviderHTTPClient(
+            provider_id=_OVERPASS_PROVIDER_ID,
+            domain=_OVERPASS_DOMAIN,
+            user_agent=_OVERPASS_USER_AGENT,
+            # Overpass queries can take a few seconds server-side even with
+            # the query's own [timeout:10]; give the HTTP layer headroom
+            # beyond that so we see the server's own timeout response rather
+            # than cutting it off client-side first.
+            read_timeout=15.0,
+        )
+    return _overpass_http_client
+
+
+def _reset_overpass_http_client_for_tests() -> None:
+    """Reset the module-level HTTP client. Used in tests only."""
+    global _overpass_http_client  # noqa: PLW0603
+    _overpass_http_client = None
+
+
+def _build_overpass_structure_query(lat: float, lon: float, radius_m: int) -> str:
+    """Build the Overpass QL query for coastal structures around (lat, lon)."""
+    return (
+        "[out:json][timeout:10];\n"
+        "(\n"
+        f'  way["man_made"~"breakwater|groyne|pier"](around:{radius_m},{lat},{lon});\n'
+        f'  way["wall"="seawall"](around:{radius_m},{lat},{lon});\n'
+        f'  way["man_made"="dyke"](around:{radius_m},{lat},{lon});\n'
+        ");\n"
+        "out body geom;"
+    )
+
+
+def _build_structure_discovery_cache_key(lat: float, lon: float, radius_m: int) -> str:
+    """Deterministic cache key: hash of (provider_id, endpoint, normalized_params).
+
+    Same construction as providers/_common/nws_zones.py's cache key builders
+    (PROVIDER-MANUAL §3 "Cache key construction") — lat/lon rounded to 4
+    decimal places, not the brief's original 3dp, so structure-discovery
+    cache entries follow the one established convention used everywhere else
+    in this codebase rather than a bespoke one for this endpoint alone.
+    """
+    payload = json.dumps(
+        {
+            "provider_id": _OVERPASS_PROVIDER_ID,
+            "endpoint": "structure_discovery",
+            "params": {"lat4": round(lat, 4), "lon4": round(lon, 4), "radius_m": radius_m},
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _classify_osm_way(tags: dict[str, Any]) -> str | None:
+    """Return the raw OSM tag value identifying a coastal structure way, or
+    None if the way's tags don't match any of the query filters (defensive
+    — the Overpass query itself already filters server-side, but a
+    conservative client-side re-check costs nothing and guards against a
+    future query-string change drifting out of sync with this parser).
+    """
+    man_made = tags.get("man_made")
+    if man_made in ("breakwater", "groyne", "pier", "dyke"):
+        return str(man_made)
+    if tags.get("wall") == "seawall":
+        return "seawall"
+    return None
+
+
+class MarineDiscoveredStructure(BaseModel):
+    osm_id: int
+    #: Raw OSM tag value that matched (e.g. "breakwater", "groyne", "pier",
+    #: "seawall", "dyke") — distinct from `type` when the OSM vocabulary and
+    #: our canonical vocabulary diverge (groyne -> groin; dyke -> seawall).
+    osm_type: str
+    name: str | None = None
+    #: Mapped to config/marine_config.py's StructureConfig.type vocabulary.
+    type: str
+    #: Mapped to config/marine_config.py's StructureConfig.material
+    #: vocabulary; null when the OSM `material` tag is missing or not one we
+    #: recognise — the operator must choose in that case.
+    material: str | None = None
+    #: "osm" when `material` was mapped from an OSM tag, "operator" when the
+    #: operator must supply it themselves.
+    material_source: str
+    length_m: float
+    bearing_degrees: float
+    distance_m: float
+    #: [[lat, lon], ...] — the way's node coordinates in OSM order.
+    geometry: list[list[float]]
+
+
+class MarineStructureDiscoveryResponse(BaseModel):
+    structures: list[MarineDiscoveredStructure]
+    query_radius_m: int
+    source: str = "openstreetmap_overpass"
+    #: Populated (structures left empty) when the Overpass call failed —
+    #: timeout, rate limit, or server error. Never a 500; graceful
+    #: degradation mirrors enrichment/bathymetry.py's "best-effort
+    #: setup-time convenience" pattern (PROVIDER-MANUAL §14.7).
+    error: str | None = None
+
+
+def _parse_overpass_structures(
+    elements: list[dict[str, Any]], lat: float, lon: float
+) -> list[MarineDiscoveredStructure]:
+    """Translate Overpass `elements` into MarineDiscoveredStructure entries.
+
+    Filters out `floating=yes` ways (marina dock fingers — irrelevant to
+    wave physics) and ways shorter than _MIN_STRUCTURE_LENGTH_M (digitisation
+    noise). Sorted by distance_m ascending (nearest first) by the caller.
+    """
+    structures: list[MarineDiscoveredStructure] = []
+    for el in elements:
+        if el.get("type") != "way":
+            continue
+
+        tags = el.get("tags") or {}
+        if str(tags.get("floating", "")).strip().lower() == "yes":
+            continue
+
+        raw_type = _classify_osm_way(tags)
+        if raw_type is None:
+            continue
+
+        geometry_raw = el.get("geometry") or []
+        points: list[tuple[float, float]] = [
+            (float(pt["lat"]), float(pt["lon"]))
+            for pt in geometry_raw
+            if isinstance(pt, dict) and "lat" in pt and "lon" in pt
+        ]
+        if len(points) < 2:
+            continue
+
+        length_m = sum(
+            _haversine_m(lat_a, lon_a, lat_b, lon_b)
+            for (lat_a, lon_a), (lat_b, lon_b) in zip(points, points[1:], strict=False)
+        )
+        if length_m < _MIN_STRUCTURE_LENGTH_M:
+            continue
+
+        bearing_degrees = _initial_bearing_degrees(
+            points[0][0], points[0][1], points[-1][0], points[-1][1]
+        )
+        distance_m = min(_haversine_m(lat, lon, p_lat, p_lon) for p_lat, p_lon in points)
+
+        raw_material = str(tags.get("material", "")).strip().lower()
+        material = _OSM_MATERIAL_MAP.get(raw_material)
+
+        name = tags.get("name")
+
+        structures.append(
+            MarineDiscoveredStructure(
+                osm_id=int(el.get("id", 0)),
+                osm_type=raw_type,
+                name=str(name) if name else None,
+                type=_OSM_STRUCTURE_TYPE_MAP[raw_type],
+                material=material,
+                material_source="osm" if material is not None else "operator",
+                length_m=round(length_m, 1),
+                bearing_degrees=round(bearing_degrees, 1),
+                distance_m=round(distance_m, 1),
+                geometry=[[p_lat, p_lon] for p_lat, p_lon in points],
+            )
+        )
+
+    structures.sort(key=lambda s: s.distance_m)
+    return structures
+
+
+@router.get("/marine/discover-structures", response_model=MarineStructureDiscoveryResponse)
+async def marine_discover_structures(
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90, description="Surf spot latitude"),
+    lon: float = Query(..., ge=-180, le=180, description="Surf spot longitude"),
+    radius_m: int = Query(2000, gt=0, le=20000, description="Search radius in meters"),
+) -> MarineStructureDiscoveryResponse:
+    """Discover nearby coastal structures (jetties, piers, breakwaters,
+    seawalls, groins) via the OpenStreetMap Overpass API (T5.2).
+
+    Used by the wizard to auto-populate the `structures` list of a surf
+    spot's config/marine_config.py StructureConfig entries, which feed the
+    NWPS supplement processor's coastal-structure transmission/reflection
+    correction (API-MANUAL §17 "Supplement 2 — Coastal structure effects").
+
+    Results are cached 24h (structures rarely change) via get_cache() — see
+    _build_structure_discovery_cache_key() docstring for the key
+    construction. A cache hit skips the Overpass call entirely.
+
+    Graceful degradation: any ProviderError from the Overpass call (timeout,
+    quota, 5xx after retries, unexpected response shape) is caught here and
+    returns 200 with an empty `structures` list and `error` populated —
+    never a 500. Not cached, so the next call retries live.
+    """
+    await require_setup_session(request)
+
+    cache_key = _build_structure_discovery_cache_key(lat, lon, radius_m)
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return MarineStructureDiscoveryResponse.model_validate(cached)
+
+    query = _build_overpass_structure_query(lat, lon, radius_m)
+    client = _get_overpass_http_client()
+
+    try:
+        _overpass_rate_limiter.acquire()
+        response = client.get(_OVERPASS_URL, params={"data": query})
+        wire = response.json()
+    except ProviderError as exc:
+        logger.warning(
+            "Overpass structure discovery failed for lat=%s,lon=%s,radius_m=%d (%s: %s)",
+            lat,
+            lon,
+            radius_m,
+            type(exc).__name__,
+            exc,
+        )
+        return MarineStructureDiscoveryResponse(
+            structures=[],
+            query_radius_m=radius_m,
+            error=f"Structure discovery unavailable: {exc}",
+        )
+    except ValueError as exc:
+        # response.json() decode failure — Overpass returned a non-JSON body
+        # (e.g. an HTML rate-limit page on a 200 response).
+        logger.warning("Overpass response JSON decode failed: %s", exc)
+        return MarineStructureDiscoveryResponse(
+            structures=[],
+            query_radius_m=radius_m,
+            error="Structure discovery unavailable: invalid response from Overpass API.",
+        )
+
+    elements = wire.get("elements", []) if isinstance(wire, dict) else []
+    structures = _parse_overpass_structures(elements, lat, lon)
+
+    result = MarineStructureDiscoveryResponse(structures=structures, query_radius_m=radius_m)
+    get_cache().set(
+        cache_key, result.model_dump(), ttl_seconds=_STRUCTURE_DISCOVERY_CACHE_TTL_SECONDS
+    )
+    return result
 
 
 def _check_restart_token(request: Request) -> bool:
