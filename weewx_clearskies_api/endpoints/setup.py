@@ -11,6 +11,10 @@ Endpoints:
   GET  /setup/schema                     — reflect DB schema using stored db_params
   GET  /setup/station                    — return weewx.conf station identity
   POST /setup/apply                      — write api.conf + secrets.env, mark setup complete
+  GET  /setup/marine/eccodes-check       — probe whether a GRIB2 backend (eccodes or
+                                            pygrib) is installed, before the wizard lets
+                                            the operator enable marine features
+                                            (Marine Remediation Plan T3.6)
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
   POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile for one
                                             surf spot (T6.3; admin/individual re-download —
@@ -75,6 +79,10 @@ from weewx_clearskies_api.enrichment.fishing_species import SPECIES_BY_REGION
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.nws_zones import get_cwa
 from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
+from weewx_clearskies_api.providers.marine.grib_processor import (
+    GRIB_AVAILABLE,
+    check_grib_available,
+)
 from weewx_clearskies_api.providers.tides.coops import discover_stations as _coops_discover_stations
 from weewx_clearskies_api.services.station import _get_str_field, _parse_altitude
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, get_weewx_conf, load_weewx_conf
@@ -2162,6 +2170,45 @@ async def get_skin_file(
 # ---------------------------------------------------------------------------
 # Marine setup endpoints (T6.3)
 # ---------------------------------------------------------------------------
+
+
+class MarineEccodesCheckResponse(BaseModel):
+    #: True when a GRIB2 backend (eccodes or the pygrib fallback) is
+    #: importable in this process. False means the marine feature's NWPS
+    #: nearshore wave provider (PROVIDER-MANUAL §14.6) cannot run.
+    available: bool
+    #: Platform-agnostic install instructions (matches
+    #: grib_processor.check_grib_available()'s RuntimeError message).
+    #: None when available is True.
+    install_instructions: str | None = None
+
+
+@router.get("/marine/eccodes-check", response_model=MarineEccodesCheckResponse)
+async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
+    """Probe whether a GRIB2 backend is installed (Marine Remediation Plan T3.6).
+
+    Called by the wizard's marine step on load, before the operator is
+    allowed to enable marine features — the NWPS nearshore wave provider
+    (PROVIDER-MANUAL §14.6) hard-requires eccodes (or the pygrib fallback)
+    and cannot function without it. Reuses the same backend-detection state
+    (``GRIB_AVAILABLE``, set once at process start when
+    ``providers/marine/grib_processor.py`` is imported) and the same
+    install-instructions text that the provider registration path already
+    raises with, rather than re-probing ``import eccodes`` / ``import
+    pygrib`` here — one source of truth for GRIB backend detection.
+    """
+    await require_setup_session(request)
+
+    if GRIB_AVAILABLE:
+        return MarineEccodesCheckResponse(available=True, install_instructions=None)
+
+    try:
+        check_grib_available()
+    except RuntimeError as exc:
+        return MarineEccodesCheckResponse(available=False, install_instructions=str(exc))
+
+    # Unreachable: GRIB_AVAILABLE is False iff check_grib_available() raises.
+    return MarineEccodesCheckResponse(available=False, install_instructions=None)
 
 
 class MarineNdbcStationEntry(BaseModel):
