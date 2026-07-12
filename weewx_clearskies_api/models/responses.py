@@ -1631,6 +1631,25 @@ class BeachSafetyAssessment(BaseModel):
     activeAlerts: list[str]  # alert headlines relevant to beach safety
 
 
+class MarineAlertSummary(BaseModel):
+    """One active NWS alert on a MarineLocationSummary, tagged for tab filtering.
+
+    alertType classifies the alert's NWS `event` string into a dashboard
+    activity-tab bucket (API-MANUAL §16 "Marine alert types", T3.5): one of
+    "marineZone" (Small Craft Advisory, Gale/Storm/Hurricane Force Wind
+    Warning, Special Marine Warning), "coastalFlood" (Coastal Flood
+    Watch/Warning/Advisory/Statement), or "beachHazard" (Beach Hazards
+    Statement, High Surf Warning/Advisory, Rip Current Statement).  See
+    endpoints/marine.py's _classify_alert_type() for the exact keyword
+    match; unrecognized marine event types default to "marineZone".
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    headline: str    # NWS alert headline text
+    alertType: str   # "marineZone" | "coastalFlood" | "beachHazard"
+
+
 class MarineLocationSummary(BaseModel):
     """Summary snapshot for one marine location, used by the Now page summary card.
 
@@ -1645,7 +1664,7 @@ class MarineLocationSummary(BaseModel):
     activities: list[str]           # enabled activities for this location
     currentConditions: MarineObservation | None = None  # latest buoy obs, if buoy enabled
     currentTide: dict[str, Any] | None = None  # next high/low tide {type, time, height}
-    activeAlerts: list[str] | None = None       # active marine alert headlines
+    activeAlerts: list[MarineAlertSummary] | None = None  # active marine alerts, tagged by type
     surfRating: int | None = None               # current surf quality stars (1-5), if surf enabled
     beachSafetyLevel: str | None = None         # current safety level, if beach_safety enabled
 

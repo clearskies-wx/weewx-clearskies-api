@@ -5,11 +5,22 @@ Two routes:
   GET /marine
     No locationId.  Returns a list of MarineLocationSummary, one per
     configured [marine] location (id, name, coordinates, activities).
-    currentConditions/currentTide/activeAlerts/surfRating/beachSafetyLevel
-    are left None -- full population is deferred until the cache warmer
+    currentConditions/currentTide/surfRating/beachSafetyLevel are left
+    None -- full population is deferred until the cache warmer
     infrastructure exists to make a multi-location summary cheap to serve
-    (per brief).  404 "Marine features not configured" when no [marine]
-    section is present or it has zero locations.
+    (per brief).  activeAlerts IS populated (Marine Remediation Plan
+    T3.5, un-deferred by lead ruling): the NWS alerts provider
+    (providers/alerts/nws.py) already caches its response for 5 minutes,
+    so a per-location fetch here is cheap enough not to need the cache
+    warmer.  Each alert carries a `headline` and an `alertType`
+    classified from its NWS `event` string by _classify_alert_type() --
+    "marineZone" | "coastalFlood" | "beachHazard" -- so the dashboard can
+    filter alerts per activity tab.  A single location's alert-fetch
+    failure degrades that location's activeAlerts to None (independent
+    best-effort, same pattern as GET /marine/{location_id}'s provider
+    calls below) rather than failing the whole list.  404 "Marine
+    features not configured" when no [marine] section is present or it
+    has zero locations.
 
     Ruling (lead, T5.1/T5.2 round): the API-MANUAL §18 line "Without
     locationId, the endpoint returns data for the first configured
@@ -62,6 +73,7 @@ from weewx_clearskies_api.config.marine_config import (
     load_marine_config,
 )
 from weewx_clearskies_api.models.responses import (
+    MarineAlertSummary,
     MarineBundle,
     MarineForecastPoint,
     MarineLocationSummary,
@@ -251,8 +263,59 @@ def _convert_forecast_point(
 # ---------------------------------------------------------------------------
 
 
+def _classify_alert_type(event: str) -> str:
+    """Classify an NWS alert `event` string into a dashboard alertType bucket.
+
+    Keyword match, case-insensitive, on the NWS canonical event name (e.g.
+    "Small Craft Advisory", "Coastal Flood Warning"). Unrecognized marine
+    event types default to "marineZone" (T3.5, Marine Remediation Plan --
+    lead-specified default; every alert reaching this endpoint is already a
+    marine/coastal NWS alert, so marineZone is the safest generic bucket).
+    """
+    event_lower = event.lower()
+    if any(
+        k in event_lower
+        for k in ("small craft", "gale", "storm warning", "hurricane force", "special marine")
+    ):
+        return "marineZone"
+    if "coastal flood" in event_lower:
+        return "coastalFlood"
+    if any(k in event_lower for k in ("beach hazard", "rip current", "high surf")):
+        return "beachHazard"
+    return "marineZone"  # default to marineZone for unrecognized marine alerts
+
+
+def _fetch_active_alerts(location: MarineLocation) -> list[MarineAlertSummary] | None:
+    """Best-effort fetch of active NWS alerts for a marine location, classified by type.
+
+    Returns None on any provider failure (independent best-effort, matching
+    the try/except pattern used by every other provider call in this
+    module) rather than raising -- one location's alert outage must not
+    fail the whole /marine list response.
+    """
+    try:
+        from weewx_clearskies_api.providers.alerts import nws  # noqa: PLC0415
+
+        marine_zone_ids = [location.nws_marine_zone_id] if location.nws_marine_zone_id else None
+        alerts = nws.fetch(
+            lat=location.lat,
+            lon=location.lon,
+            user_agent_contact=None,
+            marine_zone_ids=marine_zone_ids,
+        )
+        return [
+            MarineAlertSummary(headline=alert.headline, alertType=_classify_alert_type(alert.event))
+            for alert in alerts
+        ]
+    except Exception:
+        logger.warning(
+            "NWS alerts fetch failed for marine location %r", location.id, exc_info=True
+        )
+        return None
+
+
 def _location_summary(location: MarineLocation) -> MarineLocationSummary:
-    """Build a MarineLocationSummary with only config-derived fields populated."""
+    """Build a MarineLocationSummary; activeAlerts is fetched, other fields config-derived only."""
     return MarineLocationSummary(
         locationId=location.id,
         name=location.name,
@@ -260,7 +323,7 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
         activities=list(location.activities),
         currentConditions=None,
         currentTide=None,
-        activeAlerts=None,
+        activeAlerts=_fetch_active_alerts(location),
         surfRating=None,
         beachSafetyLevel=None,
     )
