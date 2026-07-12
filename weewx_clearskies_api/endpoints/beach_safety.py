@@ -358,6 +358,7 @@ def list_beach_safety_locations() -> dict:
     now_str = utc_isoformat(datetime.now(tz=UTC))
     return {
         "data": cards,
+        "units": _units_block(),
         "stationClock": build_station_clock().model_dump(by_alias=True),
         "freshness": build_freshness("beach_safety").model_dump(by_alias=True),
         "generatedAt": now_str,

@@ -262,6 +262,7 @@ def list_fishing_locations() -> dict:
     now_str = utc_isoformat(datetime.now(tz=UTC))
     return {
         "data": cards,
+        "units": _units_block(),
         "stationClock": build_station_clock().model_dump(by_alias=True),
         "freshness": build_freshness("fishing").model_dump(by_alias=True),
         "generatedAt": now_str,
