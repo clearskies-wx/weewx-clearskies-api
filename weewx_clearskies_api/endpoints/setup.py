@@ -16,6 +16,9 @@ Endpoints:
                                             surf spot (T6.3; admin/individual re-download —
                                             POST /setup/apply auto-downloads for all
                                             configured surf spots in one pass, T1.2)
+  GET  /setup/marine/species             — species checklist for a coordinate + fishing
+                                            target category, keyed by biogeographic region
+                                            (T2.5)
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -65,8 +68,10 @@ from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, SchemaReflector
 from weewx_clearskies_api.enrichment.bathymetry import (
     ATTRIBUTION as _BATHYMETRY_ATTRIBUTION,
     DISCLAIMER as _BATHYMETRY_DISCLAIMER,
+    classify_region,
     download_bathymetric_profile,
 )
+from weewx_clearskies_api.enrichment.fishing_species import SPECIES_BY_REGION
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.nws_zones import get_cwa
 from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
@@ -2329,6 +2334,41 @@ async def marine_bathymetry(body: MarineBathymetryRequest, request: Request) -> 
         attribution=_BATHYMETRY_ATTRIBUTION,
         disclaimer=_BATHYMETRY_DISCLAIMER,
     )
+
+
+class MarineSpeciesResponse(BaseModel):
+    region: str
+    species: list[str]
+
+
+@router.get("/marine/species", response_model=MarineSpeciesResponse)
+async def marine_species(
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90, description="Spot latitude"),
+    lon: float = Query(..., ge=-180, le=180, description="Spot longitude"),
+    category: str = Query("saltwater_inshore", description="Target fishing category"),
+) -> MarineSpeciesResponse:
+    """Return available species for a coordinate + fishing target category
+    (T2.5).
+
+    Used by the wizard to populate species checkboxes for a marine fishing
+    spot, based on the biogeographic region covering the spot's coordinates.
+    Delegates entirely to the existing hardcoded lookup tables in
+    ``enrichment/fishing_species.py`` (API-MANUAL §17: "Species data is
+    hardcoded lookup tables ... keyed by biogeographic region and target
+    category. No external API.") — this endpoint performs no I/O.
+    """
+    await require_setup_session(request)
+
+    if category not in _VALID_TARGET_CATEGORIES:
+        raise HTTPException(
+            422,
+            detail=f"category {category!r} not in {sorted(_VALID_TARGET_CATEGORIES)}",
+        )
+
+    region = classify_region(lat, lon)
+    species = SPECIES_BY_REGION.get(region, {}).get(category, [])
+    return MarineSpeciesResponse(region=region, species=species)
 
 
 def _check_restart_token(request: Request) -> bool:
