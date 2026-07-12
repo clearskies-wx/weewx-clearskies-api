@@ -289,6 +289,11 @@ class MarineLocation:
     coops_station_ids: list[str]
     nws_marine_zone_id: str | None
     nwps_wfo: str | None
+    #: Parsed and stored, but NOT currently read by any provider (T4.5,
+    #: Phase 4 cleanup). providers/marine/nwps.py's fetch() hardcodes the
+    #: NWPS grid to "CG1" everywhere (v1 simplification: CG1 only, per that
+    #: module's docstring) and takes no cg_grid parameter. This field is
+    #: reserved for future CG2-5 support and has zero runtime effect today.
     nwps_cg_grid: str | None
     #: Computed at config time (haversine from weewx station to this location).
     station_distance_km: float

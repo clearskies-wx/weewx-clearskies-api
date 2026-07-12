@@ -1708,45 +1708,11 @@ class TideBundle(BaseModel):
     generatedAt: str  # UTC ISO-8601 with Z
 
 
-class SurfBundle(BaseModel):
-    """SurfBundle container for GET /api/v1/surf[/{locationId}] (API-MANUAL §16)."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    locationId: str
-    locationName: str
-    coordinates: dict[str, float]  # {lat, lon}
-    forecast: list[SurfForecast] = []                 # per-timestep surf quality forecast
-    zoneForecast: SurfZoneForecast | None = None       # NWS SRF for the covering county zone
-    spectralComponents: list[SpectralWaveComponent] = []  # current decomposed swell systems
-    source: str
-    generatedAt: str  # UTC ISO-8601 with Z
-
-
-class FishingBundle(BaseModel):
-    """FishingBundle container for GET /api/v1/fishing[/{locationId}] (API-MANUAL §16)."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    locationId: str
-    locationName: str
-    coordinates: dict[str, float]  # {lat, lon}
-    forecast: list[FishingForecast] = []  # per-period fishing conditions forecast
-    solunar: SolunarTimes | None = None    # solunar major/minor periods for the current date
-    source: str
-    generatedAt: str  # UTC ISO-8601 with Z
-
-
-class BeachSafetyBundle(BaseModel):
-    """BeachSafetyBundle container for GET /api/v1/beach-safety[/{locationId}] (API-MANUAL §16)."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    locationId: str
-    locationName: str
-    coordinates: dict[str, float]  # {lat, lon}
-    assessment: BeachSafetyAssessment
-    zoneForecast: SurfZoneForecast | None = None  # NWS SRF for the covering county zone
-    source: str
-    generatedAt: str  # UTC ISO-8601 with Z
+# NOTE: SurfBundle/FishingBundle/BeachSafetyBundle were removed here (T4.3,
+# Phase 4 cleanup). They were never referenced outside this module and had
+# drifted from the actual dict shapes returned by endpoints/surf.py,
+# fishing.py, and beach_safety.py (e.g. the real fishing bundle returns
+# `days`/`species`/`targetCategory`/`habitatFeatures`, not `forecast`/
+# `solunar`). Those endpoints intentionally return plain dicts pending a
+# real *BundleResponse model — see each endpoint module's docstring.
 
