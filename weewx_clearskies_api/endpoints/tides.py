@@ -51,7 +51,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
-from weewx_clearskies_api.services.units import get_target_unit
+from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
 logger = logging.getLogger(__name__)
@@ -110,8 +110,9 @@ _WATER_LEVEL_DISPLAY_LABEL = {"foot": "ft", "meter": "m"}
 
 
 def _water_level_target_unit() -> str:
-    """"foot" for US, "meter" for METRIC/METRICWX (API-MANUAL §16 preset defaults)."""
-    return "foot" if get_target_unit() == "US" else "meter"
+    """Return the operator's configured water level unit."""
+    default = "foot" if get_target_unit() == "US" else "meter"
+    return get_group_unit("group_water_level", default)
 
 
 def _convert_tide_prediction(prediction: TidePrediction, target_unit: str) -> TidePrediction:

@@ -1060,7 +1060,7 @@ def main() -> None:
     # This is the single unit authority — api.conf [units] controls both
     # conversion math AND display labels (ADR-042, T2A.5).
     # _target_unit_str was computed at step 6c½ from the same settings source.
-    from weewx_clearskies_api.services.units import set_units_block  # noqa: PLC0415
+    from weewx_clearskies_api.services.units import set_group_targets, set_units_block  # noqa: PLC0415
 
     units_block = transformer.build_units_block()
     if not units_block:
@@ -1069,6 +1069,7 @@ def main() -> None:
             "Values pass through unconverted with source-unit labels."
         )
     set_units_block(units_block, _target_unit_str)
+    set_group_targets(transformer._targets)
 
     # Step 7b½: Configure response_conversion module with the transformer so
     # that apply_conversion() in /current, /archive, and SSE can convert units.

@@ -83,7 +83,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
-from weewx_clearskies_api.services.units import get_target_unit
+from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
 logger = logging.getLogger(__name__)
@@ -160,31 +160,29 @@ _MARINE_DISPLAY_LABEL = {
     "second": "s",
     "knot": "kt",
     "nautical_mile": "nm",
+    "meter_per_second": "m/s",
+    "mile_per_hour": "mph",
+    "km_per_hour": "km/h",
+    "mile": "mi",
+    "km": "km",
 }
 
 
 def _marine_target_units() -> dict[str, str]:
     """Return group -> weewx-internal target unit for the 5 marine groups.
 
-    group_ocean_speed, group_wave_period, and group_visibility are fixed at
-    knot / second / nautical_mile in *every* preset (API-MANUAL §16: "Even
-    countries that use m/s on land use knots at sea" -- maritime convention
-    overrides land convention in all three unit systems).  group_wave_height
-    and group_water_level are the only two that vary: foot for US, meter for
-    METRIC/METRICWX.
-
-    Does not honor per-group [StdReport] overrides -- services/units.py's
-    get_units_block() has no field-name entries for marine fields to look
-    up an override through (out of scope for this endpoint pair; see module
-    docstring).
+    Reads the operator's configured per-group unit from api.conf [units][[groups]]
+    via get_group_unit().  Falls back to preset defaults (knot for ocean speed,
+    nautical_mile for visibility, foot/meter for wave height based on US vs METRIC)
+    when the group is not explicitly configured.
     """
-    height_unit = "foot" if get_target_unit() == "US" else "meter"
+    height_default = "foot" if get_target_unit() == "US" else "meter"
     return {
-        "group_wave_height": height_unit,
-        "group_wave_period": "second",
-        "group_water_level": height_unit,
-        "group_ocean_speed": "knot",
-        "group_visibility": "nautical_mile",
+        "group_wave_height": get_group_unit("group_wave_height", height_default),
+        "group_wave_period": get_group_unit("group_wave_period", "second"),
+        "group_water_level": get_group_unit("group_water_level", height_default),
+        "group_ocean_speed": get_group_unit("group_ocean_speed", "knot"),
+        "group_visibility": get_group_unit("group_visibility", "nautical_mile"),
     }
 
 

@@ -51,7 +51,7 @@ from weewx_clearskies_api.enrichment.surf_scorer import score_surf
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
-from weewx_clearskies_api.services.units import get_target_unit
+from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
 logger = logging.getLogger(__name__)
@@ -109,36 +109,47 @@ def _find_location(location_id: str) -> MarineLocation | None:
 
 # ---------------------------------------------------------------------------
 # Marine unit resolution (API-MANUAL §16 "Marine unit groups")
-#
-# get_units_block() is keyed by canonical field name (services/units.py
-# _GROUP_MEMBERS), which does not yet enumerate the marine groups' member
-# fields — so marine display units are resolved directly from the target
-# unit system per the documented preset table instead. group_ocean_speed
-# and group_visibility are "knot"/"nautical_mile" universally (maritime
-# convention, API-MANUAL §16); only group_wave_height/group_water_level
-# vary by target system (foot for US, meter for METRIC/METRICWX).
 # ---------------------------------------------------------------------------
+
+_DISPLAY_LABEL = {
+    "foot": "ft",
+    "meter": "m",
+    "second": "s",
+    "knot": "kt",
+    "meter_per_second": "m/s",
+    "mile_per_hour": "mph",
+    "km_per_hour": "km/h",
+    "nautical_mile": "nm",
+    "mile": "mi",
+    "km": "km",
+}
 
 
 def _wave_height_unit() -> tuple[str, str]:
     """Return (internal_unit_name, display_symbol) for wave height/water level."""
-    try:
-        target = get_target_unit()
-    except RuntimeError:
-        target = "US"
-    return ("foot", "ft") if target == "US" else ("meter", "m")
+    height_default = "foot" if get_target_unit() == "US" else "meter"
+    unit = get_group_unit("group_wave_height", height_default)
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
 
 
-_OCEAN_SPEED_UNIT = ("knot", "kt")
-_WAVE_PERIOD_UNIT = ("second", "s")
+def _ocean_speed_unit() -> tuple[str, str]:
+    unit = get_group_unit("group_ocean_speed", "knot")
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
+
+
+def _wave_period_unit() -> tuple[str, str]:
+    unit = get_group_unit("group_wave_period", "second")
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
 
 
 def _units_block() -> dict[str, str]:
     _, height_symbol = _wave_height_unit()
+    _, speed_symbol = _ocean_speed_unit()
+    _, period_symbol = _wave_period_unit()
     return {
         "waveHeight": height_symbol,
-        "wavePeriod": _WAVE_PERIOD_UNIT[1],
-        "windSpeed": _OCEAN_SPEED_UNIT[1],
+        "wavePeriod": period_symbol,
+        "windSpeed": speed_symbol,
     }
 
 

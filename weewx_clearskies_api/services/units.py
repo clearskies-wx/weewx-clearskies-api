@@ -525,14 +525,44 @@ def get_target_unit() -> str:
     return _cached_target_unit
 
 
+_cached_group_targets: dict[str, str] | None = None
+
+
+def set_group_targets(targets: dict[str, str]) -> None:
+    """Store the operator's per-group unit targets from the transformer.
+
+    Called once at startup alongside set_units_block().  Marine endpoints
+    use get_group_unit() to read these rather than hardcoding units based
+    on the system preset alone.
+    """
+    global _cached_group_targets  # noqa: PLW0603
+    _cached_group_targets = dict(targets)
+    logger.info(
+        "Group targets set",
+        extra={"group_count": len(targets)},
+    )
+
+
+def get_group_unit(group: str, default: str) -> str:
+    """Return the operator's configured unit for a group, or *default*.
+
+    Falls back to *default* when the group is not configured or
+    set_group_targets() has not been called yet.
+    """
+    if _cached_group_targets is None:
+        return default
+    return _cached_group_targets.get(group, default)
+
+
 def reset_cache() -> None:
     """Reset the module-level cache.  Used in tests only.
 
     Also resets the shared weewx_conf cache so tests that call load_units_block
     with different weewx.conf paths don't get stale data.
     """
-    global _cached_units_block, _cached_target_unit  # noqa: PLW0603
+    global _cached_units_block, _cached_target_unit, _cached_group_targets  # noqa: PLW0603
     _cached_units_block = None
     _cached_target_unit = None
+    _cached_group_targets = None
     from weewx_clearskies_api.services.weewx_conf import reset_cache as _reset_weewx_conf
     _reset_weewx_conf()

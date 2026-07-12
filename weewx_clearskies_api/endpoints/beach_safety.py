@@ -62,7 +62,7 @@ from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocati
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
-from weewx_clearskies_api.services.units import get_target_unit
+from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
 logger = logging.getLogger(__name__)
@@ -125,30 +125,54 @@ def _find_location(location_id: str) -> MarineLocation | None:
 
 
 # ---------------------------------------------------------------------------
-# Marine unit resolution — see endpoints/surf.py for the rationale.
+# Marine unit resolution (API-MANUAL §16 "Marine unit groups")
 # ---------------------------------------------------------------------------
+
+_DISPLAY_LABEL = {
+    "foot": "ft",
+    "meter": "m",
+    "second": "s",
+    "knot": "kt",
+    "meter_per_second": "m/s",
+    "mile_per_hour": "mph",
+    "km_per_hour": "km/h",
+    "nautical_mile": "nm",
+    "mile": "mi",
+    "km": "km",
+}
 
 
 def _wave_height_unit() -> tuple[str, str]:
-    try:
-        target = get_target_unit()
-    except RuntimeError:
-        target = "US"
-    return ("foot", "ft") if target == "US" else ("meter", "m")
+    height_default = "foot" if get_target_unit() == "US" else "meter"
+    unit = get_group_unit("group_wave_height", height_default)
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
 
 
-_OCEAN_SPEED_UNIT = ("knot", "kt")
-_WAVE_PERIOD_UNIT = ("second", "s")
-_VISIBILITY_UNIT = ("nautical_mile", "nm")
+def _ocean_speed_unit() -> tuple[str, str]:
+    unit = get_group_unit("group_ocean_speed", "knot")
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
+
+
+def _wave_period_unit() -> tuple[str, str]:
+    unit = get_group_unit("group_wave_period", "second")
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
+
+
+def _visibility_unit() -> tuple[str, str]:
+    unit = get_group_unit("group_visibility", "nautical_mile")
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
 
 
 def _units_block() -> dict[str, str]:
     _, height_symbol = _wave_height_unit()
+    _, speed_symbol = _ocean_speed_unit()
+    _, period_symbol = _wave_period_unit()
+    _, vis_symbol = _visibility_unit()
     return {
         "waveHeight": height_symbol,
-        "wavePeriod": _WAVE_PERIOD_UNIT[1],
-        "windSpeed": _OCEAN_SPEED_UNIT[1],
-        "visibility": _VISIBILITY_UNIT[1],
+        "wavePeriod": period_symbol,
+        "windSpeed": speed_symbol,
+        "visibility": vis_symbol,
     }
 
 
@@ -436,11 +460,10 @@ def get_beach_safety(location_id: str) -> dict:
         "waterTemp": gathered["water_temp_c"],
         "comfortLevel": comfort_level,
         "uvIndex": gathered["uv_index"],
-        # NDBC visibility is already reported in nautical miles (group_visibility
-        # base unit), which is also the universal marine display default
-        # (API-MANUAL §16) — no conversion needed.
-        "visibility": gathered["visibility"],
-        "windSpeed": _convert_unit(gathered["wind_speed"], "meter_per_second", "knot"),
+        "visibility": _convert_unit(gathered["visibility"], "nautical_mile", _visibility_unit()[0])
+        if gathered["visibility"] is not None
+        else None,
+        "windSpeed": _convert_unit(gathered["wind_speed"], "meter_per_second", _ocean_speed_unit()[0]),
         "windDirection": gathered["wind_direction"],
         "activeAlerts": active_alert_headlines,
     }
