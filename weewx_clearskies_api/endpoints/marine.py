@@ -194,25 +194,35 @@ def _convert_observation(
     windDirection/meanWaveDirection (degrees) and temperature/pressure
     fields are passed through unchanged -- see module docstring.
     """
-    return obs.model_copy(
-        update={
-            "windSpeed": _convert_unit(
-                obs.windSpeed, _BASE_OCEAN_SPEED_UNIT, targets["group_ocean_speed"]
-            ),
-            "windGust": _convert_unit(
-                obs.windGust, _BASE_OCEAN_SPEED_UNIT, targets["group_ocean_speed"]
-            ),
-            "waveHeight": _convert_unit(
-                obs.waveHeight, _BASE_WAVE_HEIGHT_UNIT, targets["group_wave_height"]
-            ),
-            "tideLevel": _convert_unit(
-                obs.tideLevel, _BASE_WATER_LEVEL_UNIT, targets["group_water_level"]
-            ),
-            "visibility": _convert_unit(
-                obs.visibility, _BASE_VISIBILITY_UNIT, targets["group_visibility"]
-            ),
-        }
-    )
+    updates: dict[str, object] = {
+        "windSpeed": _convert_unit(
+            obs.windSpeed, _BASE_OCEAN_SPEED_UNIT, targets["group_ocean_speed"]
+        ),
+        "windGust": _convert_unit(
+            obs.windGust, _BASE_OCEAN_SPEED_UNIT, targets["group_ocean_speed"]
+        ),
+        "waveHeight": _convert_unit(
+            obs.waveHeight, _BASE_WAVE_HEIGHT_UNIT, targets["group_wave_height"]
+        ),
+        "tideLevel": _convert_unit(
+            obs.tideLevel, _BASE_WATER_LEVEL_UNIT, targets["group_water_level"]
+        ),
+        "visibility": _convert_unit(
+            obs.visibility, _BASE_VISIBILITY_UNIT, targets["group_visibility"]
+        ),
+    }
+    if obs.spectralComponents:
+        updates["spectralComponents"] = [
+            comp.model_copy(
+                update={
+                    "height": _convert_unit(
+                        comp.height, _BASE_WAVE_HEIGHT_UNIT, targets["group_wave_height"]
+                    )
+                }
+            )
+            for comp in obs.spectralComponents
+        ]
+    return obs.model_copy(update=updates)
 
 
 def _convert_forecast_point(

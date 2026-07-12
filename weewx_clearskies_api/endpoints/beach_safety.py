@@ -334,11 +334,6 @@ def list_beach_safety_locations() -> dict:
         gathered = _gather_wave_and_temp(loc)
         height_ft = _convert_unit(gathered["wave_height_m"], "meter", "foot")
         safety_level = classify_sea_state(height_ft, gathered["wave_period_s"])
-        water_temp_f = (
-            _convert_unit(gathered["water_temp_c"], "degree_C", "degree_F")
-            if gathered["water_temp_c"] is not None
-            else None
-        )
         cards.append(
             {
                 "locationId": loc.id,
@@ -347,11 +342,7 @@ def list_beach_safety_locations() -> dict:
                 "lon": loc.lon,
                 "safetyLevel": safety_level,
                 "ripCurrentRisk": gathered["rip_current_risk"],
-                # Reported in Fahrenheit as an informational value; the
-                # operator's display unit conversion for group_temperature
-                # happens dashboard-side same as every other temperature
-                # field (API-MANUAL §6).
-                "waterTemp": water_temp_f,
+                "waterTemp": gathered["water_temp_c"],
             }
         )
 
@@ -442,7 +433,7 @@ def get_beach_safety(location_id: str) -> dict:
         "waveHeight": _convert_unit(gathered["wave_height_m"], "meter", wave_height_internal),
         "wavePeriod": gathered["wave_period_s"],
         "ripCurrentRisk": gathered["rip_current_risk"],
-        "waterTemp": water_temp_f,
+        "waterTemp": gathered["water_temp_c"],
         "comfortLevel": comfort_level,
         "uvIndex": gathered["uv_index"],
         # NDBC visibility is already reported in nautical miles (group_visibility
