@@ -44,7 +44,7 @@ CWA filtering (lead call, this round):
   codes.  `GET /zones?type=coastal&area=ILM` returns HTTP 400 (verified live
   against api.weather.gov).  There is no server-side CWA filter for `/zones`.
   Per the lead's explicit fallback instruction, this module fetches the full
-  `type=coastal` zone list (101 zones as of this writing, no pagination
+  `type=coastal` zone list (~570 zones as of this writing, no pagination
   encountered in practice — see "Pagination" below) and filters client-side
   on each zone's `properties.cwa` array, which reliably contains the WFO
   office ID (e.g. `["ILM"]`) per a live fixture capture of
@@ -52,7 +52,7 @@ CWA filtering (lead call, this round):
   one-time cost per cache window, not a per-discovery cost.
 
 Pagination:
-  A live, unbounded `GET /zones?type=coastal` request returned all 101
+  A live, unbounded `GET /zones?type=coastal` request returned all ~570
   features in a single response with no `pagination.next` key.  This module
   still checks for a `pagination.next` link defensively (NWS API pagination
   behavior is not contractually guaranteed to stay this way) and follows it
@@ -451,7 +451,7 @@ def _fetch_coastal_zone_list(client: ProviderHTTPClient) -> list[dict[str, Any]]
     module docstring "CWA filtering" section).
 
     Handles a `pagination.next` link defensively, though a live unbounded
-    request returned all 101 coastal zones in a single page with no such key.
+    request returned all ~570 coastal zones in a single page with no such key.
     """
     cache_key = _build_zones_list_cache_key()
     cached = get_cache().get(cache_key)
