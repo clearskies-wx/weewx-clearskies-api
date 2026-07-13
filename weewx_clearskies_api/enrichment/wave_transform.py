@@ -14,7 +14,9 @@ The four supplements, applied in this order:
    number, then re-caps wave height at the breaking depth.
 3. Coastal structure transmission/reflection effects — attenuates wave
    height for spots in the lee of a jetty, breakwater, pier, seawall, or
-   groin.
+   groin. Direction-dependent (T7.2): a shadow-zone check and cos²(theta)
+   angular Kt modulation scale the effect by the wave direction relative
+   to the structure's bearing.
 4. Topographic focusing/sheltering — a multiplicative adjustment based on
    the spot's operator-classified topographic feature.
 
@@ -157,39 +159,87 @@ def apply_breaker_correction(
 # ---------------------------------------------------------------------------
 
 
-def _structure_kt_effective(structure: Any) -> float:
+def _structure_kt_effective(
+    structure: Any, wave_direction: float | None = None
+) -> float:
     """Return the effective (distance-attenuated) Kt for one structure.
 
     Within the structure's influence zone (structure-type multiplier x
     length_m), the full material Kt applies. Beyond it, the effect
     diminishes with the square of (influence_zone / distance) — full Kt
     at the zone boundary, approaching 1.0 (no effect) as distance grows.
+
+    ``wave_direction`` (degrees true, direction the waves are coming FROM)
+    enables two direction-dependent refinements (T7.2, research brief
+    §11.5.1). Both are skipped — falling back to the omnidirectional
+    behavior above — when ``wave_direction`` is None:
+
+    1. **Shadow zone check.** When the structure also carries a
+       ``bearing_to_spot_degrees`` (bearing from the structure's nearest
+       point to the surf spot), the spot is only in the structure's
+       "shadow" if it falls within a cone projected along the wave's
+       travel direction (``wave_direction + 180``), half-angle
+       ``atan2(length_m, 2*distance_m)``. Outside that cone the structure
+       cannot block these waves at all — returns 1.0 (no effect)
+       regardless of material/distance.
+    2. **Angular Kt modulation.** The blocking fraction ``(1 - kt)`` is
+       scaled by ``cos²(theta)``, where ``theta`` is the angle between the
+       wave direction and the structure's normal (0 = wave hits the
+       structure perpendicularly = full blocking; 90 = wave travels
+       parallel to the structure's length = no blocking).
     """
     kt = KT.get(structure.material, 1.0)
     zone_multiplier = INFLUENCE_ZONE_MULTIPLIERS.get(structure.type, 1.0)
     influence_zone = zone_multiplier * structure.length_m
     distance = structure.distance_m
 
+    bearing_to_spot = getattr(structure, "bearing_to_spot_degrees", None)
+    if wave_direction is not None and bearing_to_spot is not None:
+        wave_travel = (wave_direction + 180) % 360
+        cone_half = math.degrees(math.atan2(structure.length_m, 2 * distance))
+        bearing_diff = abs((bearing_to_spot - wave_travel) % 360)
+        if bearing_diff > 180:
+            bearing_diff = 360 - bearing_diff
+        if bearing_diff > cone_half:
+            # Spot is NOT in the structure's shadow for this wave direction.
+            return 1.0
+
+    angular_factor = 1.0
+    if wave_direction is not None and hasattr(structure, "bearing_degrees"):
+        alpha = abs((wave_direction - structure.bearing_degrees) % 360)
+        if alpha > 180:
+            alpha = 360 - alpha
+        theta = abs(alpha - 90)
+        angular_factor = math.cos(math.radians(theta)) ** 2
+
+    effective_blocking = (1.0 - kt) * angular_factor
     if influence_zone <= 0 or distance <= influence_zone:
-        return kt
-    return 1.0 - (1.0 - kt) * (influence_zone / distance) ** 2
+        return 1.0 - effective_blocking
+    return 1.0 - effective_blocking * (influence_zone / distance) ** 2
 
 
 def apply_structure_effects(
-    wave_height: float, structures: list[Any]
+    wave_height: float,
+    structures: list[Any],
+    wave_direction: float | None = None,
 ) -> tuple[float, bool]:
     """Apply coastal-structure transmission effects to wave height.
 
     Multiple structures combine via linear superposition (their effective
     Kt values are multiplied together). Returns ``(new_height, applied)``;
     ``applied`` is False (and height unchanged) when ``structures`` is empty.
+
+    ``wave_direction`` (degrees true) enables directional Kt modulation and
+    the shadow-zone check in ``_structure_kt_effective`` — see that
+    function's docstring. ``None`` (the default) preserves the prior
+    omnidirectional behavior.
     """
     if not structures:
         return wave_height, False
 
     combined_kt = 1.0
     for structure in structures:
-        combined_kt *= _structure_kt_effective(structure)
+        combined_kt *= _structure_kt_effective(structure, wave_direction=wave_direction)
 
     return wave_height * combined_kt, True
 
@@ -343,7 +393,9 @@ def apply_supplements(
     # Supplement 2 — coastal structure effects.
     structures = getattr(spot_config, "structures", None) or []
     if wave_height is not None:
-        wave_height, structure_applied = apply_structure_effects(wave_height, structures)
+        wave_height, structure_applied = apply_structure_effects(
+            wave_height, structures, wave_direction=wave_direction
+        )
         if structure_applied:
             supplements_applied.append("structure_effects")
 

@@ -2700,6 +2700,12 @@ class MarineDiscoveredStructure(BaseModel):
     length_m: float
     bearing_degrees: float
     distance_m: float
+    #: Bearing (degrees true) from the structure's nearest point to the
+    #: queried (lat, lon) surf spot — feeds config/marine_config.py's
+    #: StructureConfig.bearing_to_spot_degrees, which enables the
+    #: directional shadow-zone check in enrichment/wave_transform.py's
+    #: _structure_kt_effective() (T7.2).
+    bearing_to_spot_degrees: float
     #: [[lat, lon], ...] — the way's node coordinates in OSM order.
     geometry: list[list[float]]
 
@@ -2784,7 +2790,13 @@ def _parse_overpass_structures(
 
         if length_m < _MIN_STRUCTURE_LENGTH_M:
             continue
-        distance_m = min(_haversine_m(lat, lon, p_lat, p_lon) for p_lat, p_lon in points)
+        nearest_point = min(
+            points, key=lambda p: _haversine_m(lat, lon, p[0], p[1])
+        )
+        distance_m = _haversine_m(lat, lon, nearest_point[0], nearest_point[1])
+        bearing_to_spot_degrees = _initial_bearing_degrees(
+            nearest_point[0], nearest_point[1], lat, lon
+        )
 
         raw_material = str(tags.get("material", "")).strip().lower()
         material = _OSM_MATERIAL_MAP.get(raw_material)
@@ -2802,6 +2814,7 @@ def _parse_overpass_structures(
                 length_m=round(length_m, 1),
                 bearing_degrees=round(bearing_degrees, 1),
                 distance_m=round(distance_m, 1),
+                bearing_to_spot_degrees=round(bearing_to_spot_degrees, 1),
                 geometry=[[p_lat, p_lon] for p_lat, p_lon in points],
             )
         )

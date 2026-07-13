@@ -166,6 +166,12 @@ class StructureConfig:
     length_m: float
     bearing_degrees: float
     distance_m: float
+    #: Bearing (degrees true) from the structure's nearest point to the surf
+    #: spot. Optional — enables the directional shadow-zone check in
+    #: enrichment/wave_transform.py's _structure_kt_effective() (T7.2).
+    #: Auto-populated by GET /setup/marine/discover-structures; None for
+    #: manually-entered structures unless the operator supplies it.
+    bearing_to_spot_degrees: float | None
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.type = str(section.get("type", "")).strip()
@@ -173,6 +179,7 @@ class StructureConfig:
         self.length_m = float(section.get("length_m", 0.0))
         self.bearing_degrees = float(section.get("bearing_degrees", 0.0))
         self.distance_m = float(section.get("distance_m", 0.0))
+        self.bearing_to_spot_degrees = _opt_float(section, "bearing_to_spot_degrees")
 
     def validate(self, location_id: str) -> None:
         """Raise ValueError naming the field + location on bad values."""
@@ -190,6 +197,14 @@ class StructureConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf.structures] bearing_degrees "
                 f"{self.bearing_degrees!r} out of range [0, 360)"
+            )
+        if self.bearing_to_spot_degrees is not None and not (
+            0 <= self.bearing_to_spot_degrees < 360
+        ):
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf.structures] "
+                f"bearing_to_spot_degrees {self.bearing_to_spot_degrees!r} "
+                "out of range [0, 360)"
             )
 
 
