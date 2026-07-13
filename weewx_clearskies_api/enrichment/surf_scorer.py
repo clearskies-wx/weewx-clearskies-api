@@ -25,11 +25,12 @@ time-of-day adjustment.
 field resolves through ``i18n.t()`` — quality label, wind quality label, and
 the composed conditions text. Per the manual, the output function accepts
 ``locale: str | None = None`` and resolves internally via
-``locale or i18n.get_active_locale()`` — the same pattern used by
-``sse/conditions_text.py``. The locale keys referenced below
-(``_LOCALE_KEYS``) do not exist in ``locales/*.json`` yet; until they are
-added, ``t()`` falls back to returning the key itself (documented, safe
-v1 behavior — see ``i18n.t()`` docstring).
+``locale or i18n.get_active_locale()``. The quality/wind-quality keys
+below (``_LOCALE_KEYS``) and the ``surf.conditions.*`` composition
+template keys used by ``_compose_conditions_text()`` (T4.4) are wired into
+all 13 ``locales/*.json`` files; non-English locales currently carry
+English placeholder text pending translation (I18N T3.1 skeleton
+convention).
 """
 
 from __future__ import annotations
@@ -48,8 +49,12 @@ from weewx_clearskies_api.units.conversion import convert
 # ---------------------------------------------------------------------------
 # Locale keys referenced by this module (API-MANUAL.md §17 "Marine i18n").
 #
-# Documented here as the authoritative v1 English source; wiring these into
-# locales/*.json is a separate task. Not modified by this module.
+# Documented here as the authoritative v1 English source; wired into
+# locales/*.json (see "surf" section). Not modified by this module — a
+# separate mirror kept for at-a-glance reference alongside the scoring
+# logic that consumes each key. Composition template keys
+# ("surf.conditions.*", T4.4) live only in locales/*.json, not duplicated
+# here, since they are read via string templates rather than fixed keys.
 # ---------------------------------------------------------------------------
 
 _LOCALE_KEYS: dict[str, str] = {
@@ -422,31 +427,40 @@ def _compose_conditions_text(
 
     Example (en): "3-4 ft at 12 seconds from the SSW. Offshore winds
     5-10 mph. Clean conditions with long-period swell."
-    All labels/units resolve through i18n.t(); numbers through
-    i18n.format_number() per §17 "Marine i18n". *wind_label* is the
-    already-resolved (i18n.t()) wind quality label.
+    Sentence templates resolve through i18n.t() (``surf.conditions.*``
+    keys, API-MANUAL.md §17 "Marine i18n", T4.4) and are filled in with
+    ``str.format()``; numbers through i18n.format_number(). *wind_label*
+    is the already-resolved (i18n.t()) wind quality label. The compass
+    abbreviation itself (N/NE/E/...) is not locale-resolved — these are
+    the same terse letters used cross-locale in marine/aviation notation.
     """
     compass = _nearest_compass(direction_deg)
     height_low = max(0.0, height_ft - 1.0)
     height_high = height_ft + 1.0
-    wave_part = (
-        f"{_format_range(height_low, height_high, locale)} ft at "
-        f"{i18n.format_number(period_s, 0, locale)} seconds from the {compass}."
+    wave_part = i18n.t("surf.conditions.wave_summary", locale).format(
+        range=_format_range(height_low, height_high, locale),
+        period=i18n.format_number(period_s, 0, locale),
+        compass=compass,
     )
 
     if wind_speed_mph is not None:
         wind_low = max(0.0, wind_speed_mph - 2.5)
         wind_high = wind_speed_mph + 2.5
-        wind_part = f"{wind_label} winds {_format_range(wind_low, wind_high, locale)} mph."
+        wind_part = i18n.t("surf.conditions.wind_with_speed", locale).format(
+            wind_label=wind_label,
+            range=_format_range(wind_low, wind_high, locale),
+        )
     else:
-        wind_part = f"{wind_label} winds."
+        wind_part = i18n.t("surf.conditions.wind_no_speed", locale).format(
+            wind_label=wind_label,
+        )
 
     if swell_score >= _SWELL_DOMINANCE_PURE_SCORE:
-        summary_part = "Clean conditions with long-period swell."
+        summary_part = i18n.t("surf.conditions.swell_clean", locale)
     elif swell_score >= _SWELL_DOMINANCE_MIXED_SCORE:
-        summary_part = "Mixed swell conditions."
+        summary_part = i18n.t("surf.conditions.swell_mixed", locale)
     else:
-        summary_part = "Wind chop dominates."
+        summary_part = i18n.t("surf.conditions.swell_chop", locale)
 
     return f"{wave_part} {wind_part} {summary_part}"
 

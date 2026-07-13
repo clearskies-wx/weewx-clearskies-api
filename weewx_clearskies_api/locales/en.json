@@ -464,6 +464,14 @@
       "cross_onshore": "Cross-onshore",
       "onshore": "Onshore",
       "glassy": "Glassy"
+    },
+    "conditions": {
+      "wave_summary": "{range} ft at {period} seconds from the {compass}.",
+      "wind_with_speed": "{wind_label} winds {range} mph.",
+      "wind_no_speed": "{wind_label} winds.",
+      "swell_clean": "Clean conditions with long-period swell.",
+      "swell_mixed": "Mixed swell conditions.",
+      "swell_chop": "Wind chop dominates."
     }
   },
   "fishing": {
@@ -487,7 +495,32 @@
       "channel": "Channel",
       "pinnacle": "Pinnacle"
     },
-    "solunar_caveat": "Solunar theory suggests feeding activity correlates with moon position. Scientific evidence is mixed; environmental conditions (pressure, temperature, tides) have stronger research support."
+    "solunar_caveat": "Solunar theory suggests feeding activity correlates with moon position. Scientific evidence is mixed; environmental conditions (pressure, temperature, tides) have stronger research support.",
+    "conditions": {
+      "overall_great": "Great conditions",
+      "overall_good": "Good conditions",
+      "overall_fair": "Fair conditions",
+      "overall_poor": "Poor conditions",
+      "pressure_unavailable": "pressure trend unavailable",
+      "pressure_rapid_drop": "rapidly falling pressure",
+      "pressure_falling": "falling pressure",
+      "pressure_stable": "stable pressure",
+      "pressure_rising_slow": "slowly rising pressure",
+      "pressure_rising_rapid": "rapidly rising pressure",
+      "tide_outgoing": "an outgoing tide",
+      "tide_incoming": "an incoming tide",
+      "tide_peak_flow": "peak tidal flow",
+      "tide_slack_high": "a slack high tide",
+      "tide_slack_low": "a slack low tide",
+      "tide_uncertain": "an uncertain tide state",
+      "solunar_major": " during a major solunar period",
+      "solunar_minor": " during a minor solunar period",
+      "summary": "{overall_label} — {pressure_phrase} with {tide_phrase}{solunar_clause}.",
+      "species_active": "{names} active.",
+      "list_and": " and ",
+      "list_separator": ", ",
+      "list_final_and": ", and "
+    }
   },
   "beach_safety": {
     "level": {

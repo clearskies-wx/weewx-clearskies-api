@@ -57,13 +57,13 @@ FYI — if habitat annotations need a home on a response model, that's a
 
 **i18n (API-MANUAL.md §17 "Marine i18n"):** ``periodLabel`` and
 ``speciesScores[].status`` resolve through ``i18n.t()``; ``conditionsText``
-and per-species ``note`` are composed via locale-aware templates for the
-former (numbers formatted through ``i18n.format_number()``) — ``note`` is
-plain English text (not marked "(locale)" in the API-MANUAL.md field
-table, unlike ``status``). Locale keys referenced below (``_LOCALE_KEYS``)
-follow the ``surf_scorer.py`` precedent: documented here as the
-authoritative v1 English source, not yet wired into ``locales/*.json``
-(confirmed with lead 2026-07-10 — no locale file edits in this task).
+is composed via locale-aware ``fishing.conditions.*`` templates (T4.4) —
+per-species ``note`` remains plain English text (not marked "(locale)" in
+the API-MANUAL.md field table, unlike ``status``, and out of this task's
+scope). Locale keys referenced below (``_LOCALE_KEYS``) and the
+``fishing.conditions.*`` composition template keys are wired into all 13
+``locales/*.json`` files; non-English locales currently carry English
+placeholder text pending translation (I18N T3.1 skeleton convention).
 """
 
 from __future__ import annotations
@@ -88,8 +88,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Locale keys referenced by this module (API-MANUAL.md §17 "Marine i18n").
 #
-# Documented here as the authoritative v1 English source; wiring these into
-# locales/*.json is a separate task. Not modified by this module.
+# Documented here as the authoritative v1 English source; wired into
+# locales/*.json (see "fishing" section). Not modified by this module — a
+# separate mirror kept for at-a-glance reference alongside the scoring
+# logic that consumes each key. Composition template keys
+# ("fishing.conditions.*", T4.4) live only in locales/*.json, not
+# duplicated here, since they are read via string templates rather than
+# fixed keys.
 # ---------------------------------------------------------------------------
 
 _LOCALE_KEYS: dict[str, str] = {
@@ -497,50 +502,57 @@ _OVERALL_GOOD_THRESHOLD = 50
 _OVERALL_FAIR_THRESHOLD = 30
 
 
-def _overall_label(overall_score: int) -> str:
+def _overall_label(overall_score: int, locale: str) -> str:
     if overall_score >= _OVERALL_GREAT_THRESHOLD:
-        return "Great conditions"
-    if overall_score >= _OVERALL_GOOD_THRESHOLD:
-        return "Good conditions"
-    if overall_score >= _OVERALL_FAIR_THRESHOLD:
-        return "Fair conditions"
-    return "Poor conditions"
+        key = "fishing.conditions.overall_great"
+    elif overall_score >= _OVERALL_GOOD_THRESHOLD:
+        key = "fishing.conditions.overall_good"
+    elif overall_score >= _OVERALL_FAIR_THRESHOLD:
+        key = "fishing.conditions.overall_fair"
+    else:
+        key = "fishing.conditions.overall_poor"
+    return i18n.t(key, locale)
 
 
-def _pressure_phrase(trend_hpa_3hr: float | None) -> str:
+def _pressure_phrase(trend_hpa_3hr: float | None, locale: str) -> str:
     if trend_hpa_3hr is None:
-        return "pressure trend unavailable"
+        return i18n.t("fishing.conditions.pressure_unavailable", locale)
     score = _score_pressure(trend_hpa_3hr)
-    return {
-        _PRESSURE_SCORE_RAPID_DROP: "rapidly falling pressure",
-        _PRESSURE_SCORE_FALLING: "falling pressure",
-        _PRESSURE_SCORE_STABLE: "stable pressure",
-        _PRESSURE_SCORE_RISING_SLOW: "slowly rising pressure",
-        _PRESSURE_SCORE_RISING_RAPID: "rapidly rising pressure",
+    key = {
+        _PRESSURE_SCORE_RAPID_DROP: "fishing.conditions.pressure_rapid_drop",
+        _PRESSURE_SCORE_FALLING: "fishing.conditions.pressure_falling",
+        _PRESSURE_SCORE_STABLE: "fishing.conditions.pressure_stable",
+        _PRESSURE_SCORE_RISING_SLOW: "fishing.conditions.pressure_rising_slow",
+        _PRESSURE_SCORE_RISING_RAPID: "fishing.conditions.pressure_rising_rapid",
     }[score]
+    return i18n.t(key, locale)
 
 
-_TIDE_PHRASES: dict[str, str] = {
-    "outgoing": "an outgoing tide",
-    "incoming": "an incoming tide",
-    "peak_flow": "peak tidal flow",
-    "slack_high": "a slack high tide",
-    "slack_low": "a slack low tide",
+_TIDE_PHRASE_KEYS: dict[str, str] = {
+    "outgoing": "fishing.conditions.tide_outgoing",
+    "incoming": "fishing.conditions.tide_incoming",
+    "peak_flow": "fishing.conditions.tide_peak_flow",
+    "slack_high": "fishing.conditions.tide_slack_high",
+    "slack_low": "fishing.conditions.tide_slack_low",
 }
 
 
-def _tide_phrase(tide_state: str) -> str:
-    return _TIDE_PHRASES.get(tide_state, "an uncertain tide state")
+def _tide_phrase(tide_state: str, locale: str) -> str:
+    key = _TIDE_PHRASE_KEYS.get(tide_state, "fishing.conditions.tide_uncertain")
+    return i18n.t(key, locale)
 
 
-def _join_names(names: list[str]) -> str:
+def _join_names(names: list[str], locale: str) -> str:
     if not names:
         return ""
     if len(names) == 1:
         return names[0]
     if len(names) == 2:
-        return f"{names[0]} and {names[1]}"
-    return ", ".join(names[:-1]) + f", and {names[-1]}"
+        connector = i18n.t("fishing.conditions.list_and", locale)
+        return f"{names[0]}{connector}{names[1]}"
+    separator = i18n.t("fishing.conditions.list_separator", locale)
+    final_connector = i18n.t("fishing.conditions.list_final_and", locale)
+    return separator.join(names[:-1]) + f"{final_connector}{names[-1]}"
 
 
 def _compose_conditions_text(
@@ -551,28 +563,36 @@ def _compose_conditions_text(
     is_during_major_period: bool,
     is_during_minor_period: bool,
     active_species_names: list[str],
+    locale: str,
 ) -> str:
     """Compose a natural-language conditions summary (API-MANUAL.md §17).
 
     Example: "Good conditions — falling pressure with outgoing tide during
     a major solunar period. Redfish and Flounder active."
-    Sentence structure is hardcoded English per the surf_scorer.py
-    precedent (only label/status lookups route through i18n.t(); free
-    composition text is out of scope for locale wiring in this task).
+    Sentence templates resolve through i18n.t() (``fishing.conditions.*``
+    keys, API-MANUAL.md §17 "Marine i18n", T4.4) and are filled in with
+    ``str.format()`` — overall/pressure/tide phrase lookups and list
+    connectors all route through i18n.t() via the helpers above; only the
+    interpolation slots (phrase substitution, species names) remain in the
+    composed string.
     """
     if is_during_major_period:
-        solunar_clause = " during a major solunar period"
+        solunar_clause = i18n.t("fishing.conditions.solunar_major", locale)
     elif is_during_minor_period:
-        solunar_clause = " during a minor solunar period"
+        solunar_clause = i18n.t("fishing.conditions.solunar_minor", locale)
     else:
         solunar_clause = ""
 
-    text = (
-        f"{_overall_label(overall_score)} — {_pressure_phrase(pressure_trend_hpa_3hr)} "
-        f"with {_tide_phrase(tide_state)}{solunar_clause}."
+    text = i18n.t("fishing.conditions.summary", locale).format(
+        overall_label=_overall_label(overall_score, locale),
+        pressure_phrase=_pressure_phrase(pressure_trend_hpa_3hr, locale),
+        tide_phrase=_tide_phrase(tide_state, locale),
+        solunar_clause=solunar_clause,
     )
     if active_species_names:
-        text += f" {_join_names(active_species_names)} active."
+        text += " " + i18n.t("fishing.conditions.species_active", locale).format(
+            names=_join_names(active_species_names, locale)
+        )
     return text
 
 
@@ -681,6 +701,7 @@ def score_fishing(
         is_during_major_period=is_during_major_period,
         is_during_minor_period=is_during_minor_period,
         active_species_names=active_names,
+        locale=loc,
     )
 
     period_label = i18n.t(f"fishing.period.{_period_label_key(hour_utc)}", loc)
