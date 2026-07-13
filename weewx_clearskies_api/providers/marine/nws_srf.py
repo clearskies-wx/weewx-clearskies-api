@@ -10,10 +10,34 @@ Five responsibilities per the §1 Module Contract (PROVIDER-MANUAL):
   4. Capability declaration — CAPABILITY symbol consumed at startup.
   5. Error handling — provider errors translated to canonical taxonomy.
 
-WFO determination (PROVIDER-MANUAL §14.5, §14.8):
-  Reuses `get_cwa()` from the shared zone discovery utility at
-  providers/_common/nws_zones.py — the same /points → cwa lookup used by
-  providers/marine/nws_marine.py.
+WFO determination (PROVIDER-MANUAL §14.5, §14.8; extended 2026-07-13,
+Marine Remediation Plan T1.4 — see docs/planning/MARINE-REMEDIATION-PLAN.md):
+  The coordinate-only `get_cwa()` lookup breaks for shoreline spots whose
+  (lat, lon) resolves to a marine zone (e.g. PZZ655) rather than a county
+  zone, and/or whose CWA differs from the WFO that actually issues the SRF
+  for that county (observed for Huntington Beach, CA: get_cwa() resolves
+  LOX, but Orange County's SRF is issued by SGX). fetch() now resolves the
+  WFO with this priority:
+    1. `wfo_override` kwarg, when the caller already knows the issuing WFO
+       (operator config, mirroring nwps.py's `wfo_override` pattern).
+    2. The zone's own `cwa` property from the `/zones/forecast/{zoneId}`
+       response (already fetched for the zone *name* — see
+       `_resolve_zone_name_and_cwa` below) — used only when the zone ID was
+       auto-resolved from (lat, lon) rather than supplied as `county_zone`.
+       This is the fix for the SGX/LOX case: the zone is the more reliable
+       anchor than the raw coordinate CWA lookup.
+    3. `get_cwa()` (the original coordinate → CWA lookup), used when the
+       caller passed `county_zone` explicitly and no zone-derived cwa
+       applies (preserves the original operator-config call shape).
+  Separately, `_resolve_forecast_zone_id()` now detects when /points
+  resolves to a marine zone (PZZ/AMZ/PKZ/PMZ/PHZ/PSZ/GMZ/ANZ/LMZ/LHZ/LEZ/
+  LOZ/LSZ/SLZ prefix) instead of a county zone — SRF sections are keyed by
+  county UGC codes, so a marine zone ID never matches any section. On a
+  marine-zone result, it retries /points with latitude shifted +0.015°
+  (~1.7 km, generally inland for US coasts) and uses that result if it
+  resolves to a non-marine zone; if the retry is *also* marine, the
+  original marine zone_id is kept (some configured spots genuinely sit in
+  a marine zone with no nearby inland county zone).
 
 County-zone determination (PROVIDER-MANUAL §14.5, lead-approved design
 2026-07-09 — self-contained in this module, nws_zones.py NOT extended):
@@ -182,6 +206,35 @@ _CACHE_TTL_SECONDS = 3600  # 60 min per PROVIDER-MANUAL §14.5
 _ZONE_LOOKUP_TTL_SECONDS = 3600  # lead instruction 2026-07-09 (see module docstring)
 _API_VERSION = "0.1.0"
 
+# NWS marine (water) zone prefixes. A /points forecastZone resolving to one
+# of these means the coordinate landed on/near a water polygon rather than a
+# county/land zone — SRF sections are keyed by county UGC codes, so a marine
+# zone ID never matches any SRF section (T1.4, Marine Remediation Plan).
+_MARINE_ZONE_PREFIXES: tuple[str, ...] = (
+    "PZZ",
+    "AMZ",
+    "PKZ",
+    "PMZ",
+    "PHZ",
+    "PSZ",
+    "GMZ",
+    "ANZ",
+    "LMZ",
+    "LHZ",
+    "LEZ",
+    "LOZ",
+    "LSZ",
+    "SLZ",
+)
+
+# Latitude shift applied when retrying a marine-zone /points result — moves
+# ~1.7 km north, generally inland for US coasts (T1.4).
+_INLAND_RETRY_LAT_SHIFT = 0.015
+
+
+def _is_marine_zone(zone_id: str) -> bool:
+    return zone_id.upper().startswith(_MARINE_ZONE_PREFIXES)
+
 # ---------------------------------------------------------------------------
 # Capability declaration (§1 Module Contract)
 # ---------------------------------------------------------------------------
@@ -258,12 +311,20 @@ class _NwsPointForecastZoneResponse(BaseModel):
 
 
 class _NwsForecastZoneProperties(BaseModel):
-    """Properties of a /zones/forecast/{zoneId} detail response."""
+    """Properties of a /zones/forecast/{zoneId} detail response.
+
+    `cwa` (added T1.4, Marine Remediation Plan): the WFO office ID that
+    issues forecast products for this zone. NWS returns this as either a
+    bare string (e.g. "SGX") or a single-element list (observed shape
+    varies by zone type) — both are normalized to `str | None` by
+    `_resolve_zone_name_and_cwa`.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     id: str
     name: str
+    cwa: str | list[str] | None = None
 
 
 class _NwsForecastZoneResponse(BaseModel):
@@ -402,23 +463,20 @@ def _build_srf_cache_key(wfo: str, county_zone: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_forecast_zone_id(lat: float, lon: float, user_agent_contact: str | None) -> str:
-    """Resolve the NWS public forecast zone ID covering (lat, lon).
+def _fetch_forecast_zone_id_raw(
+    lat: float, lon: float, user_agent_contact: str | None
+) -> str:
+    """GET /points/{lat},{lon} -> properties.forecastZone -> zone ID.
 
-    GET /points/{lat},{lon} -> properties.forecastZone (a URL like
-    "https://api.weather.gov/zones/forecast/NCZ027") -> zone ID is the
-    final path segment.
+    No caching, no marine-zone retry — the uncached single-shot lookup used
+    by both the primary call and the inland-shifted retry in
+    `_resolve_forecast_zone_id`.
 
     Raises:
         ProviderProtocolError: response validation failed, or the response
             omitted properties.forecastZone (unexpected NWS schema change
             for this coordinate — every US coastal point has one).
     """
-    cache_key = _build_points_cache_key(lat, lon)
-    cached = get_cache().get(cache_key)
-    if cached is not None:
-        return cast(str, cached)
-
     _rate_limiter.acquire()
     user_agent = _build_user_agent(user_agent_contact)
     client = _get_http_client(user_agent)
@@ -454,17 +512,72 @@ def _resolve_forecast_zone_id(lat: float, lon: float, user_agent_contact: str | 
             domain=DOMAIN,
         )
 
-    zone_id = forecast_zone_url.rstrip("/").rsplit("/", 1)[-1]
+    return forecast_zone_url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _resolve_forecast_zone_id(lat: float, lon: float, user_agent_contact: str | None) -> str:
+    """Resolve the NWS public forecast zone ID covering (lat, lon).
+
+    GET /points/{lat},{lon} -> properties.forecastZone -> zone ID (final
+    path segment of the forecastZone URL).
+
+    Marine-zone retry (T1.4, Marine Remediation Plan): when the resolved
+    zone has a marine prefix (see `_MARINE_ZONE_PREFIXES`), the coordinate
+    landed on/near a water polygon rather than a county zone — SRF sections
+    are keyed by county UGC codes, so a marine zone ID would never match.
+    Retry once with latitude shifted `_INLAND_RETRY_LAT_SHIFT` degrees north
+    (generally inland for US coasts); use the retried zone if it resolves
+    to a non-marine zone, otherwise keep the original marine zone_id (some
+    configured spots genuinely sit in a marine zone with no nearby inland
+    county zone). The retry itself is not cached — only the final resolved
+    zone_id is, keyed by the *original* (lat, lon), so repeat calls for the
+    same point never re-run the retry within the cache window.
+
+    Raises:
+        ProviderProtocolError: response validation failed, or the response
+            omitted properties.forecastZone (unexpected NWS schema change
+            for this coordinate — every US coastal point has one).
+    """
+    cache_key = _build_points_cache_key(lat, lon)
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return cast(str, cached)
+
+    zone_id = _fetch_forecast_zone_id_raw(lat, lon, user_agent_contact)
+
+    if _is_marine_zone(zone_id):
+        logger.debug(
+            "Forecast zone %s is a marine zone; retrying with inland-shifted coordinates",
+            zone_id,
+        )
+        retried_zone_id = _fetch_forecast_zone_id_raw(
+            lat + _INLAND_RETRY_LAT_SHIFT, lon, user_agent_contact
+        )
+        if not _is_marine_zone(retried_zone_id):
+            zone_id = retried_zone_id
+        # else: retry also landed in a marine zone — keep the original
+        # marine zone_id (fallback for spots genuinely in a marine zone).
+
     get_cache().set(cache_key, zone_id, ttl_seconds=_ZONE_LOOKUP_TTL_SECONDS)
     return zone_id
 
 
-def _resolve_zone_name(zone_id: str, user_agent_contact: str | None) -> str:
-    """Resolve the human-readable name for a public forecast zone ID.
+def _resolve_zone_name_and_cwa(
+    zone_id: str, user_agent_contact: str | None
+) -> tuple[str, str | None]:
+    """Resolve the human-readable name and issuing WFO (cwa) for a public
+    forecast zone ID.
 
-    GET /zones/forecast/{zoneId} -> properties.name. The SRF text carries
+    GET /zones/forecast/{zoneId} -> properties.name (the SRF text carries
     zone *names* in its section headers, not zone IDs, so this name is what
-    gets fuzzy-matched against the parsed text (see _zone_header_matches).
+    gets fuzzy-matched against the parsed text — see _zone_header_matches)
+    and properties.cwa (T1.4, Marine Remediation Plan: the WFO that issues
+    forecast products for this zone, used by fetch() as the preferred WFO
+    source over the raw coordinate-based get_cwa() lookup when the zone was
+    auto-resolved — see module docstring "WFO determination").
+
+    Both values come from the same response and are cached together under
+    one key, so adding cwa resolution costs no extra HTTP call.
 
     Raises:
         ProviderProtocolError: response validation failed.
@@ -472,7 +585,8 @@ def _resolve_zone_name(zone_id: str, user_agent_contact: str | None) -> str:
     cache_key = _build_zone_name_cache_key(zone_id)
     cached = get_cache().get(cache_key)
     if cached is not None:
-        return cast(str, cached)
+        cached_dict = cast(dict[str, Any], cached)
+        return cast(str, cached_dict["name"]), cast("str | None", cached_dict.get("cwa"))
 
     _rate_limiter.acquire()
     user_agent = _build_user_agent(user_agent_contact)
@@ -498,8 +612,15 @@ def _resolve_zone_name(zone_id: str, user_agent_contact: str | None) -> str:
         ) from exc
 
     zone_name = wire.properties.name
-    get_cache().set(cache_key, zone_name, ttl_seconds=_ZONE_LOOKUP_TTL_SECONDS)
-    return zone_name
+    raw_cwa = wire.properties.cwa
+    zone_cwa = (raw_cwa[0] if raw_cwa else None) if isinstance(raw_cwa, list) else raw_cwa
+
+    get_cache().set(
+        cache_key,
+        {"name": zone_name, "cwa": zone_cwa},
+        ttl_seconds=_ZONE_LOOKUP_TTL_SECONDS,
+    )
+    return zone_name, zone_cwa
 
 
 # ---------------------------------------------------------------------------
@@ -966,6 +1087,7 @@ def fetch(
     lat: float,
     lon: float,
     county_zone: str | None = None,
+    wfo_override: str | None = None,
     user_agent_contact: str | None = None,
 ) -> dict[str, object]:
     """Fetch NWS SRF for the WFO covering (lat, lon).
@@ -976,7 +1098,15 @@ def fetch(
         county_zone: NWS public forecast zone ID (e.g. "NCZ027") if already
             known (e.g. from operator config, mirroring the
             nws_marine_zone_id pattern). When None, resolved from (lat, lon)
-            via /points -> properties.forecastZone.
+            via /points -> properties.forecastZone (with marine-zone retry,
+            see `_resolve_forecast_zone_id`).
+        wfo_override: WFO office ID (e.g. "SGX") if the caller already knows
+            which WFO issues the SRF for this spot (operator config; naming
+            mirrors nwps.py's `wfo_override` pattern). Takes priority over
+            both zone-derived and coordinate-derived WFO resolution — use
+            this when a spot's SRF-issuing WFO differs from its coordinate
+            CWA (T1.4, Marine Remediation Plan; see module docstring "WFO
+            determination").
         user_agent_contact: Operator-configured NWS UA contact (ADR-006).
 
     Returns:
@@ -987,9 +1117,12 @@ def fetch(
           - "wfo": str — the resolved WFO (CWA) covering the spot.
 
     Raises:
-        ValueError: lat/lon out of range, or county_zone is an empty string.
+        ValueError: lat/lon out of range, or county_zone/wfo_override is an
+            empty string.
         GeographicallyUnsupported: get_cwa() found no NWS coverage for
-            (lat, lon) (non-US location).
+            (lat, lon) (non-US location). Not raised when wfo_override is
+            supplied, or when the zone was auto-resolved and its cwa
+            property was present (get_cwa() is skipped in both cases).
         QuotaExhausted: NWS returned 429 (rate limit).
         KeyInvalid: NWS returned 401/403 (exotic; NWS is keyless).
         TransientNetworkError: Network/DNS failure or 5xx after retries.
@@ -1002,16 +1135,30 @@ def fetch(
         raise ValueError(f"lon must be within [-180, 180]; got {lon!r}")
     if county_zone is not None and not county_zone.strip():
         raise ValueError("county_zone must not be empty when provided")
+    if wfo_override is not None and not wfo_override.strip():
+        raise ValueError("wfo_override must not be empty when provided")
 
     if not user_agent_contact:
         _warn_once_missing_contact()
 
-    wfo = get_cwa(lat, lon, user_agent_contact=user_agent_contact)
-
-    zone_id = county_zone if county_zone is not None else _resolve_forecast_zone_id(
-        lat, lon, user_agent_contact
+    zone_auto_resolved = county_zone is None
+    zone_id = (
+        county_zone
+        if county_zone is not None
+        else _resolve_forecast_zone_id(lat, lon, user_agent_contact)
     )
-    zone_name = _resolve_zone_name(zone_id, user_agent_contact)
+    zone_name, zone_cwa = _resolve_zone_name_and_cwa(zone_id, user_agent_contact)
+
+    # WFO priority (T1.4, Marine Remediation Plan; see module docstring
+    # "WFO determination"): wfo_override > zone-derived cwa (auto-resolved
+    # zones only) > get_cwa(lat, lon) (unchanged path for explicit
+    # county_zone callers).
+    if wfo_override:
+        wfo = wfo_override
+    elif zone_auto_resolved and zone_cwa:
+        wfo = zone_cwa
+    else:
+        wfo = get_cwa(lat, lon, user_agent_contact=user_agent_contact)
 
     cache_key = _build_srf_cache_key(wfo, zone_id)
     cached = get_cache().get(cache_key)

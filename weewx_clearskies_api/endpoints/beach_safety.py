@@ -311,7 +311,12 @@ def _gather_wave_and_temp(location: MarineLocation) -> dict:
     try:
         from weewx_clearskies_api.providers.marine import nws_srf  # noqa: PLC0415
 
-        srf_result = nws_srf.fetch(lat=location.lat, lon=location.lon)
+        srf_result = nws_srf.fetch(
+            lat=location.lat,
+            lon=location.lon,
+            county_zone=getattr(location, "nws_srf_zone_id", None),
+            wfo_override=getattr(location, "nws_srf_wfo", None),
+        )
         srf_forecasts = srf_result.get("forecasts") or []
         if srf_forecasts:
             today_forecast = srf_forecasts[0]

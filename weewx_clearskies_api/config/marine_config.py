@@ -23,6 +23,11 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
           nws_marine_zone_id = AMZ250
           nwps_wfo = ILM
           nwps_cg_grid = CG1
+          # Optional overrides for the SRF provider (T1.4, Marine
+          # Remediation Plan) -- only needed when the spot's coordinates
+          # resolve to a marine zone or a WFO that doesn't issue its SRF:
+          # nws_srf_zone_id = CAZ552
+          # nws_srf_wfo = SGX
 
           [[[[surf]]]]
             beach_facing_degrees = 135
@@ -324,6 +329,20 @@ class MarineLocation:
     coops_station_ids: list[str]
     nws_marine_zone_id: str | None
     nwps_wfo: str | None
+    #: NWS public forecast (county) zone ID for the Surf Zone Forecast (SRF)
+    #: text product (e.g. "CAZ552" for Orange County, CA). Optional — when
+    #: unset, providers/marine/nws_srf.py auto-resolves the zone from
+    #: (lat, lon) via /points, with a marine-zone retry (T1.4, Marine
+    #: Remediation Plan). Set explicitly for shoreline spots whose
+    #: coordinates resolve to a marine zone instead of the covering county.
+    nws_srf_zone_id: str | None
+    #: WFO office ID that issues the SRF for this location (e.g. "SGX"),
+    #: when it differs from the WFO resolved from coordinates or from the
+    #: nws_srf_zone_id's own cwa property (T1.4, Marine Remediation Plan —
+    #: observed for Huntington Beach, CA: coordinate CWA is LOX, but Orange
+    #: County's SRF is issued by SGX). Optional; passed as nws_srf.fetch()'s
+    #: wfo_override kwarg when set.
+    nws_srf_wfo: str | None
     #: Parsed and stored, but NOT currently read by any provider (T4.5,
     #: Phase 4 cleanup). providers/marine/nwps.py's fetch() hardcodes the
     #: NWPS grid to "CG1" everywhere (v1 simplification: CG1 only, per that
@@ -343,6 +362,8 @@ class MarineLocation:
         self.coops_station_ids = _as_list(section.get("coops_station_ids", []))
         self.nws_marine_zone_id = _opt_str(section, "nws_marine_zone_id")
         self.nwps_wfo = _opt_str(section, "nwps_wfo")
+        self.nws_srf_zone_id = _opt_str(section, "nws_srf_zone_id")
+        self.nws_srf_wfo = _opt_str(section, "nws_srf_wfo")
         self.nwps_cg_grid = _opt_str(section, "nwps_cg_grid")
         self.station_distance_km = float(section.get("station_distance_km", 0.0))
 
