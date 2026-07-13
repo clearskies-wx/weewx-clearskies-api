@@ -13,6 +13,10 @@ Warmed endpoints:
   - GET /almanac/eclipses (rolling 1-year window from today)
   - GET /almanac/meteor-showers (rolling 1-year window from today, station location)
   - GET /earthquakes/faults (station location, configured radius)
+  - Marine provider data for configured [marine] locations (Marine
+    Remediation Plan T2.1): NDBC buoy observations, CO-OPS tide
+    predictions/water levels, NWS marine zone text, WaveWatch III wave
+    forecasts.  Deduplicated across locations by station id / grid group.
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -22,6 +26,10 @@ Cache key format:
   warmer:almanac:eclipses:<date>         e.g. warmer:almanac:eclipses:2026-05-27
   warmer:almanac:meteor-showers:<date>   e.g. warmer:almanac:meteor-showers:2026-05-27
   warmer:earthquakes:faults
+  warmer:marine:ndbc:<station_id>
+  warmer:marine:coops:<station_id>
+  warmer:marine:nws_text:<zone_id>
+  warmer:marine:wavewatch:<grid_group>
 
 Cached values are plain dicts (JSON-safe) so both MemoryCache and RedisCache
 backends work correctly.  RecordsBundle.model_dump() serialises the Pydantic
@@ -88,12 +96,14 @@ class BackgroundCacheWarmer:
         settings: object,  # CacheWarmerSettings — avoid circular import
         station_meta: dict,
         seeing_settings: object | None = None,  # SeeingSettings — optional, avoids circular import
+        marine_config: object | None = None,  # MarineConfig — optional, avoids circular import
     ) -> None:
         self._engine = engine
         self._registry = registry
         self._settings = settings
         self._station = station_meta
         self._seeing_settings = seeing_settings
+        self._marine_config = marine_config
         self._stop_event = threading.Event()
 
     # ------------------------------------------------------------------
@@ -117,6 +127,7 @@ class BackgroundCacheWarmer:
         self._warm_meteor_showers()
         self._warm_faults()
         self._warm_seeing_forecast()
+        self._warm_marine()
         logger.info("Cache warmer: initial warm complete")
 
     def start(self) -> None:
@@ -142,6 +153,7 @@ class BackgroundCacheWarmer:
         last_meteor_showers: float = _NEVER
         last_faults: float = _NEVER
         last_seeing: float = _NEVER
+        last_marine: float = _NEVER
 
         while not self._stop_event.is_set():
             now = time.monotonic()
@@ -176,6 +188,10 @@ class BackgroundCacheWarmer:
             if last_seeing == _NEVER or (now - last_seeing) >= self._settings.seeing_interval_seconds:
                 self._warm_seeing_forecast()
                 last_seeing = time.monotonic()
+
+            if last_marine == _NEVER or (now - last_marine) >= 1800:
+                self._warm_marine()
+                last_marine = time.monotonic()
 
             # Sleep in small ticks so stop() is responsive.
             self._stop_event.wait(timeout=_SLEEP_TICK_SECONDS)
@@ -595,3 +611,90 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: seeing forecast refreshed (%d points)", len(points))
         except Exception:
             logger.warning("Cache warmer: seeing forecast warm failed", exc_info=True)
+
+    def _warm_marine(self) -> None:
+        """Warm marine provider data for configured locations (Marine Remediation Plan T2.1).
+
+        Deduplicates fetches across all configured [marine] locations so a
+        station shared by two locations (or a WaveWatch III grid group shared
+        by two nearby locations) is only fetched once per warm cycle.
+        """
+        if self._marine_config is None:
+            return
+        try:
+            # Deduplicate: collect unique station IDs across all locations.
+            ndbc_stations: set[str] = set()
+            coops_stations: set[str] = set()
+            nws_zones: set[str] = set()
+
+            for loc in self._marine_config.locations:
+                ndbc_stations.update(loc.ndbc_station_ids or [])
+                coops_stations.update(loc.coops_station_ids or [])
+                if loc.nws_marine_zone_id:
+                    nws_zones.add(loc.nws_marine_zone_id)
+
+            cache = get_cache()
+
+            # NDBC buoy observations — one fetch per unique station.
+            for station_id in ndbc_stations:
+                try:
+                    from weewx_clearskies_api.providers.buoy import ndbc
+
+                    result = ndbc.fetch(station_id=station_id)
+                    cache.set(f"warmer:marine:ndbc:{station_id}", result, 3600)
+                    logger.info("Cache warmer: NDBC %s refreshed", station_id)
+                except Exception:
+                    logger.warning("Cache warmer: NDBC %s warm failed", station_id, exc_info=True)
+
+            # CO-OPS tide predictions + water levels — one fetch per unique station.
+            for station_id in coops_stations:
+                try:
+                    from weewx_clearskies_api.providers.tides import coops
+
+                    result = coops.fetch(station_id=station_id, products=("predictions", "water_level"))
+                    cache.set(f"warmer:marine:coops:{station_id}", result, 600)
+                    logger.info("Cache warmer: CO-OPS %s refreshed", station_id)
+                except Exception:
+                    logger.warning("Cache warmer: CO-OPS %s warm failed", station_id, exc_info=True)
+
+            # NWS marine text — one fetch per unique zone.
+            for zone_id in nws_zones:
+                try:
+                    from weewx_clearskies_api.providers.marine import nws_marine
+
+                    result = nws_marine.fetch(zone_id=zone_id)
+                    cache.set(f"warmer:marine:nws_text:{zone_id}", result, 1800)
+                    logger.info("Cache warmer: NWS marine text %s refreshed", zone_id)
+                except Exception:
+                    logger.warning("Cache warmer: NWS marine text %s warm failed", zone_id, exc_info=True)
+
+            # WaveWatch III — one fetch per unique grid group (spatial dedup via
+            # marine_location_resolver; locations without a resolved group are
+            # skipped for this warm cycle and picked up once the resolver runs).
+            from weewx_clearskies_api.services.marine_location_resolver import get_grid_group
+
+            fetched_groups: set[str] = set()
+            for loc in self._marine_config.locations:
+                group = get_grid_group(loc.id)
+                if group and group not in fetched_groups:
+                    try:
+                        from weewx_clearskies_api.providers.marine import wavewatch
+
+                        result = wavewatch.fetch(lat=loc.lat, lon=loc.lon)
+                        cache.set(f"warmer:marine:wavewatch:{group}", result, 1800)
+                        fetched_groups.add(group)
+                        logger.info("Cache warmer: WaveWatch III %s refreshed", group)
+                    except Exception:
+                        logger.warning(
+                            "Cache warmer: WaveWatch III warm failed for group %s", group, exc_info=True
+                        )
+
+            logger.info(
+                "Cache warmer: marine data refreshed (%d NDBC, %d CO-OPS, %d NWS zones, %d WW3 groups)",
+                len(ndbc_stations),
+                len(coops_stations),
+                len(nws_zones),
+                len(fetched_groups),
+            )
+        except Exception:
+            logger.warning("Cache warmer: marine warm failed", exc_info=True)
