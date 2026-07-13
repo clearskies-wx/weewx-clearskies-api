@@ -14,9 +14,12 @@ Warmed endpoints:
   - GET /almanac/meteor-showers (rolling 1-year window from today, station location)
   - GET /earthquakes/faults (station location, configured radius)
   - Marine provider data for configured [marine] locations (Marine
-    Remediation Plan T2.1): NDBC buoy observations, CO-OPS tide
+    Remediation Plan T2.1/T2.2): NDBC buoy observations, CO-OPS tide
     predictions/water levels, NWS marine zone text, WaveWatch III wave
-    forecasts.  Deduplicated across locations by station id / grid group.
+    forecasts, NWS Surf Zone Forecast (SRF), NWPS nearshore wave model.
+    Deduplicated across locations by station id / grid group where the
+    provider's own cache key allows it; NWS SRF and NWPS are fetched once
+    per location (see `_warm_marine` docstring for why).
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -26,10 +29,14 @@ Cache key format:
   warmer:almanac:eclipses:<date>         e.g. warmer:almanac:eclipses:2026-05-27
   warmer:almanac:meteor-showers:<date>   e.g. warmer:almanac:meteor-showers:2026-05-27
   warmer:earthquakes:faults
-  warmer:marine:ndbc:<station_id>
-  warmer:marine:coops:<station_id>
-  warmer:marine:nws_text:<zone_id>
-  warmer:marine:wavewatch:<grid_group>
+
+  Marine warming does NOT write warmer:marine:* keys.  It calls provider
+  .fetch() functions directly, which populate each provider's own internal
+  ADR-017 cache (keyed per-provider — see providers/buoy/ndbc.py,
+  providers/tides/coops.py, providers/marine/nws_marine.py,
+  providers/marine/wavewatch.py, providers/marine/nws_srf.py,
+  providers/marine/nwps.py for their respective cache key shapes).  The
+  marine endpoints call the same .fetch() functions and get cache hits.
 
 Cached values are plain dicts (JSON-safe) so both MemoryCache and RedisCache
 backends work correctly.  RecordsBundle.model_dump() serialises the Pydantic
@@ -612,47 +619,61 @@ class BackgroundCacheWarmer:
         except Exception:
             logger.warning("Cache warmer: seeing forecast warm failed", exc_info=True)
 
-    @staticmethod
-    def _serialize_provider_result(obj: object) -> object:
-        """Recursively convert Pydantic models to dicts for cache storage."""
-        if hasattr(obj, "model_dump"):
-            return obj.model_dump()
-        if isinstance(obj, list):
-            return [BackgroundCacheWarmer._serialize_provider_result(item) for item in obj]
-        if isinstance(obj, dict):
-            return {k: BackgroundCacheWarmer._serialize_provider_result(v) for k, v in obj.items()}
-        return obj
-
     def _warm_marine(self) -> None:
-        """Warm marine provider data for configured locations (Marine Remediation Plan T2.1).
+        """Pre-fetch marine provider data for configured locations (Marine
+        Remediation Plan T2.1/T2.2).
 
-        Deduplicates fetches across all configured [marine] locations so a
-        station shared by two locations (or a WaveWatch III grid group shared
-        by two nearby locations) is only fetched once per warm cycle.
+        Unlike the almanac/records/faults warm functions above (which write
+        to ``warmer:`` cache keys that the corresponding endpoint reads
+        back), marine warming works differently: it calls the marine
+        providers' own .fetch() functions, which populate each provider's
+        own internal ADR-017 cache.  The marine endpoints call those same
+        .fetch() functions and get cache hits — there is no separate
+        ``warmer:marine:*`` cache layer to read or write.
+
+        Deduplicates fetches across all configured [marine] locations where
+        the provider's cache key allows it, so a station shared by two
+        locations (or a WaveWatch III grid group shared by two nearby
+        locations) is only fetched once per warm cycle.
+
+        NWS SRF and NWPS are the exception: both require lat/lon (not just
+        a WFO) because each resolves location-specific data from the
+        coordinates — nws_srf resolves a per-county forecast zone (a WFO
+        can cover multiple zones, so a single representative fetch would
+        under-warm the other zones), and nwps bilinear-interpolates the
+        wave grid at the exact point. The real endpoints
+        (endpoints/beach_safety.py, endpoints/surf.py) call both providers
+        per-location with the location's own lat/lon, so warming mirrors
+        that exactly to guarantee a cache hit. Redundant calls for
+        locations sharing a zone/WFO are cheap: both providers cache
+        internally, so only the first location per zone/WFO does real
+        network work.
         """
         if self._marine_config is None:
             return
         try:
-            # Deduplicate: collect unique station IDs across all locations.
+            # Deduplicate: collect unique identifiers across all locations.
             ndbc_stations: set[str] = set()
             coops_stations: set[str] = set()
             nws_zones: set[str] = set()
+            nwps_locations: list = []
+            nwps_wfos: set[str] = set()
 
             for loc in self._marine_config.locations:
                 ndbc_stations.update(loc.ndbc_station_ids or [])
                 coops_stations.update(loc.coops_station_ids or [])
                 if loc.nws_marine_zone_id:
                     nws_zones.add(loc.nws_marine_zone_id)
-
-            cache = get_cache()
+                if loc.nwps_wfo:
+                    nwps_locations.append(loc)
+                    nwps_wfos.add(loc.nwps_wfo)
 
             # NDBC buoy observations — one fetch per unique station.
             for station_id in ndbc_stations:
                 try:
                     from weewx_clearskies_api.providers.buoy import ndbc
 
-                    result = ndbc.fetch(station_id=station_id)
-                    cache.set(f"warmer:marine:ndbc:{station_id}", self._serialize_provider_result(result), 3600)
+                    ndbc.fetch(station_id=station_id)
                     logger.info("Cache warmer: NDBC %s refreshed", station_id)
                 except Exception:
                     logger.warning("Cache warmer: NDBC %s warm failed", station_id, exc_info=True)
@@ -662,8 +683,7 @@ class BackgroundCacheWarmer:
                 try:
                     from weewx_clearskies_api.providers.tides import coops
 
-                    result = coops.fetch(station_id=station_id, products=("predictions", "water_level"))
-                    cache.set(f"warmer:marine:coops:{station_id}", self._serialize_provider_result(result), 600)
+                    coops.fetch(station_id=station_id, products=("predictions", "water_level"))
                     logger.info("Cache warmer: CO-OPS %s refreshed", station_id)
                 except Exception:
                     logger.warning("Cache warmer: CO-OPS %s warm failed", station_id, exc_info=True)
@@ -673,8 +693,7 @@ class BackgroundCacheWarmer:
                 try:
                     from weewx_clearskies_api.providers.marine import nws_marine
 
-                    result = nws_marine.fetch(zone_id=zone_id)
-                    cache.set(f"warmer:marine:nws_text:{zone_id}", self._serialize_provider_result(result), 1800)
+                    nws_marine.fetch(zone_id=zone_id)
                     logger.info("Cache warmer: NWS marine text %s refreshed", zone_id)
                 except Exception:
                     logger.warning("Cache warmer: NWS marine text %s warm failed", zone_id, exc_info=True)
@@ -691,8 +710,7 @@ class BackgroundCacheWarmer:
                     try:
                         from weewx_clearskies_api.providers.marine import wavewatch
 
-                        result = wavewatch.fetch(lat=loc.lat, lon=loc.lon)
-                        cache.set(f"warmer:marine:wavewatch:{group}", self._serialize_provider_result(result), 1800)
+                        wavewatch.fetch(lat=loc.lat, lon=loc.lon)
                         fetched_groups.add(group)
                         logger.info("Cache warmer: WaveWatch III %s refreshed", group)
                     except Exception:
@@ -700,12 +718,43 @@ class BackgroundCacheWarmer:
                             "Cache warmer: WaveWatch III warm failed for group %s", group, exc_info=True
                         )
 
+            # NWS SRF (surf zone forecast) — one fetch per location with
+            # nwps_wfo configured (zone resolution needs lat/lon; see
+            # docstring above). Mirrors endpoints/beach_safety.py and
+            # endpoints/surf.py's nws_srf.fetch(lat=..., lon=...) call.
+            for loc in nwps_locations:
+                try:
+                    from weewx_clearskies_api.providers.marine import nws_srf
+
+                    nws_srf.fetch(lat=loc.lat, lon=loc.lon)
+                    logger.info("Cache warmer: NWS SRF refreshed for %s (wfo=%s)", loc.id, loc.nwps_wfo)
+                except Exception:
+                    logger.warning("Cache warmer: NWS SRF warm failed for %s", loc.id, exc_info=True)
+
+            # NWPS nearshore wave model — one fetch per location with
+            # nwps_wfo configured (grid interpolation needs lat/lon; see
+            # docstring above). Mirrors endpoints/beach_safety.py and
+            # endpoints/surf.py's nwps.fetch(lat=..., lon=..., wfo_override=...)
+            # call. wfo_override skips re-resolving the WFO via NWS /points
+            # since it's already known from config.
+            for loc in nwps_locations:
+                try:
+                    from weewx_clearskies_api.providers.marine import nwps
+
+                    nwps.fetch(lat=loc.lat, lon=loc.lon, wfo_override=loc.nwps_wfo)
+                    logger.info("Cache warmer: NWPS refreshed for %s (wfo=%s)", loc.id, loc.nwps_wfo)
+                except Exception:
+                    logger.warning("Cache warmer: NWPS warm failed for %s", loc.id, exc_info=True)
+
             logger.info(
-                "Cache warmer: marine data refreshed (%d NDBC, %d CO-OPS, %d NWS zones, %d WW3 groups)",
+                "Cache warmer: marine data refreshed (%d NDBC, %d CO-OPS, %d NWS zones, "
+                "%d WW3 groups, %d SRF/NWPS locations across %d WFOs)",
                 len(ndbc_stations),
                 len(coops_stations),
                 len(nws_zones),
                 len(fetched_groups),
+                len(nwps_locations),
+                len(nwps_wfos),
             )
         except Exception:
             logger.warning("Cache warmer: marine warm failed", exc_info=True)
