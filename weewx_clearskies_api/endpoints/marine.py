@@ -67,12 +67,14 @@ from datetime import UTC, datetime
 
 import configobj
 from fastapi import APIRouter, HTTPException
+from sqlalchemy.orm import Session
 
 from weewx_clearskies_api.config.marine_config import (
     MarineConfig,
     MarineLocation,
     load_marine_config,
 )
+from weewx_clearskies_api.db.session import get_engine
 from weewx_clearskies_api.models.responses import (
     MarineAlertSummary,
     MarineBundle,
@@ -86,6 +88,7 @@ from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
+from weewx_clearskies_api.units.labels import get_label as _get_unit_label
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +158,13 @@ _BASE_WATER_LEVEL_UNIT = "meter"
 _BASE_OCEAN_SPEED_UNIT = "meter_per_second"
 _BASE_VISIBILITY_UNIT = "nautical_mile"
 
+# NDBC buoy standard-met waterTemp wire unit (T1.2). This is the land
+# group_temperature group (not one of the 5 marine-specific groups above) --
+# waterTemp is documented as group_temperature in API-MANUAL §16's
+# MarineObservation table, so it converts against the operator's configured
+# group_temperature target the same way outTemp does on /current.
+_BASE_TEMPERATURE_UNIT = "degree_C"
+
 _MARINE_DISPLAY_LABEL = {
     "foot": "ft",
     "meter": "m",
@@ -178,12 +188,14 @@ def _marine_target_units() -> dict[str, str]:
     when the group is not explicitly configured.
     """
     height_default = "foot" if get_target_unit() == "US" else "meter"
+    temperature_default = "degree_F" if get_target_unit() == "US" else "degree_C"
     return {
         "group_wave_height": get_group_unit("group_wave_height", height_default),
         "group_wave_period": get_group_unit("group_wave_period", "second"),
         "group_water_level": get_group_unit("group_water_level", height_default),
         "group_ocean_speed": get_group_unit("group_ocean_speed", "knot"),
         "group_visibility": get_group_unit("group_visibility", "nautical_mile"),
+        "group_temperature": get_group_unit("group_temperature", temperature_default),
     }
 
 
@@ -194,6 +206,11 @@ def _marine_units_block(targets: dict[str, str]) -> dict[str, str]:
         "waterLevel": _MARINE_DISPLAY_LABEL[targets["group_water_level"]],
         "windSpeed": _MARINE_DISPLAY_LABEL[targets["group_ocean_speed"]],
         "visibility": _MARINE_DISPLAY_LABEL[targets["group_visibility"]],
+        # T1.2: waterTemp (and any other land group_temperature marine field)
+        # display unit -- resolved via units/labels.py rather than
+        # _MARINE_DISPLAY_LABEL since group_temperature units (degree_F/
+        # degree_C) aren't in that marine-only lookup table.
+        "temperature": _get_unit_label(targets["group_temperature"]),
     }
 
 
@@ -316,12 +333,18 @@ def _fetch_active_alerts(location: MarineLocation) -> list[MarineAlertSummary] |
 def _location_summary(location: MarineLocation) -> MarineLocationSummary:
     """Build a MarineLocationSummary with best-effort live data.
 
-    Each sub-fetch (NDBC observation, CO-OPS tide, weather cache) is
+    Each sub-fetch (NDBC observation, weather cache, station archive) is
     independently wrapped in try/except so a single provider outage
     degrades that field to None without failing the whole summary.
+
+    currentTide is always None on this card summary (ADR-091, T1.3): all
+    locations sharing a CO-OPS station show identical tide predictions --
+    visual noise on the landing page. The CO-OPS prediction fetch stays in
+    the cache warmer (services/cache_warmer.py _warm_marine()) because it
+    feeds the activity detail tabs via GET /tides/{locationId}.
     """
+    now_str = utc_isoformat(datetime.now(tz=UTC))
     current_conditions: MarineObservation | None = None
-    current_tide: dict[str, object] | None = None
     weather_code: int | None = None
     is_day: bool | None = None
 
@@ -342,30 +365,95 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
                 exc_info=True,
             )
 
-    # --- currentTide from CO-OPS next high/low prediction ---
-    if location.coops_station_ids:
-        try:
-            from weewx_clearskies_api.providers.tides import coops  # noqa: PLC0415
+    # --- waterTemp unit conversion (T1.2) ---
+    # NDBC standard-met waterTemp arrives as raw degrees Celsius with no
+    # conversion applied. Convert to the operator's configured
+    # group_temperature display unit (e.g. degree_F for the US preset).
+    # TODO: Replace NDBC source with ocean_data_resolver.resolve(needs="surface") in Phase 3
+    if current_conditions is not None and current_conditions.waterTemp is not None:
+        target_temp_unit = get_group_unit(
+            "group_temperature",
+            "degree_F" if get_target_unit() == "US" else "degree_C",
+        )
+        current_conditions = current_conditions.model_copy(
+            update={
+                "waterTemp": _convert_unit(
+                    current_conditions.waterTemp, _BASE_TEMPERATURE_UNIT, target_temp_unit
+                )
+            }
+        )
 
-            tide_result = coops.fetch(
-                station_id=location.coops_station_ids[0],
-                products=("predictions",),
+    # --- windSpeed / windDirection / airTemp precedence (T1.1) ---
+    # Station hardware wins when the location is within dedup_radius_km of
+    # the weewx station (marine_location_resolver.is_station_served());
+    # otherwise falls back to the forecast-provider-fed marine weather cache
+    # (populated by cache_warmer._warm_marine_weather()). Card data source
+    # contract, API-MANUAL §16. Values pass through in whatever unit the
+    # source already provides -- no marine-group (knot) conversion applied
+    # here, per lead ruling (interim; T1.2 is the only conversion in scope
+    # for this round).
+    #
+    # The station-served branch opens its own short-lived Session via
+    # get_engine() rather than threading a FastAPI Depends()-injected Session
+    # through list_marine_locations() -> _location_summary() (lead ruling):
+    # this is a conditional path inside a helper, not a reason to change the
+    # route's public signature, and services/cache_warmer.py already
+    # establishes the "open a fresh Session(engine) outside the request-DI
+    # path" pattern for exactly this kind of one-off archive read.
+    wind_temp_updates: dict[str, float] = {}
+    try:
+        from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
+            is_station_served,
+        )
+
+        if is_station_served(location.id):
+            from weewx_clearskies_api.db.registry import get_registry  # noqa: PLC0415
+            from weewx_clearskies_api.services.archive import (  # noqa: PLC0415
+                get_current as _get_current_observation,
             )
-            predictions = tide_result.get("predictions", [])
-            for pred in predictions:
-                if pred.type is not None:
-                    current_tide = {
-                        "type": pred.type,
-                        "time": pred.time,
-                        "height": pred.height,
-                    }
-                    break
-        except Exception:
-            logger.warning(
-                "CO-OPS tide fetch failed for summary of location %r (station %s)",
-                location.id,
-                location.coops_station_ids[0],
-                exc_info=True,
+
+            registry = get_registry()
+            with Session(get_engine()) as station_db:
+                station_obs = _get_current_observation(station_db, registry)
+            if station_obs is not None:
+                if station_obs.windSpeed is not None:
+                    wind_temp_updates["windSpeed"] = station_obs.windSpeed
+                if station_obs.windDir is not None:
+                    wind_temp_updates["windDirection"] = station_obs.windDir
+                if station_obs.outTemp is not None:
+                    wind_temp_updates["airTemp"] = station_obs.outTemp
+        else:
+            from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+                get_marine_weather_cache as _get_weather_cache_for_wind,
+            )
+
+            weather_cache_for_wind = _get_weather_cache_for_wind()
+            if weather_cache_for_wind is not None:
+                provider_conditions = weather_cache_for_wind.get_current_conditions(
+                    location.lat, location.lon
+                )
+                if provider_conditions is not None:
+                    if provider_conditions.get("windSpeed") is not None:
+                        wind_temp_updates["windSpeed"] = provider_conditions["windSpeed"]
+                    if provider_conditions.get("windDirection") is not None:
+                        wind_temp_updates["windDirection"] = provider_conditions["windDirection"]
+                    if provider_conditions.get("airTemp") is not None:
+                        wind_temp_updates["airTemp"] = provider_conditions["airTemp"]
+    except Exception:
+        logger.warning(
+            "Station/provider wind+airTemp lookup failed for marine location %r",
+            location.id,
+            exc_info=True,
+        )
+
+    if wind_temp_updates:
+        if current_conditions is not None:
+            current_conditions = current_conditions.model_copy(update=wind_temp_updates)
+        else:
+            current_conditions = MarineObservation(
+                stationId=location.id,
+                time=now_str,
+                **wind_temp_updates,
             )
 
     # --- weatherCode / isDay from marine weather cache ---
@@ -393,7 +481,7 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
         coordinates={"lat": location.lat, "lon": location.lon},
         activities=list(location.activities),
         currentConditions=current_conditions,
-        currentTide=current_tide,
+        currentTide=None,
         activeAlerts=_fetch_active_alerts(location),
         surfRating=None,
         beachSafetyLevel=None,

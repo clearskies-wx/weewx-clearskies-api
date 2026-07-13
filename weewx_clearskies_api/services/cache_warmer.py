@@ -20,6 +20,12 @@ Warmed endpoints:
     Deduplicated across locations by station id / grid group where the
     provider's own cache key allows it; NWS SRF and NWPS are fetched once
     per location (see `_warm_marine` docstring for why).
+  - Forecast provider current conditions for marine locations, one fetch
+    per unique grid group (Marine Card Data Source Fix T1.1): feeds
+    `services/marine_weather_cache.py` so `/marine` card summaries have
+    airTemp/windSpeed/windDirection/weatherCode/isDay for locations not
+    served directly by the weewx station (see `_warm_marine_weather`
+    docstring).
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -758,3 +764,163 @@ class BackgroundCacheWarmer:
             )
         except Exception:
             logger.warning("Cache warmer: marine warm failed", exc_info=True)
+
+        # Forecast provider current conditions -> marine weather cache (T1.1).
+        # Separate try/except so a failure here never blocks the provider
+        # warming above (which already completed by this point).
+        self._warm_marine_weather()
+
+    def _warm_marine_weather(self) -> None:
+        """Pre-fetch forecast-provider current conditions for marine locations
+        not directly served by the weewx station (Marine Card Data Source
+        Fix, T1.1).
+
+        `endpoints/marine.py`'s `_location_summary()` sources
+        `airTemp`/`windSpeed`/`windDirection`/`weatherCode`/`isDay` for a
+        marine location either from the weewx archive (when
+        `marine_location_resolver.is_station_served()` is True) or from this
+        cache (`services/marine_weather_cache.py`).  Without this warm
+        function the cache is never populated (`put_weather()` had zero
+        callers), so `get_current_conditions()` always returned None and
+        those five card fields were always null.
+
+        Fetches once per unique grid group (`marine_location_resolver`'s
+        distance-based dedup, same spatial dedup the WaveWatch III warm loop
+        above uses) rather than once per location, so two nearby marine
+        locations share a single provider call.
+
+        Provider-agnostic by construction: it discovers whichever module is
+        registered for the "forecast" domain via the capability registry
+        (`get_provider_registry()`) and dispatches to that provider's
+        `fetch_current_conditions()` with the provider-specific keyword
+        arguments it requires -- the same per-provider dispatch pattern (and
+        the same module-level credential state from `endpoints/forecast.py`)
+        used by `endpoints/observations.py`'s `_fill_cloudcover_from_provider()`.
+        No provider name is hardcoded as "the" configured provider; the
+        branch taken depends entirely on what the operator has configured.
+        """
+        if self._marine_config is None:
+            return
+        try:
+            from weewx_clearskies_api.providers._common.capability import (
+                get_provider_registry,
+            )
+            from weewx_clearskies_api.providers._common.dispatch import get_provider_module
+            from weewx_clearskies_api.services.marine_location_resolver import get_grid_group
+            from weewx_clearskies_api.services.marine_weather_cache import (
+                get_marine_weather_cache,
+            )
+            from weewx_clearskies_api.services.units import get_target_unit
+
+            weather_cache = get_marine_weather_cache()
+            if weather_cache is None:
+                return  # Marine weather cache not configured -- nothing to warm.
+
+            forecast_providers = [
+                p for p in get_provider_registry() if p.domain == "forecast"
+            ]
+            if not forecast_providers:
+                return  # No forecast provider configured/registered.
+
+            provider_id = forecast_providers[0].provider_id
+            try:
+                provider_module = get_provider_module(domain="forecast", provider_id=provider_id)
+            except KeyError:
+                logger.warning(
+                    "Cache warmer: unknown forecast provider %r; skipping marine weather warm",
+                    provider_id,
+                )
+                return
+
+            try:
+                target_unit = get_target_unit()
+            except RuntimeError:
+                target_unit = "US"
+
+            # Deferred import mirrors _fill_cloudcover_from_provider()'s pattern
+            # for reading operator credential state populated at startup by
+            # wire_forecast_settings().
+            import weewx_clearskies_api.endpoints.forecast as _forecast_ep
+
+            station_tz = self._station.get("station_tz", "UTC")
+
+            fetched_groups: set[str] = set()
+            for loc in self._marine_config.locations:
+                group = get_grid_group(loc.id) or f"{round(loc.lat, 2)}_{round(loc.lon, 2)}"
+                if group in fetched_groups:
+                    continue
+                fetched_groups.add(group)
+
+                try:
+                    if provider_id == "openmeteo":
+                        conditions = provider_module.fetch_current_conditions(
+                            lat=loc.lat,
+                            lon=loc.lon,
+                            target_unit=target_unit,
+                            timezone=station_tz,
+                        )
+                    elif provider_id == "nws":
+                        conditions = provider_module.fetch_current_conditions(
+                            lat=loc.lat,
+                            lon=loc.lon,
+                            target_unit=target_unit,
+                            user_agent_contact=_forecast_ep._nws_user_agent_contact,
+                        )
+                    elif provider_id == "aeris":
+                        conditions = provider_module.fetch_current_conditions(
+                            lat=loc.lat,
+                            lon=loc.lon,
+                            target_unit=target_unit,
+                            client_id=_forecast_ep._aeris_client_id,
+                            client_secret=_forecast_ep._aeris_client_secret,
+                        )
+                    elif provider_id == "openweathermap":
+                        conditions = provider_module.fetch_current_conditions(
+                            lat=loc.lat,
+                            lon=loc.lon,
+                            target_unit=target_unit,
+                            appid=_forecast_ep._openweathermap_appid,
+                        )
+                    else:
+                        logger.debug(
+                            "Cache warmer: no fetch_current_conditions dispatch for "
+                            "provider %r; skipping marine weather warm",
+                            provider_id,
+                        )
+                        continue
+
+                    if conditions is None:
+                        continue
+
+                    weather_code: int | None = None
+                    if conditions.weatherCode is not None:
+                        try:
+                            weather_code = int(conditions.weatherCode)
+                        except (TypeError, ValueError):
+                            weather_code = None
+
+                    weather_cache.put_weather(
+                        loc.lat,
+                        loc.lon,
+                        {
+                            "airTemp": conditions.temperature,
+                            "windSpeed": conditions.windSpeed,
+                            "windDirection": conditions.windDir,
+                            "weatherCode": weather_code,
+                            "isDay": conditions.isDay,
+                            "skyCondition": None,
+                        },
+                    )
+                    logger.info(
+                        "Cache warmer: marine weather cache updated for group %s (provider=%s)",
+                        group,
+                        provider_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Cache warmer: marine weather warm failed for group %s",
+                        group,
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.warning("Cache warmer: marine weather warm failed", exc_info=True)
