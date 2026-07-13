@@ -876,6 +876,35 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Step 6g½: Wire marine location resolver and weather cache (Marine
+    # Remediation Plan T2.2). Must run before Step 6h½'s cache warmer
+    # construction/initial_warm() so that marine_location_resolver's grid
+    # groups are available when BackgroundCacheWarmer._warm_marine() runs
+    # its WaveWatch III dedup loop on the very first (synchronous) warm --
+    # otherwise get_grid_group() returns None for every location until the
+    # resolver runs, silently skipping WaveWatch III on cold start.
+    if settings.marine_config is not None and settings.marine_config.locations:
+        from weewx_clearskies_api.services import marine_location_resolver  # noqa: PLC0415
+        from weewx_clearskies_api.services import marine_weather_cache  # noqa: PLC0415
+
+        _station_info = get_station_info()
+        marine_location_resolver.resolve_grid_groups(
+            settings.marine_config.locations,
+            settings.marine_config.weather.dedup_radius_km,
+        )
+        marine_location_resolver.resolve_station_distances(
+            settings.marine_config.locations,
+            _station_info.latitude,
+            _station_info.longitude,
+            settings.marine_config.weather.dedup_radius_km,
+        )
+        marine_weather_cache.configure(
+            forecast_ttl_hours=settings.marine_config.weather.forecast_ttl_hours,
+            observation_ttl_minutes=settings.marine_config.weather.observation_ttl_minutes,
+            dedup_radius_km=settings.marine_config.weather.dedup_radius_km,
+        )
+        logger.info("Marine location resolver and weather cache configured")
+
     # Step 6h½: Wire cache warmer (ADR-045).
     # Must run after wire_cache_from_env() (step 6h) and after
     # load_station_metadata() (step 6d) and wire_ephemeris_directory() (step 6e)
@@ -896,6 +925,7 @@ def main() -> None:
             settings=settings.cache_warmer,
             station_meta=_station_meta,
             seeing_settings=settings.seeing,
+            marine_config=settings.marine_config,
         )
         _warmer.initial_warm()
         _warmer.start()
