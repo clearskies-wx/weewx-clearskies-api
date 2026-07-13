@@ -612,6 +612,17 @@ class BackgroundCacheWarmer:
         except Exception:
             logger.warning("Cache warmer: seeing forecast warm failed", exc_info=True)
 
+    @staticmethod
+    def _serialize_provider_result(obj: object) -> object:
+        """Recursively convert Pydantic models to dicts for cache storage."""
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+        if isinstance(obj, list):
+            return [BackgroundCacheWarmer._serialize_provider_result(item) for item in obj]
+        if isinstance(obj, dict):
+            return {k: BackgroundCacheWarmer._serialize_provider_result(v) for k, v in obj.items()}
+        return obj
+
     def _warm_marine(self) -> None:
         """Warm marine provider data for configured locations (Marine Remediation Plan T2.1).
 
@@ -641,7 +652,7 @@ class BackgroundCacheWarmer:
                     from weewx_clearskies_api.providers.buoy import ndbc
 
                     result = ndbc.fetch(station_id=station_id)
-                    cache.set(f"warmer:marine:ndbc:{station_id}", result, 3600)
+                    cache.set(f"warmer:marine:ndbc:{station_id}", self._serialize_provider_result(result), 3600)
                     logger.info("Cache warmer: NDBC %s refreshed", station_id)
                 except Exception:
                     logger.warning("Cache warmer: NDBC %s warm failed", station_id, exc_info=True)
@@ -652,7 +663,7 @@ class BackgroundCacheWarmer:
                     from weewx_clearskies_api.providers.tides import coops
 
                     result = coops.fetch(station_id=station_id, products=("predictions", "water_level"))
-                    cache.set(f"warmer:marine:coops:{station_id}", result, 600)
+                    cache.set(f"warmer:marine:coops:{station_id}", self._serialize_provider_result(result), 600)
                     logger.info("Cache warmer: CO-OPS %s refreshed", station_id)
                 except Exception:
                     logger.warning("Cache warmer: CO-OPS %s warm failed", station_id, exc_info=True)
@@ -663,7 +674,7 @@ class BackgroundCacheWarmer:
                     from weewx_clearskies_api.providers.marine import nws_marine
 
                     result = nws_marine.fetch(zone_id=zone_id)
-                    cache.set(f"warmer:marine:nws_text:{zone_id}", result, 1800)
+                    cache.set(f"warmer:marine:nws_text:{zone_id}", self._serialize_provider_result(result), 1800)
                     logger.info("Cache warmer: NWS marine text %s refreshed", zone_id)
                 except Exception:
                     logger.warning("Cache warmer: NWS marine text %s warm failed", zone_id, exc_info=True)
@@ -681,7 +692,7 @@ class BackgroundCacheWarmer:
                         from weewx_clearskies_api.providers.marine import wavewatch
 
                         result = wavewatch.fetch(lat=loc.lat, lon=loc.lon)
-                        cache.set(f"warmer:marine:wavewatch:{group}", result, 1800)
+                        cache.set(f"warmer:marine:wavewatch:{group}", self._serialize_provider_result(result), 1800)
                         fetched_groups.add(group)
                         logger.info("Cache warmer: WaveWatch III %s refreshed", group)
                     except Exception:
