@@ -63,6 +63,12 @@ dependencies = [
     "sse-starlette>=2.0.0",
     # ADR-079: scikit-learn for forecast correction Random Forest model.
     "scikit-learn>=1.5.0",
+    # T8.2: PyYAML for loading operator-editable reference data (currently
+    # data/species.yaml, enrichment/fishing_species.py) via yaml.safe_load()
+    # at import time. Previously only present transitively (e.g. via
+    # uvicorn[standard]); pinned explicitly so import-time data loading
+    # doesn't depend on another package's dependency graph.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

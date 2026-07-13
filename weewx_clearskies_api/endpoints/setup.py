@@ -23,6 +23,11 @@ Endpoints:
   GET  /setup/marine/species             — species checklist for a coordinate + fishing
                                             target category, keyed by biogeographic region
                                             (T2.5)
+  GET  /setup/marine/species-database    — dump the full loaded species reference data
+                                            (regions, species-by-region, per-species scoring
+                                            profiles, seasonal behavior) for admin/wizard
+                                            reference (T8.2 — data externalized to
+                                            data/species.yaml)
   GET  /setup/marine/discover-structures — discover nearby coastal structures (jetties,
                                             piers, breakwaters, seawalls, groins) via the
                                             OpenStreetMap Overpass API, for surf spot
@@ -83,7 +88,10 @@ from weewx_clearskies_api.enrichment.bathymetry import (
     download_bathymetric_profile,
 )
 from weewx_clearskies_api.enrichment.fishing_species import (
+    BIOGEOGRAPHIC_REGIONS,
+    SEASONAL_BEHAVIOR,
     SPECIES_BY_REGION,
+    SPECIES_PROFILES,
     classify_region as _classify_fishing_region,
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
@@ -2464,6 +2472,45 @@ async def marine_species(
                 seen.add(name)
                 species.append(name)
     return MarineSpeciesResponse(region=region, species=species)
+
+
+class MarineSpeciesDatabaseResponse(BaseModel):
+    regions: dict[str, dict[str, float]]
+    species_by_region: dict[str, dict[str, list[str]]]
+    species_profiles: dict[str, dict[str, Any]]
+    seasonal_behavior: dict[str, dict[int, dict[str, Any]]]
+    source_path: str
+
+
+@router.get("/marine/species-database", response_model=MarineSpeciesDatabaseResponse)
+async def marine_species_database(request: Request) -> MarineSpeciesDatabaseResponse:
+    """Dump the full loaded species reference data for admin/wizard reference (T8.2).
+
+    Externalizing ``enrichment/fishing_species.py``'s data tables from
+    hardcoded Python dicts to an operator-editable ``data/species.yaml``
+    file (T8.2) means an admin/wizard client has no other way to inspect
+    what's currently loaded (regions, species-by-region, per-species
+    scoring profiles, seasonal behavior) short of reading the YAML file on
+    disk directly. This endpoint returns exactly what the module loaded at
+    process start — no re-read from disk, no transformation beyond the
+    response model's field naming.
+
+    ``source_path`` is the bundled default location relative to the
+    package root (``data/species.yaml``). A future config override
+    (``api.conf [fishing] species_data_path``) is documented in
+    ``fishing_species.py``'s module docstring but not implemented yet — the
+    loader always uses the bundled default today, so this is always
+    ``"data/species.yaml"`` for now.
+    """
+    await require_setup_session(request)
+
+    return MarineSpeciesDatabaseResponse(
+        regions=BIOGEOGRAPHIC_REGIONS,
+        species_by_region=SPECIES_BY_REGION,
+        species_profiles=SPECIES_PROFILES,
+        seasonal_behavior=SEASONAL_BEHAVIOR,
+        source_path="data/species.yaml",
+    )
 
 
 # ---------------------------------------------------------------------------

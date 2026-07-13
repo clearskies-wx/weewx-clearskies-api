@@ -1,0 +1,580 @@
+# Species reference data for the Clear Skies fishing scorer
+# (API-MANUAL.md §17 "Fishing scorer").
+#
+# Loaded once at process start by
+# weewx_clearskies_api/enrichment/fishing_species.py via
+# _load_species_data(). The module's public API
+# (BIOGEOGRAPHIC_REGIONS, SPECIES_BY_REGION, SPECIES_PROFILES,
+# SEASONAL_BEHAVIOR, classify_region()) is unchanged by this externalization
+# (T8.2) — only the storage location moved from hardcoded Python dicts to
+# this operator-editable file. A future config override
+# (api.conf [fishing] species_data_path) will let operators point the loader
+# at their own file instead of this bundled default; not implemented yet —
+# see fishing_species.py's module docstring.
+#
+# ---------------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------------
+#
+# regions: dict[region_name -> bbox]
+#   Coarse lat/lon bounding boxes used by classify_region() to map a
+#   (lat, lon) coordinate to one of the 11 US biogeographic regions.
+#     lat_min, lat_max: float, degrees (-90..90)
+#     lon_min, lon_max: float, degrees (-180..180)
+#   A region whose lon_min > lon_max is a wraparound box crossing the
+#   antimeridian (currently only pacific_territories: Guam/CNMI side
+#   lon_min=144.0, American Samoa side lon_max=-172.0).
+#
+#   Example:
+#     atlantic_ne:
+#       lat_min: 41.0
+#       lat_max: 47.0
+#       lon_min: -74.0
+#       lon_max: -66.0
+#
+# species_by_region: dict[region_name -> dict[target_category -> list[str]]]
+#   target_category is one of: saltwater_inshore, bottom_fish,
+#   freshwater_sport, salmonids (config/marine_config.py
+#   FishingSpotConfig._VALID_TARGET_CATEGORIES). Descriptive metadata used to
+#   auto-populate a fishing spot's species config list from its
+#   biogeographic region and target category. Not every species listed here
+#   has a species_profiles entry below — the scorer falls back to a neutral
+#   default profile for species with no profile
+#   (fishing_scorer._DEFAULT_SPECIES_PROFILE). Not all categories apply to
+#   all regions (e.g. Hawaii has no freshwater_sport).
+#
+#   Example:
+#     atlantic_ne:
+#       saltwater_inshore:
+#         - striped bass
+#         - bluefish
+#         - flounder
+#
+# species_profiles: dict[species_name -> profile]
+#   Per-species scoring inputs consumed by fishing_scorer.py. Species names
+#   are lowercase and matched case-insensitively by the scorer.
+#     pressure_sensitivity: float, 0.0-1.0 (0.1 = little/no swim bladder,
+#       e.g. tuna; 0.8 = large swim bladder, e.g. redfish — higher means
+#       more sensitive to barometric pressure changes)
+#     temp_optimal: [min, max] degrees Fahrenheit
+#     temp_good:    [min, max] degrees Fahrenheit (superset of temp_optimal)
+#     temp_marginal:[min, max] degrees Fahrenheit (superset of temp_good)
+#       Ranges are nested so a water temperature reading falls into exactly
+#       one bucket when checked in optimal -> good -> marginal -> outside
+#       order; outside temp_marginal scores as "inactive".
+#     tide_preference: "incoming" | "outgoing" | "slack" | "any"
+#     tide_multiplier: float, applied to the species score when the current
+#       tide_state matches tide_preference ("slack" matches both
+#       slack_high and slack_low)
+#     time_preference: "dawn" | "dusk" | "night" | "any"
+#     time_multiplier: float, applied when the current time-of-day bucket
+#       matches time_preference
+#
+#   Example:
+#     redfish:
+#       pressure_sensitivity: 0.8
+#       temp_optimal: [68.0, 80.0]
+#       temp_good: [60.0, 85.0]
+#       temp_marginal: [50.0, 90.0]
+#       tide_preference: outgoing
+#       tide_multiplier: 1.2
+#       time_preference: dawn
+#       time_multiplier: 1.3
+#
+# seasonal_behavior: dict[species_name -> dict[month(1-12) -> entry]]
+#   entry fields (all optional; any subset may be set for a given
+#   species/month pair):
+#     spawning_multiplier: float, applied during peak spawning activity
+#       (typically 2.0-3.0x)
+#     pre_spawn_multiplier: float, applied during the pre-spawn buildup
+#       (typically ~1.5x)
+#     closed: bool, true = regulatory closure — the species' score is forced
+#       to 0 for that month regardless of environmental conditions
+#   Months not listed for a species carry no seasonal adjustment (implicit
+#   multiplier 1.0, not closed).
+#
+#   Example:
+#     redfish:
+#       9:
+#         pre_spawn_multiplier: 1.5
+#       10:
+#         spawning_multiplier: 2.5
+#
+# All temperature ranges are in degrees Fahrenheit.
+# ---------------------------------------------------------------------------
+
+regions:
+  atlantic_ne:
+    lat_min: 41.0
+    lat_max: 47.0
+    lon_min: -74.0
+    lon_max: -66.0
+  atlantic_se:
+    lat_min: 25.0
+    lat_max: 41.0
+    lon_min: -82.0
+    lon_max: -71.0
+  gulf:
+    lat_min: 25.0
+    lat_max: 31.0
+    lon_min: -98.0
+    lon_max: -80.0
+  pacific_sw:
+    lat_min: 32.0
+    lat_max: 34.0
+    lon_min: -121.0
+    lon_max: -117.0
+  pacific_central:
+    lat_min: 34.0
+    lat_max: 38.0
+    lon_min: -124.0
+    lon_max: -120.0
+  pacific_nw:
+    lat_min: 38.0
+    lat_max: 49.0
+    lon_min: -126.0
+    lon_max: -122.0
+  alaska:
+    lat_min: 55.0
+    lat_max: 90.0
+    lon_min: -170.0
+    lon_max: -130.0
+  hawaii:
+    lat_min: 18.0
+    lat_max: 23.0
+    lon_min: -161.0
+    lon_max: -154.0
+  great_lakes:
+    lat_min: 41.0
+    lat_max: 49.0
+    lon_min: -93.0
+    lon_max: -76.0
+  caribbean:
+    lat_min: 17.0
+    lat_max: 19.0
+    lon_min: -68.0
+    lon_max: -64.0
+  pacific_territories:
+    # Wraparound box: lon_min (144.0, Guam side) > lon_max (-172.0, American
+    # Samoa side) — see classify_region()'s _lon_in_range() handling.
+    lat_min: -15.0
+    lat_max: 20.0
+    lon_min: 144.0
+    lon_max: -172.0
+
+species_by_region:
+  atlantic_ne:
+    saltwater_inshore:
+      - striped bass
+      - bluefish
+      - flounder
+      - sheepshead
+      - black sea bass
+    bottom_fish:
+      - tautog
+      - cod
+      - haddock
+      - pollock
+      - sheepshead
+    freshwater_sport:
+      - largemouth bass
+      - smallmouth bass
+      - walleye
+      - catfish
+      - pike
+    salmonids:
+      - atlantic salmon
+      - trout
+      - steelhead
+      - landlocked salmon
+  atlantic_se:
+    saltwater_inshore:
+      - redfish
+      - speckled trout
+      - flounder
+      - snook
+      - sheepshead
+      - cobia
+    bottom_fish:
+      - grouper
+      - snapper
+      - sheepshead
+      - king mackerel
+      - amberjack
+    freshwater_sport:
+      - largemouth bass
+      - catfish
+      - crappie
+      - bream
+  gulf:
+    saltwater_inshore:
+      - redfish
+      - speckled trout
+      - flounder
+      - snook
+      - cobia
+      - bluefish
+    bottom_fish:
+      - grouper
+      - snapper
+      - king mackerel
+      - sheepshead
+      - triggerfish
+    freshwater_sport:
+      - largemouth bass
+      - catfish
+      - crappie
+      - bream
+  pacific_sw:
+    saltwater_inshore:
+      - halibut
+      - corbina
+      - surfperch
+      - sheepshead
+      - yellowtail
+    bottom_fish:
+      - grouper
+      - sheepshead
+      - lingcod
+      - rockfish
+      - sculpin
+    freshwater_sport:
+      - largemouth bass
+      - catfish
+      - trout
+  pacific_central:
+    saltwater_inshore:
+      - halibut
+      - surfperch
+      - striped bass
+      - corbina
+    bottom_fish:
+      - lingcod
+      - rockfish
+      - sheepshead
+      - cabezon
+    freshwater_sport:
+      - largemouth bass
+      - trout
+      - catfish
+    salmonids:
+      - salmon
+      - steelhead
+      - trout
+  pacific_nw:
+    saltwater_inshore:
+      - surfperch
+      - striped bass
+      - flounder
+      - sturgeon
+    bottom_fish:
+      - lingcod
+      - rockfish
+      - halibut
+      - cabezon
+    freshwater_sport:
+      - smallmouth bass
+      - walleye
+      - catfish
+      - pike
+    salmonids:
+      - salmon
+      - steelhead
+      - trout
+  alaska:
+    bottom_fish:
+      - halibut
+      - lingcod
+      - rockfish
+      - sablefish
+    salmonids:
+      - salmon
+      - steelhead
+      - trout
+      - arctic char
+  hawaii:
+    saltwater_inshore:
+      - bonefish
+      - trevally
+      - mahi-mahi
+      - bluefish
+    bottom_fish:
+      - grouper
+      - snapper
+      - tuna
+      - wahoo
+  great_lakes:
+    freshwater_sport:
+      - walleye
+      - largemouth bass
+      - smallmouth bass
+      - catfish
+      - pike
+      - muskie
+    salmonids:
+      - salmon
+      - steelhead
+      - trout
+      - lake trout
+  caribbean:
+    saltwater_inshore:
+      - bonefish
+      - tarpon
+      - snook
+      - mahi-mahi
+    bottom_fish:
+      - grouper
+      - snapper
+      - tuna
+      - mahi-mahi
+      - wahoo
+  pacific_territories:
+    saltwater_inshore:
+      - trevally
+      - bonefish
+      - mahi-mahi
+    bottom_fish:
+      - grouper
+      - snapper
+      - tuna
+      - mahi-mahi
+      - wahoo
+
+species_profiles:
+  redfish:
+    pressure_sensitivity: 0.8
+    temp_optimal: [68.0, 80.0]
+    temp_good: [60.0, 85.0]
+    temp_marginal: [50.0, 90.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.3
+  speckled trout:
+    pressure_sensitivity: 0.7
+    temp_optimal: [65.0, 80.0]
+    temp_good: [58.0, 85.0]
+    temp_marginal: [48.0, 90.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: dusk
+    time_multiplier: 1.3
+  flounder:
+    pressure_sensitivity: 0.6
+    temp_optimal: [60.0, 75.0]
+    temp_good: [52.0, 80.0]
+    temp_marginal: [45.0, 85.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.2
+    time_preference: any
+    time_multiplier: 1.0
+  snook:
+    pressure_sensitivity: 0.75
+    temp_optimal: [75.0, 88.0]
+    temp_good: [70.0, 92.0]
+    temp_marginal: [65.0, 95.0]
+    tide_preference: incoming
+    tide_multiplier: 1.25
+    time_preference: night
+    time_multiplier: 1.4
+  striped bass:
+    pressure_sensitivity: 0.65
+    temp_optimal: [55.0, 68.0]
+    temp_good: [48.0, 72.0]
+    temp_marginal: [40.0, 78.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.3
+  tuna:
+    pressure_sensitivity: 0.1
+    temp_optimal: [68.0, 82.0]
+    temp_good: [62.0, 86.0]
+    temp_marginal: [55.0, 90.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  mahi-mahi:
+    pressure_sensitivity: 0.1
+    temp_optimal: [75.0, 86.0]
+    temp_good: [70.0, 90.0]
+    temp_marginal: [65.0, 92.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  grouper:
+    pressure_sensitivity: 0.3
+    temp_optimal: [70.0, 82.0]
+    temp_good: [63.0, 86.0]
+    temp_marginal: [55.0, 90.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  snapper:
+    pressure_sensitivity: 0.3
+    temp_optimal: [68.0, 82.0]
+    temp_good: [60.0, 86.0]
+    temp_marginal: [52.0, 90.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dusk
+    time_multiplier: 1.2
+  walleye:
+    pressure_sensitivity: 0.7
+    temp_optimal: [55.0, 70.0]
+    temp_good: [48.0, 75.0]
+    temp_marginal: [40.0, 80.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dusk
+    time_multiplier: 1.3
+  largemouth bass:
+    pressure_sensitivity: 0.75
+    temp_optimal: [65.0, 75.0]
+    temp_good: [58.0, 80.0]
+    temp_marginal: [50.0, 88.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.3
+  salmon:
+    pressure_sensitivity: 0.5
+    temp_optimal: [50.0, 60.0]
+    temp_good: [45.0, 65.0]
+    temp_marginal: [38.0, 70.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.2
+  steelhead:
+    pressure_sensitivity: 0.5
+    temp_optimal: [45.0, 58.0]
+    temp_good: [40.0, 62.0]
+    temp_marginal: [35.0, 68.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.2
+  trout:
+    pressure_sensitivity: 0.5
+    temp_optimal: [50.0, 65.0]
+    temp_good: [44.0, 70.0]
+    temp_marginal: [38.0, 75.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.2
+  catfish:
+    pressure_sensitivity: 0.6
+    temp_optimal: [70.0, 85.0]
+    temp_good: [62.0, 88.0]
+    temp_marginal: [55.0, 92.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: night
+    time_multiplier: 1.4
+  sheepshead:
+    pressure_sensitivity: 0.3
+    temp_optimal: [60.0, 80.0]
+    temp_good: [52.0, 85.0]
+    temp_marginal: [45.0, 90.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.1
+    time_preference: any
+    time_multiplier: 1.0
+  tautog:
+    pressure_sensitivity: 0.3
+    temp_optimal: [50.0, 65.0]
+    temp_good: [45.0, 70.0]
+    temp_marginal: [40.0, 75.0]
+    tide_preference: slack
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+  king mackerel:
+    pressure_sensitivity: 0.5
+    temp_optimal: [72.0, 85.0]
+    temp_good: [65.0, 88.0]
+    temp_marginal: [58.0, 92.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.1
+    time_preference: dawn
+    time_multiplier: 1.2
+  bluefish:
+    pressure_sensitivity: 0.6
+    temp_optimal: [60.0, 75.0]
+    temp_good: [52.0, 80.0]
+    temp_marginal: [45.0, 85.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.2
+  cobia:
+    pressure_sensitivity: 0.5
+    temp_optimal: [68.0, 82.0]
+    temp_good: [62.0, 86.0]
+    temp_marginal: [55.0, 90.0]
+    tide_preference: incoming
+    tide_multiplier: 1.1
+    time_preference: any
+    time_multiplier: 1.0
+
+seasonal_behavior:
+  redfish:
+    9:
+      pre_spawn_multiplier: 1.5
+    10:
+      spawning_multiplier: 2.5
+  striped bass:
+    4:
+      pre_spawn_multiplier: 1.5
+    5:
+      spawning_multiplier: 3.0
+  flounder:
+    10:
+      pre_spawn_multiplier: 1.5
+    11:
+      spawning_multiplier: 2.0
+  snook:
+    # Regulatory closure (FL Atlantic/Gulf summer closed season) — score 0
+    # regardless of environmental conditions.
+    6:
+      closed: true
+    7:
+      closed: true
+    8:
+      closed: true
+  king mackerel:
+    # Migration windows treated as activity boosts via the same
+    # spawning_multiplier field (schema has no dedicated "migration" field;
+    # reused here for the southward fall run and northward spring run).
+    4:
+      spawning_multiplier: 1.5
+    5:
+      spawning_multiplier: 1.5
+    10:
+      spawning_multiplier: 1.5
+    11:
+      spawning_multiplier: 1.5
+  salmon:
+    8:
+      pre_spawn_multiplier: 1.5
+    9:
+      spawning_multiplier: 2.5
+    10:
+      spawning_multiplier: 2.5
+  walleye:
+    3:
+      pre_spawn_multiplier: 1.5
+    4:
+      spawning_multiplier: 2.0
+  largemouth bass:
+    3:
+      pre_spawn_multiplier: 1.5
+    4:
+      spawning_multiplier: 2.0
+    5:
+      spawning_multiplier: 2.0
