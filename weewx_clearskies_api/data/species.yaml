@@ -170,6 +170,10 @@ species_by_region:
       - flounder
       - sheepshead
       - black sea bass
+      - scup
+      - summer flounder
+      - winter flounder
+      - weakfish
     bottom_fish:
       - tautog
       - cod
@@ -195,6 +199,11 @@ species_by_region:
       - snook
       - sheepshead
       - cobia
+      - spotted seatrout
+      - pompano
+      - tarpon
+      - jack crevalle
+      - black drum
     bottom_fish:
       - grouper
       - snapper
@@ -214,6 +223,11 @@ species_by_region:
       - snook
       - cobia
       - bluefish
+      - tarpon
+      - jack crevalle
+      - black drum
+      - pompano
+      - spotted seatrout
     bottom_fish:
       - grouper
       - snapper
@@ -232,12 +246,26 @@ species_by_region:
       - surfperch
       - sheepshead
       - yellowtail
+      - california halibut
+      - opaleye
+      - kelp bass
+      - sand bass
+      - white seabass
+      - california barracuda
+      - pacific mackerel
+      - pacific bonito
+      - white croaker
+      - leopard shark
+      - thresher shark
+      - shovelnose guitarfish
+      - bat ray
     bottom_fish:
       - grouper
       - sheepshead
       - lingcod
       - rockfish
       - sculpin
+      - cabezon
     freshwater_sport:
       - largemouth bass
       - catfish
@@ -248,6 +276,9 @@ species_by_region:
       - surfperch
       - striped bass
       - corbina
+      - pacific halibut
+      - yellowtail
+      - white seabass
     bottom_fish:
       - lingcod
       - rockfish
@@ -272,6 +303,9 @@ species_by_region:
       - rockfish
       - halibut
       - cabezon
+      - pacific halibut
+      - dungeness crab
+      - petrale sole
     freshwater_sport:
       - smallmouth bass
       - walleye
@@ -287,17 +321,25 @@ species_by_region:
       - lingcod
       - rockfish
       - sablefish
+      - pacific halibut
     salmonids:
       - salmon
       - steelhead
       - trout
       - arctic char
+      - king salmon
+      - silver salmon
+      - dolly varden
   hawaii:
     saltwater_inshore:
       - bonefish
       - trevally
       - mahi-mahi
       - bluefish
+      - yellowfin tuna
+      - skipjack tuna
+      - giant trevally
+      - papio
     bottom_fish:
       - grouper
       - snapper
@@ -311,28 +353,41 @@ species_by_region:
       - catfish
       - pike
       - muskie
+      - yellow perch
+      - channel catfish
     salmonids:
       - salmon
       - steelhead
       - trout
       - lake trout
+      - brown trout
+      - rainbow trout
+      - king salmon
+      - coho salmon
   caribbean:
     saltwater_inshore:
       - bonefish
       - tarpon
       - snook
       - mahi-mahi
+      - permit
+      - barracuda
     bottom_fish:
       - grouper
       - snapper
       - tuna
       - mahi-mahi
       - wahoo
+      - yellowtail snapper
+      - hogfish
   pacific_territories:
     saltwater_inshore:
       - trevally
       - bonefish
       - mahi-mahi
+      - yellowfin tuna
+      - skipjack tuna
+      - giant trevally
     bottom_fish:
       - grouper
       - snapper
@@ -522,6 +577,651 @@ species_profiles:
     time_preference: any
     time_multiplier: 1.0
 
+  # ---------------------------------------------------------------------
+  # T8.3 (2026-07-12): pacific_sw (SoCal) species added below. Temperature
+  # data sourced from FishBase preferred-temperature-range figures (derived
+  # from occurrence-weighted AquaMaps cells), CDFW Marine Species Portal
+  # enhanced status reports, and NOAA/academic tagging studies as cited per
+  # species. Where only a survival/tolerance range was available, optimal
+  # and good bands were narrowed inward per the guidance in this file's
+  # schema doc (optimal ~ middle 40%, good ~ middle 70% of the cited band).
+  # ---------------------------------------------------------------------
+  california halibut:
+    # Source: thetackleroom.com SoCal halibut guide (55-68F preferred,
+    # deeper/cooler in summer) + fishing catch-per-unit-effort analysis
+    # (spearfactor.com) showing peak CPUE at 61F.
+    pressure_sensitivity: 0.55
+    temp_optimal: [58.0, 66.0]
+    temp_good: [55.0, 72.0]
+    temp_marginal: [50.0, 78.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.2
+  opaleye:
+    # Source: FishBase (Girella nigricans) sea temperature tolerance 0-33C
+    # (32-91F); optimal/good bands narrowed inward per schema guidance
+    # since only the outer tolerance band was found (herbivorous
+    # rocky-reef/kelp grazer, common in SoCal tide pools).
+    pressure_sensitivity: 0.5
+    temp_optimal: [55.0, 72.0]
+    temp_good: [48.0, 78.0]
+    temp_marginal: [40.0, 85.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  kelp bass:
+    # Also known as calico bass. Source: co-occurring barred sand bass
+    # FishBase preferred-temp data (same SoCal kelp/rock habitat) plus
+    # SoCal fishing-guide consensus (AFTCO, SWBA) that calico activity
+    # picks up as water warms into the 60s and holds through the 70s.
+    pressure_sensitivity: 0.35
+    temp_optimal: [62.0, 72.0]
+    temp_good: [56.0, 76.0]
+    temp_marginal: [50.0, 80.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.2
+  sand bass:
+    # Barred sand bass. Source: FishBase preferred temperature range
+    # 19.4-26C, mean 22.3C (67-79F, mean 72F).
+    pressure_sensitivity: 0.35
+    temp_optimal: [69.0, 76.0]
+    temp_good: [64.0, 79.0]
+    temp_marginal: [58.0, 84.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: dusk
+    time_multiplier: 1.2
+  white seabass:
+    # Source: NOAA/SPO seasonal movement & temperature profile study
+    # (Aalbers) — preferred 58-68F, >50% of time in 55-61F gradient,
+    # broader tolerance 46-75F.
+    pressure_sensitivity: 0.7
+    temp_optimal: [58.0, 66.0]
+    temp_good: [50.0, 70.0]
+    temp_marginal: [46.0, 75.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dusk
+    time_multiplier: 1.3
+  california barracuda:
+    # Also known as Pacific barracuda. Source: CDFW Marine Species Portal
+    # (59-73F preferred, arrival threshold ~62F) + spearfactor.com summer
+    # gamefish guide (60-72F).
+    pressure_sensitivity: 0.3
+    temp_optimal: [64.0, 72.0]
+    temp_good: [59.0, 75.0]
+    temp_marginal: [55.0, 80.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  pacific mackerel:
+    # Source: FishBase preferred temperature range 9.3-27.7C mean 20.7C,
+    # cross-checked against fishing-guide consensus of 50-72F/60-72F;
+    # spawning occurs 15-20C (59-68F).
+    pressure_sensitivity: 0.2
+    temp_optimal: [60.0, 72.0]
+    temp_good: [54.0, 78.0]
+    temp_marginal: [49.0, 82.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  pacific bonito:
+    # Source: FishBase preferred temperature range (Sarda chiliensis)
+    # 14.6-23.1C, mean 18.5C (58-74F, mean 65F).
+    pressure_sensitivity: 0.15
+    temp_optimal: [62.0, 70.0]
+    temp_good: [56.0, 75.0]
+    temp_marginal: [50.0, 80.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  white croaker:
+    # Source: FishBase preferred temperature range (Genyonemus lineatus)
+    # 7.7-18.1C, mean 10.7C (46-65F, mean 51F); year-round SoCal bay
+    # resident over sand/mud bottoms.
+    pressure_sensitivity: 0.65
+    temp_optimal: [46.0, 58.0]
+    temp_good: [42.0, 62.0]
+    temp_marginal: [38.0, 66.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+  leopard shark:
+    # Source: Shark Research Institute (55-70F preferred) + CDFW range
+    # extension study (Tomales Bay/SF Bay 10-16C ideal, migrates south
+    # below 10-12C/50-54F).
+    pressure_sensitivity: 0.15
+    temp_optimal: [57.0, 65.0]
+    temp_good: [52.0, 70.0]
+    temp_marginal: [46.0, 75.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dusk
+    time_multiplier: 1.2
+  thresher shark:
+    # Source: PMC archival tagging study of subadult/adult common thresher
+    # off SoCal (SST range 16-21C observed) + FishBase preferred temp
+    # range 11.6-28.2C mean 23.3C.
+    pressure_sensitivity: 0.15
+    temp_optimal: [63.0, 72.0]
+    temp_good: [56.0, 78.0]
+    temp_marginal: [50.0, 83.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  shovelnose guitarfish:
+    # Source: FishBase preferred temperature range 15.3-25.9C mean 22.4C
+    # (60-79F); juveniles/activity peak observed 20-24.6C (68-76F) per
+    # restored-estuary habitat-use study.
+    pressure_sensitivity: 0.15
+    temp_optimal: [68.0, 76.0]
+    temp_good: [62.0, 80.0]
+    temp_marginal: [55.0, 84.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: night
+    time_multiplier: 1.2
+  bat ray:
+    # Source: FishBase preferred temperature range 12.4-23C mean 20.6C
+    # (54-73F); abundance declines below 10C (50F).
+    pressure_sensitivity: 0.15
+    temp_optimal: [64.0, 73.0]
+    temp_good: [58.0, 76.0]
+    temp_marginal: [52.0, 80.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: night
+    time_multiplier: 1.2
+  corbina:
+    # California corbina. Source: CDFW enhanced status report (58-70F
+    # preferred) + americanseafishing.com surf-fishing guide (feeding
+    # "rampage" in the 60s).
+    pressure_sensitivity: 0.5
+    temp_optimal: [62.0, 70.0]
+    temp_good: [58.0, 75.0]
+    temp_marginal: [52.0, 82.0]
+    tide_preference: incoming
+    tide_multiplier: 1.25
+    time_preference: dawn
+    time_multiplier: 1.2
+  surfperch:
+    # Barred surfperch. Source: FishBase preferred temperature range
+    # (Amphistichus argenteus), 50-65F.
+    pressure_sensitivity: 0.45
+    temp_optimal: [54.0, 62.0]
+    temp_good: [48.0, 66.0]
+    temp_marginal: [42.0, 70.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: any
+    time_multiplier: 1.0
+  yellowtail:
+    # California yellowtail (Seriola lalandi). Source: animaldiversity.org
+    # (70-72F preferred, 64-75F range) + fishing-reports.ai SST guide
+    # (first arrivals at 60-62F).
+    pressure_sensitivity: 0.35
+    temp_optimal: [68.0, 74.0]
+    temp_good: [62.0, 76.0]
+    temp_marginal: [58.0, 80.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.2
+  sculpin:
+    # Pacific staghorn sculpin. Source: FishBase sea temperature range
+    # (Leptocottus armatus) 0.4-17.7C (33-64F); optimal/good bands
+    # narrowed inward per schema guidance from this outer tolerance band.
+    pressure_sensitivity: 0.25
+    temp_optimal: [42.0, 55.0]
+    temp_good: [38.0, 60.0]
+    temp_marginal: [33.0, 64.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.1
+    time_preference: any
+    time_multiplier: 1.0
+  lingcod:
+    # Source: Pacific coast fishing-guide consensus (46-57F preferred,
+    # moves deeper above 58F).
+    pressure_sensitivity: 0.35
+    temp_optimal: [48.0, 55.0]
+    temp_good: [44.0, 58.0]
+    temp_marginal: [40.0, 62.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  rockfish:
+    # Source: Pacific coast rockfish (Sebastes spp., e.g. blue/China
+    # rockfish) fishing-guide consensus, 45-58F preferred, ideal ~52F.
+    pressure_sensitivity: 0.5
+    temp_optimal: [48.0, 55.0]
+    temp_good: [44.0, 58.0]
+    temp_marginal: [40.0, 62.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  cabezon:
+    # Source: FishBase preferred temperature range (Scorpaenichthys
+    # marmoratus) 7.5-11.6C mean 8.9C (46-58F); most active 50-60F.
+    pressure_sensitivity: 0.25
+    temp_optimal: [48.0, 56.0]
+    temp_good: [44.0, 60.0]
+    temp_marginal: [40.0, 65.0]
+    tide_preference: slack
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+
+  # ---------------------------------------------------------------------
+  # T8.3: atlantic_ne additions. Sources cited per species below.
+  # ---------------------------------------------------------------------
+  cod:
+    # Atlantic cod. Source: fishdatabase.com (32-55F preferred) + PMC
+    # thermal-niche review (Gadus morhua limits/tolerance/optima, 2-11C
+    # habitat range).
+    pressure_sensitivity: 0.5
+    temp_optimal: [38.0, 46.0]
+    temp_good: [34.0, 50.0]
+    temp_marginal: [30.0, 55.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+  haddock:
+    # Source: climefish.eu (2-10C / 36-50F) + FishBase preferred
+    # temperature range 1.4-12.1C mean 8.4C.
+    pressure_sensitivity: 0.5
+    temp_optimal: [42.0, 48.0]
+    temp_good: [37.0, 52.0]
+    temp_marginal: [33.0, 55.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.1
+    time_preference: any
+    time_multiplier: 1.0
+  black sea bass:
+    # Source: PMC regional energy-allocation study (ideal 15-18C /
+    # 59-64F; seasonal range 6-27C) + NOAA/ASMFC species profile (spawning
+    # 15-24C, 59-75F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [60.0, 68.0]
+    temp_good: [54.0, 74.0]
+    temp_marginal: [45.0, 80.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+  scup:
+    # Source: Buzzards Bay NEP scup profile + NOAA Fisheries scup page —
+    # greatest abundance 13-16C (55-61F), avoid below 7C (45F), spawn
+    # triggered above 10C (50F).
+    pressure_sensitivity: 0.4
+    temp_optimal: [56.0, 64.0]
+    temp_good: [50.0, 68.0]
+    temp_marginal: [45.0, 72.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.1
+    time_preference: any
+    time_multiplier: 1.0
+  summer flounder:
+    # Fluke. Source: The Fisherman "preferred temperature ranges" article
+    # (peak catch 62-66F, caught 56-72F) + NOAA summer flounder page
+    # (habitat range 9-27C / 48-81F).
+    pressure_sensitivity: 0.6
+    temp_optimal: [62.0, 68.0]
+    temp_good: [56.0, 74.0]
+    temp_marginal: [48.0, 81.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.2
+    time_preference: any
+    time_multiplier: 1.0
+  winter flounder:
+    # Source: FishBase preferred temperature range (Pseudopleuronectes
+    # americanus) 0.7-13.1C mean 6.1C (33-56F, mean 43F); eurythermal,
+    # freeze-resistant species.
+    pressure_sensitivity: 0.55
+    temp_optimal: [38.0, 48.0]
+    temp_good: [34.0, 54.0]
+    temp_marginal: [30.0, 60.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: any
+    time_multiplier: 1.0
+  weakfish:
+    # Source: Peconic Star Fleet fishing guide (enters bays at 60F in
+    # spring) + FishBase preferred temperature range (wide reported
+    # uncertainty, 7.2-24.9C mean 12.7C); angling-consistent range used.
+    pressure_sensitivity: 0.6
+    temp_optimal: [64.0, 75.0]
+    temp_good: [58.0, 80.0]
+    temp_marginal: [50.0, 84.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dusk
+    time_multiplier: 1.25
+
+  # ---------------------------------------------------------------------
+  # T8.3: atlantic_se / gulf additions (shared species, same profile
+  # reused by both regions' species_by_region lists).
+  # ---------------------------------------------------------------------
+  spotted seatrout:
+    # Source: allaboutfishing.org + recon.sccf.org (optimal 69-80F, ideal
+    # performance range 60-80F, inactive/refuge-seeking below low 50s,
+    # spawn onset ~70F).
+    pressure_sensitivity: 0.7
+    temp_optimal: [70.0, 80.0]
+    temp_good: [62.0, 85.0]
+    temp_marginal: [50.0, 90.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.25
+  pompano:
+    # Florida pompano. Source: tacklepier.com (68-85F preferred) + FWC
+    # Florida pompano profile (68-82F), warmer end confirmed by SRAC
+    # species profile.
+    pressure_sensitivity: 0.4
+    temp_optimal: [72.0, 84.0]
+    temp_good: [66.0, 88.0]
+    temp_marginal: [60.0, 92.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: any
+    time_multiplier: 1.0
+  tarpon:
+    # Source: PMC tarpon ontogenetic-shift/low-temperature-cue study +
+    # billjacksons.com migration guide (active 75-88F, inactive below
+    # 61F/16C, lethal below 39F/4C; migrates north as Gulf hits ~75F).
+    pressure_sensitivity: 0.3
+    temp_optimal: [78.0, 88.0]
+    temp_good: [72.0, 90.0]
+    temp_marginal: [65.0, 95.0]
+    tide_preference: incoming
+    tide_multiplier: 1.25
+    time_preference: dusk
+    time_multiplier: 1.3
+  jack crevalle:
+    # Source: FishBase preferred temperature range 16.5-27.9C mean 24.8C
+    # (62-82F) + fishing-guide consensus (feed aggressively 75-85F, head
+    # south below 65F).
+    pressure_sensitivity: 0.35
+    temp_optimal: [75.0, 85.0]
+    temp_good: [68.0, 88.0]
+    temp_marginal: [60.0, 92.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.15
+  black drum:
+    # Source: oceaninfo.com + mexican-fish.com black drum profiles
+    # (common range 53-89F/12-32C, tolerance to ~91F/33C).
+    pressure_sensitivity: 0.75
+    temp_optimal: [65.0, 80.0]
+    temp_good: [58.0, 86.0]
+    temp_marginal: [50.0, 91.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.2
+
+  # ---------------------------------------------------------------------
+  # T8.3: pacific_central / pacific_nw / alaska additions.
+  # ---------------------------------------------------------------------
+  pacific halibut:
+    # Source: ADFG Pacific halibut species profile (36-50F preferred) +
+    # IPHC stock status & biology page (3-8C / 37-46F).
+    pressure_sensitivity: 0.55
+    temp_optimal: [38.0, 44.0]
+    temp_good: [34.0, 48.0]
+    temp_marginal: [30.0, 52.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  dungeness crab:
+    # Source: CDFW/OPC Dungeness crab fishery-at-a-glance report (adults
+    # 38-65F general range) + SeaLifeBase preferred temperature range
+    # 5.8-9.8C mean 7.8C (40-55F).
+    pressure_sensitivity: 0.1
+    temp_optimal: [44.0, 52.0]
+    temp_good: [38.0, 58.0]
+    temp_marginal: [34.0, 65.0]
+    tide_preference: slack
+    tide_multiplier: 1.1
+    time_preference: night
+    time_multiplier: 1.2
+  petrale sole:
+    # Source: mexican-fish.com petrale sole profile (34-50F preferred) +
+    # FishBase temperature range (4-12C / 39-54F); cold, deep-water
+    # flatfish.
+    pressure_sensitivity: 0.5
+    temp_optimal: [40.0, 46.0]
+    temp_good: [36.0, 50.0]
+    temp_marginal: [32.0, 54.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  king salmon:
+    # Chinook salmon. Source: Michigan Sportsman preferred-temperature
+    # compilation (holding/feeding 45-60F, sweet spot ~54F) + NOAA maximum
+    # temperature limits document (juvenile optimal 12-17C/54-63F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [46.0, 54.0]
+    temp_good: [42.0, 58.0]
+    temp_marginal: [38.0, 63.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.25
+  silver salmon:
+    # Coho salmon (Alaska common name). Source: NOAA Fisheries coho salmon
+    # species page + water-quality report (optimal rearing 8-15.6C /
+    # 46-60F, suitable range 10-14C, upper lethal ~25C/77F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [50.0, 58.0]
+    temp_good: [46.0, 63.0]
+    temp_marginal: [40.0, 70.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.2
+  dolly varden:
+    # Source: ADFG Dolly Varden species profile + FishBase temperature
+    # range (4-18C / 39-64F); cold-water char.
+    pressure_sensitivity: 0.5
+    temp_optimal: [42.0, 52.0]
+    temp_good: [38.0, 58.0]
+    temp_marginal: [34.0, 64.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+
+  # ---------------------------------------------------------------------
+  # T8.3: hawaii / pacific_territories additions.
+  # ---------------------------------------------------------------------
+  yellowfin tuna:
+    # Source: California Sea Grant yellowfin tuna profile (75-86F
+    # preferred) + satellite-tagging study off SW Taiwan (broader range
+    # 15-31C / 59-88F).
+    pressure_sensitivity: 0.1
+    temp_optimal: [75.0, 86.0]
+    temp_good: [68.0, 88.0]
+    temp_marginal: [60.0, 90.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  skipjack tuna:
+    # Source: Wikipedia/FishBase preferred range 18-30C (64-86F); larvae
+    # restricted to >=25C, spawning aggregations concentrate above 24C
+    # (75F) per Gulf of Bone-Flores Sea habitat-hotspot study.
+    pressure_sensitivity: 0.1
+    temp_optimal: [76.0, 84.0]
+    temp_good: [70.0, 86.0]
+    temp_marginal: [64.0, 88.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  wahoo:
+    # Also known by the Hawaiian name ono. Source: tagcabosportfishing.com
+    # (sweet zone 73-78F, caught 68-82F) + MDPI biology/environmental
+    # preferences paper (WCPO, optimal depth/temp 23.1-24C).
+    pressure_sensitivity: 0.15
+    temp_optimal: [73.0, 78.0]
+    temp_good: [68.0, 82.0]
+    temp_marginal: [65.0, 86.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.2
+  giant trevally:
+    # Also known as ulua (adult) in Hawaii. Source: HIMB Reef Predator
+    # research page (26-29C / 79-84F tropical range).
+    pressure_sensitivity: 0.35
+    temp_optimal: [80.0, 84.0]
+    temp_good: [76.0, 86.0]
+    temp_marginal: [72.0, 88.0]
+    tide_preference: incoming
+    tide_multiplier: 1.25
+    time_preference: dawn
+    time_multiplier: 1.25
+  papio:
+    # Juvenile giant trevally (Hawaiian name), found on shallower reef
+    # flats than adults. Source: same giant trevally range (HIMB) with a
+    # slightly wider marginal band reflecting shallow-flat habitat.
+    pressure_sensitivity: 0.35
+    temp_optimal: [78.0, 85.0]
+    temp_good: [74.0, 87.0]
+    temp_marginal: [70.0, 90.0]
+    tide_preference: incoming
+    tide_multiplier: 1.2
+    time_preference: any
+    time_multiplier: 1.1
+
+  # ---------------------------------------------------------------------
+  # T8.3: great_lakes additions.
+  # ---------------------------------------------------------------------
+  yellow perch:
+    # Source: Wisconsin DNR / Minnesota DNR yellow perch profiles
+    # (66-70F preferred, optimal 65-75F, spawn 45-52F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [66.0, 74.0]
+    temp_good: [60.0, 78.0]
+    temp_marginal: [50.0, 82.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+  channel catfish:
+    # Source: OSTI temperature tolerance/preference study (selected
+    # optimum 28-30C / 82-86F) + FWS channel catfish profile (comfortable
+    # 65-80F, spawns 72-73F).
+    pressure_sensitivity: 0.6
+    temp_optimal: [78.0, 86.0]
+    temp_good: [70.0, 88.0]
+    temp_marginal: [60.0, 92.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: night
+    time_multiplier: 1.4
+  brown trout:
+    # Source: aquamarinepower.com trout temperature guide (ideal 50-60F,
+    # best 55-57F) + Vermont Fish & Wildlife brown trout profile (optimum
+    # 53-66F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [52.0, 62.0]
+    temp_good: [46.0, 68.0]
+    temp_marginal: [40.0, 75.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dusk
+    time_multiplier: 1.3
+  rainbow trout:
+    # Source: uwotf.com "Optimal Trout Water Temps" (preference ~60F,
+    # optimum 54-68F); both rainbow and brown stressed at 68F.
+    pressure_sensitivity: 0.5
+    temp_optimal: [54.0, 64.0]
+    temp_good: [48.0, 68.0]
+    temp_marginal: [42.0, 74.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.25
+  coho salmon:
+    # Great Lakes stocked coho (same species as "silver salmon" above,
+    # regional common name differs). Source: NOAA Fisheries coho salmon
+    # species page (optimal rearing 8-15.6C / 46-60F).
+    pressure_sensitivity: 0.5
+    temp_optimal: [50.0, 58.0]
+    temp_good: [46.0, 63.0]
+    temp_marginal: [40.0, 70.0]
+    tide_preference: incoming
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.2
+
+  # ---------------------------------------------------------------------
+  # T8.3: caribbean additions.
+  # ---------------------------------------------------------------------
+  permit:
+    # Source: FishBase preferred temperature range (Trachinotus falcatus)
+    # 23.2-28C mean 26.1C (74-82F) + In The Spread flats-fishing guide
+    # (heaviest activity upper 70s-mid 80s, deeper in winter).
+    pressure_sensitivity: 0.4
+    temp_optimal: [76.0, 84.0]
+    temp_good: [72.0, 87.0]
+    temp_marginal: [66.0, 90.0]
+    tide_preference: incoming
+    tide_multiplier: 1.25
+    time_preference: any
+    time_multiplier: 1.0
+  barracuda:
+    # Great barracuda (Sphyraena barracuda), the common Caribbean
+    # barracuda. Source: animaldiversity.org (74-82F preferred) + FishBase
+    # sea temperature range 18.8-31.2C (66-88F).
+    pressure_sensitivity: 0.3
+    temp_optimal: [75.0, 82.0]
+    temp_good: [70.0, 86.0]
+    temp_marginal: [65.0, 90.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: dawn
+    time_multiplier: 1.15
+  yellowtail snapper:
+    # Source: FishBase preferred temperature range (Ocyurus chrysurus)
+    # 21.7-27.9C mean 25.9C (70-82F).
+    pressure_sensitivity: 0.35
+    temp_optimal: [74.0, 80.0]
+    temp_good: [70.0, 82.0]
+    temp_marginal: [65.0, 86.0]
+    tide_preference: outgoing
+    tide_multiplier: 1.15
+    time_preference: dawn
+    time_multiplier: 1.2
+  hogfish:
+    # Source: allaboutfishing.org / Florida Museum hogfish profiles
+    # (favor 70-89F, tropical/subtropical reef wrasse).
+    pressure_sensitivity: 0.3
+    temp_optimal: [74.0, 84.0]
+    temp_good: [70.0, 87.0]
+    temp_marginal: [65.0, 89.0]
+    tide_preference: any
+    tide_multiplier: 1.0
+    time_preference: any
+    time_multiplier: 1.0
+
 seasonal_behavior:
   redfish:
     9:
@@ -577,4 +1277,46 @@ seasonal_behavior:
     4:
       spawning_multiplier: 2.0
     5:
+      spawning_multiplier: 2.0
+  # T8.3 additions below.
+  tarpon:
+    # Spring migration into Florida waters as Gulf/Atlantic water hits
+    # ~75F (billjacksons.com migration guide) — treated as a pre-spawn
+    # buildup in April followed by the peak migratory push in May.
+    4:
+      pre_spawn_multiplier: 1.5
+    5:
+      spawning_multiplier: 2.0
+  california halibut:
+    # Spring spawning (CDFW enhanced status report), March-April.
+    3:
+      pre_spawn_multiplier: 1.5
+    4:
+      spawning_multiplier: 2.0
+  king salmon:
+    # Pacific Chinook fall run, same August-October pattern as the
+    # existing generic "salmon" entry above.
+    8:
+      pre_spawn_multiplier: 1.5
+    9:
+      spawning_multiplier: 2.5
+    10:
+      spawning_multiplier: 2.5
+  silver salmon:
+    # Coho run typically trails Chinook slightly, peaking September-
+    # November (NOAA Fisheries coho salmon species page).
+    9:
+      pre_spawn_multiplier: 1.5
+    10:
+      spawning_multiplier: 2.5
+    11:
+      spawning_multiplier: 2.0
+  coho salmon:
+    # Same species/timing as "silver salmon" above (Great Lakes stocked
+    # population, regional common name differs).
+    9:
+      pre_spawn_multiplier: 1.5
+    10:
+      spawning_multiplier: 2.5
+    11:
       spawning_multiplier: 2.0
