@@ -5,10 +5,11 @@ Two routes:
   GET /marine
     No locationId.  Returns a list of MarineLocationSummary, one per
     configured [marine] location (id, name, coordinates, activities).
-    currentConditions/currentTide/surfRating/beachSafetyLevel are left
-    None -- full population is deferred until the cache warmer
-    infrastructure exists to make a multi-location summary cheap to serve
-    (per brief).  activeAlerts IS populated (Marine Remediation Plan
+    currentConditions and currentTide are populated best-effort from
+    NDBC buoy observation and CO-OPS next tide prediction respectively.
+    weatherCode/isDay are sourced from the marine weather cache when
+    available.  surfRating/beachSafetyLevel are left None (requires
+    enrichment pipeline, Phase 2).  activeAlerts IS populated (Marine Remediation Plan
     T3.5, un-deferred by lead ruling): the NWS alerts provider
     (providers/alerts/nws.py) already caches its response for 5 minutes,
     so a per-location fetch here is cheap enough not to need the cache
@@ -313,17 +314,91 @@ def _fetch_active_alerts(location: MarineLocation) -> list[MarineAlertSummary] |
 
 
 def _location_summary(location: MarineLocation) -> MarineLocationSummary:
-    """Build a MarineLocationSummary; activeAlerts is fetched, other fields config-derived only."""
+    """Build a MarineLocationSummary with best-effort live data.
+
+    Each sub-fetch (NDBC observation, CO-OPS tide, weather cache) is
+    independently wrapped in try/except so a single provider outage
+    degrades that field to None without failing the whole summary.
+    """
+    current_conditions: MarineObservation | None = None
+    current_tide: dict[str, object] | None = None
+    weather_code: int | None = None
+    is_day: bool | None = None
+
+    # --- currentConditions from NDBC buoy observation ---
+    if location.ndbc_station_ids:
+        try:
+            from weewx_clearskies_api.providers.buoy import ndbc  # noqa: PLC0415
+
+            result = ndbc.fetch(station_id=location.ndbc_station_ids[0])
+            raw_obs = result.get("observation")
+            if raw_obs is not None:
+                current_conditions = raw_obs
+        except Exception:
+            logger.warning(
+                "NDBC fetch failed for summary of location %r (station %s)",
+                location.id,
+                location.ndbc_station_ids[0],
+                exc_info=True,
+            )
+
+    # --- currentTide from CO-OPS next high/low prediction ---
+    if location.coops_station_ids:
+        try:
+            from weewx_clearskies_api.providers.tides import coops  # noqa: PLC0415
+
+            tide_result = coops.fetch(
+                station_id=location.coops_station_ids[0],
+                products=("predictions",),
+            )
+            predictions = tide_result.get("predictions", [])
+            for pred in predictions:
+                if pred.type is not None:
+                    current_tide = {
+                        "type": pred.type,
+                        "time": pred.time,
+                        "height": pred.height,
+                    }
+                    break
+        except Exception:
+            logger.warning(
+                "CO-OPS tide fetch failed for summary of location %r (station %s)",
+                location.id,
+                location.coops_station_ids[0],
+                exc_info=True,
+            )
+
+    # --- weatherCode / isDay from marine weather cache ---
+    try:
+        from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+            get_marine_weather_cache,
+        )
+
+        cache = get_marine_weather_cache()
+        if cache is not None:
+            conditions = cache.get_current_conditions(location.lat, location.lon)
+            if conditions is not None:
+                weather_code = conditions.get("weatherCode")
+                is_day = conditions.get("isDay")
+    except Exception:
+        logger.warning(
+            "Marine weather cache lookup failed for location %r",
+            location.id,
+            exc_info=True,
+        )
+
     return MarineLocationSummary(
         locationId=location.id,
         name=location.name,
         coordinates={"lat": location.lat, "lon": location.lon},
         activities=list(location.activities),
-        currentConditions=None,
-        currentTide=None,
+        currentConditions=current_conditions,
+        currentTide=current_tide,
         activeAlerts=_fetch_active_alerts(location),
         surfRating=None,
         beachSafetyLevel=None,
+        weatherCode=weather_code,
+        isDay=is_day,
     )
 
 
