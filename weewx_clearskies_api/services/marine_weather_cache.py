@@ -6,9 +6,10 @@ locations within the configured dedup radius share a single cache entry,
 so one fetch serves both.
 
 Architecture:
-  Dict-based cache keyed by rounded grid-point coordinates.  Rounding
-  precision derived from dedup_radius_km (converted to degrees:
-  radius_deg = dedup_radius_km / 111.0).
+  Dict-based cache keyed by grid group string keys sourced from
+  marine_location_resolver's distance-based clustering (resolve_grid_groups).
+  Before the resolver has run (e.g. during startup), falls back to rounding
+  coordinates to two decimal places so the cache still functions.
 
 Thread safety:
   threading.Lock around the cache dict.  Unlike the provider-layer
@@ -43,16 +44,24 @@ class MarineWeatherCache:
         self._forecast_ttl_seconds = forecast_ttl_hours * 3600
         self._observation_ttl_seconds = observation_ttl_minutes * 60
         self._dedup_radius_km = dedup_radius_km
-        self._radius_deg = dedup_radius_km / 111.0
-        self._data: dict[tuple[float, float], dict[str, Any]] = {}
+        self._data: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def _grid_key(self, lat: float, lon: float) -> tuple[float, float]:
-        """Round lat/lon to the nearest grid point for spatial dedup."""
-        return (
-            round(lat / self._radius_deg) * self._radius_deg,
-            round(lon / self._radius_deg) * self._radius_deg,
+    def _grid_key(self, lat: float, lon: float) -> str:
+        """Look up grid group key for these coordinates.
+
+        Falls back to rounding if the resolver hasn't been configured yet.
+        """
+        from weewx_clearskies_api.services.marine_location_resolver import (
+            get_grid_group_by_coords,
         )
+
+        group = get_grid_group_by_coords(lat, lon)
+        if group is not None:
+            return group
+        # Fallback: round to nearest degree fraction (only during startup
+        # before resolve_grid_groups() has run).
+        return f"{round(lat, 2)}_{round(lon, 2)}"
 
     def get_weather(self, lat: float, lon: float) -> dict[str, Any] | None:
         """Return cached weather data if present and not expired, else None."""

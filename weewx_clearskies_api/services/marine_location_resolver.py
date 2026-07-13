@@ -26,33 +26,46 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
-def _round_to_grid(val: float, radius_deg: float) -> float:
-    """Round a coordinate value to the nearest grid point."""
-    return round(round(val / radius_deg) * radius_deg, 4)
-
-
 def resolve_grid_groups(
     locations: list[Any],
     dedup_radius_km: float,
 ) -> dict[str, str]:
-    """Group locations by rounded grid cell for spatial dedup.
+    """Group locations by proximity for spatial dedup.
+
+    Uses distance-based clustering: each location is assigned to the
+    nearest existing group centroid within dedup_radius_km, or becomes
+    a new group centroid if none is close enough.
 
     Each location object must expose .id, .lat, .lon attributes.
 
     Returns:
-        {location_id: grid_group_key} where the key is a string like
-        "33.65_-118.00" (the rounded coordinates).
+        {location_id: grid_group_key} where the key is a string derived
+        from the group's centroid coordinates.
     """
-    global _grid_groups  # noqa: PLW0603
-    radius_deg = dedup_radius_km / 111.0
+    global _grid_groups, _centroids, _dedup_radius_km  # noqa: PLW0603
+    centroids: list[tuple[str, float, float]] = []  # (group_key, lat, lon)
     groups: dict[str, str] = {}
+
     for loc in locations:
-        rounded_lat = _round_to_grid(loc.lat, radius_deg)
-        rounded_lon = _round_to_grid(loc.lon, radius_deg)
-        groups[loc.id] = f"{rounded_lat}_{rounded_lon}"
+        assigned = False
+        for group_key, clat, clon in centroids:
+            if _haversine_km(loc.lat, loc.lon, clat, clon) <= dedup_radius_km:
+                groups[loc.id] = group_key
+                assigned = True
+                break
+        if not assigned:
+            group_key = f"{round(loc.lat, 4)}_{round(loc.lon, 4)}"
+            centroids.append((group_key, loc.lat, loc.lon))
+            groups[loc.id] = group_key
+
     _grid_groups = groups
-    logger.info("Marine grid groups resolved: %d locations -> %d groups",
-                len(locations), len(set(groups.values())))
+    _centroids = centroids
+    _dedup_radius_km = dedup_radius_km
+    logger.info(
+        "Marine grid groups resolved: %d locations -> %d groups",
+        len(locations),
+        len(set(groups.values())),
+    )
     return groups
 
 
@@ -89,11 +102,26 @@ def resolve_station_distances(
 
 _grid_groups: dict[str, str] = {}
 _station_distances: dict[str, dict[str, Any]] = {}
+_centroids: list[tuple[str, float, float]] = []
+_dedup_radius_km: float = 2.5
 
 
 def get_grid_group(location_id: str) -> str | None:
     """Return the grid group key for a location, or None if not resolved."""
     return _grid_groups.get(location_id)
+
+
+def get_grid_group_by_coords(lat: float, lon: float) -> str | None:
+    """Find the grid group key for arbitrary coordinates.
+
+    Returns the key of the nearest resolved group centroid within
+    dedup_radius_km, or None if no group has been resolved yet or none
+    is close enough.
+    """
+    for group_key, clat, clon in _centroids:
+        if _haversine_km(lat, lon, clat, clon) <= _dedup_radius_km:
+            return group_key
+    return None
 
 
 def is_station_served(location_id: str) -> bool:
