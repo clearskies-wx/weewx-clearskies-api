@@ -86,6 +86,7 @@ from weewx_clearskies_api.enrichment.bathymetry import (
     DISCLAIMER as _BATHYMETRY_DISCLAIMER,
     classify_region,
     download_bathymetric_profile,
+    download_bathymetric_profiles_unified,
 )
 from weewx_clearskies_api.enrichment.fishing_species import (
     BIOGEOGRAPHIC_REGIONS,
@@ -968,37 +969,46 @@ def _resolve_marine_bathymetry(marine: MarineApplyConfig) -> dict[str, list[Bath
     (Marine Remediation T1.2 "unified bounding box" apply flow).
 
     There is no longer a separate wizard "download bathymetry" step per
-    spot: saving marine locations via ``POST /setup/apply`` now triggers the
-    download for every configured surf spot in a single pass here, sharing
-    the ``enrichment/bathymetry.py`` module-level HTTP client and its
-    ``ncei-cudem`` rate-limit budget across all locations (the NCEI
-    ImageServer ``identify`` endpoint is a point-query API with no area/
-    bounding-box export shape — see that module's docstring — so "unified"
-    here means one apply action triggers all per-location downloads, not a
-    single combined-area HTTP request).
+    spot: saving marine locations via ``POST /setup/apply`` now triggers one
+    ``download_bathymetric_profiles_unified`` call covering every configured
+    surf spot that needs a profile, rather than N independent per-spot
+    ``download_bathymetric_profile`` calls. The NCEI ImageServer ``identify``
+    endpoint is a point-query API with no area/bounding-box export shape
+    (see ``enrichment/bathymetry.py``'s module docstring), so "unified" here
+    means: every spot's search/transect/refinement points are computed up
+    front and queried as one deduplicated batch per phase, sharing the
+    module-level HTTP client and ``ncei-cudem`` rate-limit budget, instead of
+    each spot running its own full search+profile+refinement sequence
+    independently.
 
     A location whose ``surf.bathymetric_profile`` is already populated
     (e.g. an admin re-download via ``POST /setup/marine/bathymetry``, whose
     result the wizard then includes in this apply payload) is left
     untouched — this function never overwrites an operator-confirmed
-    profile.
+    profile, and is excluded from the unified batch entirely.
 
-    ``download_bathymetric_profile`` never raises for upstream provider
-    failures — it catches the canonical ``ProviderError`` taxonomy
-    internally and returns a hardcoded regional fallback profile instead
-    (see that module's docstring, "best-effort setup-time convenience").
-    One location's provider trouble therefore cannot block the rest of the
-    payload from saving, mirroring ``_resolve_marine_wfo``'s per-location
-    isolation above.
+    ``download_bathymetric_profiles_unified`` never raises for upstream
+    provider failures — it catches the canonical ``ProviderError`` taxonomy
+    internally and returns a hardcoded regional fallback profile for every
+    spot in the batch instead (see that function's docstring, "best-effort
+    setup-time convenience"). A provider outage therefore cannot block the
+    rest of the payload from saving, mirroring ``_resolve_marine_wfo``'s
+    per-location isolation above (at batch, rather than per-spot,
+    granularity — see that function's docstring for why).
     """
-    result: dict[str, list[BathymetryPoint]] = {}
-    for location in marine.locations:
-        if location.surf is None or location.surf.bathymetric_profile:
-            continue
-        result[location.id] = download_bathymetric_profile(
-            location.lat, location.lon, location.surf.beach_facing_degrees
-        )
-    return result
+    spots_needing_profiles = [
+        {
+            "id": location.id,
+            "lat": location.lat,
+            "lon": location.lon,
+            "bearing_degrees": location.surf.beach_facing_degrees,
+        }
+        for location in marine.locations
+        if location.surf is not None and not location.surf.bathymetric_profile
+    ]
+    if not spots_needing_profiles:
+        return {}
+    return download_bathymetric_profiles_unified(spots_needing_profiles)
 
 
 def _build_marine_conf_section(

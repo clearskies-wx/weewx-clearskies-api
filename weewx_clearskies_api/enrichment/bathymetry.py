@@ -33,6 +33,15 @@ Data source (T1.2 remediation, superseding the original v1 decision):
     single-point query API: one HTTP request per (lat, lon) sample. See
     ``_query_depths_m`` below.
 
+    Unified bounding-box download (Marine Remediation T1.2): when multiple
+    surf/fishing spots are configured, ``download_bathymetric_profiles_unified``
+    computes every spot's search/transect/refinement points up front,
+    deduplicates points that land on the same CUDEM pixel across spots, and
+    issues one shared batch of point queries per phase instead of running
+    each spot's full search+profile+refinement sequence independently. The
+    single-spot ``download_bathymetric_profile`` function is unchanged and
+    still used by the standalone admin re-download endpoint.
+
 Elevation sign convention: NCEI/CUDEM elevation is relative to Mean Sea
 Level (MSL). Negative elevation = underwater depth. Depth values returned
 by this module are always non-negative meters (``depth_m = max(0,
@@ -608,6 +617,271 @@ def _download_bathymetric_profile_impl(
         BathymetryPoint({"distance_m": d, "depth_m": z})
         for d, z in zip(clean_distances, clean_depths, strict=True)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Unified bounding-box download (Marine Remediation T1.2)
+# ---------------------------------------------------------------------------
+
+# Points within this grid size (~4m, matching CUDEM's ~3.4m 1/9 arc-second
+# pixel size) are treated as "the same query" and deduplicated across spots.
+# Purely a query-count optimization: collapsing two queries that would
+# return the same (or a physically indistinguishable) CUDEM pixel reading
+# anyway. Expressed in degrees-of-latitude terms for both axes (a slight
+# over-merge at low latitudes where a degree of longitude is physically
+# shorter is immaterial here — the true CUDEM pixel is still ~3.4m wide).
+_DEDUPE_GRID_DEG = 4.0 / 111_320.0
+
+
+def _dedupe_points(
+    points: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], list[int]]:
+    """Collapse near-identical (lat, lon) points into a unique query list.
+
+    Returns ``(unique_points, index_map)`` where ``index_map[i]`` is the
+    index into ``unique_points`` that ``points[i]`` maps to. Preserves
+    first-seen order so behavior is deterministic and, for a single caller
+    with no duplicates, ``unique_points == points`` and ``index_map`` is the
+    identity mapping.
+    """
+    seen: dict[tuple[int, int], int] = {}
+    unique: list[tuple[float, float]] = []
+    index_map: list[int] = []
+    for lat, lon in points:
+        key = (round(lat / _DEDUPE_GRID_DEG), round(lon / _DEDUPE_GRID_DEG))
+        idx = seen.get(key)
+        if idx is None:
+            idx = len(unique)
+            seen[key] = idx
+            unique.append((lat, lon))
+        index_map.append(idx)
+    return unique, index_map
+
+
+def download_bathymetric_profiles_unified(
+    spots: list[dict[str, Any]],
+    *,
+    max_search_km: float = _DEFAULT_MAX_SEARCH_KM,
+    search_step_km: float = _DEFAULT_SEARCH_STEP_KM,
+    num_profile_points: int = _DEFAULT_PROFILE_POINTS,
+) -> dict[str, list[BathymetryPoint]]:
+    """Download bathymetric depth profiles for multiple spots in one unified pass
+    (Marine Remediation T1.2, PROVIDER-MANUAL §14.7 "Unified bounding box download").
+
+    The NCEI ImageServer ``identify`` endpoint is a single-point query API with
+    no area/bounding-box export shape (see module docstring), so "one
+    operation" here means: instead of N independent
+    ``download_bathymetric_profile`` calls (each doing its own sequential
+    search + profile + refinement queries), this function computes every
+    spot's search/profile/refinement points *up front*, merges them into one
+    deduplicated batch per phase (search, then initial transect, then each
+    adaptive-refinement round), and issues one shared ``_query_depths_m`` call
+    per phase covering every spot at once. Points that fall on the same CUDEM
+    pixel (~4m, see ``_dedupe_points``) across different spots' transects are
+    queried only once. This is the "unified bounding box" the operator's
+    configured locations collectively span — expressed as a merged point set
+    rather than a literal ArcGIS area export, since no such export exists for
+    this data source.
+
+    *spots* is a list of ``{"id": str, "lat": float, "lon": float,
+    "bearing_degrees": float}`` dicts (one per surf/fishing spot needing a
+    profile). Returns ``{spot_id: [BathymetryPoint, ...]}``.
+
+    Per-spot algorithm and output quality are identical to
+    ``download_bathymetric_profile`` (same region classification, deep-water
+    threshold search, linearly-interpolated transect, adaptive gradient
+    refinement, and IQR outlier smoothing) — only the query batching differs.
+    For a single spot this degenerates to the same behavior as
+    ``download_bathymetric_profile`` (the dedup step is a no-op when there's
+    nothing to merge against).
+
+    On any provider failure (network error, quota, protocol error) during any
+    phase, logs a WARNING and returns the hardcoded regional fallback profile
+    for *every* spot in the batch — unlike the per-spot function's isolated
+    per-location fallback, a shared batch query failing means every spot in
+    that batch was relying on the same in-flight HTTP call, so there is no
+    finer-grained partial result to preserve.
+    """
+    if not spots:
+        return {}
+
+    regions: dict[str, str] = {}
+    thresholds: dict[str, float] = {}
+    for spot in spots:
+        region = classify_region(spot["lat"], spot["lon"])
+        regions[spot["id"]] = region
+        thresholds[spot["id"]] = REGION_DEEP_WATER_THRESHOLDS_M.get(
+            region, _DEFAULT_DEEP_WATER_THRESHOLD_M
+        )
+
+    def _fallback_all() -> dict[str, list[BathymetryPoint]]:
+        return {spot["id"]: _fallback_profile(regions[spot["id"]]) for spot in spots}
+
+    # --- Step 1/2: search outward for each spot's deep-water endpoint ---
+    num_steps = int(max_search_km / search_step_km)
+    search_distances_m = [search_step_km * 1000.0 * i for i in range(1, num_steps + 1)]
+
+    all_search_points: list[tuple[float, float]] = []
+    for spot in spots:
+        all_search_points.extend(
+            point_along_bearing(spot["lat"], spot["lon"], spot["bearing_degrees"], d)
+            for d in search_distances_m
+        )
+
+    try:
+        unique_points, index_map = _dedupe_points(all_search_points)
+        unique_depths = _query_depths_m(unique_points)
+    except ProviderError as exc:
+        logger.warning(
+            "Bathymetry: unified search-phase query failed for %d spot(s): %s. "
+            "Using fallback profiles for all spots in this batch.",
+            len(spots),
+            exc,
+        )
+        return _fallback_all()
+    all_search_depths = [unique_depths[i] for i in index_map]
+
+    deep_water_distance_by_spot: dict[str, float] = {}
+    offset = 0
+    for spot in spots:
+        sid = spot["id"]
+        n = len(search_distances_m)
+        depths_for_spot = all_search_depths[offset : offset + n]
+        offset += n
+
+        threshold_m = thresholds[sid]
+        deep_water_distance_m = search_distances_m[-1]
+        found_threshold = False
+        for distance_m, depth_m in zip(search_distances_m, depths_for_spot, strict=True):
+            if depth_m is not None and depth_m >= threshold_m:
+                deep_water_distance_m = distance_m
+                found_threshold = True
+                break
+        if not found_threshold:
+            logger.warning(
+                "Bathymetry: no point reached deep-water threshold %.1fm within "
+                "%.1fkm for spot %r (region=%r); using farthest searched point "
+                "as the deep-water endpoint.",
+                threshold_m,
+                max_search_km,
+                sid,
+                regions[sid],
+            )
+        deep_water_distance_by_spot[sid] = deep_water_distance_m
+
+    # --- Step 3: initial linearly-interpolated transect per spot ---
+    distances_by_spot: dict[str, list[float]] = {}
+    profile_point_counts: dict[str, int] = {}
+    all_profile_points: list[tuple[float, float]] = []
+    for spot in spots:
+        sid = spot["id"]
+        distances_m = _linspace(0.0, deep_water_distance_by_spot[sid], num_profile_points)
+        distances_by_spot[sid] = distances_m
+        points = [
+            point_along_bearing(spot["lat"], spot["lon"], spot["bearing_degrees"], d)
+            for d in distances_m
+        ]
+        profile_point_counts[sid] = len(points)
+        all_profile_points.extend(points)
+
+    try:
+        unique_points, index_map = _dedupe_points(all_profile_points)
+        unique_depths = _query_depths_m(unique_points)
+    except ProviderError as exc:
+        logger.warning(
+            "Bathymetry: unified profile-phase query failed for %d spot(s): %s. "
+            "Using fallback profiles for all spots in this batch.",
+            len(spots),
+            exc,
+        )
+        return _fallback_all()
+    all_profile_depths = [unique_depths[i] for i in index_map]
+
+    depths_by_spot: dict[str, list[float | None]] = {}
+    offset = 0
+    for spot in spots:
+        sid = spot["id"]
+        n = profile_point_counts[sid]
+        depths_by_spot[sid] = all_profile_depths[offset : offset + n]
+        offset += n
+
+    # --- Step 4: adaptive refinement, batched per round across all spots ---
+    for _iteration in range(_MAX_REFINEMENT_ITERATIONS):
+        insertions_by_spot: dict[str, list[tuple[float, tuple[float, float]]]] = {}
+        all_insert_points: list[tuple[float, float]] = []
+        for spot in spots:
+            sid = spot["id"]
+            distances_m = distances_by_spot[sid]
+            depths_m = depths_by_spot[sid]
+            spot_insertions: list[tuple[float, tuple[float, float]]] = []
+            for i in range(len(distances_m) - 1):
+                d0, d1 = depths_m[i], depths_m[i + 1]
+                x0, x1 = distances_m[i], distances_m[i + 1]
+                if d0 is None or d1 is None or x1 <= x0:
+                    continue
+                gradient = abs(d1 - d0) / (x1 - x0)
+                if gradient > _GRADIENT_REFINEMENT_THRESHOLD:
+                    mid_distance = (x0 + x1) / 2.0
+                    pt = point_along_bearing(
+                        spot["lat"], spot["lon"], spot["bearing_degrees"], mid_distance
+                    )
+                    spot_insertions.append((mid_distance, pt))
+            if spot_insertions:
+                insertions_by_spot[sid] = spot_insertions
+                all_insert_points.extend(pt for _, pt in spot_insertions)
+
+        if not insertions_by_spot:
+            break
+
+        try:
+            unique_points, index_map = _dedupe_points(all_insert_points)
+            unique_depths = _query_depths_m(unique_points)
+        except ProviderError as exc:
+            logger.warning(
+                "Bathymetry: unified refinement-phase query failed for %d spot(s): "
+                "%s. Stopping refinement early; using data collected so far "
+                "(not falling back for this batch since search+initial-transect "
+                "data already succeeded).",
+                len(insertions_by_spot),
+                exc,
+            )
+            break
+        all_insert_depths = [unique_depths[i] for i in index_map]
+
+        offset = 0
+        for sid, spot_insertions in insertions_by_spot.items():
+            n = len(spot_insertions)
+            spot_depths = all_insert_depths[offset : offset + n]
+            offset += n
+            for (mid_distance, _pt), mid_depth in zip(spot_insertions, spot_depths, strict=True):
+                distances_by_spot[sid].append(mid_distance)
+                depths_by_spot[sid].append(mid_depth)
+
+            paired = sorted(
+                zip(distances_by_spot[sid], depths_by_spot[sid], strict=True),
+                key=lambda p: p[0],
+            )
+            distances_by_spot[sid] = [p[0] for p in paired]
+            depths_by_spot[sid] = [p[1] for p in paired]
+
+    # --- Step 5: smooth outliers, drop missing readings, build profiles ---
+    result: dict[str, list[BathymetryPoint]] = {}
+    for spot in spots:
+        sid = spot["id"]
+        clean_pairs = [
+            (d, z)
+            for d, z in zip(distances_by_spot[sid], depths_by_spot[sid], strict=True)
+            if z is not None
+        ]
+        clean_pairs.sort(key=lambda p: p[0])
+        clean_distances = [p[0] for p in clean_pairs]
+        clean_depths = _smooth_outliers_iqr([p[1] for p in clean_pairs])
+        result[sid] = [
+            BathymetryPoint({"distance_m": d, "depth_m": z})
+            for d, z in zip(clean_distances, clean_depths, strict=True)
+        ]
+
+    return result
 
 
 # ---------------------------------------------------------------------------
