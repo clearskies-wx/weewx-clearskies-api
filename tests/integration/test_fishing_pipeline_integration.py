@@ -88,7 +88,7 @@ class TestFishingPipelineWithRealisticEnvironmentalData:
             is_during_major_period=False,
             is_during_minor_period=True,
             species=fishing_config.species,
-            target_category=fishing_config.target_category,
+            target_category=fishing_config.target_categories[0],
             month=7,
             wind_speed=4.0,
             wind_direction=200.0,
@@ -102,11 +102,13 @@ class TestFishingPipelineWithRealisticEnvironmentalData:
             forecast.pressureScore,
             forecast.tideScore,
             forecast.solunarScore,
-            forecast.waterTempScore,
             forecast.timeofdayScore,
         ):
             assert isinstance(score, int)
             assert 0 <= score <= 100
+        # waterTempScore is no longer a shared-base component (T6.2,
+        # 2026-07-11) -- temperature is scored per-species only.
+        assert forecast.waterTempScore is None
 
     def test_species_scores_present_with_0_to_100_int_scores_and_status(self) -> None:
         fishing_config = _wrightsville_fishing_config()
@@ -126,7 +128,7 @@ class TestFishingPipelineWithRealisticEnvironmentalData:
             is_during_major_period=True,
             is_during_minor_period=False,
             species=fishing_config.species,
-            target_category=fishing_config.target_category,
+            target_category=fishing_config.target_categories[0],
             month=7,
         )
 
@@ -159,7 +161,7 @@ class TestFishingPipelineWithRealisticEnvironmentalData:
             is_during_major_period=True,
             is_during_minor_period=False,
             species=fishing_config.species,
-            target_category=fishing_config.target_category,
+            target_category=fishing_config.target_categories[0],
             month=7,
         )
 
@@ -208,7 +210,7 @@ class TestFishingPipelineWithLiveNdbcData:
             is_during_major_period=False,
             is_during_minor_period=False,
             species=fishing_config.species,
-            target_category=fishing_config.target_category,
+            target_category=fishing_config.target_categories[0],
             month=date.today().month,
             wind_speed=observation.windSpeed,
             wind_direction=observation.windDirection,

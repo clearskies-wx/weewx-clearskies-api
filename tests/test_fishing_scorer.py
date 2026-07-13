@@ -153,7 +153,6 @@ def test_component_scores_are_ints_in_0_100_range():
     for score in (
         fishing_scorer._score_pressure(-2.0),
         fishing_scorer._score_tide("incoming"),
-        fishing_scorer._score_water_temp(70.0, "saltwater_inshore"),
         fishing_scorer._score_solunar(True, False, 1.0),
         fishing_scorer._score_time_of_day(6, "2026-07-10T06:00:00Z", "2026-07-10T19:00:00Z"),
     ):
@@ -177,9 +176,12 @@ def test_overall_score_rounds_and_clamps():
         target_category="saltwater_inshore",
         month=7,
     )
-    # 80*.30 + 70*.25 + 100*.20 + 60*.15 + 30*.10 = 24+17.5+20+9+3 = 73.5 -> 74
+    # Four-component weighted base (T6.2 weights: pressure .375, tide .3125,
+    # solunar .1875, time_of_day .125 — water temperature no longer scored
+    # at the category level, see fishing_scorer.py module docstring):
+    # 80*.375 + 70*.3125 + 60*.1875 + 30*.125 = 30+21.875+11.25+3.75 = 66.875 -> 67
     assert isinstance(forecast.overallScore, int)
-    assert forecast.overallScore == 74
+    assert forecast.overallScore == 67
     assert 0 <= forecast.overallScore <= 100
 
 
@@ -207,7 +209,7 @@ def test_great_day_overall_score_at_least_70():
     assert forecast.overallScore >= 70
     assert forecast.pressureScore == 100
     assert forecast.tideScore == 100
-    assert forecast.waterTempScore == 100
+    assert forecast.waterTempScore is None
     assert forecast.solunarScore == 100
     assert forecast.timeofdayScore == 100
 
@@ -379,11 +381,11 @@ def test_score_fishing_returns_fishing_forecast_with_expected_shape():
         forecast.pressureScore,
         forecast.tideScore,
         forecast.solunarScore,
-        forecast.waterTempScore,
         forecast.timeofdayScore,
     ):
         assert isinstance(field, int)
         assert 0 <= field <= 100
+    assert forecast.waterTempScore is None
     assert isinstance(forecast.conditionsText, str) and forecast.conditionsText
     assert forecast.speciesScores is not None
     assert forecast.speciesScores[0]["name"] == "Walleye"
