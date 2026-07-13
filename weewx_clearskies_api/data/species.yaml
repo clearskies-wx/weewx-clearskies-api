@@ -244,7 +244,7 @@ species_by_region:
       - halibut
       - corbina
       - surfperch
-      - sheepshead
+      - california sheephead
       - yellowtail
       - california halibut
       - opaleye
@@ -261,7 +261,7 @@ species_by_region:
       - bat ray
     bottom_fish:
       - grouper
-      - sheepshead
+      - california sheephead
       - lingcod
       - rockfish
       - sculpin
@@ -596,6 +596,19 @@ species_profiles:
     temp_marginal: [50.0, 78.0]
     tide_preference: outgoing
     tide_multiplier: 1.2
+    time_preference: dawn
+    time_multiplier: 1.2
+  california sheephead:
+    # Source: FishBase (Semicossyphus pulcher) preferred temperature
+    # 16.6-22.9C (62-73F), mean 21.2C (70F), based on 30 cells.
+    # Distinct from Atlantic sheepshead (Archosargus probatocephalus).
+    # Wrasse family — rocky reef/kelp bed dweller, diurnal feeder.
+    pressure_sensitivity: 0.3
+    temp_optimal: [64.0, 72.0]
+    temp_good: [60.0, 75.0]
+    temp_marginal: [55.0, 80.0]
+    tide_preference: incoming
+    tide_multiplier: 1.1
     time_preference: dawn
     time_multiplier: 1.2
   opaleye:
