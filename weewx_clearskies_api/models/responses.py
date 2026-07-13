@@ -1670,6 +1670,8 @@ class MarineLocationSummary(BaseModel):
     activeAlerts: list[MarineAlertSummary] | None = None  # active marine alerts, tagged by type
     surfRating: int | None = None               # current surf quality stars (1-5), if surf enabled
     beachSafetyLevel: str | None = None         # current safety level, if beach_safety enabled
+    weatherCode: int | None = None              # WMO weather code for hero icon
+    isDay: bool | None = None                   # day/night for icon variant
 
 
 # ---------------------------------------------------------------------------
