@@ -2699,16 +2699,44 @@ def _parse_overpass_structures(
         if len(points) < 2:
             continue
 
-        length_m = sum(
-            _haversine_m(lat_a, lon_a, lat_b, lon_b)
-            for (lat_a, lon_a), (lat_b, lon_b) in zip(points, points[1:], strict=False)
+        # Detect closed polygons (area outlines like pier footprints).
+        is_closed = (
+            len(points) > 3
+            and abs(points[0][0] - points[-1][0]) < 1e-7
+            and abs(points[0][1] - points[-1][1]) < 1e-7
         )
+
+        if is_closed:
+            # For closed polygons, find the two most distant vertices
+            # (the principal/long axis) to get meaningful length and bearing.
+            max_dist = 0.0
+            p_a, p_b = points[0], points[1]
+            for pi in range(len(points)):
+                for pj in range(pi + 1, len(points)):
+                    d = _haversine_m(
+                        points[pi][0], points[pi][1],
+                        points[pj][0], points[pj][1],
+                    )
+                    if d > max_dist:
+                        max_dist = d
+                        p_a, p_b = points[pi], points[pj]
+            length_m = max_dist
+            bearing_degrees = _initial_bearing_degrees(
+                p_a[0], p_a[1], p_b[0], p_b[1]
+            )
+        else:
+            length_m = sum(
+                _haversine_m(lat_a, lon_a, lat_b, lon_b)
+                for (lat_a, lon_a), (lat_b, lon_b) in zip(
+                    points, points[1:], strict=False
+                )
+            )
+            bearing_degrees = _initial_bearing_degrees(
+                points[0][0], points[0][1], points[-1][0], points[-1][1]
+            )
+
         if length_m < _MIN_STRUCTURE_LENGTH_M:
             continue
-
-        bearing_degrees = _initial_bearing_degrees(
-            points[0][0], points[0][1], points[-1][0], points[-1][1]
-        )
         distance_m = min(_haversine_m(lat, lon, p_lat, p_lon) for p_lat, p_lon in points)
 
         raw_material = str(tags.get("material", "")).strip().lower()
