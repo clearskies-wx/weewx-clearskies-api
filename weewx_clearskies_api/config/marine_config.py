@@ -368,6 +368,42 @@ class MarineLocation:
                 )
 
 
+_VALID_FORECAST_TTL_HOURS = {1, 3, 6}
+_VALID_OBSERVATION_TTL_MINUTES = {15, 30, 60}
+
+
+class MarineWeatherConfig:
+    """Parsed ``[[weather]]`` subsection under ``[marine]``."""
+
+    forecast_ttl_hours: int
+    observation_ttl_minutes: int
+    dedup_radius_km: float
+
+    def __init__(
+        self,
+        forecast_ttl_hours: int = 3,
+        observation_ttl_minutes: int = 30,
+        dedup_radius_km: float = 2.5,
+    ) -> None:
+        if forecast_ttl_hours not in _VALID_FORECAST_TTL_HOURS:
+            raise ValueError(
+                f"[marine.weather] forecast_ttl_hours must be one of "
+                f"{sorted(_VALID_FORECAST_TTL_HOURS)}, got {forecast_ttl_hours}"
+            )
+        if observation_ttl_minutes not in _VALID_OBSERVATION_TTL_MINUTES:
+            raise ValueError(
+                f"[marine.weather] observation_ttl_minutes must be one of "
+                f"{sorted(_VALID_OBSERVATION_TTL_MINUTES)}, got {observation_ttl_minutes}"
+            )
+        if dedup_radius_km <= 0:
+            raise ValueError(
+                f"[marine.weather] dedup_radius_km must be > 0, got {dedup_radius_km}"
+            )
+        self.forecast_ttl_hours = forecast_ttl_hours
+        self.observation_ttl_minutes = observation_ttl_minutes
+        self.dedup_radius_km = dedup_radius_km
+
+
 class MarineConfig:
     """Top-level parsed ``[marine]`` section."""
 
@@ -375,6 +411,7 @@ class MarineConfig:
     surf_spots: dict[str, SurfSpotConfig]
     fishing_spots: dict[str, FishingSpotConfig]
     beach_safety: dict[str, BeachSafetyConfig]
+    weather: MarineWeatherConfig
 
     def __init__(
         self,
@@ -382,11 +419,13 @@ class MarineConfig:
         surf_spots: dict[str, SurfSpotConfig] | None = None,
         fishing_spots: dict[str, FishingSpotConfig] | None = None,
         beach_safety: dict[str, BeachSafetyConfig] | None = None,
+        weather: MarineWeatherConfig | None = None,
     ) -> None:
         self.locations = locations if locations is not None else []
         self.surf_spots = surf_spots if surf_spots is not None else {}
         self.fishing_spots = fishing_spots if fishing_spots is not None else {}
         self.beach_safety = beach_safety if beach_safety is not None else {}
+        self.weather = weather if weather is not None else MarineWeatherConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -440,9 +479,22 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
         if raw_beach_safety:
             beach_safety[location_id] = BeachSafetyConfig(raw_beach_safety)
 
+    weather_section = _as_dict(marine_section.get("weather", {}))
+    if weather_section:
+        weather = MarineWeatherConfig(
+            forecast_ttl_hours=int(weather_section.get("forecast_ttl_hours", 3)),
+            observation_ttl_minutes=int(
+                weather_section.get("observation_ttl_minutes", 30)
+            ),
+            dedup_radius_km=float(weather_section.get("dedup_radius_km", 2.5)),
+        )
+    else:
+        weather = MarineWeatherConfig()
+
     return MarineConfig(
         locations=locations,
         surf_spots=surf_spots,
         fishing_spots=fishing_spots,
         beach_safety=beach_safety,
+        weather=weather,
     )
