@@ -38,7 +38,20 @@ Two routes:
     Looks up the location by id in the configured [marine] locations.
     404 when not found.  Aggregates, independently and best-effort:
       - NDBC buoy observation (providers/buoy/ndbc.py), if the location has
-        ndbc_station_ids configured.
+        ndbc_station_ids configured.  Marine Remediation Plan Phase 2 T2.1
+        enriches this raw buoy snapshot in place (API-MANUAL §18 "Detail
+        endpoint enrichment contract") because most buoys do not report
+        wind, air temp, pressure, visibility, or weather conditions:
+        windSpeed/windDirection/windGust/airTemp/pressure from station
+        hardware (marine_location_resolver.is_station_served()) else
+        marine_weather_cache; visibility/weatherCode/isDay from
+        marine_weather_cache only; waveHeight overridden by the same
+        NWPS+wave_transform -> WaveWatch III -> NDBC fallback chain
+        _location_summary() uses (not refactored into a shared function --
+        different response shapes); waterTemp overridden by
+        ocean_data_resolver.resolve(). Each source is independently
+        best-effort and only overrides a field when it actually returns a
+        non-null value -- the raw NDBC value survives untouched otherwise.
       - Wave forecast (T2.2): NWPS nearshore data (providers/marine/nwps.py)
         when the location has nwps_wfo configured and the fetch succeeds --
         falls back to WaveWatch III offshore forecast
@@ -731,6 +744,239 @@ def get_marine_location(location_id: str) -> dict:
                 location.ndbc_station_ids[0],
                 exc_info=True,
             )
+
+    # --- T2.1 enrichment (API-MANUAL §18 "Detail endpoint enrichment
+    # contract"): the raw NDBC buoy observation alone is insufficient -- most
+    # buoys do not report wind, air temp, pressure, visibility, or weather
+    # conditions. Copies the enrichment dispatch pattern from
+    # _location_summary() (implementation rule: do NOT refactor these two
+    # endpoints into a shared function -- different response shapes and
+    # different additional data).
+    #
+    # Note on unit conversion: `observation` above is already display-unit
+    # converted (via _convert_observation() called once, immediately after
+    # the NDBC fetch). We do NOT call _convert_observation() a second time
+    # after layering enrichment on top, because that function assumes its
+    # inputs are in the NDBC/NWPS/WaveWatch canonical base units (m/s,
+    # nautical miles, meters) -- station-hardware and marine_weather_cache
+    # values are not in those units (station hardware is in the weewx
+    # archive's native unit; the cache is already in the operator's *land*
+    # display unit system from the forecast provider). Re-running them
+    # through _convert_observation() would silently mis-convert them. Each
+    # enrichment source below is therefore converted with the correct,
+    # source-specific unit (waveHeight, waterTemp) or passed through
+    # unconverted, matching the same interim treatment _location_summary()
+    # already established for windSpeed/windDirection/airTemp.
+
+    # --- waveHeight fallback chain: NWPS + wave_transform (surf locations)
+    # -> WaveWatch III (offshore) -> NDBC buoy Hs (already on `observation`,
+    # used automatically as the last resort by doing nothing below). ---
+    wave_height_meters: float | None = None
+
+    if "surf" in location.activities and location.nwps_wfo:
+        try:
+            from weewx_clearskies_api.providers.marine import nwps  # noqa: PLC0415
+
+            spot_config = (
+                _marine_config.surf_spots.get(location.id) if _marine_config else None
+            )
+            if spot_config is not None:
+                nwps_result = nwps.fetch(
+                    lat=location.lat, lon=location.lon, wfo_override=location.nwps_wfo
+                )
+                nearshore = nwps_result.get("nearshore") if nwps_result else None
+                if nearshore and nearshore.get("waveHeight") is not None:
+                    supplemented = wave_transform.apply_supplements(
+                        {
+                            "wave_height": nearshore.get("waveHeight"),
+                            "wave_period": nearshore.get("wavePeriod"),
+                            "wave_direction": nearshore.get("waveDirection"),
+                        },
+                        spot_config,
+                        location.lat,
+                        location.lon,
+                    )
+                    if supplemented is not None and supplemented.get("wave_height") is not None:
+                        wave_height_meters = supplemented["wave_height"]
+        except Exception:
+            logger.warning(
+                "T2.1 enrichment: NWPS wave height fetch/supplement failed for "
+                "marine location %r",
+                location_id,
+                exc_info=True,
+            )
+
+    if wave_height_meters is None:
+        try:
+            from weewx_clearskies_api.providers.marine import wavewatch  # noqa: PLC0415
+
+            ww_result = wavewatch.fetch(lat=location.lat, lon=location.lon)
+            points = ww_result.get("forecast") or []
+            if points and points[0].waveHeight is not None:
+                wave_height_meters = points[0].waveHeight
+        except Exception:
+            logger.warning(
+                "T2.1 enrichment: WaveWatch III wave height fetch failed for "
+                "marine location %r",
+                location_id,
+                exc_info=True,
+            )
+
+    if wave_height_meters is not None:
+        converted_wave_height = _convert_unit(
+            wave_height_meters, _BASE_WAVE_HEIGHT_UNIT, targets["group_wave_height"]
+        )
+        if observation is not None:
+            observation = observation.model_copy(update={"waveHeight": converted_wave_height})
+        else:
+            observation = MarineObservation(
+                stationId=location_id, time=now_str, waveHeight=converted_wave_height
+            )
+    # else: leave observation.waveHeight as whatever the NDBC buoy fetch above
+    # already produced (already display-unit converted) -- the documented
+    # last-resort fallback.
+
+    # --- waterTemp: ocean data resolver (OFS -> regional ERDDAP -> MUR SST ->
+    # RTOFS), falls back to the NDBC buoy's raw waterTemp already on
+    # `observation` (that raw value has NOT been temperature-converted yet --
+    # _convert_observation() does not touch waterTemp -- so the conversion
+    # below applies uniformly whether the value came from the resolver or the
+    # buoy). ---
+    try:
+        from weewx_clearskies_api.services.ocean_data_resolver import resolve as resolve_ocean  # noqa: PLC0415
+
+        ocean = resolve_ocean(
+            lat=location.lat,
+            lon=location.lon,
+            location_config={
+                "ofs_model": getattr(location, "ofs_model", None),
+                "ofs_fallback": getattr(location, "ofs_fallback", None),
+                "ofs_region": getattr(location, "ofs_region", None),
+            },
+            needs="surface",
+        )
+        if ocean.surface_temp is not None:
+            if observation is not None:
+                observation = observation.model_copy(update={"waterTemp": ocean.surface_temp})
+            else:
+                observation = MarineObservation(
+                    stationId=location_id, time=now_str, waterTemp=ocean.surface_temp
+                )
+    except Exception:
+        logger.warning(
+            "T2.1 enrichment: ocean resolver failed for marine location %r waterTemp",
+            location_id,
+            exc_info=True,
+        )
+
+    if observation is not None and observation.waterTemp is not None:
+        observation = observation.model_copy(
+            update={
+                "waterTemp": _convert_unit(
+                    observation.waterTemp, _BASE_TEMPERATURE_UNIT, targets["group_temperature"]
+                )
+            }
+        )
+
+    # --- windSpeed / windDirection / windGust / airTemp / pressure: station
+    # hardware (when is_station_served()) else marine_weather_cache. Passed
+    # through in whatever unit the source provides -- see the module-level
+    # note above on why a second _convert_observation() pass is unsafe here.
+    # windGust/pressure have no marine_weather_cache fallback: the forecast
+    # provider's ProviderConditions DTO (models/responses.py) does not carry
+    # either field today, so those two are station-hardware-only until that
+    # DTO is extended (out of scope for this task -- flagged separately). ---
+    station_updates: dict[str, float] = {}
+    try:
+        from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
+            is_station_served,
+        )
+
+        if is_station_served(location_id):
+            from weewx_clearskies_api.db.registry import get_registry  # noqa: PLC0415
+            from weewx_clearskies_api.services.archive import (  # noqa: PLC0415
+                get_current as _get_current_observation,
+            )
+
+            registry = get_registry()
+            with Session(get_engine()) as station_db:
+                station_obs = _get_current_observation(station_db, registry)
+            if station_obs is not None:
+                if station_obs.windSpeed is not None:
+                    station_updates["windSpeed"] = station_obs.windSpeed
+                if station_obs.windDir is not None:
+                    station_updates["windDirection"] = station_obs.windDir
+                if station_obs.windGust is not None:
+                    station_updates["windGust"] = station_obs.windGust
+                if station_obs.outTemp is not None:
+                    station_updates["airTemp"] = station_obs.outTemp
+                if station_obs.barometer is not None:
+                    station_updates["pressure"] = station_obs.barometer
+        else:
+            from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+                get_marine_weather_cache as _get_weather_cache_for_wind,
+            )
+
+            weather_cache_for_wind = _get_weather_cache_for_wind()
+            if weather_cache_for_wind is not None:
+                provider_conditions = weather_cache_for_wind.get_current_conditions(
+                    location.lat, location.lon
+                )
+                if provider_conditions is not None:
+                    if provider_conditions.get("windSpeed") is not None:
+                        station_updates["windSpeed"] = provider_conditions["windSpeed"]
+                    if provider_conditions.get("windDirection") is not None:
+                        station_updates["windDirection"] = provider_conditions["windDirection"]
+                    if provider_conditions.get("airTemp") is not None:
+                        station_updates["airTemp"] = provider_conditions["airTemp"]
+    except Exception:
+        logger.warning(
+            "T2.1 enrichment: station/provider wind+airTemp lookup failed for "
+            "marine location %r",
+            location_id,
+            exc_info=True,
+        )
+
+    if station_updates:
+        if observation is not None:
+            observation = observation.model_copy(update=station_updates)
+        else:
+            observation = MarineObservation(stationId=location_id, time=now_str, **station_updates)
+
+    # --- visibility / weatherCode / isDay: marine_weather_cache only, no
+    # station fallback (API-MANUAL §18 table -- buoys/station hardware do not
+    # report a WMO weatherCode or day/night flag; visibility here only
+    # overrides when the cache actually has a value -- the NDBC buoy's own
+    # visibility reading, if present, is otherwise left as-is). ---
+    cache_updates: dict[str, object] = {}
+    try:
+        from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+            get_marine_weather_cache,
+        )
+
+        cache = get_marine_weather_cache()
+        if cache is not None:
+            conditions = cache.get_current_conditions(location.lat, location.lon)
+            if conditions is not None:
+                if conditions.get("weatherCode") is not None:
+                    cache_updates["weatherCode"] = conditions["weatherCode"]
+                if conditions.get("isDay") is not None:
+                    cache_updates["isDay"] = conditions["isDay"]
+                if conditions.get("visibility") is not None:
+                    cache_updates["visibility"] = conditions["visibility"]
+    except Exception:
+        logger.warning(
+            "T2.1 enrichment: marine weather cache lookup failed for marine "
+            "location %r",
+            location_id,
+            exc_info=True,
+        )
+
+    if cache_updates:
+        if observation is not None:
+            observation = observation.model_copy(update=cache_updates)
+        else:
+            observation = MarineObservation(stationId=location_id, time=now_str, **cache_updates)
 
     # --- Wave forecast: NWPS nearshore (T2.2, preferred when configured) ---
     # falls back to WaveWatch III offshore data only when NWPS is not
