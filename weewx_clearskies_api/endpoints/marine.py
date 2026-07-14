@@ -5,11 +5,16 @@ Two routes:
   GET /marine
     No locationId.  Returns a list of MarineLocationSummary, one per
     configured [marine] location (id, name, coordinates, activities).
-    currentConditions and currentTide are populated best-effort from
-    NDBC buoy observation and CO-OPS next tide prediction respectively.
-    weatherCode/isDay are sourced from the marine weather cache when
-    available.  surfRating/beachSafetyLevel are left None (requires
-    enrichment pipeline, Phase 2).  activeAlerts IS populated (Marine Remediation Plan
+    currentConditions is populated best-effort from NDBC buoy observation
+    (wind/water temp/spectral fields), with its waveHeight field specifically
+    overridden by the NWPS + wave_transform -> WaveWatch III -> NDBC fallback
+    chain (T2.1, API-MANUAL §16 "Card data source contract") so that
+    surf-enabled locations get spot-specific wave heights instead of every
+    location sharing one buoy's raw offshore reading.  currentTide is always
+    None on this card summary (ADR-091) -- see below.  weatherCode/isDay are
+    sourced from the marine weather cache when available.
+    surfRating/beachSafetyLevel are left None (requires enrichment pipeline,
+    Phase 2).  activeAlerts IS populated (Marine Remediation Plan
     T3.5, un-deferred by lead ruling): the NWS alerts provider
     (providers/alerts/nws.py) already caches its response for 5 minutes,
     so a per-location fetch here is cheap enough not to need the cache
@@ -34,9 +39,13 @@ Two routes:
     404 when not found.  Aggregates, independently and best-effort:
       - NDBC buoy observation (providers/buoy/ndbc.py), if the location has
         ndbc_station_ids configured.
-      - WaveWatch III forecast (providers/marine/wavewatch.py), always
-        attempted (global coverage, keyed by lat/lon -- no station id
-        needed).
+      - Wave forecast (T2.2): NWPS nearshore data (providers/marine/nwps.py)
+        when the location has nwps_wfo configured and the fetch succeeds --
+        falls back to WaveWatch III offshore forecast
+        (providers/marine/wavewatch.py, global coverage, keyed by lat/lon --
+        no station id needed) when NWPS is not configured or its fetch
+        fails. The bundle's `source` field reflects which path supplied the
+        forecast ("nwps+ndbc+nws_marine" vs "ndbc+wavewatch+nws_marine").
       - NWS marine zone text forecast (providers/marine/nws_marine.py), if
         the location has nws_marine_zone_id configured.
     Each provider call is wrapped in try/except -- a single provider outage
@@ -75,6 +84,7 @@ from weewx_clearskies_api.config.marine_config import (
     load_marine_config,
 )
 from weewx_clearskies_api.db.session import get_engine
+from weewx_clearskies_api.enrichment import wave_transform
 from weewx_clearskies_api.models.responses import (
     MarineAlertSummary,
     MarineBundle,
@@ -365,6 +375,85 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
                 exc_info=True,
             )
 
+    # --- waveHeight fallback chain (T2.1, API-MANUAL §16 "Card data source
+    # contract", ADR-091/ADR-084): NWPS + wave_transform supplements (surf-
+    # enabled locations only) -> WaveWatch III first forecast point (offshore,
+    # no supplements) -> NDBC buoy Hs (already fetched above, raw canonical
+    # meters). Each level is independently try/excepted; a wave-height source
+    # outage falls through to the next level rather than failing the whole
+    # summary. This replaces the previous behavior where every location's
+    # card waveHeight came solely from the (shared) NDBC buoy, making all
+    # locations sharing a buoy show identical values.
+    wave_height_meters: float | None = None
+
+    if "surf" in location.activities and location.nwps_wfo:
+        try:
+            from weewx_clearskies_api.providers.marine import nwps  # noqa: PLC0415
+
+            spot_config = (
+                _marine_config.surf_spots.get(location.id) if _marine_config else None
+            )
+            if spot_config is not None:
+                nwps_result = nwps.fetch(
+                    lat=location.lat, lon=location.lon, wfo_override=location.nwps_wfo
+                )
+                nearshore = nwps_result.get("nearshore") if nwps_result else None
+                if nearshore and nearshore.get("waveHeight") is not None:
+                    supplemented = wave_transform.apply_supplements(
+                        {
+                            "wave_height": nearshore.get("waveHeight"),
+                            "wave_period": nearshore.get("wavePeriod"),
+                            "wave_direction": nearshore.get("waveDirection"),
+                        },
+                        spot_config,
+                        location.lat,
+                        location.lon,
+                    )
+                    if supplemented is not None and supplemented.get("wave_height") is not None:
+                        wave_height_meters = supplemented["wave_height"]
+        except Exception:
+            logger.warning(
+                "NWPS wave height fetch/supplement failed for marine location %r",
+                location.id,
+                exc_info=True,
+            )
+
+    if wave_height_meters is None:
+        try:
+            from weewx_clearskies_api.providers.marine import wavewatch  # noqa: PLC0415
+
+            ww_result = wavewatch.fetch(lat=location.lat, lon=location.lon)
+            points = ww_result.get("forecast") or []
+            if points and points[0].waveHeight is not None:
+                wave_height_meters = points[0].waveHeight
+        except Exception:
+            logger.warning(
+                "WaveWatch III wave height fetch failed for marine location %r",
+                location.id,
+                exc_info=True,
+            )
+
+    if wave_height_meters is None and current_conditions is not None:
+        wave_height_meters = current_conditions.waveHeight
+
+    if wave_height_meters is not None:
+        target_wave_height_unit = get_group_unit(
+            "group_wave_height", "foot" if get_target_unit() == "US" else "meter"
+        )
+        converted_wave_height = _convert_unit(
+            wave_height_meters, _BASE_WAVE_HEIGHT_UNIT, target_wave_height_unit
+        )
+        if current_conditions is not None:
+            current_conditions = current_conditions.model_copy(
+                update={"waveHeight": converted_wave_height}
+            )
+        else:
+            current_conditions = MarineObservation(
+                stationId=location.id,
+                time=now_str,
+                waveHeight=converted_wave_height,
+            )
+
     # --- waterTemp unit conversion (T1.2) ---
     # NDBC standard-met waterTemp arrives as raw degrees Celsius with no
     # conversion applied. Convert to the operator's configured
@@ -568,19 +657,49 @@ def get_marine_location(location_id: str) -> dict:
                 exc_info=True,
             )
 
+    # --- Wave forecast: NWPS nearshore (T2.2, preferred when configured) ---
+    # falls back to WaveWatch III offshore data only when NWPS is not
+    # configured for this location or its fetch fails. Unlike the surf
+    # endpoint, no wave_transform supplements are applied here -- this is the
+    # general-purpose marine bundle, not a surf-spot-specific score, and not
+    # every marine location carries a SurfSpotConfig to supplement against.
     forecast: list[MarineForecastPoint] = []
-    try:
-        from weewx_clearskies_api.providers.marine import wavewatch  # noqa: PLC0415
+    nwps_succeeded = False
+    if location.nwps_wfo:
+        try:
+            from weewx_clearskies_api.providers.marine import nwps  # noqa: PLC0415
 
-        ww_result = wavewatch.fetch(lat=location.lat, lon=location.lon)
-        forecast = [
-            _convert_forecast_point(point, targets)
-            for point in ww_result.get("forecast", [])
-        ]
-    except Exception:
-        logger.warning(
-            "WaveWatch III fetch failed for marine location %r", location_id, exc_info=True
-        )
+            nwps_result = nwps.fetch(
+                lat=location.lat, lon=location.lon, wfo_override=location.nwps_wfo
+            )
+            nearshore = nwps_result.get("nearshore") if nwps_result else None
+            if nearshore and nearshore.get("waveHeight") is not None:
+                point = MarineForecastPoint(
+                    time=nwps_result.get("cycle_time") or now_str,
+                    waveHeight=nearshore.get("waveHeight"),
+                    wavePeriod=nearshore.get("wavePeriod"),
+                    waveDirection=nearshore.get("waveDirection"),
+                )
+                forecast = [_convert_forecast_point(point, targets)]
+                nwps_succeeded = True
+        except Exception:
+            logger.warning(
+                "NWPS fetch failed for marine location %r", location_id, exc_info=True
+            )
+
+    if not nwps_succeeded:
+        try:
+            from weewx_clearskies_api.providers.marine import wavewatch  # noqa: PLC0415
+
+            ww_result = wavewatch.fetch(lat=location.lat, lon=location.lon)
+            forecast = [
+                _convert_forecast_point(point, targets)
+                for point in ww_result.get("forecast", [])
+            ]
+        except Exception:
+            logger.warning(
+                "WaveWatch III fetch failed for marine location %r", location_id, exc_info=True
+            )
 
     text_forecast: list[MarineTextForecast] = []
     if location.nws_marine_zone_id:
@@ -596,6 +715,11 @@ def get_marine_location(location_id: str) -> dict:
                 exc_info=True,
             )
 
+    # --- source attribution (T2.2): reflect which wave-data path actually
+    # supplied the forecast list, so dashboard/debugging can tell NWPS-backed
+    # nearshore data from WaveWatch III offshore fallback data. ---
+    wave_source = "nwps+ndbc+nws_marine" if nwps_succeeded else "ndbc+wavewatch+nws_marine"
+
     bundle = MarineBundle(
         locationId=location.id,
         locationName=location.name,
@@ -603,7 +727,7 @@ def get_marine_location(location_id: str) -> dict:
         observation=observation,
         forecast=forecast,
         textForecast=text_forecast,
-        source="ndbc+wavewatch+nws_marine",
+        source=wave_source,
         generatedAt=now_str,
     )
 
