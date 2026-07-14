@@ -822,6 +822,17 @@ def get_marine_location(location_id: str) -> dict:
                 exc_info=True,
             )
 
+    # --- harbor/sheltered-water override (mirrors _location_summary() lines
+    # 468-486). Suppress open-ocean wave height for harbor locations. ---
+    if (
+        wave_height_meters is not None
+        and "surf" not in location.activities
+        and _is_harbor_location(location)
+    ):
+        wave_height_meters = None
+        if observation is not None:
+            observation = observation.model_copy(update={"waveHeight": None})
+
     if wave_height_meters is not None:
         converted_wave_height = _convert_unit(
             wave_height_meters, _BASE_WAVE_HEIGHT_UNIT, targets["group_wave_height"]
