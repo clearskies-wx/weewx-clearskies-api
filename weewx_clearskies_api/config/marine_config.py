@@ -364,7 +364,8 @@ class MarineLocation:
         self.activities = _as_list(section.get("activities", []))
         self.ndbc_station_ids = _as_list(section.get("ndbc_station_ids", []))
         self.coops_station_ids = _as_list(section.get("coops_station_ids", []))
-        self.nws_marine_zone_id = _opt_str(section, "nws_marine_zone_id")
+        nws_marine_zone_id = _opt_str(section, "nws_marine_zone_id")
+        self.nws_marine_zone_id = nws_marine_zone_id.upper() if nws_marine_zone_id is not None else None
         nwps_wfo = _opt_str(section, "nwps_wfo")
         self.nwps_wfo = nwps_wfo.lower() if nwps_wfo is not None else None
         self.nws_srf_zone_id = _opt_str(section, "nws_srf_zone_id")
