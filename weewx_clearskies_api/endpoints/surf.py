@@ -9,11 +9,20 @@ Behavior:
 Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14:
   1. NWPS nearshore wave data (providers/marine/nwps.py), corrected by the
      four wave_transform.py supplements (breaker index, structure effects,
-     interpolation, topographic adjustment).
+     interpolation, topographic adjustment). NWPS's GRIB2 extraction only
+     ever yields a single current/nearest-cycle snapshot (no per-forecast-
+     hour extraction) — this path always produces a 1-element `forecast`
+     array, matching API-MANUAL §18's documented "single time step" case.
   2. Falls back to WaveWatch III offshore data (providers/marine/wavewatch.py)
      when NWPS is unavailable — matches PROVIDER-MANUAL §14.6 "No fallback
      transformation pipeline" (WaveWatch data passes through unmodified,
-     wave_transform is simply not applied to it).
+     wave_transform is simply not applied to it). WaveWatch III already
+     returns a genuine 25-point 3-hourly forecast, so this is the path that
+     produces real multi-point `forecast` data (T2.3, Marine Remediation
+     Plan Phase 2): every WW3 timestep is scored independently, broadcasting
+     the single current NDBC wind reading and spectral swell decomposition
+     across all of them (best available data — neither NDBC nor WaveWatch
+     III supply per-future-timestep wind or swell spectrum).
   3. enrichment/surf_scorer.py's score_surf() produces the SurfForecast.
   4. NDBC (providers/buoy/ndbc.py) supplies spectral swell decomposition and
      wind speed/direction (surf_scorer's wind-quality input).
@@ -214,7 +223,17 @@ def get_surf(location_id: str) -> dict:
     wave_height_internal, _ = _wave_height_unit()
 
     # --- NWPS nearshore wave data + wave_transform supplements ---
+    # T2.3 (Marine Remediation Plan Phase 2): NWPS's GRIB2 extraction
+    # (providers/marine/nwps.py + grib_processor.py) only ever produces a
+    # single current/nearest-cycle snapshot -- it does not extract multiple
+    # forecast-hour timesteps from the GRIB2 file (confirmed with lead;
+    # multi-timestep NWPS parsing is future work, out of scope here). So the
+    # NWPS path below always yields exactly one scored entry -- this is the
+    # "single time step" case API-MANUAL §18 "Multi-point surf forecast
+    # contract" explicitly allows ("When NWPS provides only one time step
+    # (current snapshot), the array contains a single element").
     supplemented: dict | None = None
+    nwps_succeeded = False
     try:
         from weewx_clearskies_api.providers.marine import nwps  # noqa: PLC0415
 
@@ -231,32 +250,37 @@ def get_surf(location_id: str) -> dict:
                 location.lat,
                 location.lon,
             )
+            if supplemented is not None and supplemented.get("wave_height") is not None:
+                nwps_succeeded = True
     except Exception:
         logger.warning(
             "surf endpoint: NWPS fetch/supplement failed for %s", location_id, exc_info=True
         )
 
-    # --- WaveWatch III offshore fallback (PROVIDER-MANUAL §14.6: no
-    # transformation pipeline applied to WaveWatch data when NWPS is down) ---
-    if supplemented is None:
+    # --- WaveWatch III offshore fallback: multi-point (T2.3) ---
+    # PROVIDER-MANUAL §14.6: no transformation pipeline applied to WaveWatch
+    # data when NWPS is down -- WW3 data passes through unmodified. Unlike
+    # NWPS, WaveWatch III already returns a genuine 25-point 3-hourly
+    # forecast (providers/marine/wavewatch.py), so this is where real
+    # multi-point surf data comes from today.
+    ww3_points: list = []
+    if not nwps_succeeded:
         try:
             from weewx_clearskies_api.providers.marine import wavewatch  # noqa: PLC0415
 
             ww_result = wavewatch.fetch(lat=location.lat, lon=location.lon)
-            points = ww_result.get("forecast") or []
-            if points:
-                first = points[0]
-                supplemented = {
-                    "wave_height": first.waveHeight,
-                    "wave_period": first.wavePeriod,
-                    "wave_direction": first.waveDirection,
-                }
+            ww3_points = ww_result.get("forecast") or []
         except Exception:
             logger.warning(
                 "surf endpoint: WaveWatch III fallback failed for %s", location_id, exc_info=True
             )
 
     # --- NDBC spectral swell decomposition + wind ---
+    # A single current reading (NDBC has no forecast product) -- broadcast
+    # across every WaveWatch III timestep below when scoring multiple
+    # points, matching the lead-approved treatment for wind (best available
+    # data; NDBC/WaveWatch III supply no per-future-timestep wind or swell
+    # spectrum).
     spectral_components: list[dict] = []
     wind_speed_mps: float | None = None
     wind_direction: float | None = None
@@ -273,9 +297,9 @@ def get_surf(location_id: str) -> dict:
     except Exception:
         logger.warning("surf endpoint: NDBC fetch failed for %s", location_id, exc_info=True)
 
-    # --- Score surf quality ---
+    # --- Score surf quality (T2.3: multi-point) ---
     forecast_entries: list[dict] = []
-    if supplemented is not None and supplemented.get("wave_height") is not None:
+    if nwps_succeeded and supplemented is not None and supplemented.get("wave_height") is not None:
         surf_forecast = score_surf(
             wave_height=supplemented["wave_height"],
             wave_period=supplemented.get("wave_period") or 0.0,
@@ -291,6 +315,25 @@ def get_surf(location_id: str) -> dict:
             entry["waveHeightAtBreak"], "meter", wave_height_internal
         )
         forecast_entries.append(entry)
+    else:
+        for point in ww3_points:
+            if point.waveHeight is None:
+                continue
+            surf_forecast = score_surf(
+                wave_height=point.waveHeight,
+                wave_period=point.wavePeriod or 0.0,
+                wave_direction=point.waveDirection or 0.0,
+                wind_speed=wind_speed_mps,
+                wind_direction=wind_direction,
+                spectral_components=spectral_components or None,
+                spot_config=spot_config,
+                time_utc=point.time,
+            )
+            entry = surf_forecast.model_dump()
+            entry["waveHeightAtBreak"] = _convert_unit(
+                entry["waveHeightAtBreak"], "meter", wave_height_internal
+            )
+            forecast_entries.append(entry)
 
     # --- CO-OPS tide predictions (informational overlay, not scored) ---
     tide_predictions: list[dict] = []
