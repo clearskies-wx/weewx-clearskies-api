@@ -770,6 +770,10 @@ class BackgroundCacheWarmer:
         # warming above (which already completed by this point).
         self._warm_marine_weather()
 
+        # Ocean data resolver warm (T3.7) — pre-fetch OFS/ERDDAP ocean data
+        # so card waterTemp comes from the resolver cache, not a live call.
+        self._warm_ocean_data()
+
     def _warm_marine_weather(self) -> None:
         """Pre-fetch forecast-provider current conditions for marine locations
         not directly served by the weewx station (Marine Card Data Source
@@ -924,3 +928,49 @@ class BackgroundCacheWarmer:
                     )
         except Exception:
             logger.warning("Cache warmer: marine weather warm failed", exc_info=True)
+
+    def _warm_ocean_data(self) -> None:
+        """Pre-fetch ocean data (waterTemp, currents, salinity) for marine
+        locations via the ocean data resolver (T3.7, ADR-091).
+
+        Deduplicates by OFS model — one OFS fetch per model, not per location.
+        Locations without an ofs_model still get warmed (resolver falls to
+        RTOFS/MUR SST).
+        """
+        if self._marine_config is None:
+            return
+        try:
+            from weewx_clearskies_api.services.ocean_data_resolver import (
+                resolve as resolve_ocean,
+            )
+
+            warmed_models: set[str] = set()
+            for loc in self._marine_config.locations:
+                ofs_model = getattr(loc, "ofs_model", None)
+                dedup_key = ofs_model or f"{loc.lat:.3f}_{loc.lon:.3f}"
+                if dedup_key in warmed_models:
+                    continue
+                warmed_models.add(dedup_key)
+
+                try:
+                    resolve_ocean(
+                        lat=loc.lat,
+                        lon=loc.lon,
+                        location_config={
+                            "ofs_model": ofs_model,
+                            "ofs_fallback": getattr(loc, "ofs_fallback", None),
+                            "ofs_region": getattr(loc, "ofs_region", None),
+                        },
+                        needs="surface",
+                    )
+                    logger.info(
+                        "Cache warmer: ocean data warmed for %s (model=%s)",
+                        loc.id,
+                        ofs_model or "fallback",
+                    )
+                except Exception:
+                    logger.warning(
+                        "Cache warmer: ocean data warm failed for %s", loc.id, exc_info=True
+                    )
+        except Exception:
+            logger.warning("Cache warmer: ocean data warm failed", exc_info=True)

@@ -454,11 +454,37 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
                 waveHeight=converted_wave_height,
             )
 
-    # --- waterTemp unit conversion (T1.2) ---
-    # NDBC standard-met waterTemp arrives as raw degrees Celsius with no
-    # conversion applied. Convert to the operator's configured
-    # group_temperature display unit (e.g. degree_F for the US preset).
-    # TODO: Replace NDBC source with ocean_data_resolver.resolve(needs="surface") in Phase 3
+    # --- waterTemp from ocean data resolver (T3.7, replaces raw NDBC) ---
+    # The resolver runs the tiered fallback chain (OFS → regional ERDDAP →
+    # MUR SST → RTOFS). If it returns a surface_temp, that replaces the
+    # NDBC buoy waterTemp on the card. If it fails, the NDBC buoy value
+    # (already in current_conditions from the fetch above) is kept as-is
+    # and converted below.
+    try:
+        from weewx_clearskies_api.services.ocean_data_resolver import resolve as resolve_ocean  # noqa: PLC0415
+
+        ocean = resolve_ocean(
+            lat=location.lat,
+            lon=location.lon,
+            location_config={
+                "ofs_model": getattr(location, "ofs_model", None),
+                "ofs_fallback": getattr(location, "ofs_fallback", None),
+                "ofs_region": getattr(location, "ofs_region", None),
+            },
+            needs="surface",
+        )
+        if ocean.surface_temp is not None and current_conditions is not None:
+            current_conditions = current_conditions.model_copy(
+                update={"waterTemp": ocean.surface_temp}
+            )
+    except Exception:
+        logger.warning(
+            "Ocean resolver failed for card waterTemp at %r", location.id, exc_info=True
+        )
+
+    # --- waterTemp unit conversion (T1.2 / T3.7) ---
+    # waterTemp is now either from the ocean resolver (Celsius) or NDBC
+    # buoy (also Celsius). Convert to the operator's display unit.
     if current_conditions is not None and current_conditions.waterTemp is not None:
         target_temp_unit = get_group_unit(
             "group_temperature",
