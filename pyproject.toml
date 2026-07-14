@@ -78,6 +78,9 @@ marine = [
     # (apt install libeccodes-dev / dnf install eccodes-devel / brew install eccodes).
     # Docker images include it by default; native installs need the system library.
     "eccodes>=1.5",
+    # ADR-091: OFS ocean data via THREDDS/OPeNDAP (xarray + netCDF4).
+    "xarray>=2024.1",
+    "netCDF4>=1.6",
 ]
 dev = [
     "ruff==0.11.9",

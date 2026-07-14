@@ -1524,6 +1524,74 @@ class MarineTextForecast(BaseModel):
     weather: str | None = None      # weather description
 
 
+class WaterColumnLayer(BaseModel):
+    """Single depth layer in a water column profile (ADR-091, API-MANUAL §16)."""
+
+    depth_m: float
+    temperature: float | None = None
+    salinity: float | None = None
+
+
+class WaterColumnProfile(BaseModel):
+    """Vertical temperature/salinity profile from OFS or RTOFS (ADR-091)."""
+
+    layers: list[WaterColumnLayer]
+    thermocline_depth_m: float | None = None
+    bottom_temp: float | None = None
+    seafloor_depth_m: float | None = None
+    source: str
+    timestamp: str
+
+
+class OceanCurrentSnapshot(BaseModel):
+    """Current speed and direction at a point (ADR-091)."""
+
+    speed: float
+    direction: float
+    depth_m: float | None = None
+
+
+class OceanForecastPoint(BaseModel):
+    """Single timestep in an ocean data forecast (ADR-091)."""
+
+    time: str
+    surface_temp: float | None = None
+    current_speed: float | None = None
+    current_direction: float | None = None
+    source: str
+
+
+class OceanDataResult(BaseModel):
+    """Ocean data resolver output — everything endpoints need from ocean model data.
+
+    Returned by ocean_data_resolver.resolve(). Raw values in Celsius/m/s/PSU;
+    unit conversion happens in the endpoint, not the resolver.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    surface_temp: float | None = None
+    column_profile: WaterColumnProfile | None = None
+    thermocline_depth_m: float | None = None
+    bottom_temp_c: float | None = None
+    seafloor_depth_m: float | None = None
+
+    surface_current_speed: float | None = None
+    surface_current_dir: float | None = None
+    current_profile: list[OceanCurrentSnapshot] | None = None
+
+    surface_salinity: float | None = None
+
+    water_level_msl: float | None = None
+    water_level_mllw: float | None = None
+
+    forecast: list[OceanForecastPoint] | None = None
+
+    source: str = "unavailable"
+    source_type: str = "modeled"
+    coverage_tier: str = "unavailable"
+
+
 class SurfForecast(BaseModel):
     """Surf quality forecast for one spot at one timestep (API-MANUAL §16).
 
