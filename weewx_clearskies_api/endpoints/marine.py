@@ -24,9 +24,16 @@ Two routes:
     filter alerts per activity tab.  A single location's alert-fetch
     failure degrades that location's activeAlerts to None (independent
     best-effort, same pattern as GET /marine/{location_id}'s provider
-    calls below) rather than failing the whole list.  404 "Marine
-    features not configured" when no [marine] section is present or it
-    has zero locations.
+    calls below) rather than failing the whole list.  photoUrl (T4.3,
+    Marine Complete Remediation Plan) is
+    `/marine-photos/{locationId}.webp` when the operator has uploaded a
+    location photo (T4.1, saved to
+    /etc/weewx-clearskies/marine-photos/{locationId}.webp by the
+    wizard/admin upload handler and served by Caddy at /marine-photos/*,
+    T4.2) else None -- a plain filesystem existence check via
+    _photo_url(), no config field read.  404 "Marine features not
+    configured" when no [marine] section is present or it has zero
+    locations.
 
     Ruling (lead, T5.1/T5.2 round): the API-MANUAL §18 line "Without
     locationId, the endpoint returns data for the first configured
@@ -85,6 +92,7 @@ shapes.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 
 import configobj
@@ -311,6 +319,22 @@ _HARBOR_NAME_KEYWORDS: tuple[str, ...] = (
     "channel",
     "lagoon",
 )
+
+# Marine location photo storage (T4.1-T4.3, Marine Complete Remediation
+# Plan). Photos are always converted to WebP and saved at this deterministic
+# on-disk path -- see the wizard/admin upload handlers (T4.1). Served by
+# Caddy at /marine-photos/* (T4.2) as a static file route rooted at
+# /etc/weewx-clearskies, so the URL returned to the dashboard is the same
+# path with the leading /etc/weewx-clearskies stripped.
+_MARINE_PHOTOS_DIR = "/etc/weewx-clearskies/marine-photos"
+
+
+def _photo_url(location_id: str) -> str | None:
+    """Return the /marine-photos/{locationId}.webp URL if the photo file
+    exists on disk, else None (API-MANUAL §16 MarineLocationSummary).
+    """
+    photo_path = os.path.join(_MARINE_PHOTOS_DIR, f"{location_id}.webp")
+    return f"/marine-photos/{location_id}.webp" if os.path.isfile(photo_path) else None
 
 
 def _is_harbor_location(location: MarineLocation) -> bool:
@@ -664,6 +688,7 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
         beachSafetyLevel=None,
         weatherCode=weather_code,
         isDay=is_day,
+        photoUrl=_photo_url(location.id),
     )
 
 
