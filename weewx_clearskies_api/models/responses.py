@@ -1469,6 +1469,8 @@ class MarineObservation(BaseModel):
     stationId: str
     time: str  # UTC ISO-8601 with Z
     spectralComponents: list[SpectralWaveComponent] | None = None  # decomposed swell systems
+    weatherCode: int | None = None  # WMO code (no conversion); from forecast provider (T2.1/T2.2)
+    isDay: bool | None = None       # from forecast provider (T2.1/T2.2)
 
 
 class TidePrediction(BaseModel):
