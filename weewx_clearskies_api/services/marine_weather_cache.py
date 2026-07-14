@@ -71,7 +71,7 @@ class MarineWeatherCache:
         if entry is None:
             return None
         age = time.monotonic() - entry.get("forecast_fetched_at", 0.0)
-        if age >= self._forecast_ttl_seconds:
+        if age >= self._observation_ttl_seconds:
             return None
         return entry
 
