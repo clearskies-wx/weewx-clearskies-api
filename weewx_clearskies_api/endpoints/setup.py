@@ -3260,7 +3260,10 @@ async def marine_coverage(
 
     # --- OFS model assignment ---
     ofs_primary, ofs_fallback = _find_ofs_model(lat, lon)
-    ofs_resolution = _OFS_RESOLUTION_DEG.get(ofs_primary) if ofs_primary else None
+    ofs_resolution = None
+    if ofs_primary:
+        from weewx_clearskies_api.providers.ocean.ofs import _MODEL_RESOLUTION_DEG  # noqa: PLC0415
+        ofs_resolution = _MODEL_RESOLUTION_DEG.get(ofs_primary)
 
     # --- Coverage tier ---
     if ofs_primary:
