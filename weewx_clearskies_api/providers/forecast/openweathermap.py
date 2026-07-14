@@ -748,6 +748,7 @@ def _owm_to_daily_point(
         uvIndexMax=day.uvi,
         weatherCode=weather_code,
         weatherText=weather_text,
+        cloudCover=day.clouds,
         narrative=narrative,
         humidityMax=day.humidity,
         snowAmount=day.snow,
