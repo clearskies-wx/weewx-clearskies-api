@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 import configobj
 from fastapi import APIRouter, HTTPException
@@ -236,13 +237,79 @@ def get_tide_location(location_id: str) -> dict:
             exc_info=True,
         )
 
+    # --- Composite water level (T4.2, ADR-091 Decision 4) ---
+    # Combines CO-OPS harmonic predictions with OFS non-tidal residual to
+    # produce a total water level forecast that includes storm surge.
+    composite: dict[str, Any] = {}
+    try:
+        from weewx_clearskies_api.services.ocean_data_resolver import resolve as resolve_ocean  # noqa: PLC0415
+        from weewx_clearskies_api.services.water_level_compositor import compute_composite  # noqa: PLC0415
+
+        # Get OFS water levels for this location (if OFS covers it)
+        ocean = resolve_ocean(
+            lat=location.lat,
+            lon=location.lon,
+            location_config={
+                "ofs_model": getattr(location, "ofs_model", None),
+                "ofs_fallback": getattr(location, "ofs_fallback", None),
+                "ofs_region": getattr(location, "ofs_region", None),
+            },
+            needs="full",
+        )
+        ofs_levels: list[dict[str, Any]] | None = None
+        if ocean.water_level_msl is not None:
+            ofs_levels = [{"time": now_str, "height": ocean.water_level_msl}]
+
+        # Convert predictions/observations back to meters for the compositor
+        # (they were converted to target_unit above; compositor works in meters)
+        raw_predictions = [
+            {"time": p.get("time"), "height": p.get("height")}
+            for p in (result.get("predictions", []) if 'result' in dir() else [])
+        ]
+        raw_observations = [
+            {"time": w.get("time"), "height": w.get("height")}
+            for w in (result.get("water_levels", []) if 'result' in dir() else [])
+        ]
+
+        # Use the raw (pre-conversion) data from the CO-OPS result
+        coops_result_raw = coops.fetch(
+            station_id=location.coops_station_ids[0],
+            products=("predictions", "water_level"),
+        ) if location.coops_station_ids else {}
+        raw_preds = [
+            {"time": p.time if hasattr(p, 'time') else p.get("time"),
+             "height": p.height if hasattr(p, 'height') else p.get("height")}
+            for p in coops_result_raw.get("predictions", [])
+        ]
+        raw_obs = [
+            {"time": w.time if hasattr(w, 'time') else w.get("time"),
+             "height": w.height if hasattr(w, 'height') else w.get("height")}
+            for w in coops_result_raw.get("water_levels", [])
+        ]
+
+        composite = compute_composite(
+            predictions=raw_preds,
+            observations=raw_obs,
+            ofs_water_levels=ofs_levels,
+            now=datetime.now(tz=UTC),
+            target_unit=target_unit,
+        )
+    except Exception:
+        logger.warning(
+            "Water level compositor failed for %r", location_id, exc_info=True
+        )
+
     bundle = TideBundle(
         locationId=location.id,
         locationName=location.name,
         coordinates={"lat": location.lat, "lon": location.lon},
         predictions=predictions,
         waterLevels=water_levels,
-        source="coops",
+        totalWaterLevelForecast=composite.get("totalWaterLevelForecast"),
+        currentResidual=composite.get("currentResidual"),
+        residualForecastSource=composite.get("residualForecastSource"),
+        stormSurgeLevel=composite.get("stormSurgeLevel"),
+        source="coops" + ("+waterLevelComposite" if composite.get("totalWaterLevelForecast") else ""),
         generatedAt=now_str,
     )
 

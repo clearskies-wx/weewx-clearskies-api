@@ -1777,6 +1777,11 @@ class TideBundle(BaseModel):
     coordinates: dict[str, float]  # {lat, lon}
     predictions: list[TidePrediction] = []  # CO-OPS harmonic predictions
     waterLevels: list[WaterLevel] = []       # CO-OPS observed water levels
+    # Composite water level fields (ADR-091 Decision 4, T4.2)
+    totalWaterLevelForecast: list[dict[str, Any]] | None = None
+    currentResidual: dict[str, Any] | None = None
+    residualForecastSource: str | None = None
+    stormSurgeLevel: str | None = None
     source: str
     generatedAt: str  # UTC ISO-8601 with Z
 
