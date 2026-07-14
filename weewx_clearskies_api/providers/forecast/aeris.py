@@ -372,6 +372,8 @@ class _AerisDayNightPeriod(BaseModel):
     weather: str | None = None
     weatherPrimary: str | None = None
     isDay: bool | None = None
+    # Sky/cloud
+    sky: float | None = None
 
 
 class _AerisHourlyResponse(BaseModel):
