@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 PROVIDER_ID = "erddap_ocean"
 DOMAIN = "ocean"
 
+_API_VERSION = "0.1.0"
+_USER_AGENT = f"weewx-clearskies-api/{_API_VERSION} (ERDDAP ocean data provider)"
+
 DATASETS: dict[str, dict[str, Any]] = {
     "mur_sst": {
         "server": "coastwatch.pfeg.noaa.gov",
@@ -80,8 +83,9 @@ def _get_http_client() -> ProviderHTTPClient:
     if _http_client is None:
         _http_client = ProviderHTTPClient(
             provider_id=PROVIDER_ID,
-            base_url="",
-            timeout_seconds=15,
+            domain=DOMAIN,
+            user_agent=_USER_AGENT,
+            read_timeout=15,
         )
     return _http_client
 

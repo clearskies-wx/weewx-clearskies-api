@@ -289,6 +289,35 @@ def _convert_forecast_point(
 # ---------------------------------------------------------------------------
 
 
+_HARBOR_NAME_KEYWORDS: tuple[str, ...] = (
+    "harbor",
+    "harbour",
+    "bay",
+    "inlet",
+    "marina",
+    "channel",
+    "lagoon",
+)
+
+
+def _is_harbor_location(location: MarineLocation) -> bool:
+    """Best-effort detection of sheltered/harbor locations (T1.4, Marine
+    Remediation Plan; API-MANUAL §"Detail endpoint enrichment contract" --
+    "Null for harbor locations (no open-ocean fallback)").
+
+    WaveWatch III and NDBC buoy Hs both model open-water conditions -- a
+    harbor/bay/inlet/marina/channel/lagoon has calmer, sheltered water that
+    neither source represents, so a raw open-ocean wave height there is
+    misleading rather than merely approximate.
+
+    Detected via a case-insensitive keyword match on the configured location
+    name. A future `sheltered = true` config flag is deferred (lead ruling,
+    Phase 1 F0 round) -- name-keyword detection is sufficient for now.
+    """
+    name_lower = location.name.lower()
+    return any(keyword in name_lower for keyword in _HARBOR_NAME_KEYWORDS)
+
+
 def _classify_alert_type(event: str) -> str:
     """Classify an NWS alert `event` string into a dashboard alertType bucket.
 
@@ -435,6 +464,26 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
 
     if wave_height_meters is None and current_conditions is not None:
         wave_height_meters = current_conditions.waveHeight
+
+    # --- harbor/sheltered-water override (T1.4, Marine Remediation Plan) ---
+    # Non-surf locations in this chain only ever reach here via WaveWatch III
+    # or the raw NDBC buoy reading (the NWPS + wave_transform branch above is
+    # gated on "surf" in location.activities) -- both are open-ocean sources.
+    # Suppress the wave height for harbor-like locations rather than show a
+    # misleading open-water number for sheltered water. Also null out
+    # current_conditions.waveHeight directly -- otherwise the raw
+    # (unconverted) NDBC buoy value already sitting on current_conditions
+    # would survive unchanged, since the conversion block below (which is
+    # the only other place that writes waveHeight onto current_conditions)
+    # is skipped whenever wave_height_meters is None.
+    if (
+        wave_height_meters is not None
+        and "surf" not in location.activities
+        and _is_harbor_location(location)
+    ):
+        wave_height_meters = None
+        if current_conditions is not None:
+            current_conditions = current_conditions.model_copy(update={"waveHeight": None})
 
     if wave_height_meters is not None:
         target_wave_height_unit = get_group_unit(

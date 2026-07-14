@@ -488,7 +488,7 @@ def fetch(
 
     check_grib_available()
 
-    wfo = wfo_override or _determine_wfo(lat, lon)
+    wfo = (wfo_override or _determine_wfo(lat, lon)).lower()
     if wfo not in _WFO_TO_REGION:
         raise GeographicallyUnsupported(
             f"WFO '{wfo}' is not in the NWPS production set. "
