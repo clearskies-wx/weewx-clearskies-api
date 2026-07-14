@@ -351,6 +351,10 @@ class MarineLocation:
     nwps_cg_grid: str | None
     #: Computed at config time (haversine from weewx station to this location).
     station_distance_km: float
+    #: OFS model assigned at config time via find_ofs_model(lat, lon).
+    ofs_model: str | None
+    ofs_fallback: str | None
+    ofs_region: str | None
 
     def __init__(self, location_id: str, section: dict[str, Any]) -> None:
         self.id = location_id

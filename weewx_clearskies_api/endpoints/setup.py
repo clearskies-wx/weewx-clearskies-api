@@ -28,6 +28,7 @@ Endpoints:
                                             profiles, seasonal behavior) for admin/wizard
                                             reference (T8.2 — data externalized to
                                             data/species.yaml)
+  GET  /setup/marine/coverage             — data source coverage panel for a coordinate (T3.6)
   GET  /setup/marine/discover-structures — discover nearby coastal structures (jetties,
                                             piers, breakwaters, seawalls, groins) via the
                                             OpenStreetMap Overpass API, for surf spot
@@ -99,6 +100,7 @@ from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
 from weewx_clearskies_api.providers._common.nws_zones import get_cwa
+from weewx_clearskies_api.providers.ocean.ofs import find_ofs_model as _find_ofs_model
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
 from weewx_clearskies_api.providers.marine.grib_processor import (
@@ -1058,6 +1060,12 @@ def _build_marine_conf_section(
         if wfo:
             loc_section["nwps_wfo"] = wfo
 
+        ofs_primary, ofs_fallback = _find_ofs_model(loc.lat, loc.lon)
+        if ofs_primary:
+            loc_section["ofs_model"] = ofs_primary
+        if ofs_fallback:
+            loc_section["ofs_fallback"] = ofs_fallback
+
         if loc.surf is not None:
             surf = loc.surf
             surf_section: dict[str, Any] = {
@@ -1306,13 +1314,28 @@ def _write_api_conf(
             cfg["units"]["ordinates"] = list(u.ordinates)
 
     # [marine] — optional; only written when the wizard sends this block (T6.3).
-    # Additive/replace-whole-section on re-run, same precedent as [units]/
-    # [column_mapping] above, so stale locations from a prior run don't persist.
-    # Structure/format notes: see _build_marine_conf_section() docstring.
+    # Replace-whole-section on re-run so stale locations don't persist, but
+    # preserve station IDs (ndbc_station_ids, coops_station_ids,
+    # nws_marine_zone_id) from the existing config when the new payload
+    # doesn't include them — the wizard has no UI for these fields, so a
+    # re-run would silently drop manually-configured station IDs without
+    # this merge.
     if apply.marine is not None:
-        cfg["marine"] = _build_marine_conf_section(
+        new_marine = _build_marine_conf_section(
             apply.marine, marine_wfo_by_location or {}, marine_bathymetry_by_location or {}
         )
+        existing_marine = cfg.get("marine")
+        if isinstance(existing_marine, dict):
+            existing_locs = existing_marine.get("locations", {})
+            if isinstance(existing_locs, dict):
+                _PRESERVE_KEYS = ("ndbc_station_ids", "coops_station_ids", "nws_marine_zone_id")
+                for loc_id, new_loc in new_marine.get("locations", {}).items():
+                    old_loc = existing_locs.get(loc_id)
+                    if isinstance(old_loc, dict):
+                        for key in _PRESERVE_KEYS:
+                            if key not in new_loc and key in old_loc:
+                                new_loc[key] = old_loc[key]
+        cfg["marine"] = new_marine
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -3170,4 +3193,164 @@ def retrain_forecast_correction(
         mae_corrected=result.get("mae_corrected"),
         provider_score=result.get("provider_score"),
         correction_score=result.get("correction_score"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /setup/marine/coverage — data source coverage panel (T3.6)
+# ---------------------------------------------------------------------------
+
+
+class _CoverageNearestStation(BaseModel):
+    station_id: str
+    name: str
+    distance_miles: float
+    products: list[str] | None = None
+    capabilities: list[str] | None = None
+
+
+class MarineCoverageResponse(BaseModel):
+    """Response for GET /setup/marine/coverage (T3.6, WATER-TEMPERATURE-DATA-SOURCE-BRIEF)."""
+
+    ofs_model: str | None = None
+    ofs_model_resolution_deg: float | None = None
+    ofs_fallback: str | None = None
+    coverage_tier: str
+    available_data: list[str]
+    nearest_coops_station: _CoverageNearestStation | None = None
+    nearest_ndbc_buoy: _CoverageNearestStation | None = None
+    nws_marine_zone: str | None = None
+    nwps_wfo: str | None = None
+    on_premises_sensor: str
+
+
+def _coverage_tier_capabilities(tier: str) -> list[str]:
+    """Derive available data capabilities from the coverage tier."""
+    if tier == "ofs":
+        return [
+            "surface_temp",
+            "water_column",
+            "currents",
+            "salinity",
+            "modeled_water_levels",
+            "forecast",
+        ]
+    if tier == "regional_erddap":
+        return ["surface_temp", "water_column", "currents", "forecast"]
+    if tier == "rtofs":
+        return ["surface_temp", "water_column", "currents", "salinity", "forecast"]
+    if tier == "mur_sst":
+        return ["surface_temp"]
+    return []
+
+
+@router.get("/marine/coverage", response_model=MarineCoverageResponse)
+async def marine_coverage(
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+) -> MarineCoverageResponse:
+    """Return data source coverage information for a marine location (T3.6).
+
+    Checks OFS model assignment, nearest stations, NWS zone, NWPS WFO, and
+    on-premises sensor proximity. Used by the wizard and admin to show what
+    data sources are available at a given coordinate before/after configuration.
+    """
+    await require_setup_session(request)
+
+    # --- OFS model assignment ---
+    ofs_primary, ofs_fallback = _find_ofs_model(lat, lon)
+    ofs_resolution = _OFS_RESOLUTION_DEG.get(ofs_primary) if ofs_primary else None
+
+    # --- Coverage tier ---
+    if ofs_primary:
+        coverage_tier = "ofs"
+    else:
+        coverage_tier = "mur_sst"
+
+    available_data = _coverage_tier_capabilities(coverage_tier)
+
+    # --- Nearest NDBC buoy ---
+    nearest_ndbc: _CoverageNearestStation | None = None
+    try:
+        ndbc_raw = _ndbc_discover_stations(lat, lon, radius_km=80.5)
+        if ndbc_raw:
+            s = ndbc_raw[0]
+            distance_miles = round(convert(float(s["distanceKm"]), "km", "mile") or 0.0, 1)
+            nearest_ndbc = _CoverageNearestStation(
+                station_id=str(s["stationId"]),
+                name=str(s["name"]),
+                distance_miles=distance_miles,
+                capabilities=_ndbc_capabilities(str(s["capabilityGuess"])),
+            )
+    except Exception:
+        logger.warning("Coverage: NDBC discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True)
+
+    # --- Nearest CO-OPS station ---
+    nearest_coops: _CoverageNearestStation | None = None
+    try:
+        coops_raw = _coops_discover_stations(lat, lon, radius_km=80.5)
+        if coops_raw:
+            s = coops_raw[0]
+            distance_miles = round(convert(float(s["distance_km"]), "km", "mile") or 0.0, 1)
+            nearest_coops = _CoverageNearestStation(
+                station_id=str(s["id"]),
+                name=str(s["name"] or s["id"]),
+                distance_miles=distance_miles,
+                products=list(s["products"]),
+            )
+    except Exception:
+        logger.warning("Coverage: CO-OPS discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True)
+
+    # --- NWS marine zone ---
+    nws_zone: str | None = None
+    try:
+        from weewx_clearskies_api.providers._common.nws_zones import (  # noqa: PLC0415
+            discover_marine_zones,
+        )
+
+        zones = discover_marine_zones(lat, lon, radius_miles=50, user_agent_contact=None)
+        if zones:
+            nws_zone = zones[0].zone_id
+    except Exception:
+        logger.warning("Coverage: NWS zone discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True)
+
+    # --- NWPS WFO ---
+    nwps_wfo: str | None = None
+    try:
+        nwps_wfo = get_cwa(lat, lon, user_agent_contact=None)
+    except Exception:
+        logger.warning("Coverage: NWPS WFO lookup failed at (%.4f, %.4f)", lat, lon, exc_info=True)
+
+    # --- On-premises sensor proximity ---
+    try:
+        from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
+            _haversine_km,
+            _dedup_radius_km,
+        )
+        from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
+
+        station_info = get_station_info()
+        if station_info and station_info.latitude and station_info.longitude:
+            dist_km = _haversine_km(lat, lon, station_info.latitude, station_info.longitude)
+            if dist_km <= _dedup_radius_km:
+                on_premises = "within_threshold"
+            else:
+                on_premises = "too_far"
+        else:
+            on_premises = "not_configured"
+    except Exception:
+        on_premises = "not_configured"
+
+    return MarineCoverageResponse(
+        ofs_model=ofs_primary,
+        ofs_model_resolution_deg=ofs_resolution,
+        ofs_fallback=ofs_fallback,
+        coverage_tier=coverage_tier,
+        available_data=available_data,
+        nearest_coops_station=nearest_coops,
+        nearest_ndbc_buoy=nearest_ndbc,
+        nws_marine_zone=nws_zone,
+        nwps_wfo=nwps_wfo,
+        on_premises_sensor=on_premises,
     )
