@@ -1691,7 +1691,7 @@ class BeachSafetyAssessment(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    safetyLevel: str  # "safe" | "caution" | "dangerous"
+    safetyLevel: str | None = None  # T9.1: always null in v1 — see API-MANUAL §16
     waveHeight: float | None = None       # group_wave_height; current/forecast
     wavePeriod: float | None = None       # group_wave_period; current/forecast
     ripCurrentRisk: str | None = None     # "low" | "moderate" | "high"

@@ -913,6 +913,12 @@ class BackgroundCacheWarmer:
                             "weatherCode": weather_code,
                             "isDay": conditions.isDay,
                             "skyCondition": None,
+                            # T9.2: ProviderConditions (models/responses.py) carries
+                            # no UV field today — none of the four forecast
+                            # providers' fetch_current_conditions() populate one.
+                            # Always None here; wired through so a future provider
+                            # that does supply UV needs no cache-shape change.
+                            "uvIndex": None,
                         },
                     )
                     logger.info(

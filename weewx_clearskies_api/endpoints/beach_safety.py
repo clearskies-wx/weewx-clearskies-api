@@ -329,6 +329,29 @@ def _gather_wave_and_temp(location: MarineLocation) -> dict:
             "beach-safety endpoint: NWS SRF fetch failed for %s", location.id, exc_info=True
         )
 
+    if result["uv_index"] is None:
+        # T9.2: NWS SRF doesn't cover every WFO/zone; fall back to whatever
+        # the forecast provider's cached current conditions supplied. As of
+        # T9.2, no forecast provider populates UV (see cache_warmer.py), so
+        # this is currently a no-op — wired for graceful pickup once one
+        # does, without another endpoint-layer change.
+        try:
+            from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+                get_marine_weather_cache,
+            )
+
+            weather_cache = get_marine_weather_cache()
+            if weather_cache:
+                conditions = weather_cache.get_current_conditions(location.lat, location.lon)
+                if conditions and conditions.get("uvIndex") is not None:
+                    result["uv_index"] = conditions["uvIndex"]
+        except Exception:
+            logger.warning(
+                "beach-safety endpoint: marine weather cache UV fallback failed for %s",
+                location.id,
+                exc_info=True,
+            )
+
     if result["water_temp_c"] is None and location.coops_station_ids:
         try:
             from weewx_clearskies_api.providers.tides import coops  # noqa: PLC0415
@@ -361,15 +384,19 @@ def list_beach_safety_locations() -> dict:
     cards = []
     for loc in locations:
         gathered = _gather_wave_and_temp(loc)
-        height_ft = _convert_unit(gathered["wave_height_m"], "meter", "foot")
-        safety_level = classify_sea_state(height_ft, gathered["wave_period_s"])
         cards.append(
             {
                 "locationId": loc.id,
                 "name": loc.name,
                 "lat": loc.lat,
                 "lon": loc.lon,
-                "safetyLevel": safety_level,
+                # T9.1: the crude two-threshold sea-state classifier
+                # (classify_sea_state()) is no longer surfaced as a single
+                # composite label — the individual hazard data points
+                # (ripCurrentRisk, waveHeight, uvIndex, etc. on the detail
+                # bundle) speak for themselves. Always null; kept in the
+                # response shape for backward compatibility.
+                "safetyLevel": None,
                 "ripCurrentRisk": gathered["rip_current_risk"],
                 "waterTemp": gathered["water_temp_c"],
             }
@@ -405,8 +432,6 @@ def get_beach_safety(location_id: str) -> dict:
     wave_height_internal, _ = _wave_height_unit()
 
     gathered = _gather_wave_and_temp(location)
-    height_ft = _convert_unit(gathered["wave_height_m"], "meter", "foot")
-    safety_level = classify_sea_state(height_ft, gathered["wave_period_s"])
     water_temp_f = (
         _convert_unit(gathered["water_temp_c"], "degree_C", "degree_F")
         if gathered["water_temp_c"] is not None
@@ -458,7 +483,10 @@ def get_beach_safety(location_id: str) -> dict:
     )
 
     assessment = {
-        "safetyLevel": safety_level,
+        # T9.1: always null — see the list-route comment above for
+        # rationale. Individual hazard fields below (ripCurrentRisk,
+        # waveHeight, uvIndex, etc.) replace the single composite label.
+        "safetyLevel": None,
         "waveHeight": _convert_unit(gathered["wave_height_m"], "meter", wave_height_internal),
         "wavePeriod": gathered["wave_period_s"],
         "ripCurrentRisk": gathered["rip_current_risk"],

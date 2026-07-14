@@ -86,7 +86,8 @@ class MarineWeatherCache:
         """Extract current conditions from cached forecast data.
 
         Returns a dict with airTemp, windSpeed, windDirection, weatherCode,
-        isDay, and skyCondition if cached data is available; None otherwise.
+        isDay, skyCondition, and uvIndex if cached data is available; None
+        otherwise.
         """
         weather = self.get_weather(lat, lon)
         if weather is None:
@@ -98,6 +99,7 @@ class MarineWeatherCache:
             "weatherCode": weather.get("weatherCode"),
             "isDay": weather.get("isDay"),
             "skyCondition": weather.get("skyCondition"),
+            "uvIndex": weather.get("uvIndex"),
         }
 
 

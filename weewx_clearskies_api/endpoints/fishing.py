@@ -60,6 +60,7 @@ from fastapi import APIRouter, HTTPException
 
 from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocation
 from weewx_clearskies_api.enrichment.fishing_scorer import get_habitat_features, score_fishing
+from weewx_clearskies_api.enrichment.fishing_species import SPECIES_BY_REGION, classify_region
 from weewx_clearskies_api.enrichment.solunar import compute_solunar
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services import almanac as almanac_svc
@@ -369,6 +370,16 @@ def get_fishing(location_id: str) -> dict:
     habitat_features = get_habitat_features(bathymetric_profile)
 
     species = fishing_config.species
+    if not species:
+        # T8.1: no explicit `species` configured — auto-populate from the
+        # location's biogeographic region and configured target_categories
+        # (API-MANUAL §17 "Species profiles ... auto-populated from 11 US
+        # biogeographic regions").
+        region = classify_region(location.lat, location.lon)
+        region_species = SPECIES_BY_REGION.get(region, {})
+        for cat in fishing_config.target_categories:
+            species.extend(region_species.get(cat, []))
+        species = list(dict.fromkeys(species))  # dedupe, preserve order
     # T6.3: FishingSpotConfig.target_category (str) -> target_categories
     # (list[str]) so anglers can target species from multiple categories.
     # score_fishing()'s target_category kwarg is retained for signature
