@@ -166,11 +166,14 @@ def _derive_weather_code(
     rain_label: str | None,
     fog_mist_state: str | None,
     is_hazy: bool = False,
+    is_smoky: bool = False,
+    is_dusty: bool = False,
     out_temp: float | None = None,
 ) -> int:
     """Map current conditions state to a WMO present-weather code (subset).
 
-    Priority order: precipitation > fog (rime or plain) > mist > haze > sky.
+    Priority order: precipitation > fog (rime or plain) > mist > smoke > dust
+    > haze > sky.
 
     Snow codes (WMO group 7x):
       "Heavy Snow"     → 75
@@ -197,6 +200,12 @@ def _derive_weather_code(
     Mist code (WMO 10):
       fog_mist_state == "Misty" → 10
 
+    Smoke code (WMO 06):
+      is_smoky=True → 6
+
+    Dust code (WMO 07):
+      is_dusty=True → 7
+
     Haze code (WMO 05):
       is_hazy=True AND effective_sky is haze-eligible → 5
       (haze-eligible = Clear/Sunny/Mostly Clear/Mostly Sunny/Partly Cloudy;
@@ -214,6 +223,10 @@ def _derive_weather_code(
         rain_label: Precipitation label from _precip_label().
         fog_mist_state: "Foggy", "Misty", or None from detect_fog_mist().
         is_hazy: True when haze detection has fired.
+        is_smoky: True when smoke detection has fired (no dedicated detector
+                  yet; reserved for provider-text-derived smoke signals).
+        is_dusty: True when dust detection has fired (no dedicated detector
+                  yet; reserved for provider-text-derived dust signals).
         out_temp: Outside temperature in °F (smoothed).  Used to distinguish
                   depositing rime fog (code 48, ≤ 32 °F) from plain fog (code 45).
                   When None, rime fog is not emitted and plain fog (45) is used.
@@ -247,6 +260,10 @@ def _derive_weather_code(
         return 45
     if fog_mist_state == "Misty":
         return 10
+    if is_smoky:
+        return 6
+    if is_dusty:
+        return 7
     if is_hazy and _is_haze_eligible_sky(effective_sky):
         return 5
     if effective_sky in ("Heavy Overcast", "Overcast"):
@@ -563,6 +580,8 @@ def enrich_weather_text(data: dict, locale: str | None = None) -> dict:  # type:
             rain_label=_rain_label,
             fog_mist_state=_fog_mist_state2,
             is_hazy=_is_hazy_code,
+            is_smoky=False,   # no dedicated smoke detector yet (T2.6 follow-up)
+            is_dusty=False,   # no dedicated dust detector yet (T2.6 follow-up)
             out_temp=_out_temp,
         )
 

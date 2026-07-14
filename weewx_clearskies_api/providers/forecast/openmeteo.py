@@ -284,6 +284,7 @@ _DAILY_VARS = (
     "visibility_max",
     "visibility_min",
     "snowfall_sum",
+    "cloud_cover_max",
 )
 
 # ---------------------------------------------------------------------------
@@ -345,6 +346,7 @@ class _OpenMeteoDailyBlock(BaseModel):
     visibility_max: list[float | None] = Field(default_factory=list)
     visibility_min: list[float | None] = Field(default_factory=list)
     snowfall_sum: list[float | None] = Field(default_factory=list)
+    cloud_cover_max: list[float | None] = Field(default_factory=list)
 
 
 class _OpenMeteoCurrentBlock(BaseModel):
@@ -613,6 +615,7 @@ def _zip_daily(
                 sunset=sunset_utc,
                 uvIndexMax=_get_at(daily.uv_index_max, i),
                 weatherCode=code_str,
+                cloudCover=_get_at(daily.cloud_cover_max, i),
                 weatherText=weather_text,
                 humidityMax=_get_at(daily.relative_humidity_2m_max, i),
                 humidityMin=_get_at(daily.relative_humidity_2m_min, i),

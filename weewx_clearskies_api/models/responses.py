@@ -1028,6 +1028,7 @@ class DailyForecastPoint(BaseModel):
     sunset: str | None = None                # UTC ISO-8601 with Z
     uvIndexMax: float | None = None
     weatherCode: str | None = None           # WMO code as string
+    cloudCover: float | None = None          # 0-100; max cloud cover across the day's hourly points
     weatherText: str | None = None
     narrative: str | None = None             # per-day summary (NWS/some Aeris plans; null here)
     forecastText: str | None = None          # GFE text engine output (ADR-082 T7.3); null for

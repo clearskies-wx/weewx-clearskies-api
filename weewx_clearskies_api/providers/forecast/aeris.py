@@ -806,6 +806,7 @@ def _daynight_periods_to_daily(
                 sunset=sunset_utc,
                 uvIndexMax=day_period.uvi,
                 weatherCode=day_period.weatherPrimaryCoded,
+                cloudCover=day_period.sky,
                 weatherText=day_period.weather,
                 narrative=day_period.weatherPrimary,
                 dewpointMax=dewpoint_max,
