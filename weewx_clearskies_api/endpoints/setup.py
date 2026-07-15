@@ -505,6 +505,8 @@ class MarineFishingSpotApplyConfig(BaseModel):
     #: Auto-classified from coordinates when omitted (OPERATIONS-MANUAL.md);
     #: the wizard may also send an operator-confirmed value.
     biogeographic_region: str | None = None
+    #: Operator-provided species names targeted at this spot (T2.1, 2026-07-15).
+    species: list[str] = []
 
     @field_validator("target_categories")
     @classmethod
