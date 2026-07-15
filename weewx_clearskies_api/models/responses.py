@@ -1743,7 +1743,7 @@ class MarineLocationSummary(BaseModel):
     beachSafetyLevel: str | None = None         # current safety level, if beach_safety enabled
     weatherCode: int | None = None              # WMO weather code for hero icon
     isDay: bool | None = None                   # day/night for icon variant
-    photoUrl: str | None = None                 # /marine-photos/{locationId}.webp if a photo file exists (T4.3)
+    photoUrl: str | None = None                 # /marine-photos/{locationId}.{ext} if a photo file exists (T4.3)
 
 
 # ---------------------------------------------------------------------------

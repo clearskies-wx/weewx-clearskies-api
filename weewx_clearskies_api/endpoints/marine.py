@@ -28,10 +28,10 @@ Two routes:
     Marine Complete Remediation Plan) is
     `/marine-photos/{locationId}.webp` when the operator has uploaded a
     location photo (T4.1, saved to
-    /etc/weewx-clearskies/marine-photos/{locationId}.webp by the
+    /etc/weewx-clearskies/marine-photos/{locationId}.{ext} by the
     wizard/admin upload handler and served by Caddy at /marine-photos/*,
     T4.2) else None -- a plain filesystem existence check via
-    _photo_url(), no config field read.  404 "Marine features not
+    _photo_url(), no config field read.  Accepts JPG, PNG, and WebP.  404 "Marine features not
     configured" when no [marine] section is present or it has zero
     locations.
 
@@ -330,11 +330,14 @@ _MARINE_PHOTOS_DIR = "/etc/weewx-clearskies/marine-photos"
 
 
 def _photo_url(location_id: str) -> str | None:
-    """Return the /marine-photos/{locationId}.webp URL if the photo file
+    """Return the /marine-photos/{locationId}.{ext} URL if a photo file
     exists on disk, else None (API-MANUAL §16 MarineLocationSummary).
     """
-    photo_path = os.path.join(_MARINE_PHOTOS_DIR, f"{location_id}.webp")
-    return f"/marine-photos/{location_id}.webp" if os.path.isfile(photo_path) else None
+    for ext in (".webp", ".jpg", ".jpeg", ".png"):
+        fname = f"{location_id}{ext}"
+        if os.path.isfile(os.path.join(_MARINE_PHOTOS_DIR, fname)):
+            return f"/marine-photos/{fname}"
+    return None
 
 
 def _is_harbor_location(location: MarineLocation) -> bool:
