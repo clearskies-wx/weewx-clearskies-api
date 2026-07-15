@@ -1111,6 +1111,8 @@ def _build_marine_conf_section(
             }
             if loc.fishing.biogeographic_region:
                 fishing_section["biogeographic_region"] = loc.fishing.biogeographic_region
+            if loc.fishing.species:
+                fishing_section["species"] = list(loc.fishing.species)
             loc_section["fishing"] = fishing_section
 
         if loc.beach_safety is not None and loc.beach_safety.external_links:
