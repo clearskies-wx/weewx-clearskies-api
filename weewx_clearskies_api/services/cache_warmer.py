@@ -124,12 +124,12 @@ class BackgroundCacheWarmer:
     # ------------------------------------------------------------------
 
     def initial_warm(self) -> None:
-        """Synchronous first warm — called before the server starts.
+        """First warm — runs in the background thread, NOT blocking startup.
 
-        Runs all warm functions once.  Failures are logged as WARNING and
+        Runs all warm functions once. Failures are logged as WARNING and
         do not prevent startup (non-fatal per the brief).
         """
-        logger.info("Cache warmer: initial warm starting")
+        logger.info("Cache warmer: initial warm starting (background)")
         self._warm_records()
         self._warm_almanac()
         self._warm_almanac_snapshot()
@@ -144,10 +144,15 @@ class BackgroundCacheWarmer:
         logger.info("Cache warmer: initial warm complete")
 
     def start(self) -> None:
-        """Launch the background daemon thread."""
-        t = threading.Thread(target=self._loop, daemon=True, name="cache-warmer")
+        """Launch the background daemon thread.
+
+        Runs initial_warm() as the first action in the thread, then enters
+        the periodic loop.  The server accepts requests immediately — cache
+        misses are handled gracefully by all endpoints.
+        """
+        t = threading.Thread(target=self._run, daemon=True, name="cache-warmer")
         t.start()
-        logger.info("Cache warmer: background thread started")
+        logger.info("Cache warmer: background thread started (server accepting requests now)")
 
     def stop(self) -> None:
         """Signal the background thread to exit at next tick."""
@@ -156,6 +161,11 @@ class BackgroundCacheWarmer:
     # ------------------------------------------------------------------
     # Background loop
     # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        """Thread entry point: initial warm then periodic loop."""
+        self.initial_warm()
+        self._loop()
 
     def _loop(self) -> None:
         """Main loop: wake every _SLEEP_TICK_SECONDS, run overdue functions."""

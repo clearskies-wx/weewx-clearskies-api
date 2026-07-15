@@ -927,7 +927,6 @@ def main() -> None:
             seeing_settings=settings.seeing,
             marine_config=settings.marine_config,
         )
-        _warmer.initial_warm()
         _warmer.start()
 
     # Step 6h½: Wire DB metrics (ADR-031).
