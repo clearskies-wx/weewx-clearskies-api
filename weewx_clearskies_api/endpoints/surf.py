@@ -20,16 +20,30 @@ Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14:
      returns a genuine 25-point 3-hourly forecast, so this is the path that
      produces real multi-point `forecast` data (T2.3, Marine Remediation
      Plan Phase 2): every WW3 timestep is scored independently, broadcasting
-     the single current NDBC wind reading and spectral swell decomposition
-     across all of them (best available data — neither NDBC nor WaveWatch
-     III supply per-future-timestep wind or swell spectrum).
-  3. enrichment/surf_scorer.py's score_surf() produces the SurfForecast.
-  4. NDBC (providers/buoy/ndbc.py) supplies spectral swell decomposition and
-     wind speed/direction (surf_scorer's wind-quality input).
-  5. CO-OPS (providers/tides/coops.py) supplies tide predictions for the
+     the single current wind reading and spectral swell decomposition
+     across all of them (best available data — neither the wind source nor
+     WaveWatch III supply per-future-timestep wind or swell spectrum).
+  3. Wind for surf-quality scoring (T2.5 / FIX-14, API-MANUAL §17 "Wind
+     source for surf quality scoring (HARD RULE)"): station hardware ->
+     forecast-provider-fed marine weather cache, same precedence as the
+     marine endpoint (endpoints/marine.py:567-638). NDBC buoy wind is NEVER
+     used for surf quality scoring — offshore buoys (12+ miles out) measure
+     the synoptic wind field, not the beach-level wind that determines wave
+     face quality.
+  4. enrichment/surf_scorer.py's score_surf() produces the SurfForecast.
+  5. NDBC (providers/buoy/ndbc.py) supplies spectral swell decomposition
+     ONLY (its valid role per API-MANUAL §17 — not wind).
+  6. CO-OPS (providers/tides/coops.py) supplies tide predictions for the
      surf page's tide overlay (informational, not scored).
-  6. NWS SRF (providers/marine/nws_srf.py) supplies the county-zone forecast
-     (rip current risk, surf height range, UV, water temp) as zoneForecast.
+  7. NWS SRF (providers/marine/nws_srf.py) supplies the county-zone forecast
+     (rip current risk, surf height range, UV) as zoneForecast.
+  8. Water temperature (T2.4 / FIX-13, API-MANUAL §18 "Surf endpoint data
+     source rules"): ocean data resolver (services/ocean_data_resolver.py,
+     tiered fallback: on-premises sensor -> OFS regional model -> regional
+     ERDDAP -> RTOFS/MUR SST global) — same source the marine endpoint uses
+     for observation.waterTemp. The NWS SRF text product's waterTemp (a
+     stale, hand-typed forecaster value) is a last-resort fallback only,
+     exposed as the top-level `waterTemp` bundle field.
 
 Each provider section is wrapped in its own try/except — one provider
 failing does not take down the whole response (graceful degradation per
@@ -275,27 +289,71 @@ def get_surf(location_id: str) -> dict:
                 "surf endpoint: WaveWatch III fallback failed for %s", location_id, exc_info=True
             )
 
-    # --- NDBC spectral swell decomposition + wind ---
-    # A single current reading (NDBC has no forecast product) -- broadcast
-    # across every WaveWatch III timestep below when scoring multiple
-    # points, matching the lead-approved treatment for wind (best available
-    # data; NDBC/WaveWatch III supply no per-future-timestep wind or swell
-    # spectrum).
-    spectral_components: list[dict] = []
+    # --- Wind: station hardware -> forecast provider (T2.5 / FIX-14) ---
+    # API-MANUAL §17 "Wind source for surf quality scoring (HARD RULE)":
+    # wind AT THE BEACH determines wave face quality, not offshore wind.
+    # NDBC buoy wind (12+ miles offshore) is NEVER used for surf quality
+    # scoring -- only for spectral swell decomposition (see below). This
+    # mirrors the marine endpoint's precedence exactly (marine.py:567-638):
+    # station hardware wins when the location is within dedup_radius_km of
+    # the weewx station; otherwise falls back to the forecast-provider-fed
+    # marine weather cache.
     wind_speed_mps: float | None = None
     wind_direction: float | None = None
+    try:
+        from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
+            is_station_served,
+        )
+
+        if is_station_served(location.id):
+            from weewx_clearskies_api.db.connection import get_engine  # noqa: PLC0415
+            from weewx_clearskies_api.db.registry import get_registry  # noqa: PLC0415
+            from weewx_clearskies_api.services.archive import (  # noqa: PLC0415
+                get_current as _get_current_observation,
+            )
+            from sqlalchemy.orm import Session as _Session  # noqa: PLC0415
+
+            registry = get_registry()
+            with _Session(get_engine()) as station_db:
+                station_obs = _get_current_observation(station_db, registry)
+            if station_obs is not None:
+                if station_obs.windSpeed is not None:
+                    wind_speed_mps = station_obs.windSpeed
+                if station_obs.windDir is not None:
+                    wind_direction = station_obs.windDir
+        else:
+            from weewx_clearskies_api.services.marine_weather_cache import (  # noqa: PLC0415
+                get_marine_weather_cache,
+            )
+
+            weather_cache = get_marine_weather_cache()
+            if weather_cache is not None:
+                conditions = weather_cache.get_current_conditions(location.lat, location.lon)
+                if conditions is not None:
+                    if conditions.get("windSpeed") is not None:
+                        wind_speed_mps = conditions["windSpeed"]
+                    if conditions.get("windDirection") is not None:
+                        wind_direction = conditions["windDirection"]
+    except Exception:
+        logger.warning("surf endpoint: wind lookup failed for %s", location_id, exc_info=True)
+
+    # --- NDBC spectral swell decomposition (wind removed -- see above) ---
+    # A single current reading (NDBC has no forecast product) -- broadcast
+    # across every WaveWatch III timestep below when scoring multiple
+    # points, matching the lead-approved treatment for spectral data (best
+    # available data; NDBC/WaveWatch III supply no per-future-timestep
+    # swell spectrum). NDBC's role here is spectral decomposition ONLY --
+    # API-MANUAL §17: "NDBC buoy wind's valid role: Spectral swell
+    # decomposition ONLY."
+    spectral_components: list[dict] = []
     try:
         if location.ndbc_station_ids:
             from weewx_clearskies_api.providers.buoy import ndbc  # noqa: PLC0415
 
             ndbc_result = ndbc.fetch(station_id=location.ndbc_station_ids[0], include_spectral=True)
-            obs = ndbc_result.get("observation")
-            if obs is not None:
-                wind_speed_mps = obs.windSpeed
-                wind_direction = obs.windDirection
             spectral_components = [c.model_dump() for c in (ndbc_result.get("spectral") or [])]
     except Exception:
-        logger.warning("surf endpoint: NDBC fetch failed for %s", location_id, exc_info=True)
+        logger.warning("surf endpoint: NDBC spectral fetch failed for %s", location_id, exc_info=True)
 
     # --- Score surf quality (T2.3: multi-point) ---
     forecast_entries: list[dict] = []
@@ -365,6 +423,47 @@ def get_surf(location_id: str) -> dict:
     except Exception:
         logger.warning("surf endpoint: NWS SRF fetch failed for %s", location_id, exc_info=True)
 
+    # --- Water temperature: ocean data resolver (T2.4 / FIX-13) ---
+    # API-MANUAL §18 "Surf endpoint data source rules": water temp MUST come
+    # from the ocean data resolver (tiered fallback: on-premises sensor ->
+    # OFS regional model -> regional ERDDAP -> RTOFS/MUR SST global) -- the
+    # same source the marine endpoint uses for observation.waterTemp
+    # (marine.py:523-549). The NWS SRF text product's waterTemp (a stale,
+    # hand-typed forecaster value) is a last-resort fallback only, never the
+    # primary source.
+    water_temp: float | None = None
+    try:
+        from weewx_clearskies_api.services.ocean_data_resolver import (  # noqa: PLC0415
+            resolve as resolve_ocean,
+        )
+
+        ocean = resolve_ocean(
+            lat=location.lat,
+            lon=location.lon,
+            location_config={
+                "ofs_model": getattr(location, "ofs_model", None),
+                "ofs_fallback": getattr(location, "ofs_fallback", None),
+                "ofs_region": getattr(location, "ofs_region", None),
+            },
+            needs="surface",
+        )
+        if ocean.surface_temp is not None:
+            water_temp = ocean.surface_temp
+    except Exception:
+        logger.warning(
+            "surf endpoint: ocean data resolver failed for %s", location_id, exc_info=True
+        )
+
+    # Last-resort fallback to the NWS SRF text product's hand-typed value.
+    if water_temp is None and zone_forecast is not None:
+        water_temp = zone_forecast.get("waterTemp")
+
+    if water_temp is not None:
+        target_temp_unit = get_group_unit(
+            "group_temperature", "degree_F" if get_target_unit() == "US" else "degree_C"
+        )
+        water_temp = _convert_unit(water_temp, "degree_C", target_temp_unit)
+
     # --- Unit conversion for spectral components (group_wave_height) ---
     for component in spectral_components:
         component["height"] = _convert_unit(component["height"], "meter", wave_height_internal)
@@ -376,6 +475,7 @@ def get_surf(location_id: str) -> dict:
         "coordinates": {"lat": location.lat, "lon": location.lon},
         "forecast": forecast_entries,
         "zoneForecast": zone_forecast,
+        "waterTemp": water_temp,
         "spectralComponents": spectral_components,
         "tidePredictions": tide_predictions,
         "source": "nwps+wavewatch+ndbc+coops+nws_srf",
