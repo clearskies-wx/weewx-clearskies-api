@@ -84,6 +84,7 @@ class GribFieldData:
     lon_first: float
     lat_last: float
     lon_last: float
+    end_step: int = 0  # forecast hour (0 = analysis/current conditions)
 
     @property
     def lat_step(self) -> float:
@@ -113,7 +114,9 @@ class GribResult:
 # ---------------------------------------------------------------------------
 
 
-def _read_eccodes(file_path: str, field_names: set[str]) -> GribResult:
+def _read_eccodes(
+    file_path: str, field_names: set[str], target_step: int | None = None
+) -> GribResult:
     """Read GRIB2 fields using eccodes."""
     result = GribResult()
 
@@ -125,6 +128,10 @@ def _read_eccodes(file_path: str, field_names: set[str]) -> GribResult:
             try:
                 short_name: str = eccodes.codes_get(msgid, "shortName")
                 if short_name not in field_names:
+                    continue
+
+                end_step = eccodes.codes_get(msgid, "endStep")
+                if target_step is not None and end_step != target_step:
                     continue
 
                 raw_values = eccodes.codes_get_values(msgid)
@@ -158,6 +165,7 @@ def _read_eccodes(file_path: str, field_names: set[str]) -> GribResult:
                     lon_first=lon_first,
                     lat_last=lat_last,
                     lon_last=lon_last,
+                    end_step=end_step,
                 )
             except Exception:
                 logger.warning("Failed to read GRIB message for field %s", short_name, exc_info=True)
@@ -172,7 +180,9 @@ def _read_eccodes(file_path: str, field_names: set[str]) -> GribResult:
 # ---------------------------------------------------------------------------
 
 
-def _read_pygrib(file_path: str, field_names: set[str]) -> GribResult:
+def _read_pygrib(
+    file_path: str, field_names: set[str], target_step: int | None = None
+) -> GribResult:
     """Read GRIB2 fields using pygrib."""
     result = GribResult()
 
@@ -181,6 +191,10 @@ def _read_pygrib(file_path: str, field_names: set[str]) -> GribResult:
         for grb in grbs:
             short_name: str = grb.shortName
             if short_name not in field_names:
+                continue
+
+            end_step = grb.endStep
+            if target_step is not None and end_step != target_step:
                 continue
 
             try:
@@ -209,6 +223,7 @@ def _read_pygrib(file_path: str, field_names: set[str]) -> GribResult:
                     lon_first=lon_first,
                     lat_last=lat_last,
                     lon_last=lon_last,
+                    end_step=end_step,
                 )
             except Exception:
                 logger.warning(
@@ -225,16 +240,27 @@ def _read_pygrib(file_path: str, field_names: set[str]) -> GribResult:
 # ---------------------------------------------------------------------------
 
 
-def read_grib_fields(file_path: str, field_names: list[str]) -> GribResult:
+def read_grib_fields(
+    file_path: str, field_names: list[str], target_step: int | None = None
+) -> GribResult:
     """Open a GRIB2 file and extract named fields into Python lists.
 
     Args:
         file_path: Path to the GRIB2 file on disk.
         field_names: GRIB2 shortName values to extract (e.g. ``["HTSGW", "PERPW"]``).
+        target_step: Forecast hour (GRIB2 ``endStep``) to select. NWPS GRIB2
+            files contain 144 hourly forecast timesteps per field; without
+            filtering, messages are read in file order and the last match
+            wins. Pass ``target_step=0`` to select only the analysis/current
+            conditions timestep. When ``None``, all messages are read and the
+            last matching message per field name wins (legacy behavior,
+            preserved for backwards compatibility — callers that need a
+            specific timestep MUST pass ``target_step`` explicitly).
 
     Returns:
         GribResult with extracted fields. Fields not present in the file
-        are silently absent from the result (logged at WARNING).
+        (or not present at ``target_step``) are silently absent from the
+        result (logged at WARNING).
 
     Raises:
         RuntimeError: No GRIB backend available.
@@ -246,9 +272,9 @@ def read_grib_fields(file_path: str, field_names: list[str]) -> GribResult:
     requested = set(field_names)
 
     if _BACKEND == "eccodes":
-        result = _read_eccodes(file_path, requested)
+        result = _read_eccodes(file_path, requested, target_step)
     else:
-        result = _read_pygrib(file_path, requested)
+        result = _read_pygrib(file_path, requested, target_step)
 
     missing = requested - set(result.fields.keys())
     if missing:

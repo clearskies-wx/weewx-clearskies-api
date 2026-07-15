@@ -401,7 +401,7 @@ def _extract_fields(
     lon: float,
 ) -> NwpsExtraction:
     """Extract nearshore wave fields from a downloaded GRIB2 file."""
-    result = read_grib_fields(grib_path, _ALL_FIELDS)
+    result = read_grib_fields(grib_path, _ALL_FIELDS, target_step=0)
 
     extraction = NwpsExtraction()
 
