@@ -52,6 +52,8 @@ def _is_haze_eligible_sky(effective_sky: str | None) -> bool:
 # deferral paths (nighttime + missing-pyranometer) in
 # _apply_weather_text_deferrals().
 _HAZE_DEFERRAL_KEYWORDS: tuple[str, ...] = ("haze", "hazy", "smoke", "smoky")
+_SMOKE_KEYWORDS: tuple[str, ...] = ("smoke", "smoky")
+_DUST_KEYWORDS: tuple[str, ...] = ("dust", "dusty", "sand", "sandy", "blowing dust")
 
 
 def _provider_text_matches(keywords: tuple[str, ...]) -> bool:
@@ -580,8 +582,8 @@ def enrich_weather_text(data: dict, locale: str | None = None) -> dict:  # type:
             rain_label=_rain_label,
             fog_mist_state=_fog_mist_state2,
             is_hazy=_is_hazy_code,
-            is_smoky=False,   # no dedicated smoke detector yet (T2.6 follow-up)
-            is_dusty=False,   # no dedicated dust detector yet (T2.6 follow-up)
+            is_smoky=_provider_text_matches(_SMOKE_KEYWORDS),
+            is_dusty=_provider_text_matches(_DUST_KEYWORDS),
             out_temp=_out_temp,
         )
 

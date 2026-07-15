@@ -556,6 +556,39 @@ def _extract_icon_shortname(icon_url: str | None) -> str | None:
         return None
 
 
+_SKY_SHORTNAME_TO_CLOUD_COVER: dict[str, float] = {
+    "skc": 0.0,
+    "few": 15.0,
+    "sct": 35.0,
+    "bkn": 70.0,
+    "ovc": 95.0,
+}
+
+
+def _shortname_to_cloud_cover(shortname: str | None) -> float | None:
+    """Derive a cloud cover percentage from an NWS icon shortname.
+
+    NWS daily periods don't carry a numeric cloud cover field; this derives
+    it from the sky-cover shortname embedded in the icon URL.  For compound
+    shortnames (e.g. "sct/rain"), uses the sky-cover part.  Returns None
+    when no sky-cover shortname is recognised.
+    """
+    if not shortname:
+        return None
+    lower = shortname.lower()
+    if lower in _SKY_SHORTNAME_TO_CLOUD_COVER:
+        return _SKY_SHORTNAME_TO_CLOUD_COVER[lower]
+    for part in lower.replace("_", " ").split("/"):
+        part = part.strip()
+        if part in _SKY_SHORTNAME_TO_CLOUD_COVER:
+            return _SKY_SHORTNAME_TO_CLOUD_COVER[part]
+        if part.startswith("wind_"):
+            sky = part[5:]
+            if sky in _SKY_SHORTNAME_TO_CLOUD_COVER:
+                return _SKY_SHORTNAME_TO_CLOUD_COVER[sky]
+    return None
+
+
 def _compass_to_degrees(s: str | None) -> float | None:
     """Convert a 16-point compass abbreviation to degrees (0–360).
 
@@ -924,6 +957,7 @@ def _zip_daily(
                 precipProbabilityMax=precip_prob_max_val,
                 windSpeedMax=wind_speed_max,
                 weatherCode=shortname,
+                cloudCover=_shortname_to_cloud_cover(shortname),
                 weatherText=day.shortForecast,
                 narrative=day.detailedForecast,
                 source=PROVIDER_ID,
