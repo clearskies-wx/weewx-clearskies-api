@@ -26,6 +26,14 @@ Warmed endpoints:
     airTemp/windSpeed/windDirection/weatherCode/isDay for locations not
     served directly by the weewx station (see `_warm_marine_weather`
     docstring).
+  - GET /forecast (station location, configured forecast provider): calls
+    the provider's own fetch() so the endpoint's own call gets a cache hit
+    (FIX-24; see `_warm_forecast` docstring).
+  - GET /current (station location, configured forecast provider's
+    fetch_current_conditions(), used for cloudcover/snow/snowRate
+    blending): calls the provider's own fetch_current_conditions() so the
+    endpoint's own call gets a cache hit (FIX-24; see
+    `_warm_current_conditions` docstring).
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -141,6 +149,8 @@ class BackgroundCacheWarmer:
         self._warm_faults()
         self._warm_seeing_forecast()
         self._warm_marine()
+        self._warm_forecast()
+        self._warm_current_conditions()
         logger.info("Cache warmer: initial warm complete")
 
     def start(self) -> None:
@@ -177,6 +187,8 @@ class BackgroundCacheWarmer:
         last_faults: float = _NEVER
         last_seeing: float = _NEVER
         last_marine: float = _NEVER
+        last_forecast: float = _NEVER
+        last_current_conditions: float = _NEVER
 
         while not self._stop_event.is_set():
             now = time.monotonic()
@@ -215,6 +227,21 @@ class BackgroundCacheWarmer:
             if last_marine == _NEVER or (now - last_marine) >= 1800:
                 self._warm_marine()
                 last_marine = time.monotonic()
+
+            # 1500 s < the 1800 s /forecast TTL (ADR-017), leaving margin so
+            # a warm cycle always lands before the cached bundle expires.
+            if last_forecast == _NEVER or (now - last_forecast) >= 1500:
+                self._warm_forecast()
+                last_forecast = time.monotonic()
+
+            # 240 s < the 300 s /current provider-conditions TTL (ADR-017),
+            # leaving margin so a warm cycle always lands before expiry.
+            if (
+                last_current_conditions == _NEVER
+                or (now - last_current_conditions) >= 240
+            ):
+                self._warm_current_conditions()
+                last_current_conditions = time.monotonic()
 
             # Sleep in small ticks so stop() is responsive.
             self._stop_event.wait(timeout=_SLEEP_TICK_SECONDS)
@@ -990,3 +1017,233 @@ class BackgroundCacheWarmer:
                     )
         except Exception:
             logger.warning("Cache warmer: ocean data warm failed", exc_info=True)
+
+    def _warm_forecast(self) -> None:
+        """Pre-fetch GET /forecast's provider bundle (FIX-24).
+
+        /forecast is a cold-call outlier: 5 sequential NWS HTTP calls,
+        ~11 s, with a 30-min TTL (ADR-017).  Every TTL expiry makes the
+        next visitor pay the full cold-call cost.  This warm function
+        avoids that by calling the provider's own fetch() ahead of time on
+        a 1500 s cycle (comfortably inside the 1800 s TTL).
+
+        Mirrors `endpoints/forecast.py`'s `get_forecast()` dispatch
+        exactly: discovers whichever provider is registered for the
+        "forecast" domain via `get_provider_registry()` (provider-agnostic
+        by construction -- no provider name is hardcoded as "the"
+        configured provider) and calls that provider's `fetch()` with
+        station lat/lon and the provider-specific kwargs it requires.
+        `fetch()` populates the provider's own internal ADR-017 cache; the
+        endpoint calls the same `fetch()` and gets a cache hit.  No
+        separate `warmer:forecast` cache key is written (same pattern as
+        `_warm_marine_weather` / `_warm_marine`).
+
+        Credential state (NWS user-agent contact, Aeris client id/secret +
+        forecast model, OWM appid) is read from `endpoints/forecast.py`
+        module-level variables populated at startup by
+        `wire_forecast_settings()` -- the same deferred-import pattern
+        `_warm_marine_weather()` uses.
+        """
+        try:
+            from weewx_clearskies_api.providers._common.capability import (
+                get_provider_registry,
+            )
+            from weewx_clearskies_api.services.station import get_station_info
+            from weewx_clearskies_api.services.units import get_target_unit
+
+            forecast_providers = [
+                p for p in get_provider_registry() if p.domain == "forecast"
+            ]
+            if not forecast_providers:
+                return  # No forecast provider configured/registered.
+
+            provider_id = forecast_providers[0].provider_id
+
+            try:
+                station = get_station_info()
+            except RuntimeError:
+                logger.debug(
+                    "Cache warmer: station metadata not available; skipping forecast warm"
+                )
+                return
+
+            try:
+                target_unit = get_target_unit()
+            except RuntimeError:
+                logger.debug(
+                    "Cache warmer: target unit not available; skipping forecast warm"
+                )
+                return
+
+            # Deferred import mirrors _fill_cloudcover_from_provider()'s pattern
+            # for reading operator credential state populated at startup by
+            # wire_forecast_settings().
+            import weewx_clearskies_api.endpoints.forecast as _forecast_ep
+
+            if provider_id == "openmeteo":
+                from weewx_clearskies_api.providers.forecast import openmeteo
+
+                openmeteo.fetch(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    timezone=station.timezone,
+                )
+            elif provider_id == "nws":
+                from weewx_clearskies_api.providers.forecast import nws as forecast_nws
+
+                forecast_nws.fetch(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    user_agent_contact=_forecast_ep._nws_user_agent_contact,
+                )
+            elif provider_id == "aeris":
+                from weewx_clearskies_api.providers.forecast import aeris
+
+                aeris.fetch(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    client_id=_forecast_ep._aeris_client_id,
+                    client_secret=_forecast_ep._aeris_client_secret,
+                    forecast_model=_forecast_ep._aeris_forecast_model,
+                )
+            elif provider_id == "openweathermap":
+                from weewx_clearskies_api.providers.forecast import openweathermap
+
+                openweathermap.fetch(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    appid=_forecast_ep._openweathermap_appid,
+                )
+            else:
+                logger.debug(
+                    "Cache warmer: no fetch dispatch for forecast provider %r; "
+                    "skipping forecast warm",
+                    provider_id,
+                )
+                return
+
+            logger.info("Cache warmer: forecast refreshed (provider=%s)", provider_id)
+        except Exception:
+            logger.warning("Cache warmer: forecast warm failed", exc_info=True)
+
+    def _warm_current_conditions(self) -> None:
+        """Pre-fetch GET /current's provider-conditions blend (FIX-24).
+
+        /current calls the configured forecast provider's
+        `fetch_current_conditions()` to blend cloudcover/snow/snowRate when
+        the archive row has those fields null (see
+        `endpoints/observations.py`'s `_fill_cloudcover_from_provider()`).
+        That blend call is a cold-call outlier: 3 NWS HTTP calls, ~6.2 s,
+        with a 5-min TTL (ADR-017).  This warm function avoids that by
+        calling `fetch_current_conditions()` ahead of time on a 240 s cycle
+        (comfortably inside the 300 s TTL).
+
+        Mirrors `_fill_cloudcover_from_provider()`'s dispatch exactly:
+        discovers whichever provider is registered for the "forecast"
+        domain via `get_provider_registry()` (provider-agnostic by
+        construction) and calls that provider's `fetch_current_conditions()`
+        with station lat/lon and the provider-specific kwargs it requires.
+        `fetch_current_conditions()` populates the provider's own internal
+        ADR-017 cache; the endpoint calls the same function and gets a
+        cache hit.  No separate `warmer:current` cache key is written (same
+        pattern as `_warm_marine_weather` / `_warm_marine`).
+        """
+        try:
+            from weewx_clearskies_api.providers._common.capability import (
+                get_provider_registry,
+            )
+            from weewx_clearskies_api.providers._common.dispatch import (
+                get_provider_module,
+            )
+            from weewx_clearskies_api.services.station import get_station_info
+            from weewx_clearskies_api.services.units import get_target_unit
+
+            forecast_providers = [
+                p for p in get_provider_registry() if p.domain == "forecast"
+            ]
+            if not forecast_providers:
+                return  # No forecast provider configured/registered.
+
+            provider_id = forecast_providers[0].provider_id
+
+            try:
+                station = get_station_info()
+            except RuntimeError:
+                logger.debug(
+                    "Cache warmer: station metadata not available; "
+                    "skipping current conditions warm"
+                )
+                return
+
+            try:
+                target_unit = get_target_unit()
+            except RuntimeError:
+                logger.debug(
+                    "Cache warmer: target unit not available; "
+                    "skipping current conditions warm"
+                )
+                return
+
+            try:
+                provider_module = get_provider_module(
+                    domain="forecast", provider_id=provider_id
+                )
+            except KeyError:
+                logger.warning(
+                    "Cache warmer: unknown forecast provider %r; "
+                    "skipping current conditions warm",
+                    provider_id,
+                )
+                return
+
+            # Deferred import mirrors _fill_cloudcover_from_provider()'s pattern
+            # for reading operator credential state populated at startup by
+            # wire_forecast_settings().
+            import weewx_clearskies_api.endpoints.forecast as _forecast_ep
+
+            if provider_id == "openmeteo":
+                provider_module.fetch_current_conditions(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    timezone=station.timezone,
+                )
+            elif provider_id == "nws":
+                provider_module.fetch_current_conditions(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    user_agent_contact=_forecast_ep._nws_user_agent_contact,
+                )
+            elif provider_id == "aeris":
+                provider_module.fetch_current_conditions(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    client_id=_forecast_ep._aeris_client_id,
+                    client_secret=_forecast_ep._aeris_client_secret,
+                )
+            elif provider_id == "openweathermap":
+                provider_module.fetch_current_conditions(
+                    lat=station.latitude,
+                    lon=station.longitude,
+                    target_unit=target_unit,
+                    appid=_forecast_ep._openweathermap_appid,
+                )
+            else:
+                logger.debug(
+                    "Cache warmer: no fetch_current_conditions dispatch for "
+                    "provider %r; skipping current conditions warm",
+                    provider_id,
+                )
+                return
+
+            logger.info(
+                "Cache warmer: current conditions refreshed (provider=%s)", provider_id
+            )
+        except Exception:
+            logger.warning("Cache warmer: current conditions warm failed", exc_info=True)
