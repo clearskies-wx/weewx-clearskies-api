@@ -43,7 +43,7 @@ from pydantic import ValidationError
 
 from weewx_clearskies_api import i18n
 from weewx_clearskies_api.config.marine_config import SurfSpotConfig
-from weewx_clearskies_api.models.responses import SpectralWaveComponent, SurfForecast
+from weewx_clearskies_api.models.responses import SpectralWaveComponent, SurfForecast, SurfScoringBreakdown
 from weewx_clearskies_api.units.conversion import convert
 
 # ---------------------------------------------------------------------------
@@ -544,6 +544,21 @@ def score_surf(
         * time_adjustment
     )
 
+    # Build factor breakdown before consuming each score below.
+    # windQuality can exceed 1.0 (offshore boost up to 1.2); clamp to 1.0 for
+    # the 0-100 display scale so the bar never overflows.
+    scoring = SurfScoringBreakdown(
+        waveHeight=round(height_score * 100, 1),
+        wavePeriod=round(period_score * 100, 1),
+        windQuality=round(min(wind_score, 1.0) * 100, 1),
+        swellDominance=round(swell_score * 100, 1),
+        beachAlignment=round(beach_alignment * 100, 1),
+        waveHeightWeight=35,
+        wavePeriodWeight=35,
+        windQualityWeight=20,
+        swellDominanceWeight=10,
+    )
+
     stars = max(1, min(5, round(overall * 5)))
     quality_label = i18n.t(f"surf.quality.{stars}", loc)
     # windQuality is a (locale) field per API-MANUAL.md §17 "Marine i18n" —
@@ -576,4 +591,5 @@ def score_surf(
         windQuality=wind_quality_label,
         swellDominance=swell_score,
         multiSwell=_build_multi_swell(spectral_components),
+        scoring=scoring,
     )
