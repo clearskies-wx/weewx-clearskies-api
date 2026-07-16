@@ -1595,6 +1595,27 @@ class OceanDataResult(BaseModel):
     coverage_tier: str = "unavailable"
 
 
+class SurfScoringBreakdown(BaseModel):
+    """Individual factor scores for the surf quality rating (API-MANUAL §17).
+
+    All factor scores are expressed as 0-100 values (raw 0-1 scorer output × 100).
+    windQuality can exceed 100 in the raw scorer (offshore boost up to 1.2); it is
+    clamped to 100 for display purposes before being stored here.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    waveHeight: float        # 0-100; height component score
+    wavePeriod: float        # 0-100; period component score
+    windQuality: float       # 0-100; wind quality component score (clamped from raw ≤1.2)
+    swellDominance: float    # 0-100; swell dominance component score
+    beachAlignment: float    # 0-100; multiplier × 100 (100 = direct hit, 30 = 70% penalty)
+    waveHeightWeight: int    # 35
+    wavePeriodWeight: int    # 35
+    windQualityWeight: int   # 20
+    swellDominanceWeight: int  # 10
+
+
 class SurfForecast(BaseModel):
     """Surf quality forecast for one spot at one timestep (API-MANUAL §16).
 
@@ -1614,6 +1635,7 @@ class SurfForecast(BaseModel):
     windQuality: str            # offshore | cross_offshore | cross | cross_onshore | onshore
     swellDominance: float       # ratio of primary swell energy to total energy (0.0-1.0)
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
+    scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
 
 
 class FishingForecast(BaseModel):
