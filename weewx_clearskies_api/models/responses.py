@@ -1512,6 +1512,7 @@ class MarineForecastPoint(BaseModel):
     windWaveHeight: float | None = None      # group_wave_height
     windWavePeriod: float | None = None      # group_wave_period
     windWaveDirection: float | None = None   # degrees true north
+    waterTemp: float | None = None           # group_temperature; OFS model forecast water temp
 
 
 class MarineTextForecast(BaseModel):

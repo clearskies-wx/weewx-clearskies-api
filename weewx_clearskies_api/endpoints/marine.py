@@ -1038,6 +1038,65 @@ def get_marine_location(location_id: str) -> dict:
                 "WaveWatch III fetch failed for marine location %r", location_id, exc_info=True
             )
 
+    # --- waterTemp per forecast point: OFS forecast time series (T-wtemp).
+    # resolve_forecast() returns [{"time": iso_z, "water_temp_c": float}, ...].
+    # We time-match each forecast point to the closest OFS entry (within 1.5h —
+    # half the 3h OFS step) and apply the operator's group_temperature conversion.
+    # Failure is independently best-effort: the forecast list is left unchanged
+    # (waterTemp remains None on each point) rather than failing the whole bundle.
+    if forecast:
+        try:
+            from weewx_clearskies_api.services.ocean_data_resolver import (  # noqa: PLC0415
+                resolve_forecast as _resolve_ocean_forecast,
+            )
+
+            water_temp_series = _resolve_ocean_forecast(
+                lat=location.lat,
+                lon=location.lon,
+                location_config={
+                    "ofs_model": getattr(location, "ofs_model", None),
+                    "ofs_fallback": getattr(location, "ofs_fallback", None),
+                    "ofs_region": getattr(location, "ofs_region", None),
+                },
+            )
+
+            if water_temp_series:
+                target_temp_unit = targets["group_temperature"]
+                # Pre-parse OFS times once to avoid repeated fromisoformat calls.
+                ofs_parsed: list[tuple[datetime, float]] = [
+                    (datetime.fromisoformat(entry["time"]), entry["water_temp_c"])
+                    for entry in water_temp_series
+                ]
+
+                enriched_forecast: list[MarineForecastPoint] = []
+                for fp in forecast:
+                    try:
+                        fp_time = datetime.fromisoformat(fp.time)
+                        closest = min(
+                            ofs_parsed,
+                            key=lambda t: abs((t[0] - fp_time).total_seconds()),
+                        )
+                        diff_hours = abs((closest[0] - fp_time).total_seconds()) / 3600.0
+                        if diff_hours <= 1.5:
+                            converted_temp = _convert_unit(
+                                closest[1], _BASE_TEMPERATURE_UNIT, target_temp_unit
+                            )
+                            enriched_forecast.append(
+                                fp.model_copy(update={"waterTemp": converted_temp})
+                            )
+                        else:
+                            enriched_forecast.append(fp)
+                    except Exception:
+                        enriched_forecast.append(fp)
+
+                forecast = enriched_forecast
+        except Exception:
+            logger.warning(
+                "OFS water temp forecast enrichment failed for marine location %r",
+                location_id,
+                exc_info=True,
+            )
+
     text_forecast: list[MarineTextForecast] = []
     if location.nws_marine_zone_id:
         try:

@@ -55,6 +55,63 @@ def resolve(
     return _resolve_modeled(lat, lon, location_config, needs)
 
 
+def resolve_forecast(
+    lat: float,
+    lon: float,
+    location_config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return water temperature forecast time series from the OFS model.
+
+    Tries the configured primary OFS model first, then the fallback model.
+    Does not fall through to ERDDAP — ERDDAP sources do not supply a
+    regulargrid forecast time series comparable to OFS.
+
+    Returns a list of dicts:
+        [{"time": "2026-07-16T18:00:00Z", "water_temp_c": 21.3}, ...]
+
+    Returns an empty list when OFS is not configured, when the model is
+    unavailable, or when the point is on land.  Callers treat an empty
+    list as "no forecast data" without raising.
+
+    All temperatures are in Celsius — unit conversion is the caller's
+    responsibility (same contract as ``resolve()``).
+    """
+    from weewx_clearskies_api.providers.ocean import ofs  # noqa: PLC0415
+
+    ofs_model: str | None = location_config.get("ofs_model")
+    ofs_fallback: str | None = location_config.get("ofs_fallback")
+
+    if ofs_model:
+        try:
+            series = ofs.fetch_forecast(model=ofs_model, lat=lat, lon=lon)
+            if series:
+                return series
+        except Exception:
+            logger.warning(
+                "OFS primary model %s forecast failed at (%.4f, %.4f)",
+                ofs_model,
+                lat,
+                lon,
+                exc_info=True,
+            )
+
+    if ofs_fallback:
+        try:
+            series = ofs.fetch_forecast(model=ofs_fallback, lat=lat, lon=lon)
+            if series:
+                return series
+        except Exception:
+            logger.warning(
+                "OFS fallback model %s forecast failed at (%.4f, %.4f)",
+                ofs_fallback,
+                lat,
+                lon,
+                exc_info=True,
+            )
+
+    return []
+
+
 def _resolve_observed(
     lat: float, lon: float, location_config: dict[str, Any]
 ) -> OceanDataResult:

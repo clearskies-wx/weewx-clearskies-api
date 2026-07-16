@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from weewx_clearskies_api.providers._common.cache import get_cache
@@ -324,3 +324,125 @@ def fetch(*, model: str, lat: float, lon: float) -> dict[str, Any]:
 
     logger.warning("All OFS cycles exhausted for %s at (%.4f, %.4f)", model, lat, lon)
     return empty
+
+
+def fetch_forecast(*, model: str, lat: float, lon: float) -> list[dict[str, Any]]:
+    """Fetch water temperature forecast time series from an OFS model.
+
+    Returns a list of dicts, one per forecast hour:
+    [{"time": "2026-07-16T18:00:00Z", "water_temp_c": 21.3}, ...]
+
+    Each entry corresponds to one regulargrid file (f003, f006, ..., f{max_fhr}).
+    Entries are sorted by ascending time. Returns an empty list on total
+    failure — callers treat empty the same as "unavailable" without raising.
+
+    Cached with the same TTL as ``fetch()`` (1800 s).  Grid coordinates
+    share the existing per-model cache so they are not re-fetched when
+    ``fetch()`` has already been called for the same location.
+    """
+    cache_key = f"{PROVIDER_ID}:forecast:{model}:{lat:.3f}:{lon:.3f}"
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return cached
+
+    if model not in OFS_MODELS:
+        logger.error("Unknown OFS model for forecast: %r", model)
+        return []
+
+    cfg = OFS_MODELS[model]
+    candidates = _select_cycle(model)
+    if not candidates:
+        logger.warning("No valid cycle candidates for OFS model %s forecast", model)
+        return []
+
+    step: int = cfg["step"]
+    max_fhr: int = cfg["max_fhr"]
+
+    for cycle_dt, cycle_hour in candidates:
+        first_url = _build_regulargrid_url(model, cycle_dt, cycle_hour, step)
+
+        grid = _get_grid(model, first_url)
+        if grid is None:
+            continue
+
+        point = _find_nearest_water_point(grid, lat, lon)
+        if point is None:
+            logger.debug(
+                "OFS %s forecast: point (%.4f, %.4f) is on land — no forecast available",
+                model,
+                lat,
+                lon,
+            )
+            return []
+
+        iy, ix = point
+        series: list[dict[str, Any]] = []
+
+        for fhr in range(step, max_fhr + 1, step):
+            url = _build_regulargrid_url(model, cycle_dt, cycle_hour, fhr)
+            try:
+                import numpy as np
+                import xarray as xr
+
+                ds = xr.open_dataset(url, engine="netcdf4")
+
+                if "temp" not in ds:
+                    ds.close()
+                    logger.debug("OFS %s fhr=%03d: no 'temp' variable in dataset", model, fhr)
+                    continue
+
+                temp_data = ds["temp"].isel(time=0, ny=iy, nx=ix)
+
+                # Models with a depth dimension: index surface (Depth=0).
+                # Models without depth: read the scalar directly.
+                if "Depth" in ds["temp"].dims:
+                    temp_val = float(temp_data.isel(Depth=0).values)
+                else:
+                    temp_val = float(temp_data.values)
+
+                ds.close()
+
+                if np.isnan(temp_val):
+                    logger.debug(
+                        "OFS %s fhr=%03d: surface temp is NaN at (%.4f, %.4f)",
+                        model,
+                        fhr,
+                        lat,
+                        lon,
+                    )
+                    continue
+
+                forecast_time = cycle_dt + timedelta(hours=fhr)
+                series.append(
+                    {
+                        "time": forecast_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "water_temp_c": temp_val,
+                    }
+                )
+            except Exception:
+                logger.debug(
+                    "OFS %s forecast: failed to extract fhr=%03d from %s",
+                    model,
+                    fhr,
+                    url,
+                    exc_info=True,
+                )
+                continue
+
+        if series:
+            series.sort(key=lambda e: e["time"])
+            get_cache().set(cache_key, series, ttl_seconds=_RESULT_CACHE_TTL)
+            return series
+
+        # No data points from this cycle — try the previous one.
+        logger.debug(
+            "OFS %s forecast: cycle %s/%02dz yielded 0 points, trying earlier cycle",
+            model,
+            cycle_dt.strftime("%Y-%m-%d"),
+            cycle_hour,
+        )
+
+    logger.warning(
+        "OFS forecast: all cycles exhausted for %s at (%.4f, %.4f)", model, lat, lon
+    )
+    return []
