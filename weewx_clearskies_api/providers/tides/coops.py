@@ -335,30 +335,58 @@ def _parse_reading(v: str, *, context: str) -> float:
 
 
 def _classify_tide_predictions(points: list[_CoopsPredictionPoint]) -> list[TidePrediction]:
-    """Classify each prediction point as high/low/interpolated by neighbor comparison.
+    """Classify each prediction point as high/low/interpolated.
 
-    height > both neighbors -> "high"; height < both neighbors -> "low";
-    otherwise (including the first/last point, which has no pair of
-    neighbors) -> None (interpolated point).
+    Uses a plateau-aware peak-finding algorithm so that adjacent points with
+    identical heights at a peak or trough are handled correctly.  CO-OPS
+    returns predictions at 6-minute intervals, and the harmonic curve can
+    produce two or more consecutive points at the same height near a true
+    extremum.  A strict greater-than / less-than comparison fails for both
+    points — neither gets classified.  This algorithm instead:
+
+    1. Groups consecutive equal-height points into a "plateau".
+    2. Checks the neighbours *outside* the plateau:
+       - If the height entering the plateau is lower AND leaving is lower
+         → peak: the FIRST point of the plateau is labelled "high".
+       - If the height entering is higher AND leaving is higher
+         → trough: the FIRST point of the plateau is labelled "low".
+       - Otherwise (plateau is mid-slope) → all points remain None.
+    3. Single-point plateaus (no equal neighbours) behave identically to
+       the original strict comparison.
+    4. The first and last points in the series never become extrema because
+       one neighbour is always missing.
     """
     heights = [_parse_reading(p.v, context="predictions") for p in points]
     n = len(points)
+    tide_types: list[str | None] = [None] * n
+
+    i = 0
+    while i < n:
+        # Find the end of the plateau (run of equal heights) starting at i.
+        j = i
+        while j + 1 < n and heights[j + 1] == heights[i]:
+            j += 1
+        # heights[i..j] inclusive are all equal.
+
+        # A plateau can only be an extremum when it has neighbours on both sides.
+        if i > 0 and j < n - 1:
+            before = heights[i - 1]
+            after = heights[j + 1]
+            level = heights[i]
+            if before < level and after < level:
+                tide_types[i] = "high"  # peak: mark first point of plateau
+            elif before > level and after > level:
+                tide_types[i] = "low"  # trough: mark first point of plateau
+
+        i = j + 1  # advance past the plateau
+
     results: list[TidePrediction] = []
     for i, point in enumerate(points):
-        height = heights[i]
-        tide_type: str | None = None
-        if 0 < i < n - 1:
-            prev_height = heights[i - 1]
-            next_height = heights[i + 1]
-            if height > prev_height and height > next_height:
-                tide_type = "high"
-            elif height < prev_height and height < next_height:
-                tide_type = "low"
         results.append(
             TidePrediction(
                 time=_parse_gmt_naive_to_iso8601(point.t),
-                height=height,
-                type=tide_type,
+                height=heights[i],
+                type=tide_types[i],
             )
         )
     return results
