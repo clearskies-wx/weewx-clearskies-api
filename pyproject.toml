@@ -82,6 +82,40 @@ marine = [
     "xarray>=2024.1",
     "netCDF4>=1.6",
 ]
+nearshore = [
+    # T2.1 (ADR-093): SWAN+TruShore nearshore wave model dependencies.
+    # [nearshore] depends on [marine] — pulls in eccodes (GRIB2 C library),
+    # xarray, and netCDF4. Install the [marine] system prerequisites before
+    # this extra (libeccodes-dev / eccodes-devel / brew install eccodes).
+    "weewx-clearskies-api[marine]",
+    # cfgrib: reads GRIB2 files via the eccodes C library. Used for HRRR
+    # wind field ingest in providers/wind/hrrr.py. Lighter alternative to
+    # raw eccodes Python bindings for structured variable access.
+    # Requires the eccodes system library — already required by [marine].
+    "cfgrib>=0.9.10",
+    # xarray: n-dimensional labelled array handling for HRRR grid operations
+    # (interpolation, slicing, coordinate transforms). Already pulled in by
+    # [marine]; listed explicitly here so [nearshore] remains self-documenting
+    # when installed without [marine] in a future split scenario.
+    "xarray>=2024.1",
+    # ---------------------------------------------------------------------------
+    # SWAN binary — NOT a pip package; must be installed separately.
+    # SWAN 41.45 (Simulating WAves Nearshore, Delft University of Technology)
+    # is a compiled Fortran binary. It is the computational core of TruShore.
+    #
+    # Prerequisites (Debian/Ubuntu):
+    #   sudo apt install gfortran libopenmpi-dev
+    #
+    # Installation:
+    #   sudo bash scripts/install_swan.sh
+    #
+    # This script downloads SWAN 41.45 from SourceForge, compiles with
+    # gfortran + OpenMP, and installs the binary to /usr/local/bin/swan.
+    #
+    # Without SWAN on PATH, the API logs CRITICAL at startup and the surf
+    # endpoint returns null surf data (no fallback model). See T2.2.
+    # ---------------------------------------------------------------------------
+]
 dev = [
     "ruff==0.11.9",
     "mypy==1.15.0",
