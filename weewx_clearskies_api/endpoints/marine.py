@@ -1050,6 +1050,7 @@ def get_marine_location(location_id: str) -> dict:
                 resolve_forecast as _resolve_ocean_forecast,
             )
 
+            logger.info("OFS water temp enrichment: starting for %s (ofs_model=%s)", location_id, getattr(location, "ofs_model", "NONE"))
             water_temp_series = _resolve_ocean_forecast(
                 lat=location.lat,
                 lon=location.lon,
