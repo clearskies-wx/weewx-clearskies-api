@@ -42,6 +42,13 @@ Warmed endpoints:
     and on the hourly schedule matching the HRRR cycle cadence (3600 s).
     The HRRR provider caches internally (ADR-017, TTL 3300 s); the SWAN
     runner reads from that cache.  See `_warm_hrrr_wind` docstring.
+  - SWAN+TruShore nearshore wave model (SWAN-TRUSHORE-PLAN T2.5): runs the
+    SWAN wave model for all configured surf spot locations after HRRR wind
+    data is warm.  Active only when the [nearshore] pip extra is installed.
+    Fires at startup (after HRRR warm) and on the same hourly schedule,
+    sequential after _warm_hrrr_wind() completes (never parallel).  On
+    failure: logs ERROR, last-good cache is preserved indefinitely.  See
+    `_warm_swan` docstring.
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -158,6 +165,7 @@ class BackgroundCacheWarmer:
         self._warm_seeing_forecast()
         self._warm_marine()
         self._warm_hrrr_wind()
+        self._warm_swan()   # sequential after HRRR (SWAN-TRUSHORE-PLAN T2.5)
         self._warm_forecast()
         self._warm_current_conditions()
         logger.info("Cache warmer: initial warm complete")
@@ -197,6 +205,7 @@ class BackgroundCacheWarmer:
         last_seeing: float = _NEVER
         last_marine: float = _NEVER
         last_hrrr_wind: float = _NEVER
+        last_swan: float = _NEVER  # SWAN-TRUSHORE-PLAN T2.5 — always fires after HRRR
         last_forecast: float = _NEVER
         last_current_conditions: float = _NEVER
 
@@ -243,9 +252,13 @@ class BackgroundCacheWarmer:
             # §14.14), so this fires just after the previous cache entry has
             # been refreshed with a new cycle.  Active only when [nearshore]
             # extra is installed; _warm_hrrr_wind() returns silently otherwise.
+            # SWAN runs sequentially after HRRR (SWAN-TRUSHORE-PLAN T2.5 lead
+            # call #6): never parallel, always after HRRR warm completes.
             if last_hrrr_wind == _NEVER or (now - last_hrrr_wind) >= 3600:
                 self._warm_hrrr_wind()
                 last_hrrr_wind = time.monotonic()
+                self._warm_swan()   # sequential — HRRR must be warm first
+                last_swan = time.monotonic()
 
             # 1500 s < the 1800 s /forecast TTL (ADR-017), leaving margin so
             # a warm cycle always lands before the cached bundle expires.
@@ -1096,6 +1109,51 @@ class BackgroundCacheWarmer:
             logger.info("Cache warmer: HRRR wind field refreshed (bbox=%s)", bbox)
         except Exception:
             logger.warning("Cache warmer: HRRR wind warm failed", exc_info=True)
+
+    def _warm_swan(self) -> None:
+        """Run SWAN+TruShore nearshore wave model for configured surf spots.
+
+        Fires sequentially after _warm_hrrr_wind() completes — HRRR wind data
+        must be in cache before SWAN can run.  Active only when the [nearshore]
+        pip extra is installed; returns silently when the extra is absent so
+        this method is zero-cost on standard installations.
+
+        On failure: logs ERROR, last-good per-spot cache is preserved
+        indefinitely (stale TruShore data is always preferred to no data per
+        PROVIDER-MANUAL §14.15).  Failure here does NOT affect the API's
+        ability to serve other endpoints.
+
+        SWAN runs are deduplicated per HRRR cycle: if SWAN already completed
+        for the current HRRR cycle (within the 55-min run marker TTL), the
+        run is skipped without error.  Operators can force a re-run by
+        flushing the cache.
+
+        Reference: SWAN-TRUSHORE-PLAN.md T2.5, PROVIDER-MANUAL §14.15.
+        """
+        if self._marine_config is None or not getattr(
+            self._marine_config, "surf_spots", {}
+        ):
+            return  # No surf spots configured — nothing to warm.
+
+        # Guard: [nearshore] extra required.
+        try:
+            from weewx_clearskies_api.providers.wind.hrrr import GRIB_AVAILABLE
+        except ImportError:
+            return  # [nearshore] module absent
+
+        if not GRIB_AVAILABLE:
+            return  # eccodes and pygrib both absent — skip silently
+
+        try:
+            from weewx_clearskies_api.providers.nearshore import trushore
+
+            trushore.run_all_spots(self._marine_config)
+        except Exception:
+            logger.error(
+                "Cache warmer: SWAN warm failed unexpectedly; "
+                "last-good cache preserved",
+                exc_info=True,
+            )
 
     def _warm_forecast(self) -> None:
         """Pre-fetch GET /forecast's provider bundle (FIX-24).
