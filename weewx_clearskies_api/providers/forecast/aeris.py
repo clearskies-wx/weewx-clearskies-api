@@ -653,18 +653,21 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         wind_gust = period.windGustMPH
         precip_amount = period.precipIN
         feels_like = period.feelslikeF
+        dewpoint = period.dewpointF
     elif target_unit == "METRICWX":
         temp = period.tempC
         wind_speed = period.windSpeedMPS
         wind_gust = period.windGustMPS
         precip_amount = period.precipMM
         feels_like = period.feelslikeC
+        dewpoint = period.dewpointC
     else:  # METRIC
         temp = period.tempC
         wind_speed = period.windSpeedKPH
         wind_gust = period.windGustKPH
         precip_amount = period.precipMM
         feels_like = period.feelslikeC
+        dewpoint = period.dewpointC
 
     # Pass xcast confidence limits through extras when non-null.
     # These are present only on /xcast/forecasts responses; null where no sensors deployed.
@@ -688,6 +691,7 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         weatherCode=period.weatherPrimaryCoded,
         weatherText=period.weather,
         feelsLike=feels_like,
+        dewpoint=dewpoint,
         source=PROVIDER_ID,
         extras=extras,
     )

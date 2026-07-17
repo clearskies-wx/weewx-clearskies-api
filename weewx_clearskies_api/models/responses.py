@@ -998,6 +998,7 @@ class HourlyForecastPoint(BaseModel):
     weatherCode: str | None = None           # WMO code as string (opaque to api)
     weatherText: str | None = None           # Human-readable (decoded from WMO)
     feelsLike: float | None = None           # Apparent temp (heat index / wind chill)
+    dewpoint: float | None = None            # Dewpoint temperature
     source: str
     extras: dict[str, Any] = {}
 
