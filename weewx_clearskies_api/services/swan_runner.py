@@ -1,13 +1,24 @@
 """SWAN nearshore wave model subprocess orchestrator for the TruShore pipeline.
 
 Responsibilities:
-  1. Write all SWAN input files (BOTTOM.txt, WIND.txt, BOUND_SPEC.txt, INPUT,
-     OUTPUT_POINTS.txt) into a temporary directory.
-  2. Spawn the SWAN executable as a subprocess, feeding it INPUT on stdin.
-  3. Parse the TABLE output file and convert each row to a MarineForecastPoint.
-  4. Return results keyed by surf spot ID.
+  1. Blend HRRR (hours 0–48) and GFS (hours 48–72) wind fields into a single
+     72-hour blended wind input (T7.2).
+  2. Execute two sequential SWAN runs per cycle: an outer grid (continental shelf
+     approach) and an inner nest (tight nearshore domain around surf spots) — T7.2.
+  3. Write all SWAN input files (BOTTOM.txt, WIND.txt, BOUND_SPEC.txt, INPUT,
+     OUTPUT_POINTS.txt) into per-level subdirectories of a temporary directory.
+  4. Spawn the SWAN executable as a subprocess for each level, feeding it INPUT
+     on stdin.
+  5. Parse the inner nest's TABLE output file and convert each row to a
+     MarineForecastPoint.
+  6. Return results keyed by surf spot ID.
 
 Key design decisions:
+  - Two sequential SWAN runs per cycle (outer grid + inner nest).  Total grid
+    points ~8,000–16,000; total peak memory ≤300 MB (PROVIDER-MANUAL §14.15).
+  - GFS 3-hourly grids are linearly interpolated to hourly resolution in
+    _stitch_wind() so the blended wind field is uniform 1-hour cadence
+    (PROVIDER-MANUAL §14.16).
   - Runs SWAN in a temp directory; the directory is NOT cleaned up automatically
     so that operators can inspect input/output files after failures.
   - SWAN is invoked as a subprocess (not via Python bindings) per ADR-093.
@@ -17,7 +28,8 @@ Key design decisions:
 
 References:
   - PROVIDER-MANUAL.md §14.15 (SWAN+TruShore runner)
-  - SWAN-TRUSHORE-PLAN.md T2.2 + T2.4
+  - PROVIDER-MANUAL.md §14.16 (GFS wind provider)
+  - SWAN-TRUSHORE-PLAN.md T2.2 + T2.4 + T7.2
   - ADR-093 (SWAN+TruShore nearshore model)
 """
 
@@ -26,9 +38,10 @@ from __future__ import annotations
 import logging
 import math
 import os
+import shutil
 import subprocess
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
+    build_swan_input,
     cudem_to_swan_bottom,
     hrrr_to_swan_wind,
     ww3_to_swan_boundary,
@@ -83,7 +97,7 @@ def _is_valid_point(hs: float, tm01: float, mwd: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# SWAN INPUT file builder
+# Shared helpers (also duplicated in swan_formats for that module's use)
 # ---------------------------------------------------------------------------
 
 
@@ -95,115 +109,6 @@ def _swan_time(dt: datetime) -> str:
 def _parse_iso(ts: str) -> datetime:
     """Parse an ISO-8601 UTC string (with optional Z suffix) to an aware datetime."""
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(UTC)
-
-
-def _build_input_file(
-    dims: dict[str, Any],
-    valid_times: list[str],
-    spots: dict[str, tuple[float, float]],
-    output_interval_hr: float = 1.0,
-    compute_dt_min: int = 10,
-) -> str:
-    """Render the SWAN ASCII INPUT command file.
-
-    Args:
-        dims: Grid dimension dict from cudem_to_swan_bottom or hrrr_to_swan_wind.
-              Keys: mxc, myc, dlon, dlat, lon_sw, lat_sw.
-        valid_times: Ordered list of ISO-8601 UTC strings from HRRR grids.
-                     First entry is t_start, last entry is t_end.
-        spots: dict mapping spot_id → (lon, lat) — only used to confirm there are spots.
-        output_interval_hr: Hours between TABLE output rows.
-        compute_dt_min: SWAN internal time step in minutes.
-
-    Returns:
-        String content of the SWAN INPUT command file.
-    """
-    if not valid_times:
-        raise ValueError("_build_input_file: valid_times is empty")
-    if not spots:
-        raise ValueError("_build_input_file: no surf spots defined")
-
-    t_start = _parse_iso(valid_times[0])
-    t_end = _parse_iso(valid_times[-1])
-    swan_t_start = _swan_time(t_start)
-    swan_t_end = _swan_time(t_end)
-
-    # HRRR provides 1-hour wind grids; wind INPUT is stationary within each hour
-    # NONSTAT wind time step matches HRRR temporal resolution = 1 HR
-    wind_dt_hr = 1  # one-hour steps between HRRR wind snapshots
-    # Wind INPUT time range matches HRRR valid_times
-    wind_t_end = swan_t_end
-
-    mxc = dims["mxc"]
-    myc = dims["myc"]
-    dlon = dims["dlon"]
-    dlat = dims["dlat"]
-    lon_sw = dims["lon_sw"]
-    lat_sw = dims["lat_sw"]
-
-    # The INPGRID for BOTTOM and WIND use the same regular grid parameters.
-    # CGRID REG: xpc ypc alpc xlenc ylenc mxc myc
-    #   xpc, ypc = SW corner (lon, lat)
-    #   alpc = 0.0 (no grid rotation)
-    #   xlenc, ylenc = physical size in degrees (lon_ne-lon_sw, lat_ne-lat_sw)
-    xlenc = mxc * dlon
-    ylenc = myc * dlat
-
-    # INPGRID size parameters: same as CGRID
-    inpgrid_xlenc = xlenc
-    inpgrid_ylenc = ylenc
-
-    output_dt_min = int(round(output_interval_hr * 60))
-
-    lines = [
-        "PROJECT 'TruShore' 'v1'",
-        "",
-        "SET LEVEL 0.",
-        "SET NAUTICAL",
-        "COORDINATES SPHERICAL",
-        "",
-        f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}"
-        " CIRCLE 36 0.0418 1.0 31",
-        "",
-        # BOTTOM grid: static (no NONSTAT keyword)
-        f"INPGRID BOTTOM REG {lon_sw:.6f} {lat_sw:.6f} 0. {mxc} {myc} {dlon:.6f} {dlat:.6f}",
-        "READINP BOTTOM 1. 'BOTTOM.txt' 3 0 FREE",
-        "",
-        # WIND grid: non-stationary (time-varying)
-        (
-            f"INPGRID WIND REG {lon_sw:.6f} {lat_sw:.6f} 0."
-            f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
-            f" NONSTAT {swan_t_start} {wind_dt_hr} HR {wind_t_end}"
-        ),
-        "READINP WIND 1. 'WIND.txt' 3 0 FREE",
-        "",
-        # Boundary conditions: uniform WW3 spectrum on western and southern sides.
-        # SWAN can't open the same file twice, so we use separate copies.
-        "BOUNDSPEC SIDE W CCW CONSTANT FILE 'BOUND_W.txt' 1",
-        "BOUNDSPEC SIDE S CCW CONSTANT FILE 'BOUND_S.txt' 1",
-        "",
-        # Source term settings
-        "GEN3 WESTHUYSEN",
-        "BREAKING CONSTANT 1.0 0.73",
-        "FRICTION JON 0.067",
-        "TRIADS",
-        "DIFFRACTION",
-        "",
-        # Output points from file
-        "POINTS 'SPOTS' FILE 'OUTPUT_POINTS.txt'",
-        "",
-        # TABLE output: time, coordinates, Hs, mean period, mean wave direction
-        (
-            f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-            f" XP YP HS TM01 DIR OUTPUT {swan_t_start} {output_dt_min} MIN"
-        ),
-        "",
-        # Non-stationary computation
-        f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}",
-        "",
-        "STOP",
-    ]
-    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -348,35 +253,63 @@ def _parse_table_output(
 
 
 class SWANRunner:
-    """Orchestrates a full SWAN run for one set of input fields.
+    """Orchestrates a two-level nested SWAN run for one set of input fields.
+
+    Two sequential SWAN runs per cycle (PROVIDER-MANUAL §14.15):
+      1. Outer grid (continental shelf approach, ~200km × 150km, 2–3 km resolution)
+         — propagates WW3 swell across the shelf; writes NESTOUT boundary files.
+      2. Inner nest (tight nearshore, ~20–30km × 10–15km, 200–500m resolution)
+         — reads outer boundary via NGRID; outputs TABLE at surf spot coordinates.
 
     Config keys (all required unless marked optional):
-      domain_bbox (list[float]):     [lon_sw, lat_sw, lon_ne, lat_ne]
-      surf_spots (dict):             {spot_id: {"lon": float, "lat": float}}
-      swan_binary (str):             Path to the SWAN executable (e.g. "/usr/local/bin/swanrun")
-      grid_resolution_m (float):    SWAN grid spacing in metres (default 200)
-      compute_dt_min (int, opt):    SWAN time step in minutes (default 10)
-      output_interval_hr (float, opt): TABLE output interval in hours (default 1)
-      swan_timeout_s (int, opt):    Subprocess timeout seconds (default 900)
+      outer_bbox (list[float]):       [lon_sw, lat_sw, lon_ne, lat_ne] for outer grid.
+                                      Falls back to ``domain_bbox`` if absent (compat).
+      inner_bbox (list[float]):       [lon_sw, lat_sw, lon_ne, lat_ne] for inner nest.
+      surf_spots (dict):              {spot_id: {"lon": float, "lat": float}}
+      swan_binary (str):              Path to the SWAN executable.
+      outer_grid_resolution_km (float, opt):  Outer grid resolution in km (default 3.0).
+      inner_nest_resolution_m (float, opt):   Inner nest resolution in m (default 200.0).
+      compute_dt_min (int, opt):      SWAN time step in minutes (default 10).
+      output_interval_hr (float, opt): TABLE output interval in hours (default 1).
+      swan_timeout_s (int, opt):      Subprocess timeout seconds (default 900).
+      omp_num_threads (int, opt):     OpenMP thread cap; 0 = all cores (default 0).
 
     Usage:
         runner = SWANRunner(config)
-        results = runner.run(hrrr_wind_field, ww3_boundary, cudem_bathymetry)
+        results = runner.run(hrrr_wind_field, gfs_wind_field, ww3_boundary, cudem_bathymetry)
 
     run() returns dict[spot_id, list[MarineForecastPoint]].
+    When gfs_wind_field is None a shortened forecast (HRRR hours only) is produced.
     """
+
+    _NEST_BOUNDARY_FILE = "nest_boundary.dat"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
-        self._domain_bbox: tuple[float, float, float, float] = tuple(
-            config["domain_bbox"]
-        )  # type: ignore[assignment]
+
+        # Outer grid bbox — use outer_bbox, fall back to domain_bbox for compat
+        outer_raw = config.get("outer_bbox") or config.get("domain_bbox")
+        if outer_raw is None:
+            raise ValueError("SWANRunner: config requires 'outer_bbox' (or 'domain_bbox')")
+        self._outer_bbox: tuple[float, float, float, float] = tuple(outer_raw)  # type: ignore[assignment]
+
+        # Inner nest bbox — required for nested mode
+        inner_raw = config.get("inner_bbox")
+        if inner_raw is None:
+            raise ValueError("SWANRunner: config requires 'inner_bbox'")
+        self._inner_bbox: tuple[float, float, float, float] = tuple(inner_raw)  # type: ignore[assignment]
+
         self._surf_spots: dict[str, tuple[float, float]] = {
             sid: (float(sdata["lon"]), float(sdata["lat"]))
             for sid, sdata in config["surf_spots"].items()
         }
         self._swan_binary: str = config["swan_binary"]
-        self._grid_resolution_m: float = float(config.get("grid_resolution_m", 200.0))
+
+        # Resolution — outer in km converted to m; inner in m
+        outer_km = float(config.get("outer_grid_resolution_km", 3.0))
+        self._outer_resolution_m: float = outer_km * 1000.0
+        self._inner_resolution_m: float = float(config.get("inner_nest_resolution_m", 200.0))
+
         self._compute_dt_min: int = int(config.get("compute_dt_min", 10))
         self._output_interval_hr: float = float(config.get("output_interval_hr", 1.0))
         self._swan_timeout_s: int = int(config.get("swan_timeout_s", 900))
@@ -391,24 +324,27 @@ class SWANRunner:
     def run(
         self,
         hrrr_wind_field: dict[str, Any],
+        gfs_wind_field: dict[str, Any] | None,
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
     ) -> dict[str, list[MarineForecastPoint]]:
-        """Execute a complete SWAN run and return per-spot wave forecasts.
+        """Execute a two-level nested SWAN run and return per-spot wave forecasts.
 
         Steps:
-          1. Create a temporary working directory.
-          2. Write all input files (BOTTOM.txt, WIND.txt, BOUND_SPEC.txt,
-             OUTPUT_POINTS.txt, INPUT).
-          3. Run the SWAN subprocess.
-          4. Parse OUTPUT_TABLE.txt.
-          5. Return results.
+          1. Blend HRRR + GFS wind fields into a 72-hour (or shortened) uniform
+             hourly wind input via _stitch_wind().
+          2. Create a temporary working directory with outer/ and inner/ subdirs.
+          3. Run the outer grid (shelf approach): writes NESTOUT boundary data.
+          4. Run the inner nest (nearshore): reads NESTOUT via NGRID; writes TABLE.
+          5. Parse inner nest OUTPUT_TABLE.txt and return per-spot results.
 
         The temporary directory is NOT deleted on failure so that operators can
-        inspect SWAN's Errfile and PRINT output.
+        inspect SWAN's Errfile and PRINT output in outer/ and inner/.
 
         Args:
-            hrrr_wind_field: Return value of hrrr.fetch().
+            hrrr_wind_field: Return value of hrrr.fetch(). Provides hours 0–48.
+            gfs_wind_field:  Return value of gfs.fetch(). Provides hours 48–72.
+                             When None, the forecast is shortened to HRRR hours only.
             ww3_boundary:    Return value of wavewatch.fetch().
             cudem_bathymetry: Dict with keys lat_first, lon_first, lat_last,
                               lon_last, ni, nj, depths (list[list[float]]).
@@ -418,92 +354,278 @@ class SWANRunner:
             where all output rows failed physical validation.
 
         Raises:
-            SWANRunError: The SWAN subprocess exited with non-zero status or
-                          timed out.
+            SWANRunError: A SWAN subprocess exited with non-zero status or timed out.
             ValueError:   Required config keys are missing or input data is empty.
         """
+        blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
         tmpdir = Path(tempfile.mkdtemp(prefix="swan_run_"))
-        grid_info = self._write_input_files(
-            tmpdir, hrrr_wind_field, ww3_boundary, cudem_bathymetry
-        )
-        self._spawn_swan(tmpdir)
-        return self._parse_output(tmpdir, grid_info)
+        logger.info("SWAN nested run starting in %s", tmpdir)
+        self._run_outer_grid(tmpdir, blended_wind, ww3_boundary, cudem_bathymetry)
+        return self._run_inner_nest(tmpdir, blended_wind, cudem_bathymetry)
 
     # ------------------------------------------------------------------
     # Internal steps
     # ------------------------------------------------------------------
 
-    def _write_input_files(
+    def _stitch_wind(
+        self,
+        hrrr_wind_field: dict[str, Any],
+        gfs_wind_field: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Blend HRRR (hours 0–48) and GFS (hours 48–72) into a uniform hourly wind field.
+
+        HRRR grids are at 1-hour intervals (hours 0–48, 49 grids on extended cycles).
+        GFS grids are at 3-hour intervals (hours 48–72, 9 grids: f048, f051, ..., f072).
+        GFS grids are linearly interpolated to 1-hour resolution per PROVIDER-MANUAL §14.16
+        so the combined wind field is uniform hourly (73 grids total for the full 72-hour
+        forecast).
+
+        When gfs_wind_field is None the blended wind equals the HRRR field unchanged
+        (shortened forecast — HRRR hours only).
+
+        Returns:
+            dict with key ``"grids"`` containing the combined grid list.
+        """
+        hrrr_grids = list(hrrr_wind_field.get("grids", []))
+        if not hrrr_grids:
+            raise ValueError("_stitch_wind: HRRR wind field has no grids")
+
+        if gfs_wind_field is None:
+            logger.warning("_stitch_wind: gfs_wind_field is None — producing shortened forecast (HRRR hours only)")
+            return {"grids": hrrr_grids}
+
+        gfs_grids = list(gfs_wind_field.get("grids", []))
+        if not gfs_grids:
+            logger.warning("_stitch_wind: GFS wind field has empty grids — producing shortened forecast (HRRR hours only)")
+            return {"grids": hrrr_grids}
+
+        # Interpolate GFS from 3-hourly to hourly.
+        # HRRR covers hours 0–48 (last grid at hour 48).
+        # GFS starts at hour 48; we want hours 49–72 at 1-hour intervals.
+        # For each consecutive pair of GFS grids (t0, t1 = 3 hours later):
+        #   - t0 itself maps to a time already in HRRR (or the last HRRR grid) — skip for i=0
+        #   - generate intermediate hourly grids between t0 and t1
+        #   - add t1 only at the end (the last GFS grid)
+
+        interpolated_gfs: list[dict[str, Any]] = []
+
+        for i in range(len(gfs_grids) - 1):
+            g0 = gfs_grids[i]
+            g1 = gfs_grids[i + 1]
+            t0 = _parse_iso(g0["valid_time"])
+            t1 = _parse_iso(g1["valid_time"])
+            dt_hours = (t1 - t0).total_seconds() / 3600.0
+            n_steps = max(1, int(round(dt_hours)))
+
+            # For i=0, g0 is GFS hour 48 which is already the last HRRR grid —
+            # skip it to avoid duplicating hour 48 in the combined field.
+            if i > 0:
+                interpolated_gfs.append(g0)
+
+            # Interpolate intermediate hourly steps between g0 and g1
+            if n_steps > 1:
+                u0: list[list[float]] = g0["u_earth"]
+                v0: list[list[float]] = g0["v_earth"]
+                u1: list[list[float]] = g1["u_earth"]
+                v1: list[list[float]] = g1["v_earth"]
+                nj: int = g0["nj"]
+                ni: int = g0["ni"]
+
+                for step in range(1, n_steps):
+                    alpha = step / n_steps
+                    t_interp = t0 + timedelta(hours=step)
+                    u_interp = [
+                        [u0[j][k] * (1.0 - alpha) + u1[j][k] * alpha for k in range(ni)]
+                        for j in range(nj)
+                    ]
+                    v_interp = [
+                        [v0[j][k] * (1.0 - alpha) + v1[j][k] * alpha for k in range(ni)]
+                        for j in range(nj)
+                    ]
+                    interpolated_gfs.append({
+                        **g0,  # copy bbox metadata (lat_first, lon_first, lat_last, lon_last, ni, nj)
+                        "valid_time": t_interp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "u_earth": u_interp,
+                        "v_earth": v_interp,
+                    })
+
+        # Always add the last GFS grid (hour 72)
+        interpolated_gfs.append(gfs_grids[-1])
+
+        combined_grids = hrrr_grids + interpolated_gfs
+        logger.info(
+            "_stitch_wind: combined %d HRRR + %d interpolated-GFS = %d total grids",
+            len(hrrr_grids), len(interpolated_gfs), len(combined_grids),
+        )
+        return {"grids": combined_grids}
+
+    def _run_outer_grid(
         self,
         tmpdir: Path,
-        hrrr_wind_field: dict[str, Any],
+        blended_wind: dict[str, Any],
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Write SWAN input files and return grid_info needed for parse step.
+    ) -> None:
+        """Run the outer SWAN grid (continental shelf approach domain).
 
-        Files written to tmpdir:
-          BOTTOM.txt          — depth grid (SWAN convention: positive = ocean)
-          WIND.txt            — interpolated HRRR wind components (IDLA=3)
-          BOUND_SPEC.txt      — TPAR boundary spectrum from WW3
-          OUTPUT_POINTS.txt   — (lon lat) pairs for each surf spot
-          INPUT               — SWAN command file (fed via stdin)
+        Writes SWAN input files to tmpdir/outer/, spawns SWAN, and produces
+        nest_boundary.dat in tmpdir/outer/ for the inner nest to consume.
 
-        Returns grid_info dict with SWAN grid dimensions and valid_times.
+        Args:
+            tmpdir: Root temporary directory for this SWAN run.
+            blended_wind: Stitched HRRR+GFS wind field from _stitch_wind().
+            ww3_boundary: Return value of wavewatch.fetch().
+            cudem_bathymetry: CUDEM depth grid dict.
         """
-        # Generate BOTTOM.txt
-        bottom_dims, bottom_text = cudem_to_swan_bottom(
-            cudem_bathymetry, self._domain_bbox, self._grid_resolution_m
+        outer_dir = tmpdir / "outer"
+        outer_dir.mkdir(exist_ok=True)
+        grid_info = self._write_input_files(
+            outer_dir, blended_wind, ww3_boundary, cudem_bathymetry, "outer"
         )
-        (tmpdir / "BOTTOM.txt").write_text(bottom_text, encoding="ascii")
-
-        # Generate WIND.txt
-        wind_dims, wind_text = hrrr_to_swan_wind(
-            hrrr_wind_field, self._domain_bbox, self._grid_resolution_m
+        logger.info(
+            "SWAN outer grid: %d×%d cells at %.1f km resolution in %s",
+            grid_info["mxc"], grid_info["myc"],
+            self._outer_resolution_m / 1000.0, outer_dir,
         )
-        (tmpdir / "WIND.txt").write_text(wind_text, encoding="ascii")
+        self._spawn_swan(outer_dir)
+        logger.info("SWAN outer grid complete")
 
-        # Generate BOUND_SPEC.txt
-        boundary_text = ww3_to_swan_boundary(ww3_boundary)
-        if not boundary_text:
-            # Fall back to a calm boundary condition so SWAN can still run
-            from datetime import timedelta
-            grids = hrrr_wind_field.get("grids", [])
-            if grids:
-                t0 = datetime.fromisoformat(
-                    grids[0]["valid_time"].replace("Z", "+00:00")
-                ).astimezone(UTC)
-                t1 = datetime.fromisoformat(
-                    grids[-1]["valid_time"].replace("Z", "+00:00")
-                ).astimezone(UTC)
-                boundary_text = (
-                    "TPAR\n"
-                    f"{_swan_time(t0)}  0.500  8.000  270.0  30.0\n"
-                    f"{_swan_time(t1)}  0.500  8.000  270.0  30.0\n"
-                )
-        (tmpdir / "BOUND_W.txt").write_text(boundary_text, encoding="ascii")
-        (tmpdir / "BOUND_S.txt").write_text(boundary_text, encoding="ascii")
+    def _run_inner_nest(
+        self,
+        tmpdir: Path,
+        blended_wind: dict[str, Any],
+        cudem_bathymetry: dict[str, Any],
+    ) -> dict[str, list[MarineForecastPoint]]:
+        """Run the inner nested SWAN grid (tight nearshore domain around surf spots).
 
-        # Generate OUTPUT_POINTS.txt: lon lat per line, in surf_spots insertion order
-        pts_lines: list[str] = []
-        for spot_id, (lon, lat) in self._surf_spots.items():
-            pts_lines.append(f"{lon:.6f}   {lat:.6f}")
-        (tmpdir / "OUTPUT_POINTS.txt").write_text(
-            "\n".join(pts_lines) + "\n", encoding="ascii"
+        Copies nest_boundary.dat from tmpdir/outer/ into tmpdir/inner/, writes
+        SWAN input files, spawns SWAN, and parses TABLE output at surf spot points.
+
+        Args:
+            tmpdir: Root temporary directory (must contain outer/ with nest_boundary.dat).
+            blended_wind: Stitched HRRR+GFS wind field.
+            cudem_bathymetry: CUDEM depth grid dict.
+
+        Returns:
+            dict[spot_id, list[MarineForecastPoint]]
+        """
+        inner_dir = tmpdir / "inner"
+        inner_dir.mkdir(exist_ok=True)
+
+        # Copy nest boundary file from outer run into inner working dir
+        src = tmpdir / "outer" / self._NEST_BOUNDARY_FILE
+        dst = inner_dir / self._NEST_BOUNDARY_FILE
+        if src.exists():
+            shutil.copy2(str(src), str(dst))
+        else:
+            logger.warning(
+                "SWAN inner nest: outer grid did not produce %s — inner nest will run without nesting",
+                self._NEST_BOUNDARY_FILE,
+            )
+
+        grid_info = self._write_input_files(
+            inner_dir, blended_wind, {}, cudem_bathymetry, "inner"
         )
+        logger.info(
+            "SWAN inner nest: %d×%d cells at %.0f m resolution in %s",
+            grid_info["mxc"], grid_info["myc"],
+            self._inner_resolution_m, inner_dir,
+        )
+        self._spawn_swan(inner_dir)
+        logger.info("SWAN inner nest complete")
+        return self._parse_output(inner_dir, grid_info)
 
-        # Grid info: prefer wind_dims (has valid_times); bottom_dims has same geometry
+    def _write_input_files(
+        self,
+        run_dir: Path,
+        wind_field: dict[str, Any],
+        ww3_boundary: dict[str, Any],
+        cudem_bathymetry: dict[str, Any],
+        grid_level: str,
+    ) -> dict[str, Any]:
+        """Write SWAN input files for a given grid level and return grid_info.
+
+        Files written to run_dir:
+          BOTTOM.txt          — depth grid (SWAN positive-down convention)
+          WIND.txt            — interpolated wind components (IDLA=3)
+          BOUND_W.txt         — WW3 TPAR west-side boundary (outer only)
+          BOUND_S.txt         — WW3 TPAR south-side boundary (outer only)
+          OUTPUT_POINTS.txt   — (lon lat) pairs for surf spots (inner only)
+          INPUT               — SWAN command file
+
+        Args:
+            run_dir: Subdirectory (outer/ or inner/) in the main tmpdir.
+            wind_field: Blended wind field dict with ``"grids"`` list.
+            ww3_boundary: WW3 data (used for outer level only; ignored for inner).
+            cudem_bathymetry: CUDEM depth grid dict.
+            grid_level: ``"outer"`` or ``"inner"``.
+
+        Returns:
+            grid_info dict with SWAN grid dimensions and valid_times.
+        """
+        if grid_level == "outer":
+            bbox = self._outer_bbox
+            resolution_m = self._outer_resolution_m
+        else:
+            bbox = self._inner_bbox
+            resolution_m = self._inner_resolution_m
+
+        # BOTTOM.txt
+        bottom_dims, bottom_text = cudem_to_swan_bottom(cudem_bathymetry, bbox, resolution_m)
+        (run_dir / "BOTTOM.txt").write_text(bottom_text, encoding="ascii")
+
+        # WIND.txt — reuse hrrr_to_swan_wind which accepts any wind_field with "grids"
+        wind_dims, wind_text = hrrr_to_swan_wind(wind_field, bbox, resolution_m)
+        (run_dir / "WIND.txt").write_text(wind_text, encoding="ascii")
+
+        # WW3 boundary files (outer only)
+        if grid_level == "outer":
+            boundary_text = ww3_to_swan_boundary(ww3_boundary)
+            if not boundary_text:
+                # Calm boundary fallback
+                grids = wind_field.get("grids", [])
+                if grids:
+                    t0 = _parse_iso(grids[0]["valid_time"])
+                    t1 = _parse_iso(grids[-1]["valid_time"])
+                    boundary_text = (
+                        "TPAR\n"
+                        f"{_swan_time(t0)}  0.500  8.000  270.0  30.0\n"
+                        f"{_swan_time(t1)}  0.500  8.000  270.0  30.0\n"
+                    )
+            (run_dir / "BOUND_W.txt").write_text(boundary_text, encoding="ascii")
+            (run_dir / "BOUND_S.txt").write_text(boundary_text, encoding="ascii")
+
+        # OUTPUT_POINTS.txt (inner only)
+        if grid_level == "inner":
+            pts_lines: list[str] = [
+                f"{lon:.6f}   {lat:.6f}"
+                for _sid, (lon, lat) in self._surf_spots.items()
+            ]
+            (run_dir / "OUTPUT_POINTS.txt").write_text(
+                "\n".join(pts_lines) + "\n", encoding="ascii"
+            )
+
+        # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
         grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
 
-        # Generate SWAN INPUT command file
-        input_text = _build_input_file(
-            grid_info,
-            grid_info["valid_times"],
-            self._surf_spots,
-            self._output_interval_hr,
-            self._compute_dt_min,
+        # Compute inner_dims for outer NESTOUT command
+        inner_dims_for_input: dict[str, Any] | None = None
+        if grid_level == "outer":
+            from weewx_clearskies_api.services.swan_formats import _compute_swan_grid_dims
+            inner_dims_for_input = _compute_swan_grid_dims(self._inner_bbox, self._inner_resolution_m)
+
+        # SWAN INPUT command file
+        input_text = build_swan_input(
+            dims=grid_info,
+            valid_times=grid_info["valid_times"],
+            spots=self._surf_spots,
+            grid_level=grid_level,
+            inner_dims=inner_dims_for_input,
+            output_interval_hr=self._output_interval_hr,
+            compute_dt_min=self._compute_dt_min,
+            nest_boundary_file=self._NEST_BOUNDARY_FILE,
         )
-        (tmpdir / "INPUT").write_text(input_text, encoding="ascii")
+        (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
         return grid_info
 

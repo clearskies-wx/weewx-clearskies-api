@@ -11,10 +11,16 @@ Grid conventions used throughout this module:
     timestep.  HRRR winds are already earth-relative (rotated in hrrr.py).
   - BOUND_SPEC.txt: TPAR parametric boundary spectrum from WW3 scalar wave data.
 
+Nested grid support (T7.2):
+  ``build_swan_input`` builds the SWAN command INPUT file for either the outer
+  grid (uses hrrr_bbox, contains NESTOUT command, no output points) or the
+  inner nest (uses swan_domain_bbox, uses NGRID to read outer boundary, writes
+  TABLE output at configured surf spot coordinates).
+
 References:
   - SWAN User Manual v41.45, §5 (input file syntax)
   - PROVIDER-MANUAL §14.14 (HRRR), §14.15 (SWAN+TruShore runner)
-  - SWAN-TRUSHORE-PLAN.md T2.3
+  - SWAN-TRUSHORE-PLAN.md T2.3, T7.2
 """
 
 from __future__ import annotations
@@ -335,6 +341,176 @@ def cudem_to_swan_bottom(
 # ---------------------------------------------------------------------------
 # WW3 → SWAN BOUND_SPEC.txt (TPAR format)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# SWAN INPUT command file builder — nested grid support (T7.2)
+# ---------------------------------------------------------------------------
+
+
+def build_swan_input(
+    dims: dict[str, Any],
+    valid_times: list[str],
+    spots: dict[str, tuple[float, float]],
+    grid_level: str,
+    inner_dims: dict[str, Any] | None = None,
+    output_interval_hr: float = 1.0,
+    compute_dt_min: int = 10,
+    nest_boundary_file: str = "nest_boundary.dat",
+) -> str:
+    """Render the SWAN ASCII INPUT command file for a given grid level.
+
+    Two grid levels are supported (PROVIDER-MANUAL §14.15):
+
+    ``"outer"`` — continental shelf approach grid (hrrr_bbox domain).
+      - WW3 boundary conditions applied on the west and south sides.
+      - ``NESTOUT`` command written before ``COMPUTE`` to write boundary
+        spectra for the inner nest.  ``inner_dims`` must be supplied.
+      - No surf spot output points.
+
+    ``"inner"`` — tight nearshore grid (swan_domain_bbox domain).
+      - ``NGRID`` command reads outer boundary from ``nest_boundary_file``.
+      - No WW3 BOUNDSPEC (outer boundary replaces it).
+      - ``POINTS`` and ``TABLE`` output commands at all configured surf spots.
+
+    Args:
+        dims: Grid dimension dict for THIS level (mxc, myc, dlon, dlat,
+              lon_sw, lat_sw).  Returned by ``hrrr_to_swan_wind`` or
+              ``cudem_to_swan_bottom``.
+        valid_times: Ordered list of ISO-8601 UTC timestamps (first = t_start,
+                     last = t_end).  All intervals assumed 1-hour.
+        spots: dict mapping spot_id → (lon, lat).  Used only for the inner
+               level's POINTS / TABLE commands.
+        grid_level: ``"outer"`` or ``"inner"``.
+        inner_dims: Grid dimension dict for the INNER nest; required when
+                    ``grid_level == "outer"``.  Used to write the NESTOUT
+                    command with the inner nest's geographic extent.
+        output_interval_hr: Hours between TABLE output rows (inner only).
+        compute_dt_min: SWAN internal time step in minutes.
+        nest_boundary_file: Filename for NESTOUT / NGRID boundary data.
+
+    Returns:
+        String content of the SWAN INPUT command file.
+
+    Raises:
+        ValueError: ``valid_times`` is empty, or ``grid_level == "outer"``
+                    without ``inner_dims``.
+    """
+    if not valid_times:
+        raise ValueError("build_swan_input: valid_times is empty")
+    if grid_level not in ("outer", "inner"):
+        raise ValueError(f"build_swan_input: grid_level must be 'outer' or 'inner', got {grid_level!r}")
+    if grid_level == "outer" and inner_dims is None:
+        raise ValueError("build_swan_input: inner_dims required for grid_level='outer'")
+    if grid_level == "inner" and not spots:
+        raise ValueError("build_swan_input: spots must be non-empty for grid_level='inner'")
+
+    t_start = datetime.fromisoformat(valid_times[0].replace("Z", "+00:00")).astimezone(UTC)
+    t_end = datetime.fromisoformat(valid_times[-1].replace("Z", "+00:00")).astimezone(UTC)
+    swan_t_start = t_start.strftime("%Y%m%d.%H%M%S")
+    swan_t_end = t_end.strftime("%Y%m%d.%H%M%S")
+
+    wind_dt_hr = 1  # blended wind field is 1-hour cadence throughout (HRRR + interpolated GFS)
+    output_dt_min = int(round(output_interval_hr * 60))
+
+    mxc = dims["mxc"]
+    myc = dims["myc"]
+    dlon = dims["dlon"]
+    dlat = dims["dlat"]
+    lon_sw = dims["lon_sw"]
+    lat_sw = dims["lat_sw"]
+    xlenc = mxc * dlon
+    ylenc = myc * dlat
+
+    lines = [
+        "PROJECT 'TruShore' 'v1'",
+        "",
+        "SET LEVEL 0.",
+        "SET NAUTICAL",
+        "COORDINATES SPHERICAL",
+        "",
+        f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}"
+        " CIRCLE 36 0.0418 1.0 31",
+        "",
+        # BOTTOM grid: static
+        f"INPGRID BOTTOM REG {lon_sw:.6f} {lat_sw:.6f} 0. {mxc} {myc} {dlon:.6f} {dlat:.6f}",
+        "READINP BOTTOM 1. 'BOTTOM.txt' 3 0 FREE",
+        "",
+        # WIND grid: non-stationary 1-hour intervals
+        (
+            f"INPGRID WIND REG {lon_sw:.6f} {lat_sw:.6f} 0."
+            f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+            f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}"
+        ),
+        "READINP WIND 1. 'WIND.txt' 3 0 FREE",
+        "",
+    ]
+
+    if grid_level == "outer":
+        # WW3 boundary conditions on west and south sides
+        lines += [
+            "BOUNDSPEC SIDE W CCW CONSTANT FILE 'BOUND_W.txt' 1",
+            "BOUNDSPEC SIDE S CCW CONSTANT FILE 'BOUND_S.txt' 1",
+            "",
+        ]
+    else:
+        # Inner nest: read boundary spectra from outer grid's NESTOUT file
+        lines += [
+            f"NGRID '{nest_boundary_file}'",
+            "",
+        ]
+
+    # Source terms (same for both levels)
+    lines += [
+        "GEN3 WESTHUYSEN",
+        "BREAKING CONSTANT 1.0 0.73",
+        "FRICTION JON 0.067",
+        "TRIADS",
+        "DIFFRACTION",
+        "",
+    ]
+
+    if grid_level == "outer":
+        # Write NESTOUT command to produce boundary spectra for the inner nest.
+        # Syntax: NESTOUT 'file' inner_lon_sw inner_lat_sw inner_lon_ne inner_lat_ne inner_mxc inner_myc
+        assert inner_dims is not None  # guarded above
+        inner_lon_sw = inner_dims["lon_sw"]
+        inner_lat_sw = inner_dims["lat_sw"]
+        inner_mxc = inner_dims["mxc"]
+        inner_myc = inner_dims["myc"]
+        inner_dlon = inner_dims["dlon"]
+        inner_dlat = inner_dims["dlat"]
+        inner_lon_ne = inner_lon_sw + inner_mxc * inner_dlon
+        inner_lat_ne = inner_lat_sw + inner_myc * inner_dlat
+        lines += [
+            (
+                f"NESTOUT '{nest_boundary_file}'"
+                f" {inner_lon_sw:.6f} {inner_lat_sw:.6f}"
+                f" {inner_lon_ne:.6f} {inner_lat_ne:.6f}"
+                f" {inner_mxc} {inner_myc}"
+            ),
+            "",
+        ]
+    else:
+        # Inner: surf spot output points and TABLE output
+        lines += [
+            "POINTS 'SPOTS' FILE 'OUTPUT_POINTS.txt'",
+            "",
+            (
+                f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
+                f" XP YP HS TM01 DIR OUTPUT {swan_t_start} {output_dt_min} MIN"
+            ),
+            "",
+        ]
+
+    # Non-stationary computation (same for both levels)
+    lines += [
+        f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}",
+        "",
+        "STOP",
+    ]
+
+    return "\n".join(lines) + "\n"
 
 
 def ww3_to_swan_boundary(

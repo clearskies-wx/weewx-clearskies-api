@@ -34,20 +34,29 @@ Warmed endpoints:
     endpoint's own call gets a cache hit (FIX-24; see
     `_warm_current_conditions` docstring).
   - HRRR wind field for configured marine locations (SWAN+TruShore plan
-    T1.3): pre-fetches the HRRR 10m AGL wind forecast from NOMADS Grib
-    Filter for a bounding box derived from all configured [marine]
+    T1.3 / T7.3): pre-fetches the HRRR 10m AGL wind forecast from NOMADS
+    Grib Filter for a bounding box derived from all configured [marine]
     locations.  Active only when the [nearshore] pip extra is installed
     (eccodes or pygrib present, GRIB_AVAILABLE == True).  Fires at startup
-    and on the hourly schedule matching the HRRR cycle cadence (3600 s).
-    The HRRR provider caches internally (ADR-017, TTL 3300 s); the SWAN
-    runner reads from that cache.  See `_warm_hrrr_wind` docstring.
-  - SWAN+TruShore nearshore wave model (SWAN-TRUSHORE-PLAN T2.5): runs the
-    SWAN wave model for all configured surf spot locations after HRRR wind
-    data is warm.  Active only when the [nearshore] pip extra is installed.
-    Fires at startup (after HRRR warm) and on the same hourly schedule,
-    sequential after _warm_hrrr_wind() completes (never parallel).  On
-    failure: logs ERROR, last-good cache is preserved indefinitely.  See
-    `_warm_swan` docstring.
+    and on the 4×/day extended cycle schedule (00/06/12/18Z, 21600 s).
+    Extended cycles (max_forecast_hours=48) only — standard hourly cycles
+    produce only 18-hour forecasts and are not useful for TruShore.
+    The HRRR provider caches internally (ADR-017, TTL 21600 s).
+    See `_warm_hrrr_wind` docstring.
+  - GFS wind field for configured marine locations (T7.3): pre-fetches the
+    GFS 10m AGL wind forecast (hours 48–72) from NOMADS Grib Filter, using
+    the same bounding box as HRRR.  Supplements HRRR for the 72-hour surf
+    forecast card.  Active only when [nearshore] is installed.  Fires at
+    startup and on the same 4×/day schedule (00/06/12/18Z, 21600 s).
+    On failure: logs WARNING, TruShore produces shortened forecast (HRRR
+    hours only).  See `_warm_gfs_wind` docstring.
+  - SWAN+TruShore nearshore wave model (SWAN-TRUSHORE-PLAN T2.5 / T7.3):
+    runs the SWAN wave model for all configured surf spot locations after
+    both HRRR and GFS wind data are warm.  Active only when the [nearshore]
+    pip extra is installed.  Fires at startup (after HRRR+GFS warm) and on
+    the same 4×/day schedule, sequential after _warm_gfs_wind() completes
+    (never parallel).  On failure: logs ERROR, last-good cache is preserved
+    indefinitely.  See `_warm_swan` docstring.
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -164,7 +173,8 @@ class BackgroundCacheWarmer:
         self._warm_seeing_forecast()
         self._warm_marine()
         hrrr_wind = self._warm_hrrr_wind()
-        self._warm_swan(hrrr_wind)  # sequential after HRRR (SWAN-TRUSHORE-PLAN T2.5)
+        gfs_wind = self._warm_gfs_wind()
+        self._warm_swan(hrrr_wind, gfs_wind)  # sequential after HRRR+GFS (T7.3)
         self._warm_forecast()
         self._warm_current_conditions()
         logger.info("Cache warmer: initial warm complete")
@@ -204,7 +214,8 @@ class BackgroundCacheWarmer:
         last_seeing: float = _NEVER
         last_marine: float = _NEVER
         last_hrrr_wind: float = _NEVER
-        last_swan: float = _NEVER  # SWAN-TRUSHORE-PLAN T2.5 — always fires after HRRR
+        last_gfs_wind: float = _NEVER   # T7.3 — fires on same 4×/day schedule as HRRR
+        last_swan: float = _NEVER  # T2.5/T7.3 — always fires after HRRR+GFS
         last_forecast: float = _NEVER
         last_current_conditions: float = _NEVER
 
@@ -246,17 +257,19 @@ class BackgroundCacheWarmer:
                 self._warm_marine()
                 last_marine = time.monotonic()
 
-            # 3600 s = HRRR cycle cadence (one model run per hour).  The HRRR
-            # provider caches internally with a 3300 s TTL (PROVIDER-MANUAL
-            # §14.14), so this fires just after the previous cache entry has
-            # been refreshed with a new cycle.  Active only when [nearshore]
-            # extra is installed; _warm_hrrr_wind() returns silently otherwise.
-            # SWAN runs sequentially after HRRR (SWAN-TRUSHORE-PLAN T2.5 lead
-            # call #6): never parallel, always after HRRR warm completes.
-            if last_hrrr_wind == _NEVER or (now - last_hrrr_wind) >= 3600:
+            # 21600 s = extended HRRR cycle interval (4×/day at 00/06/12/18Z).
+            # TruShore uses only extended cycles (48-hour forecasts).  The HRRR
+            # provider caches internally with a 21600 s TTL (PROVIDER-MANUAL
+            # §14.14) matching this schedule.  Active only when [nearshore]
+            # extra is installed; _warm_hrrr_wind() / _warm_gfs_wind() return
+            # silently otherwise.  SWAN runs sequentially after both HRRR and
+            # GFS are warm (T7.3): never parallel, always after both complete.
+            if last_hrrr_wind == _NEVER or (now - last_hrrr_wind) >= 21600:
                 hrrr_wind = self._warm_hrrr_wind()
                 last_hrrr_wind = time.monotonic()
-                self._warm_swan(hrrr_wind)  # sequential — uses same wind data
+                gfs_wind = self._warm_gfs_wind()
+                last_gfs_wind = time.monotonic()
+                self._warm_swan(hrrr_wind, gfs_wind)  # sequential — uses both fields
                 last_swan = time.monotonic()
 
             # 1500 s < the 1800 s /forecast TTL (ADR-017), leaving margin so
@@ -1048,9 +1061,13 @@ class BackgroundCacheWarmer:
         try:
             from weewx_clearskies_api.providers.wind import hrrr as _hrrr
 
-            result = _hrrr.fetch(bbox=self._marine_config.hrrr_bbox)
+            # max_forecast_hours=48: only extended cycles (00/06/12/18Z) provide
+            # 48-hour forecasts.  Passing 48 here ensures we request the full
+            # extended range needed for the TruShore 72-hour surf forecast
+            # (HRRR hours 0–48 + GFS hours 48–72).
+            result = _hrrr.fetch(bbox=self._marine_config.hrrr_bbox, max_forecast_hours=48)
             logger.info(
-                "Cache warmer: HRRR wind field refreshed (bbox=%s)",
+                "Cache warmer: HRRR wind field refreshed (bbox=%s, max_forecast_hours=48)",
                 self._marine_config.hrrr_bbox,
             )
             return result
@@ -1058,10 +1075,49 @@ class BackgroundCacheWarmer:
             logger.warning("Cache warmer: HRRR wind warm failed", exc_info=True)
             return None
 
-    def _warm_swan(self, hrrr_wind_field: dict | None) -> None:
-        """Run SWAN+TruShore using the HRRR wind field from _warm_hrrr_wind().
+    def _warm_gfs_wind(self) -> dict | None:
+        """Pre-fetch GFS wind field (hours 48–72) using MarineConfig.hrrr_bbox.
+
+        GFS uses the same bounding box as HRRR (PROVIDER-MANUAL §14.16).
+        Fired on the same 4×/day (00/06/12/18Z) schedule as HRRR warming.
+        Returns the wind field dict on success so _warm_swan() can pass it
+        directly to TruShore alongside HRRR.  Returns None on failure or when
+        the [nearshore] extra is absent.
+
+        On GFS failure, TruShore produces a shortened forecast (HRRR hours 0–48
+        only) rather than no forecast.
+        """
+        if self._marine_config is None or self._marine_config.hrrr_bbox is None:
+            return None
+
+        try:
+            from weewx_clearskies_api.providers.wind.hrrr import GRIB_AVAILABLE
+        except ImportError:
+            return None
+
+        if not GRIB_AVAILABLE:
+            return None
+
+        try:
+            from weewx_clearskies_api.providers.wind import gfs as _gfs
+
+            result = _gfs.fetch(bbox=self._marine_config.hrrr_bbox)
+            logger.info(
+                "Cache warmer: GFS wind field refreshed (bbox=%s, cycle=%s)",
+                self._marine_config.hrrr_bbox,
+                result.get("cycle_time"),
+            )
+            return result
+        except Exception:
+            logger.warning("Cache warmer: GFS wind warm failed", exc_info=True)
+            return None
+
+    def _warm_swan(self, hrrr_wind_field: dict | None, gfs_wind_field: dict | None = None) -> None:
+        """Run SWAN+TruShore using pre-fetched HRRR and GFS wind fields.
 
         Receives the already-fetched wind data so TruShore never re-fetches.
+        gfs_wind_field supplements HRRR for 72-hour forecast (T7.3); when None,
+        TruShore produces a shortened forecast (HRRR hours only).
         On failure: logs ERROR, last-good per-spot cache preserved.
         """
         if self._marine_config is None or not getattr(
@@ -1087,7 +1143,9 @@ class BackgroundCacheWarmer:
             from weewx_clearskies_api.providers.nearshore import trushore
 
             trushore.run_all_spots(
-                self._marine_config, hrrr_wind_field=hrrr_wind_field
+                self._marine_config,
+                hrrr_wind_field=hrrr_wind_field,
+                gfs_wind_field=gfs_wind_field,
             )
         except Exception:
             logger.error(

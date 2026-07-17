@@ -148,7 +148,7 @@ _TRUSHORE_BUNDLED_SENTINEL = "http://localhost:trushore"
 
 
 class TrushoreConfig:
-    """Parsed ``[trushore]`` top-level config section (T4.2).
+    """Parsed ``[trushore]`` top-level config section (T4.2, T7.2).
 
     The ``[trushore]`` section is optional.  When absent, all fields take their
     documented defaults (bundled mode, all cores).
@@ -163,15 +163,27 @@ class TrushoreConfig:
         Number of OpenMP threads for SWAN.  0 = let OpenMP decide (uses all
         available CPU cores — the OpenMP default).  Set to a positive integer
         to cap SWAN's CPU usage, e.g. ``2`` on a busy shared host.
+      outer_grid_resolution_km (float, default 3.0):
+        Resolution of the outer SWAN grid in kilometres.  Matches the NWPS
+        CG1 pattern (~2–3 km).  Valid range: 1.0–10.0.  Controls the shelf
+        approach domain (uses ``hrrr_bbox``).
+      inner_nest_resolution_m (float, default 200.0):
+        Resolution of the inner nested SWAN grid in metres.  Controls the
+        nearshore domain tight around surf spots (uses ``swan_domain_bbox``).
+        Valid range: 50–1000.
 
-    Example api.conf (remote mode, 4 threads):
+    Example api.conf (remote mode, 4 threads, custom resolutions):
       [trushore]
         service_url = http://192.168.1.50:8767
         omp_num_threads = 4
+        outer_grid_resolution_km = 3.0
+        inner_nest_resolution_m = 200
     """
 
     service_url: str
     omp_num_threads: int
+    outer_grid_resolution_km: float
+    inner_nest_resolution_m: float
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.service_url = str(
@@ -182,6 +194,19 @@ class TrushoreConfig:
             self.omp_num_threads = int(raw_threads)
         else:
             self.omp_num_threads = 0  # 0 = let OpenMP use all cores (default)
+
+        # T7.2 — nested grid resolution config keys
+        raw_outer_km = section.get("outer_grid_resolution_km")
+        if raw_outer_km is not None and str(raw_outer_km).strip():
+            self.outer_grid_resolution_km = float(raw_outer_km)
+        else:
+            self.outer_grid_resolution_km = 3.0  # km — matches NWPS CG1 pattern
+
+        raw_inner_m = section.get("inner_nest_resolution_m")
+        if raw_inner_m is not None and str(raw_inner_m).strip():
+            self.inner_nest_resolution_m = float(raw_inner_m)
+        else:
+            self.inner_nest_resolution_m = 200.0  # metres — matches current behaviour
 
     @property
     def is_remote(self) -> bool:
@@ -199,6 +224,16 @@ class TrushoreConfig:
             raise ValueError(
                 f"[trushore] omp_num_threads must be >= 0 (0 = all cores), "
                 f"got {self.omp_num_threads}"
+            )
+        if not (1.0 <= self.outer_grid_resolution_km <= 10.0):
+            raise ValueError(
+                f"[trushore] outer_grid_resolution_km must be 1.0–10.0, "
+                f"got {self.outer_grid_resolution_km}"
+            )
+        if not (50.0 <= self.inner_nest_resolution_m <= 1000.0):
+            raise ValueError(
+                f"[trushore] inner_nest_resolution_m must be 50–1000, "
+                f"got {self.inner_nest_resolution_m}"
             )
         if self.is_remote:
             if not self.service_url.startswith(("http://", "https://")):

@@ -80,12 +80,13 @@ DOMAIN = "nearshore"
 _API_VERSION = "0.1.0"
 
 # Cache TTLs
-_CACHE_TTL_SECONDS = 3300        # 55 min per-cycle run marker (matches HRRR TTL)
+_CACHE_TTL_SECONDS = 21600       # 6 hours — extended HRRR cycle interval (4×/day at 00/06/12/18Z)
 _LAST_GOOD_TTL_SECONDS = 604800  # 7 days — "stale is always preferred to no data"
 
 # SWAN grid defaults (configurable via [marine] section in future T4.x)
 _DEFAULT_SWAN_BINARY = "/usr/local/bin/swan"
-_DEFAULT_GRID_RESOLUTION_M = 200.0
+_DEFAULT_OUTER_GRID_RESOLUTION_KM = 3.0   # outer (shelf) grid — continental approach
+_DEFAULT_GRID_RESOLUTION_M = 200.0         # inner nest resolution — tight nearshore
 _DEFAULT_COMPUTE_DT_MIN = 10
 _DEFAULT_OUTPUT_INTERVAL_HR = 1.0
 _DEFAULT_SWAN_TIMEOUT_S = 900
@@ -128,8 +129,10 @@ _REMOTE_FAILURE_THRESHOLD: int = 3
 
 try:
     from weewx_clearskies_api.providers.wind.hrrr import GRIB_AVAILABLE as _GRIB_AVAILABLE
+    from weewx_clearskies_api.providers.wind import gfs as _gfs_wind
 except ImportError:
     _GRIB_AVAILABLE = False
+    _gfs_wind = None  # type: ignore[assignment]
 
 _NEARSHORE_AVAILABLE: bool = _GRIB_AVAILABLE
 
@@ -154,7 +157,8 @@ if _NEARSHORE_AVAILABLE:
             "SWAN+TruShore locally-run nearshore wave model (PROVIDER-MANUAL §14.15). "
             "Requires SWAN binary on PATH (default: /usr/local/bin/swan) and the "
             "[nearshore] pip extra (eccodes or pygrib). "
-            "Runs hourly on the HRRR cycle — not a network provider. "
+            "Runs 4× daily on extended HRRR cycles (00/06/12/18Z) — not a network provider. "
+            "GFS wind (§14.16) supplements HRRR for 72-hour surf forecast. "
             "No API key required."
         ),
         refresh_interval=_CACHE_TTL_SECONDS,
@@ -223,33 +227,44 @@ class _SWANRunnerWithCleanup(SWANRunner):
     """SWANRunner variant that returns the tmpdir path for caller-managed cleanup.
 
     SWANRunner.run() creates a tmpdir internally and does not expose it — the
-    caller has no path to clean up.  This subclass calls the same private
-    implementation methods (_write_input_files, _spawn_swan, _parse_output)
-    with a caller-supplied tmpdir so TrushoreProvider can delete on success
-    and preserve-plus-log on failure per PROVIDER-MANUAL §14.15.
+    caller has no path to clean up.  This subclass delegates to the nested grid
+    methods (_stitch_wind, _run_outer_grid, _run_inner_nest) with a
+    caller-visible tmpdir so TrushoreProvider can delete on success and
+    preserve-plus-log on failure per PROVIDER-MANUAL §14.15.
     """
 
     def run_with_tmpdir(
         self,
         hrrr_wind_field: dict[str, Any],
+        gfs_wind_field: dict[str, Any] | None,
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
     ) -> tuple[dict[str, list], Path]:
-        """Run SWAN and return (results, tmpdir).
+        """Run nested SWAN and return (results, tmpdir).
+
+        Blends HRRR and GFS wind fields, runs the outer grid (continental shelf
+        approach) then the inner nest (tight nearshore), and returns the per-spot
+        MarineForecastPoint results alongside the working directory.
 
         The caller is responsible for deleting tmpdir on success and for
-        preserving + logging tmpdir on failure.
+        preserving + logging tmpdir on failure.  Both outer/ and inner/
+        subdirectories are created inside tmpdir.
+
+        Args:
+            hrrr_wind_field: Return value of hrrr.fetch(). Provides hours 0–48.
+            gfs_wind_field:  Return value of gfs.fetch(). Provides hours 48–72.
+                             When None, the forecast is shortened to HRRR hours only.
+            ww3_boundary:    Return value of wavewatch.fetch().
+            cudem_bathymetry: Dict with CUDEM depth grid data.
 
         Raises:
-            SWANRunError: SWAN exited non-zero, timed out, or binary not found.
-            ValueError: Required config keys missing or input data empty.
+            SWANRunError: A SWAN subprocess exited with non-zero status or timed out.
+            ValueError:   Required config keys are missing or input data is empty.
         """
+        blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
         tmpdir = Path(tempfile.mkdtemp(prefix="swan_run_"))
-        grid_info = self._write_input_files(
-            tmpdir, hrrr_wind_field, ww3_boundary, cudem_bathymetry
-        )
-        self._spawn_swan(tmpdir)
-        results = self._parse_output(tmpdir, grid_info)
+        self._run_outer_grid(tmpdir, blended_wind, ww3_boundary, cudem_bathymetry)
+        results = self._run_inner_nest(tmpdir, blended_wind, cudem_bathymetry)
         return results, tmpdir
 
 
@@ -511,8 +526,10 @@ def run_all_spots(
     marine_config: Any,
     *,
     hrrr_wind_field: dict | None = None,
+    gfs_wind_field: dict | None = None,
     swan_binary: str = _DEFAULT_SWAN_BINARY,
-    grid_resolution_m: float = _DEFAULT_GRID_RESOLUTION_M,
+    outer_grid_resolution_km: float = _DEFAULT_OUTER_GRID_RESOLUTION_KM,
+    inner_nest_resolution_m: float = _DEFAULT_GRID_RESOLUTION_M,
     compute_dt_min: int = _DEFAULT_COMPUTE_DT_MIN,
     output_interval_hr: float = _DEFAULT_OUTPUT_INTERVAL_HR,
     swan_timeout_s: int = _DEFAULT_SWAN_TIMEOUT_S,
@@ -521,9 +538,10 @@ def run_all_spots(
 
     Called from BackgroundCacheWarmer._warm_swan() in a background daemon
     thread.  All surf spot locations in ``marine_config`` are processed in a
-    single SWAN run.  On success the per-spot results are stored at the
-    last-good cache key (7-day TTL).  On failure the last-good cache is
-    untouched (stale data preserved indefinitely) per PROVIDER-MANUAL §14.15.
+    two-level nested SWAN run (outer grid + inner nest).  On success the
+    per-spot results are stored at the last-good cache key (7-day TTL).  On
+    failure the last-good cache is untouched (stale data preserved
+    indefinitely) per PROVIDER-MANUAL §14.15.
 
     Args:
         marine_config: Parsed MarineConfig from config.marine_config.
@@ -533,8 +551,13 @@ def run_all_spots(
             warmer.  When provided, TruShore uses it directly instead of
             calling _hrrr.fetch() — single fetch, single cache key, no
             divergence.  When None, falls back to fetching (legacy path).
+        gfs_wind_field: Pre-fetched GFS wind field dict (hours 48–72) from
+            the cache warmer.  When provided, the SWAN runner blends it with
+            HRRR for a full 72-hour forecast.  When None (GFS unavailable),
+            the forecast is shortened to HRRR hours only (0–48).
         swan_binary: Absolute path to the SWAN executable.
-        grid_resolution_m: SWAN grid spacing in metres (default 200).
+        outer_grid_resolution_km: Outer grid spacing in km (default 3.0).
+        inner_nest_resolution_m: Inner nest grid spacing in metres (default 200).
         compute_dt_min: SWAN internal time step in minutes (default 10).
         output_interval_hr: TABLE output timestep in hours (default 1).
         swan_timeout_s: Subprocess timeout in seconds (default 900 / 15 min).
@@ -600,10 +623,21 @@ def run_all_spots(
         return
 
     # Use canonical bboxes from MarineConfig (computed once at parse time).
-    domain_bbox = marine_config.swan_domain_bbox
-    if domain_bbox is None:
-        logger.debug("TruShore: no SWAN domain bbox; skipping")
+    # inner_bbox = tight nearshore domain around surf spots
+    # outer_bbox = wider HRRR-fetch area for the continental shelf approach
+    inner_bbox = marine_config.swan_domain_bbox
+    if inner_bbox is None:
+        logger.debug("TruShore: no SWAN domain bbox (inner nest); skipping")
         return
+
+    outer_bbox = marine_config.hrrr_bbox
+    if outer_bbox is None:
+        logger.debug("TruShore: no HRRR bbox (outer grid); skipping")
+        return
+
+    # Preserve domain_bbox alias for readability in code below that uses it
+    # for WW3 domain centre computation.
+    domain_bbox = inner_bbox
 
     # ------------------------------------------------------------------
     # 1. Use HRRR wind field passed by the cache warmer (single fetch).
@@ -613,17 +647,33 @@ def run_all_spots(
         try:
             from weewx_clearskies_api.providers.wind import hrrr as _hrrr
 
-            bbox = marine_config.hrrr_bbox
-            if bbox is None:
-                logger.error("TruShore: no HRRR bbox configured; skipping")
-                return
-            hrrr_wind_field = _hrrr.fetch(bbox=bbox)
+            hrrr_wind_field = _hrrr.fetch(bbox=outer_bbox, max_forecast_hours=48)
         except Exception:
             logger.error(
                 "TruShore: HRRR wind data unavailable; skipping SWAN run",
                 exc_info=True,
             )
             return
+
+    # ------------------------------------------------------------------
+    # 1b. Fetch GFS wind for hours 48–72 (supplements HRRR extended range).
+    #     On failure: set gfs_wind_field = None and log WARNING so the SWAN
+    #     runner produces a shortened forecast (HRRR hours only) rather than
+    #     aborting the entire run.
+    # ------------------------------------------------------------------
+    if gfs_wind_field is None and _gfs_wind is not None:
+        try:
+            gfs_wind_field = _gfs_wind.fetch(bbox=outer_bbox)
+            logger.debug(
+                "TruShore: GFS wind fetched inline (cycle=%s)",
+                gfs_wind_field.get("cycle_time"),
+            )
+        except Exception:
+            logger.warning(
+                "TruShore: GFS wind unavailable; SWAN will produce shortened "
+                "forecast (HRRR hours 0–48 only)",
+                exc_info=True,
+            )
 
     hrrr_cycle_time: str = hrrr_wind_field["cycle_time"]
 
@@ -667,16 +717,27 @@ def run_all_spots(
         loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations
     }
 
-    # Read omp_num_threads from TrushoreConfig (T4.2 / coordinator addition).
+    # Read resolution and thread config from TrushoreConfig (T4.2/T7.3).
     # 0 means "let OpenMP decide" (all available cores — default behaviour).
     trushore_cfg = getattr(marine_config, "trushore", None)
     omp_num_threads: int = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
+    # Use resolution from TrushoreConfig when available (wizard-configured); fall
+    # back to the caller-supplied default (or the module-level constant).
+    _cfg_outer_km = getattr(trushore_cfg, "outer_grid_resolution_km", None) if trushore_cfg else None
+    _cfg_inner_m = getattr(trushore_cfg, "inner_nest_resolution_m", None) if trushore_cfg else None
+    resolved_outer_km: float = float(_cfg_outer_km) if _cfg_outer_km is not None else outer_grid_resolution_km
+    resolved_inner_m: float = float(_cfg_inner_m) if _cfg_inner_m is not None else inner_nest_resolution_m
 
     swan_config: dict[str, Any] = {
-        "domain_bbox": list(domain_bbox),
+        # Nested grid architecture (T7.2 / PROVIDER-MANUAL §14.15):
+        #   outer_bbox = wider HRRR fetch area (continental shelf approach)
+        #   inner_bbox = tight nearshore domain around surf spots
+        "outer_bbox": list(outer_bbox),
+        "inner_bbox": list(inner_bbox),
         "surf_spots": surf_spots_config,
         "swan_binary": swan_binary,
-        "grid_resolution_m": grid_resolution_m,
+        "outer_grid_resolution_km": resolved_outer_km,
+        "inner_nest_resolution_m": resolved_inner_m,
         "compute_dt_min": compute_dt_min,
         "output_interval_hr": output_interval_hr,
         "swan_timeout_s": swan_timeout_s,
@@ -687,16 +748,19 @@ def run_all_spots(
     run_time = datetime.now(UTC)
 
     logger.info(
-        "TruShore: starting SWAN run for %d spot(s) (HRRR cycle=%s, domain=%s)",
+        "TruShore: starting SWAN run for %d spot(s) "
+        "(HRRR cycle=%s, GFS=%s, outer=%s, inner=%s)",
         len(surf_spots_config),
         hrrr_cycle_time,
-        domain_bbox,
+        gfs_wind_field.get("cycle_time") if gfs_wind_field else "unavailable",
+        outer_bbox,
+        inner_bbox,
     )
 
     tmpdir: Path | None = None
     try:
         results, tmpdir = runner.run_with_tmpdir(
-            hrrr_wind_field, ww3_boundary, cudem_bathymetry
+            hrrr_wind_field, gfs_wind_field, ww3_boundary, cudem_bathymetry
         )
     except SWANRunError as exc:
         logger.error(
@@ -722,6 +786,14 @@ def run_all_spots(
     run_time_iso = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
     cache = get_cache()
 
+    # Pre-parse hrrr_cycle_time for windSource attribution (T7.3).
+    # Points at or before HRRR hour 48 are wind-forced by HRRR;
+    # points beyond hour 48 are wind-forced by GFS (when available).
+    try:
+        hrrr_cycle_dt = datetime.fromisoformat(hrrr_cycle_time.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        hrrr_cycle_dt = None
+
     spots_cached = 0
     for spot_id, forecast_points in results.items():
         if not forecast_points:
@@ -732,8 +804,23 @@ def run_all_spots(
             )
             continue
 
+        # Build per-point dicts with windSource attribution.
+        forecast_dicts: list[dict[str, Any]] = []
+        for pt in forecast_points:
+            d = pt.model_dump()
+            if hrrr_cycle_dt is not None:
+                try:
+                    pt_dt = datetime.fromisoformat(pt.time.replace("Z", "+00:00"))
+                    fhour = (pt_dt - hrrr_cycle_dt).total_seconds() / 3600.0
+                    d["windSource"] = "gfs_trushore" if fhour > 48.0 else "hrrr_trushore"
+                except (ValueError, TypeError):
+                    d["windSource"] = "hrrr_trushore"
+            else:
+                d["windSource"] = "hrrr_trushore"
+            forecast_dicts.append(d)
+
         payload = {
-            "forecast": [pt.model_dump() for pt in forecast_points],
+            "forecast": forecast_dicts,
             "run_time": run_time_iso,
             "hrrr_cycle_time": hrrr_cycle_time,
         }

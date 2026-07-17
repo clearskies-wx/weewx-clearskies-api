@@ -658,7 +658,7 @@ class MarineApplyConfig(BaseModel):
 
 
 class TrushoreApplyConfig(BaseModel):
-    """``[trushore]`` section for api.conf (T4.2 / T4.4 wizard).
+    """``[trushore]`` section for api.conf (T4.2 / T4.4 / T7.3 wizard).
 
     Written by the wizard's SWAN+TruShore step.  All fields have defaults
     so existing wizard clients that don't send this block are unaffected.
@@ -672,17 +672,23 @@ class TrushoreApplyConfig(BaseModel):
       Number of OpenMP threads for SWAN.  0 = all available cores (default).
       Use a positive integer to limit SWAN's CPU usage on shared hosts.
 
-    swan_grid_resolution_m:
-      SWAN computational grid resolution in metres.  Default 200 m.
-      Finer resolution (e.g. 100 m) improves accuracy at higher CPU cost.
-      Valid range: 50 – 1000 m.
+    outer_grid_resolution_km:
+      Outer SWAN grid resolution in kilometres (continental shelf approach
+      domain).  Default 3.0 km.  Valid range: 1.0 – 10.0 km.  Coarser
+      values reduce memory and runtime at the cost of shelf-scale accuracy.
+
+    inner_nest_resolution_m:
+      Inner nest SWAN grid resolution in metres (tight nearshore domain
+      around surf spots).  Default 200 m.  Valid range: 50 – 1000 m.
+      Finer resolution improves accuracy at higher CPU cost.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     service_url: str | None = None  # None = bundled mode
     omp_num_threads: int = Field(default=0, ge=0)
-    swan_grid_resolution_m: int = Field(default=200, ge=50, le=1000)
+    outer_grid_resolution_km: float = Field(default=3.0, ge=1.0, le=10.0)
+    inner_nest_resolution_m: int = Field(default=200, ge=50, le=1000)
 
 
 class UnitsApplyConfig(BaseModel):
@@ -1383,7 +1389,8 @@ def _write_api_conf(
             from weewx_clearskies_api.config.marine_config import _TRUSHORE_BUNDLED_SENTINEL
             cfg["trushore"]["service_url"] = _TRUSHORE_BUNDLED_SENTINEL
         cfg["trushore"]["omp_num_threads"] = str(ts.omp_num_threads)
-        cfg["trushore"]["swan_grid_resolution_m"] = str(ts.swan_grid_resolution_m)
+        cfg["trushore"]["outer_grid_resolution_km"] = str(ts.outer_grid_resolution_km)
+        cfg["trushore"]["inner_nest_resolution_m"] = str(ts.inner_nest_resolution_m)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
