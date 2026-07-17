@@ -73,7 +73,7 @@ dependencies = [
 
 [project.optional-dependencies]
 marine = [
-    # ADR-085: eccodes Python binding for GRIB2 processing (NWPS nearshore data).
+    # ADR-085: eccodes Python binding for GRIB2 processing (marine GRIB2 data).
     # Requires the eccodes C library to be installed on the system first
     # (apt install libeccodes-dev / dnf install eccodes-devel / brew install eccodes).
     # Docker images include it by default; native installs need the system library.

@@ -251,9 +251,9 @@ path = /var/lib/weewx/weewx.sdb
 # OPTIONAL — its absence has zero impact on the rest of the API: no marine
 # provider modules register, no /api/v1/marine|tides|surf|fishing|beach-safety
 # endpoints appear, and the dashboard shows no Marine nav item. Requires
-# eccodes for the NWPS nearshore provider (see OPERATIONS-MANUAL "eccodes
-# native dependency"); NWPS degrades gracefully to WaveWatch III offshore
-# data when eccodes is missing or NWPS itself is unavailable.
+# eccodes for marine GRIB2 processing (see OPERATIONS-MANUAL "eccodes
+# native dependency"). The [nearshore] pip extra adds SWAN+TruShore
+# wave model support (ADR-093).
 #
 # Full field reference (valid values, required/optional): OPERATIONS-MANUAL.md
 # "Marine location configuration". Uncomment and adapt the example below —
@@ -287,11 +287,6 @@ path = /var/lib/weewx/weewx.sdb
 #     # Powers the NWS marine zone text forecast (nws_marine provider).
 #     nws_marine_zone_id = AMZ250
 #
-#     # NWPS WFO domain (3-letter code) and computational grid (CG1-CG5).
-#     # Auto-determined from coordinates at setup/apply time — set manually
-#     # only when overriding the auto-resolved value.
-#     nwps_wfo = ILM
-#     nwps_cg_grid = CG1
 #
 #     # --- Surf sub-block: required when "surf" is in activities above ---
 #     [[[[surf]]]]

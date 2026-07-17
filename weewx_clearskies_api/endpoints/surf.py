@@ -471,6 +471,8 @@ def get_surf(location_id: str) -> dict:
         swell_height_m = raw_hsig
 
         # Step 2: wave_transform supplements → corrected Hsig = waveHeightAtBreak
+        # grid_data omitted: SWAN outputs at exact spot coordinates (OUTPUT POINTS),
+        # so Supplement 3 (spatial interpolation) is handled by SWAN internally.
         supplemented = wave_transform.apply_supplements(
             {
                 "wave_height": raw_hsig,
@@ -556,7 +558,6 @@ def get_surf(location_id: str) -> dict:
         entry["breakingHawaiianHeight"] = _convert_unit(
             hawaiian_height_m, "meter", wave_height_internal
         )
-        # windSource per ADR-094 (not in SurfForecast model — added here).
         entry["windSource"] = ts_wind_source
 
         forecast_entries.append(entry)

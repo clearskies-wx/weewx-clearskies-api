@@ -7,7 +7,7 @@
 # ── builder ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim-bookworm AS builder
 
-# ADR-085: eccodes C library for GRIB2 processing (NWPS nearshore data).
+# ADR-085: eccodes C library for GRIB2 processing (marine GRIB2 data).
 # Installed in the builder stage; the shared library is copied to runtime below.
 RUN apt-get update && apt-get install -y --no-install-recommends libeccodes-dev \
     && rm -rf /var/lib/apt/lists/*

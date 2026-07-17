@@ -532,10 +532,8 @@ def score_surf(
             i18n.get_active_locale() (API-MANUAL.md §17 "Marine i18n").
         wind_source: metadata field indicating the wind data source for this
             timestep. One of ``"station"``, ``"forecast_provider"``, or
-            ``"hrrr_trushore"`` (ADR-094). Not stored in the returned
-            SurfForecast model (models/responses.py is out of scope here) —
-            the surf endpoint adds ``windSource`` to the serialised entry dict
-            after calling ``model_dump()``.
+            ``"hrrr_trushore"`` (ADR-094). Stored in the ``windSource``
+            field of the ``SurfForecast`` model (models/responses.py).
     """
     loc = locale or i18n.get_active_locale()
 
