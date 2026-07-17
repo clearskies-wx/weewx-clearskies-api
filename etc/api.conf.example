@@ -332,3 +332,24 @@ path = /var/lib/weewx/weewx.sdb
 #           label = NC Beach Water Quality
 #           url = https://ncdeq.gov/beach-water-quality
 
+[trushore]
+# SWAN+TruShore nearshore wave model configuration (ADR-093).
+# This section is OPTIONAL — only relevant when the [nearshore] pip extra is
+# installed. Controls how the SWAN wave model runs and where the API reads
+# TruShore output from.
+#
+# service_url: URL of a standalone TruShore service. Leave as "bundled" (the
+#   default) to run SWAN as a subprocess inside the API process. Set to
+#   http://<host>:8767 to read from a separated TruShore service on dedicated
+#   hardware.
+service_url = bundled
+#
+# omp_num_threads: Number of OpenMP threads for SWAN. 0 (default) = all
+#   available CPU cores. Set to a positive integer to limit SWAN's CPU usage
+#   on shared hosts (e.g., 2 on a 4-core machine leaves 2 cores for the API).
+omp_num_threads = 0
+#
+# swan_grid_resolution_m: SWAN computational grid cell size in metres.
+#   Default 200m. Finer resolution (e.g., 100m) improves accuracy near complex
+#   coastlines at higher CPU cost. Valid range: 50-1000.
+swan_grid_resolution_m = 200
