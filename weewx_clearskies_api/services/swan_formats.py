@@ -455,10 +455,10 @@ def build_swan_input(
         ]
     else:
         # Inner nest: read boundary spectra from outer grid's NESTOUT file.
-        # SWAN 41.51: NGRID 'name' 'filename' reads nesting data written by
-        # the outer grid's NESTOUT command.
+        # SWAN 41.51: BOUNDNEST1 NEST 'filename' CLOSED
+        # Validated by direct SWAN test on weewx host 2026-07-17.
         lines += [
-            f"NGRID 'outer' '{nest_boundary_file}'",
+            f"BOUNDNEST1 NEST '{nest_boundary_file}' CLOSED",
             "",
         ]
 
