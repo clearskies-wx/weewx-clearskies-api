@@ -177,9 +177,9 @@ def _build_input_file(
         ),
         "READINP WIND 1. 'WIND.txt' 3 0 FREE",
         "",
-        # Boundary conditions: parametric spectrum on western and southern sides
-        "BOUNDSPEC SIDE W CCW VARIABLE FILE 'BOUND_SPEC.txt' 1",
-        "BOUNDSPEC SIDE S CCW VARIABLE FILE 'BOUND_SPEC.txt' 1",
+        # Boundary conditions: uniform WW3 spectrum on western and southern sides
+        "BOUNDSPEC SIDE W CCW CONSTANT FILE 'BOUND_SPEC.txt' 1",
+        "BOUNDSPEC SIDE S CCW CONSTANT FILE 'BOUND_SPEC.txt' 1",
         "",
         # Source term settings (PROVIDER-MANUAL §14.15)
         "GEN3 WESTIN",
