@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -633,7 +634,9 @@ def fetch(
         cycle_has_data = False
         first_fhour = forecast_hours[0] if forecast_hours else hours_start
 
-        for fhour in forecast_hours:
+        for idx, fhour in enumerate(forecast_hours):
+            if idx > 0:
+                time.sleep(0.55)  # pace below 2 req/s NOMADS rate limit
             url = _build_grib_filter_url(cycle_dt, fhour, bbox)
             grib_path = _download_grib(url)
 

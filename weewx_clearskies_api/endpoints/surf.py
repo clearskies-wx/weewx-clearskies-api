@@ -391,7 +391,7 @@ def get_surf(location_id: str) -> dict:
         if is_station_served(location.id):
             from sqlalchemy.orm import Session as _Session  # noqa: PLC0415
 
-            from weewx_clearskies_api.db.connection import get_engine  # noqa: PLC0415
+            from weewx_clearskies_api.db.session import get_engine  # noqa: PLC0415
             from weewx_clearskies_api.db.registry import get_registry  # noqa: PLC0415
             from weewx_clearskies_api.services.archive import (  # noqa: PLC0415
                 get_current as _get_current_observation,

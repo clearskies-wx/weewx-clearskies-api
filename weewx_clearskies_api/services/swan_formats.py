@@ -13,7 +13,7 @@ Grid conventions used throughout this module:
 
 Nested grid support (T7.2):
   ``build_swan_input`` builds the SWAN command INPUT file for either the outer
-  grid (uses hrrr_bbox, contains NESTOUT command, no output points) or the
+  grid (uses hrrr_bbox, contains NEST command, no output points) or the
   inner nest (uses swan_domain_bbox, uses NGRID to read outer boundary, writes
   TABLE output at configured surf spot coordinates).
 
@@ -364,7 +364,7 @@ def build_swan_input(
 
     ``"outer"`` — continental shelf approach grid (hrrr_bbox domain).
       - WW3 boundary conditions applied on the west and south sides.
-      - ``NESTOUT`` command written before ``COMPUTE`` to write boundary
+      - ``NEST`` command written before ``COMPUTE`` to write boundary
         spectra for the inner nest.  ``inner_dims`` must be supplied.
       - No surf spot output points.
 
@@ -383,11 +383,11 @@ def build_swan_input(
                level's POINTS / TABLE commands.
         grid_level: ``"outer"`` or ``"inner"``.
         inner_dims: Grid dimension dict for the INNER nest; required when
-                    ``grid_level == "outer"``.  Used to write the NESTOUT
+                    ``grid_level == "outer"``.  Used to write the NEST
                     command with the inner nest's geographic extent.
         output_interval_hr: Hours between TABLE output rows (inner only).
         compute_dt_min: SWAN internal time step in minutes.
-        nest_boundary_file: Filename for NESTOUT / NGRID boundary data.
+        nest_boundary_file: Filename for NEST / NGRID boundary data.
 
     Returns:
         String content of the SWAN INPUT command file.
@@ -454,7 +454,7 @@ def build_swan_input(
             "",
         ]
     else:
-        # Inner nest: read boundary spectra from outer grid's NESTOUT file
+        # Inner nest: read boundary spectra from outer grid's NEST file
         lines += [
             f"NGRID '{nest_boundary_file}'",
             "",
@@ -471,8 +471,13 @@ def build_swan_input(
     ]
 
     if grid_level == "outer":
-        # Write NESTOUT command to produce boundary spectra for the inner nest.
-        # Syntax: NESTOUT 'file' inner_lon_sw inner_lat_sw inner_lon_ne inner_lat_ne inner_mxc inner_myc
+        # Write NEST command to produce boundary spectra for the inner nest.
+        # SWAN syntax: NEST 'sname' xpc ypc alpc xlenc ylenc [mxc] [myc]
+        #   xpc, ypc = SW corner of the inner grid (origin)
+        #   alpc     = direction of positive x-axis (0 = East for spherical)
+        #   xlenc    = length of inner grid in x-direction (degrees lon)
+        #   ylenc    = length of inner grid in y-direction (degrees lat)
+        #   mxc, myc = number of cells in x and y directions
         assert inner_dims is not None  # guarded above
         inner_lon_sw = inner_dims["lon_sw"]
         inner_lat_sw = inner_dims["lat_sw"]
@@ -480,13 +485,14 @@ def build_swan_input(
         inner_myc = inner_dims["myc"]
         inner_dlon = inner_dims["dlon"]
         inner_dlat = inner_dims["dlat"]
-        inner_lon_ne = inner_lon_sw + inner_mxc * inner_dlon
-        inner_lat_ne = inner_lat_sw + inner_myc * inner_dlat
+        inner_xlenc = inner_mxc * inner_dlon
+        inner_ylenc = inner_myc * inner_dlat
         lines += [
             (
-                f"NESTOUT '{nest_boundary_file}'"
+                f"NEST '{nest_boundary_file}'"
                 f" {inner_lon_sw:.6f} {inner_lat_sw:.6f}"
-                f" {inner_lon_ne:.6f} {inner_lat_ne:.6f}"
+                f" 0.0"
+                f" {inner_xlenc:.6f} {inner_ylenc:.6f}"
                 f" {inner_mxc} {inner_myc}"
             ),
             "",
