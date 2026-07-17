@@ -150,8 +150,8 @@ _rate_limiter = RateLimiter(
     name="hrrr-wind",
     provider_id=PROVIDER_ID,
     domain=DOMAIN,
-    max_calls=20,
-    window_seconds=10,
+    max_calls=2,
+    window_seconds=1,
 )
 
 # ---------------------------------------------------------------------------

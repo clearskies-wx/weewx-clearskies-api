@@ -92,8 +92,6 @@ _DEFAULT_SWAN_TIMEOUT_S = 900
 
 # Bounding-box expansion margins (degrees) used to derive the SWAN domain
 # and HRRR wind bbox from configured surf spot coordinates.
-_DOMAIN_MARGIN_DEG = 0.5    # nearshore SWAN domain: ±0.5° (~55 km per side)
-_HRRR_MARGIN_DEG = 1.0      # HRRR bbox: ±1° (matches _warm_hrrr_wind() margin)
 
 # ---------------------------------------------------------------------------
 # Remote mode state (T4.2 / T4.3 — set when [trushore] service_url is active)
@@ -512,6 +510,7 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
 def run_all_spots(
     marine_config: Any,
     *,
+    hrrr_wind_field: dict | None = None,
     swan_binary: str = _DEFAULT_SWAN_BINARY,
     grid_resolution_m: float = _DEFAULT_GRID_RESOLUTION_M,
     compute_dt_min: int = _DEFAULT_COMPUTE_DT_MIN,
@@ -526,14 +525,14 @@ def run_all_spots(
     last-good cache key (7-day TTL).  On failure the last-good cache is
     untouched (stale data preserved indefinitely) per PROVIDER-MANUAL §14.15.
 
-    Inputs are retrieved from their respective provider caches — they are
-    expected to be warm before this function is called (the cache warmer
-    fires HRRR warm first, then calls this function).
-
     Args:
         marine_config: Parsed MarineConfig from config.marine_config.
             Must have .locations (list[MarineLocation]) and .surf_spots
             (dict[str, SurfSpotConfig]).
+        hrrr_wind_field: Pre-fetched HRRR wind field dict from the cache
+            warmer.  When provided, TruShore uses it directly instead of
+            calling _hrrr.fetch() — single fetch, single cache key, no
+            divergence.  When None, falls back to fetching (legacy path).
         swan_binary: Absolute path to the SWAN executable.
         grid_resolution_m: SWAN grid spacing in metres (default 200).
         compute_dt_min: SWAN internal time step in minutes (default 10).
@@ -600,40 +599,33 @@ def run_all_spots(
         logger.debug("TruShore: no surf locations found; skipping SWAN run")
         return
 
-    lats = [loc.lat for loc in surf_locations]
-    lons = [loc.lon for loc in surf_locations]
-
-    # HRRR wind bbox: ±1° around the surf location cluster (matches
-    # _warm_hrrr_wind()'s bbox so we get a guaranteed cache hit).
-    hrrr_bbox: tuple[float, float, float, float] = (
-        min(lons) - _HRRR_MARGIN_DEG,
-        min(lats) - _HRRR_MARGIN_DEG,
-        max(lons) + _HRRR_MARGIN_DEG,
-        max(lats) + _HRRR_MARGIN_DEG,
-    )
-
-    # SWAN domain bbox: ±0.5° around surf locations (tighter than HRRR).
-    domain_bbox: tuple[float, float, float, float] = (
-        min(lons) - _DOMAIN_MARGIN_DEG,
-        min(lats) - _DOMAIN_MARGIN_DEG,
-        max(lons) + _DOMAIN_MARGIN_DEG,
-        max(lats) + _DOMAIN_MARGIN_DEG,
-    )
-
-    # ------------------------------------------------------------------
-    # 1. Fetch HRRR wind (expected cache hit — warmer called this first).
-    # ------------------------------------------------------------------
-    try:
-        from weewx_clearskies_api.providers.wind import hrrr as _hrrr
-
-        hrrr_wind_field = _hrrr.fetch(bbox=hrrr_bbox)
-        hrrr_cycle_time: str = hrrr_wind_field["cycle_time"]
-    except Exception:
-        logger.error(
-            "TruShore: HRRR wind data unavailable; skipping SWAN run",
-            exc_info=True,
-        )
+    # Use canonical bboxes from MarineConfig (computed once at parse time).
+    domain_bbox = marine_config.swan_domain_bbox
+    if domain_bbox is None:
+        logger.debug("TruShore: no SWAN domain bbox; skipping")
         return
+
+    # ------------------------------------------------------------------
+    # 1. Use HRRR wind field passed by the cache warmer (single fetch).
+    # ------------------------------------------------------------------
+    if hrrr_wind_field is None:
+        # Legacy fallback: fetch directly (used by manual trigger, tests).
+        try:
+            from weewx_clearskies_api.providers.wind import hrrr as _hrrr
+
+            bbox = marine_config.hrrr_bbox
+            if bbox is None:
+                logger.error("TruShore: no HRRR bbox configured; skipping")
+                return
+            hrrr_wind_field = _hrrr.fetch(bbox=bbox)
+        except Exception:
+            logger.error(
+                "TruShore: HRRR wind data unavailable; skipping SWAN run",
+                exc_info=True,
+            )
+            return
+
+    hrrr_cycle_time: str = hrrr_wind_field["cycle_time"]
 
     # Deduplication: skip if SWAN already ran for this HRRR cycle.
     run_marker_key = _build_run_marker_key(hrrr_cycle_time)

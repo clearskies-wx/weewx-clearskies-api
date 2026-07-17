@@ -520,6 +520,10 @@ class MarineWeatherConfig:
         self.dedup_radius_km = dedup_radius_km
 
 
+_HRRR_MARGIN_DEG = 1.0
+_SWAN_DOMAIN_MARGIN_DEG = 0.5
+
+
 class MarineConfig:
     """Top-level parsed ``[marine]`` section, with optional ``[trushore]`` settings."""
 
@@ -532,6 +536,13 @@ class MarineConfig:
     #: bundled mode (sentinel service_url, omp_num_threads=0) when the section
     #: is absent from api.conf.
     trushore: TrushoreConfig
+    #: Canonical HRRR wind bbox — computed once from ALL marine locations
+    #: with a 1° margin.  Both the cache warmer and TruShore read this
+    #: instead of computing their own.  None when no locations configured.
+    hrrr_bbox: tuple[float, float, float, float] | None
+    #: SWAN computational domain — tighter ±0.5° around surf locations only.
+    #: None when no surf spots configured.
+    swan_domain_bbox: tuple[float, float, float, float] | None
 
     def __init__(
         self,
@@ -548,6 +559,32 @@ class MarineConfig:
         self.beach_safety = beach_safety if beach_safety is not None else {}
         self.weather = weather if weather is not None else MarineWeatherConfig()
         self.trushore = trushore if trushore is not None else TrushoreConfig({})
+
+        all_lats = [loc.lat for loc in self.locations]
+        all_lons = [loc.lon for loc in self.locations]
+        if all_lats and all_lons:
+            self.hrrr_bbox = (
+                min(all_lons) - _HRRR_MARGIN_DEG,
+                min(all_lats) - _HRRR_MARGIN_DEG,
+                max(all_lons) + _HRRR_MARGIN_DEG,
+                max(all_lats) + _HRRR_MARGIN_DEG,
+            )
+        else:
+            self.hrrr_bbox = None
+
+        surf_ids = set(self.surf_spots.keys())
+        surf_locs = [loc for loc in self.locations if loc.id in surf_ids]
+        if surf_locs:
+            s_lats = [loc.lat for loc in surf_locs]
+            s_lons = [loc.lon for loc in surf_locs]
+            self.swan_domain_bbox = (
+                min(s_lons) - _SWAN_DOMAIN_MARGIN_DEG,
+                min(s_lats) - _SWAN_DOMAIN_MARGIN_DEG,
+                max(s_lons) + _SWAN_DOMAIN_MARGIN_DEG,
+                max(s_lats) + _SWAN_DOMAIN_MARGIN_DEG,
+            )
+        else:
+            self.swan_domain_bbox = None
 
 
 # ---------------------------------------------------------------------------
