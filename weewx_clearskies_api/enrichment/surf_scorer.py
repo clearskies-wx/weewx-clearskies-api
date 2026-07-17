@@ -85,13 +85,21 @@ _WEIGHT_SWELL = 0.10
 # ---------------------------------------------------------------------------
 
 _WAVE_HEIGHT_RANGES_FT: list[tuple[float, float]] = [
-    (0.5, 0.1),
-    (1.0, 0.3),
-    (1.5, 0.5),
-    (3.0, 0.8),
-    (6.0, 1.0),
-    (10.0, 0.8),
-    (15.0, 0.6),
+    # T2.6 recalibration: thresholds shifted +17% because scorer now receives
+    # breakingFaceHeight (trough-to-crest) instead of raw waveHeightAtBreak
+    # (post-supplement Hsig).  K-G amplification at typical surf wave sizes
+    # (1-3m Hsig, 10-16s) is ~1.5-1.7×, but the effective display-height
+    # jump surfers perceive is ~15-20% above the Hsig they once saw.
+    # Threshold progression (previous → new):
+    #   0.5 → 0.6 ft   1.0 → 1.2 ft   1.5 → 1.8 ft   3.0 → 3.5 ft
+    #   6.0 → 7.0 ft  10.0 → 12.0 ft  15.0 → 18.0 ft   inf → inf
+    (0.6, 0.1),
+    (1.2, 0.3),
+    (1.8, 0.5),
+    (3.5, 0.8),
+    (7.0, 1.0),
+    (12.0, 0.8),
+    (18.0, 0.6),
     (math.inf, 0.2),
 ]
 

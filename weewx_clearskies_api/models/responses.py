@@ -1622,13 +1622,14 @@ class SurfForecast(BaseModel):
     """Surf quality forecast for one spot at one timestep (API-MANUAL §16).
 
     Produced by enrichment/surf_scorer.py, after wave_transform.py has
-    applied the NWPS supplements (see API-MANUAL §17).
+    applied the NWPS supplements and breaker_height.py has converted the
+    post-supplement Hsig to face height (see API-MANUAL §17).
     """
 
     model_config = ConfigDict(extra="ignore")
 
     time: str  # UTC ISO-8601 with Z; forecast valid time
-    waveHeightAtBreak: float  # group_wave_height; after NWPS supplements
+    waveHeightAtBreak: float  # post-supplement Hsig in meters (after NWPS supplements)
     period: float              # group_wave_period; dominant period
     direction: float            # degrees true north; dominant swell direction
     qualityStars: int           # 1-5 star rating
@@ -1638,6 +1639,10 @@ class SurfForecast(BaseModel):
     swellDominance: float       # ratio of primary swell energy to total energy (0.0-1.0)
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
+    # T2.6 — breaker height pipeline (API-MANUAL §16, §17)
+    swellHeight: float | None = None            # raw SWAN Hsig before supplements (meters)
+    breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
+    breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
 
 
 class FishingForecast(BaseModel):

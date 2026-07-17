@@ -56,6 +56,8 @@ import configobj
 # Valid value sets (OPERATIONS-MANUAL.md "Marine location configuration")
 # ---------------------------------------------------------------------------
 _VALID_ACTIVITIES: frozenset[str] = frozenset({"marine", "surf", "fishing", "beach_safety"})
+_VALID_BREAKER_FORMULAS: frozenset[str] = frozenset({"komar_gaughan", "caldwell"})
+_VALID_SURF_HEIGHT_DISPLAYS: frozenset[str] = frozenset({"face", "hawaiian"})
 _VALID_BOTTOM_TYPES: frozenset[str] = frozenset({"sand", "rock", "coral_reef", "mixed"})
 _VALID_TOPOGRAPHIC_FEATURES: frozenset[str] = frozenset(
     {"point_break", "bay_break", "headland", "straight_beach"}
@@ -223,6 +225,15 @@ class SurfSpotConfig:
     bathymetric_profile: list[BathymetryPoint] | None
     topographic_feature: str
     directional_exposure: dict[str, bool]
+    # T2.6 — breaker height pipeline config keys
+    #: Formula used by enrichment/breaker_height.py ``hsig_to_face_height()``.
+    #: ``"komar_gaughan"`` (default) — Komar & Gaughan (1973), general purpose.
+    #: ``"caldwell"`` — Caldwell & Aucan (2007) H1/10 for steep volcanic coasts.
+    breaker_formula: str
+    #: Convention for the height displayed in the surf card UI.
+    #: ``"face"`` (default) — trough-to-crest face height (Western scale).
+    #: ``"hawaiian"`` — back-of-wave scale (= face × 0.5).
+    surf_height_display: str
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.beach_facing_degrees = float(section.get("beach_facing_degrees", 0.0))
@@ -232,6 +243,9 @@ class SurfSpotConfig:
         self.directional_exposure = _parse_directional_exposure(
             section.get("directional_exposure", {})
         )
+        # T2.6 — breaker formula and display convention
+        self.breaker_formula = str(section.get("breaker_formula", "komar_gaughan")).strip()
+        self.surf_height_display = str(section.get("surf_height_display", "face")).strip()
 
         raw_structures = _as_dict(section.get("structures", {}))
         self.structures = [StructureConfig(_as_dict(v)) for v in raw_structures.values()]
@@ -259,6 +273,17 @@ class SurfSpotConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf] beach_facing_degrees "
                 f"{self.beach_facing_degrees!r} out of range [0, 360)"
+            )
+        # T2.6 — validate new breaker pipeline config
+        if self.breaker_formula not in _VALID_BREAKER_FORMULAS:
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf] breaker_formula "
+                f"{self.breaker_formula!r} not in {sorted(_VALID_BREAKER_FORMULAS)}"
+            )
+        if self.surf_height_display not in _VALID_SURF_HEIGHT_DISPLAYS:
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf] surf_height_display "
+                f"{self.surf_height_display!r} not in {sorted(_VALID_SURF_HEIGHT_DISPLAYS)}"
             )
         for structure in self.structures:
             structure.validate(location_id)
