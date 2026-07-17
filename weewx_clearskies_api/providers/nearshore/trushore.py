@@ -832,7 +832,17 @@ def run_all_spots(
         spots_cached += 1
 
     # Store the run marker so duplicate runs for this HRRR cycle are skipped.
-    cache.set(run_marker_key, {"run_time": run_time_iso}, _CACHE_TTL_SECONDS)
+    # Only store when at least one spot produced valid data — otherwise a
+    # failed SWAN run (exit 0 but empty output) would block all future
+    # attempts for this cycle.
+    if spots_cached > 0:
+        cache.set(run_marker_key, {"run_time": run_time_iso}, _CACHE_TTL_SECONDS)
+    else:
+        logger.warning(
+            "TruShore: SWAN exited cleanly but 0/%d spot(s) produced valid "
+            "data — run marker NOT stored (will retry on next cycle)",
+            len(surf_spots_config),
+        )
 
     # Clean up tmpdir on success — TEMPORARILY DISABLED for T7.5 debugging.
     # TODO: re-enable after validating SWAN TABLE output format.

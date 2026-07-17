@@ -693,6 +693,21 @@ class SWANRunner:
                 returncode=result.returncode,
             )
 
+        # SWAN (Fortran) can exit 0 despite writing "Severe error" to stderr
+        # or its Errfile.  Check both so errors don't silently produce empty
+        # output that the run_marker then locks in.
+        errfile_path = tmpdir / "Errfile"
+        errfile_text = ""
+        if errfile_path.exists():
+            errfile_text = errfile_path.read_text(encoding="utf-8", errors="replace")
+        combined_errors = stderr_text + errfile_text
+        if "Severe error" in combined_errors or "SNAME is too long" in combined_errors:
+            raise SWANRunError(
+                f"SWAN exited 0 but reported severe errors in {tmpdir}",
+                stderr=combined_errors.strip()[:2000],
+                returncode=0,
+            )
+
     def _parse_output(
         self,
         tmpdir: Path,
