@@ -834,15 +834,17 @@ def run_all_spots(
     # Store the run marker so duplicate runs for this HRRR cycle are skipped.
     cache.set(run_marker_key, {"run_time": run_time_iso}, _CACHE_TTL_SECONDS)
 
-    # Clean up tmpdir on success.
+    # Clean up tmpdir on success — TEMPORARILY DISABLED for T7.5 debugging.
+    # TODO: re-enable after validating SWAN TABLE output format.
     if tmpdir is not None and tmpdir.exists():
-        try:
-            shutil.rmtree(tmpdir)
-            logger.debug("TruShore: cleaned up tmpdir %s", tmpdir)
-        except OSError:
-            logger.warning(
-                "TruShore: could not remove tmpdir %s", tmpdir, exc_info=True
-            )
+        logger.info("TruShore: preserving tmpdir for debugging: %s", tmpdir)
+        # try:
+        #     shutil.rmtree(tmpdir)
+        #     logger.debug("TruShore: cleaned up tmpdir %s", tmpdir)
+        # except OSError:
+        #     logger.warning(
+        #         "TruShore: could not remove tmpdir %s", tmpdir, exc_info=True
+        #     )
 
     elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
     logger.info(
