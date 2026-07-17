@@ -184,7 +184,7 @@ class TestMarineEndpointFullStack:
 
 
 class TestSurfEndpointFullStack:
-    """GET /surf/{locationId} -> real NWPS/WaveWatch III + NDBC + CO-OPS + NWS SRF."""
+    """GET /surf/{locationId} -> SWAN+TruShore + NDBC + CO-OPS + NWS SRF."""
 
     def test_get_surf_returns_full_envelope(self) -> None:
         import weewx_clearskies_api.endpoints.surf as surf
@@ -197,10 +197,10 @@ class TestSurfEndpointFullStack:
 
         bundle = response["data"]
         assert bundle["locationId"] == _LOCATION_ID
-        assert bundle["source"] == "nwps+wavewatch+ndbc+coops+nws_srf"
+        assert bundle["source"] == "swan_trushore+ndbc+coops+nws_srf"
 
     @pytest.mark.xfail(
-        reason="NWPS and its WaveWatch III fallback may both be temporarily "
+        reason="SWAN+TruShore may be temporarily "
         "unavailable, in which case the endpoint returns an empty forecast "
         "list rather than failing (graceful degradation)",
         strict=False,

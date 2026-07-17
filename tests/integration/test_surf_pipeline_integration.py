@@ -1,10 +1,10 @@
 """Integration tests for the surf enrichment pipeline (T8.1).
 
 Exercises the full transform-then-score chain documented in API-MANUAL.md
-§17 ("NWPS supplement processor" -> "Surf quality scorer") for a Wrightsville
+§17 ("SWAN+TruShore supplement processor" -> "Surf quality scorer") for a Wrightsville
 Beach, NC surf spot:
 
-  1. Realistic NWPS-shaped wave data (height/period/direction) through
+  1. Realistic SWAN+TruShore-shaped wave data (height/period/direction) through
      ``enrichment/wave_transform.py``'s ``apply_supplements()`` (breaker
      index correction, sub-grid interpolation, topographic adjustment —
      no coastal structures configured for this spot) and then through
@@ -69,21 +69,21 @@ def _wrightsville_surf_config() -> SurfSpotConfig:
     return config
 
 
-class TestSurfPipelineWithRealisticNwpsData:
-    """Realistic NWPS-shaped input -> wave_transform supplements -> score_surf."""
+class TestSurfPipelineWithRealisticWaveData:
+    """Realistic SWAN+TruShore-shaped input -> wave_transform supplements -> score_surf."""
 
     def test_moderate_groundswell_produces_a_1_to_5_star_rating(self) -> None:
         spot_config = _wrightsville_surf_config()
 
         # Realistic mid-period groundswell from the SE (onto the beach face) --
-        # NWPS-shaped dict as consumed by wave_transform.apply_supplements().
-        nwps_data = {
+        # SWAN+TruShore-shaped dict as consumed by wave_transform.apply_supplements().
+        wave_data = {
             "wave_height": 1.2,  # meters (~4 ft)
             "wave_period": 11.0,  # seconds
             "wave_direction": 140.0,  # degrees true, close to beach-facing (135)
         }
         supplemented = wave_transform.apply_supplements(
-            nwps_data, spot_config, _WRIGHTSVILLE_LAT, _WRIGHTSVILLE_LON
+            wave_data, spot_config, _WRIGHTSVILLE_LAT, _WRIGHTSVILLE_LON
         )
         assert supplemented is not None
         assert supplemented["wave_height"] > 0.0
@@ -105,9 +105,9 @@ class TestSurfPipelineWithRealisticNwpsData:
 
     def test_conditions_text_is_non_empty_and_describes_the_swell(self) -> None:
         spot_config = _wrightsville_surf_config()
-        nwps_data = {"wave_height": 1.2, "wave_period": 11.0, "wave_direction": 140.0}
+        wave_data = {"wave_height": 1.2, "wave_period": 11.0, "wave_direction": 140.0}
         supplemented = wave_transform.apply_supplements(
-            nwps_data, spot_config, _WRIGHTSVILLE_LAT, _WRIGHTSVILLE_LON
+            wave_data, spot_config, _WRIGHTSVILLE_LAT, _WRIGHTSVILLE_LON
         )
         assert supplemented is not None
 
@@ -173,7 +173,7 @@ class TestSurfPipelineWithLiveWaveWatchData:
     """Real WaveWatch III forecast data (live NOAA ERDDAP) fed through score_surf().
 
     WaveWatch III data bypasses wave_transform (PROVIDER-MANUAL §14.6 — the
-    supplement pipeline only applies to NWPS nearshore data), so this test
+    supplement pipeline only applies to SWAN+TruShore nearshore data), so this test
     calls score_surf() directly with the fetched forecast point.
     """
 

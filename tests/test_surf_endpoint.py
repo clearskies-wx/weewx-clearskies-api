@@ -1,4 +1,4 @@
-"""Basic tests for endpoints/surf.py (T5.3).
+"""Basic tests for endpoints/surf.py (T5.3, updated for SWAN+TruShore).
 
 Scope, per brief: keep it simple.
 
@@ -11,7 +11,7 @@ Scope, per brief: keep it simple.
      activities).
   4. List endpoint returns one card per configured surf location.
 
-Live provider calls (NWPS / WaveWatch III / NDBC / CO-OPS / NWS SRF via
+Live provider calls (SWAN+TruShore / NDBC / CO-OPS / NWS SRF via
 GET /surf/{location_id} for a *found* location) are intentionally not
 exercised here -- those are Phase 8 integration tests (PROVIDER-MANUAL §11
 "No live-network tests in CI").

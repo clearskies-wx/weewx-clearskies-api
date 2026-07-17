@@ -1622,14 +1622,14 @@ class SurfForecast(BaseModel):
     """Surf quality forecast for one spot at one timestep (API-MANUAL §16).
 
     Produced by enrichment/surf_scorer.py, after wave_transform.py has
-    applied the NWPS supplements and breaker_height.py has converted the
-    post-supplement Hsig to face height (see API-MANUAL §17).
+    applied the nearshore supplements and breaker_height.py has converted
+    the post-supplement Hsig to face height (see API-MANUAL §17).
     """
 
     model_config = ConfigDict(extra="ignore")
 
     time: str  # UTC ISO-8601 with Z; forecast valid time
-    waveHeightAtBreak: float  # post-supplement Hsig in meters (after NWPS supplements)
+    waveHeightAtBreak: float  # post-supplement Hsig in meters (after nearshore supplements)
     period: float              # group_wave_period; dominant period
     direction: float            # degrees true north; dominant swell direction
     qualityStars: int           # 1-5 star rating
@@ -1716,7 +1716,7 @@ class SurfZoneForecast(BaseModel):
 class BeachSafetyAssessment(BaseModel):
     """Composite beach safety assessment per location (API-MANUAL §16).
 
-    ripCurrentRisk is sourced from SRF or NWPS v1.5, whichever is configured.
+    ripCurrentRisk is sourced from SRF when available.
     """
 
     model_config = ConfigDict(extra="ignore")

@@ -1,4 +1,4 @@
-"""Unit tests for the NWPS supplement processor (Phase 3, T3.2).
+"""Unit tests for the nearshore supplement processor (Phase 3, T3.2).
 
 Module under test: weewx_clearskies_api/enrichment/wave_transform.py
 
@@ -208,9 +208,9 @@ def test_full_pipeline():
         topographic_feature="point_break",
         bathymetric_profile=[StubBathymetryPoint(distance_m=100.0, depth_m=2.0)],
     )
-    nwps_data = {"wave_height": 2.0, "wave_period": 10.0, "wave_direction": 180.0}
+    wave_data = {"wave_height": 2.0, "wave_period": 10.0, "wave_direction": 180.0}
 
-    result = wt.apply_supplements(nwps_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
+    result = wt.apply_supplements(wave_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
 
     assert result is not None
     assert 0.0 < result["wave_height"] < 10.0
@@ -233,9 +233,9 @@ def test_no_slope_skips_breaker():
         beach_slope=None,
         bathymetric_profile=[StubBathymetryPoint(distance_m=100.0, depth_m=2.0)],
     )
-    nwps_data = {"wave_height": 2.0, "wave_period": 10.0, "wave_direction": 180.0}
+    wave_data = {"wave_height": 2.0, "wave_period": 10.0, "wave_direction": 180.0}
 
-    result = wt.apply_supplements(nwps_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
+    result = wt.apply_supplements(wave_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
 
     assert result is not None
     assert result["breaker_gamma"] is None
@@ -259,7 +259,7 @@ def test_supplements_applied_list():
         topographic_feature="headland",
         bathymetric_profile=[StubBathymetryPoint(distance_m=100.0, depth_m=2.0)],
     )
-    nwps_data = {
+    wave_data = {
         "wave_height": 2.0,
         "wave_period": 10.0,
         "wave_direction": 180.0,
@@ -268,7 +268,7 @@ def test_supplements_applied_list():
         "grid_lons": [-78.0, -77.5],
     }
 
-    result = wt.apply_supplements(nwps_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
+    result = wt.apply_supplements(wave_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
 
     assert result is not None
     assert result["supplements_applied"] == [
