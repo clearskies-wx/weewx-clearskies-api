@@ -34,6 +34,14 @@ Warmed endpoints:
     blending): calls the provider's own fetch_current_conditions() so the
     endpoint's own call gets a cache hit (FIX-24; see
     `_warm_current_conditions` docstring).
+  - HRRR wind field for configured marine locations (SWAN+TruShore plan
+    T1.3): pre-fetches the HRRR 10m AGL wind forecast from NOMADS Grib
+    Filter for a bounding box derived from all configured [marine]
+    locations.  Active only when the [nearshore] pip extra is installed
+    (eccodes or pygrib present, GRIB_AVAILABLE == True).  Fires at startup
+    and on the hourly schedule matching the HRRR cycle cadence (3600 s).
+    The HRRR provider caches internally (ADR-017, TTL 3300 s); the SWAN
+    runner reads from that cache.  See `_warm_hrrr_wind` docstring.
 
 Cache key format:
   warmer:records:<period>                e.g. warmer:records:all-time
@@ -149,6 +157,7 @@ class BackgroundCacheWarmer:
         self._warm_faults()
         self._warm_seeing_forecast()
         self._warm_marine()
+        self._warm_hrrr_wind()
         self._warm_forecast()
         self._warm_current_conditions()
         logger.info("Cache warmer: initial warm complete")
@@ -187,6 +196,7 @@ class BackgroundCacheWarmer:
         last_faults: float = _NEVER
         last_seeing: float = _NEVER
         last_marine: float = _NEVER
+        last_hrrr_wind: float = _NEVER
         last_forecast: float = _NEVER
         last_current_conditions: float = _NEVER
 
@@ -227,6 +237,15 @@ class BackgroundCacheWarmer:
             if last_marine == _NEVER or (now - last_marine) >= 1800:
                 self._warm_marine()
                 last_marine = time.monotonic()
+
+            # 3600 s = HRRR cycle cadence (one model run per hour).  The HRRR
+            # provider caches internally with a 3300 s TTL (PROVIDER-MANUAL
+            # §14.14), so this fires just after the previous cache entry has
+            # been refreshed with a new cycle.  Active only when [nearshore]
+            # extra is installed; _warm_hrrr_wind() returns silently otherwise.
+            if last_hrrr_wind == _NEVER or (now - last_hrrr_wind) >= 3600:
+                self._warm_hrrr_wind()
+                last_hrrr_wind = time.monotonic()
 
             # 1500 s < the 1800 s /forecast TTL (ADR-017), leaving margin so
             # a warm cycle always lands before the cached bundle expires.
@@ -1017,6 +1036,66 @@ class BackgroundCacheWarmer:
                     )
         except Exception:
             logger.warning("Cache warmer: ocean data warm failed", exc_info=True)
+
+    def _warm_hrrr_wind(self) -> None:
+        """Pre-fetch HRRR wind field for configured marine location bbox.
+
+        Active only when the [nearshore] pip extra is installed (eccodes or
+        pygrib available for GRIB2 processing; GRIB_AVAILABLE == True in
+        providers/wind/hrrr.py).  Returns silently when the extra is absent
+        so this method is zero-cost on standard installations.
+
+        The bounding box is derived from all configured marine locations:
+        the extreme lat/lon values across all locations expanded by 1 degree
+        on each side (~111 km) to cover the surrounding coastal domain and
+        provide sufficient wind fetch for SWAN nearshore physics.
+
+        Fires at startup (inside the background daemon thread, non-blocking
+        for the API process — the API accepts requests immediately while the
+        first HRRR fetch runs) and on the hourly schedule thereafter,
+        matching the HRRR cycle cadence.
+
+        The HRRR provider caches the result internally per ADR-017 with a
+        3300 s TTL (PROVIDER-MANUAL §14.14); the SWAN runner (TruShore,
+        T2.x) reads from that cache.  This warm call ensures the cache is
+        primed before the SWAN runner's first cycle.
+
+        Failure is logged at WARNING — the API continues normally and the
+        SWAN runner will retry on the next hourly cycle.
+        """
+        if self._marine_config is None or not self._marine_config.locations:
+            return
+
+        # Guard: [nearshore] extra required.  try-import is defensive; the
+        # module exists when T1.1 is deployed but GRIB_AVAILABLE may still be
+        # False when eccodes/pygrib are not installed on this host.
+        try:
+            from weewx_clearskies_api.providers.wind.hrrr import GRIB_AVAILABLE
+        except ImportError:
+            return  # [nearshore] module absent (should not happen post-T1.1)
+
+        if not GRIB_AVAILABLE:
+            return  # eccodes and pygrib both absent — skip silently
+
+        try:
+            from weewx_clearskies_api.providers.wind import hrrr as _hrrr
+
+            lats = [loc.lat for loc in self._marine_config.locations]
+            lons = [loc.lon for loc in self._marine_config.locations]
+
+            # 1-degree margin (~111 km per side) covers the offshore approach
+            # cells that drive nearshore wave propagation in SWAN.
+            _MARGIN = 1.0
+            bbox: tuple[float, float, float, float] = (
+                min(lons) - _MARGIN,  # lon_min (west)
+                min(lats) - _MARGIN,  # lat_min (south)
+                max(lons) + _MARGIN,  # lon_max (east)
+                max(lats) + _MARGIN,  # lat_max (north)
+            )
+            _hrrr.fetch(bbox=bbox)
+            logger.info("Cache warmer: HRRR wind field refreshed (bbox=%s)", bbox)
+        except Exception:
+            logger.warning("Cache warmer: HRRR wind warm failed", exc_info=True)
 
     def _warm_forecast(self) -> None:
         """Pre-fetch GET /forecast's provider bundle (FIX-24).
