@@ -137,6 +137,78 @@ def _parse_directional_exposure(raw: Any) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
+# [trushore] section constants and config class (T4.2, SWAN-TRUSHORE-PLAN)
+# ---------------------------------------------------------------------------
+
+#: Sentinel value for [trushore] service_url that means "bundled mode" (run
+#: SWAN as a local subprocess inside the API process).  Any other non-empty
+#: value activates remote mode (TrushoreProvider calls the remote HTTP endpoint
+#: instead of running SWAN locally).
+_TRUSHORE_BUNDLED_SENTINEL = "http://localhost:trushore"
+
+
+class TrushoreConfig:
+    """Parsed ``[trushore]`` top-level config section (T4.2).
+
+    The ``[trushore]`` section is optional.  When absent, all fields take their
+    documented defaults (bundled mode, all cores).
+
+    Config keys:
+      service_url (str):
+        URL of the standalone TruShore service.  Default:
+        ``http://localhost:trushore`` (the bundled-mode sentinel — means "run
+        SWAN locally as a subprocess").  Set to ``http://<remote-host>:8767``
+        to activate remote mode.
+      omp_num_threads (int, default 0):
+        Number of OpenMP threads for SWAN.  0 = let OpenMP decide (uses all
+        available CPU cores — the OpenMP default).  Set to a positive integer
+        to cap SWAN's CPU usage, e.g. ``2`` on a busy shared host.
+
+    Example api.conf (remote mode, 4 threads):
+      [trushore]
+        service_url = http://192.168.1.50:8767
+        omp_num_threads = 4
+    """
+
+    service_url: str
+    omp_num_threads: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.service_url = str(
+            section.get("service_url", _TRUSHORE_BUNDLED_SENTINEL)
+        ).strip()
+        raw_threads = section.get("omp_num_threads")
+        if raw_threads is not None and str(raw_threads).strip():
+            self.omp_num_threads = int(raw_threads)
+        else:
+            self.omp_num_threads = 0  # 0 = let OpenMP use all cores (default)
+
+    @property
+    def is_remote(self) -> bool:
+        """True when service_url is set to a non-sentinel, non-empty value.
+
+        In remote mode, TrushoreProvider fetches wave forecasts from the
+        configured standalone TruShore service via HTTP instead of running
+        SWAN locally.
+        """
+        return bool(self.service_url) and self.service_url != _TRUSHORE_BUNDLED_SENTINEL
+
+    def validate(self) -> None:
+        """Raise ValueError on bad config values."""
+        if self.omp_num_threads < 0:
+            raise ValueError(
+                f"[trushore] omp_num_threads must be >= 0 (0 = all cores), "
+                f"got {self.omp_num_threads}"
+            )
+        if self.is_remote:
+            if not self.service_url.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"[trushore] service_url must start with http:// or https://, "
+                    f"got {self.service_url!r}"
+                )
+
+
+# ---------------------------------------------------------------------------
 # Leaf dataclasses
 # ---------------------------------------------------------------------------
 
@@ -449,13 +521,17 @@ class MarineWeatherConfig:
 
 
 class MarineConfig:
-    """Top-level parsed ``[marine]`` section."""
+    """Top-level parsed ``[marine]`` section, with optional ``[trushore]`` settings."""
 
     locations: list[MarineLocation]
     surf_spots: dict[str, SurfSpotConfig]
     fishing_spots: dict[str, FishingSpotConfig]
     beach_safety: dict[str, BeachSafetyConfig]
     weather: MarineWeatherConfig
+    #: Parsed ``[trushore]`` section (T4.2).  Always present — defaults to
+    #: bundled mode (sentinel service_url, omp_num_threads=0) when the section
+    #: is absent from api.conf.
+    trushore: TrushoreConfig
 
     def __init__(
         self,
@@ -464,12 +540,14 @@ class MarineConfig:
         fishing_spots: dict[str, FishingSpotConfig] | None = None,
         beach_safety: dict[str, BeachSafetyConfig] | None = None,
         weather: MarineWeatherConfig | None = None,
+        trushore: TrushoreConfig | None = None,
     ) -> None:
         self.locations = locations if locations is not None else []
         self.surf_spots = surf_spots if surf_spots is not None else {}
         self.fishing_spots = fishing_spots if fishing_spots is not None else {}
         self.beach_safety = beach_safety if beach_safety is not None else {}
         self.weather = weather if weather is not None else MarineWeatherConfig()
+        self.trushore = trushore if trushore is not None else TrushoreConfig({})
 
 
 # ---------------------------------------------------------------------------
@@ -535,10 +613,30 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
     else:
         weather = MarineWeatherConfig()
 
+    # [trushore] — optional top-level section alongside [marine] (T4.2).
+    trushore_config = load_trushore_config(config)
+
     return MarineConfig(
         locations=locations,
         surf_spots=surf_spots,
         fishing_spots=fishing_spots,
         beach_safety=beach_safety,
         weather=weather,
+        trushore=trushore_config,
     )
+
+
+def load_trushore_config(config: configobj.ConfigObj) -> TrushoreConfig:
+    """Parse the ``[trushore]`` top-level section of api.conf (or trushore.conf).
+
+    Returns a TrushoreConfig with defaults (bundled mode, omp_num_threads=0)
+    when the section is absent.  Called from load_marine_config() and also
+    directly by the standalone service's config loader.
+
+    Raises:
+        ValueError: A config value failed validation (e.g. negative omp_num_threads).
+    """
+    trushore_section = _as_dict(config.get("trushore", {}))
+    trushore = TrushoreConfig(trushore_section)
+    trushore.validate()
+    return trushore

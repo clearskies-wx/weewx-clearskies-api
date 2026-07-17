@@ -15,6 +15,10 @@ Endpoints:
                                             pygrib) is installed, before the wizard lets
                                             the operator enable marine features
                                             (Marine Remediation Plan T3.6)
+  GET  /setup/marine/swan-check          — probe whether the SWAN Fortran binary is on
+                                            PATH; returns version, path, and host CPU
+                                            core count for the wizard's TruShore step
+                                            (T4.4 / SWAN-TRUSHORE-PLAN T4.1)
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
   POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile for one
                                             surf spot (T6.3; admin/individual re-download —
@@ -52,6 +56,7 @@ import re
 import secrets
 import shutil
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -460,6 +465,14 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: SurfSpotConfig.__init__ loader, which is authoritative).
     bathymetric_profile: list[MarineBathymetryPointApplyConfig] | None = None
     structures: list[MarineStructureApplyConfig] | None = None
+    #: Breaker height formula for this spot (T2.6, T4.4 wizard).
+    #: "komar_gaughan" (default) — Komar & Gaughan (1973), general purpose.
+    #: "caldwell" — Caldwell & Aucan (2007) H1/10 for steep volcanic coasts.
+    breaker_formula: str = "komar_gaughan"
+    #: Display convention for surf height (T2.6, T4.4 wizard).
+    #: "face" (default) — trough-to-crest face height (Western scale).
+    #: "hawaiian" — back-of-wave scale (≈ face × 0.5, traditional Hawaii/Australia).
+    surf_height_display: str = "face"
 
     @field_validator("bottom_type")
     @classmethod
@@ -485,6 +498,24 @@ class MarineSurfSpotApplyConfig(BaseModel):
         bad = sorted(k for k in v if k not in _COMPASS_DIRECTIONS)
         if bad:
             raise ValueError(f"directional_exposure keys {bad!r} not in {list(_COMPASS_DIRECTIONS)}")
+        return v
+
+    @field_validator("breaker_formula")
+    @classmethod
+    def _validate_breaker_formula(cls, v: str) -> str:
+        from weewx_clearskies_api.config.marine_config import _VALID_BREAKER_FORMULAS
+        if v not in _VALID_BREAKER_FORMULAS:
+            raise ValueError(f"breaker_formula {v!r} not in {sorted(_VALID_BREAKER_FORMULAS)}")
+        return v
+
+    @field_validator("surf_height_display")
+    @classmethod
+    def _validate_surf_height_display(cls, v: str) -> str:
+        from weewx_clearskies_api.config.marine_config import _VALID_SURF_HEIGHT_DISPLAYS
+        if v not in _VALID_SURF_HEIGHT_DISPLAYS:
+            raise ValueError(
+                f"surf_height_display {v!r} not in {sorted(_VALID_SURF_HEIGHT_DISPLAYS)}"
+            )
         return v
 
 
@@ -626,6 +657,34 @@ class MarineApplyConfig(BaseModel):
         return v
 
 
+class TrushoreApplyConfig(BaseModel):
+    """``[trushore]`` section for api.conf (T4.2 / T4.4 wizard).
+
+    Written by the wizard's SWAN+TruShore step.  All fields have defaults
+    so existing wizard clients that don't send this block are unaffected.
+
+    service_url:
+      URL of the standalone TruShore service.  None (the default) means
+      bundled mode — SWAN runs as a subprocess inside the API process.
+      Set to ``http://<host>:8767`` for the separated service deployment.
+
+    omp_num_threads:
+      Number of OpenMP threads for SWAN.  0 = all available cores (default).
+      Use a positive integer to limit SWAN's CPU usage on shared hosts.
+
+    swan_grid_resolution_m:
+      SWAN computational grid resolution in metres.  Default 200 m.
+      Finer resolution (e.g. 100 m) improves accuracy at higher CPU cost.
+      Valid range: 50 – 1000 m.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    service_url: str | None = None  # None = bundled mode
+    omp_num_threads: int = Field(default=0, ge=0)
+    swan_grid_resolution_m: int = Field(default=200, ge=50, le=1000)
+
+
 class UnitsApplyConfig(BaseModel):
     """Unit configuration for api.conf [units] (ADR-042).
 
@@ -693,6 +752,10 @@ class ApplyRequest(BaseModel):
     #: locations configured behaves identically to a non-marine installation,
     #: per API-MANUAL §18 "Capability gating").
     marine: MarineApplyConfig | None = None
+    #: Optional SWAN+TruShore configuration (T4.2 / T4.4 wizard).  When present,
+    #: written to the [trushore] section of api.conf.  None → skip (leaves any
+    #: existing [trushore] section unchanged, preserving manually-set values).
+    trushore: TrushoreApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -1037,6 +1100,9 @@ def _build_marine_conf_section(
                 "beach_facing_degrees": str(surf.beach_facing_degrees),
                 "bottom_type": surf.bottom_type,
                 "topographic_feature": surf.topographic_feature,
+                # Breaker height pipeline config (T2.6 / T4.4).
+                "breaker_formula": surf.breaker_formula,
+                "surf_height_display": surf.surf_height_display,
             }
             if surf.directional_exposure:
                 surf_section["directional_exposure"] = [
@@ -1302,6 +1368,22 @@ def _write_api_conf(
                             if key not in new_loc and key in old_loc:
                                 new_loc[key] = old_loc[key]
         cfg["marine"] = new_marine
+
+    # [trushore] — optional; written when the wizard's SWAN+TruShore step sends
+    # this block (T4.2 / T4.4).  None → skip (existing values unchanged).
+    if apply.trushore is not None:
+        ts = apply.trushore
+        if "trushore" not in cfg:
+            cfg["trushore"] = {}
+        if ts.service_url is not None:
+            cfg["trushore"]["service_url"] = ts.service_url
+        else:
+            # None means bundled mode — write the sentinel so the section is
+            # explicit and operators can see what's configured.
+            from weewx_clearskies_api.config.marine_config import _TRUSHORE_BUNDLED_SENTINEL
+            cfg["trushore"]["service_url"] = _TRUSHORE_BUNDLED_SENTINEL
+        cfg["trushore"]["omp_num_threads"] = str(ts.omp_num_threads)
+        cfg["trushore"]["swan_grid_resolution_m"] = str(ts.swan_grid_resolution_m)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -2227,6 +2309,92 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
 
     # Unreachable: GRIB_AVAILABLE is False iff check_grib_available() raises.
     return MarineEccodesCheckResponse(available=False, install_instructions=None)
+
+
+class MarineSwanCheckResponse(BaseModel):
+    """Response shape for ``GET /setup/marine/swan-check`` (T4.4 / T4.1).
+
+    The wizard's SWAN+TruShore step calls this endpoint on load to determine
+    whether the SWAN Fortran binary is installed and to show the operator how
+    many CPU cores are available for the ``omp_num_threads`` slider.
+    """
+
+    #: True when ``swan`` is found on PATH and can be executed.
+    available: bool
+    #: SWAN version string (e.g. ``"41.45"``), or None when the binary is
+    #: unavailable or version detection fails.
+    version: str | None = None
+    #: Absolute path of the ``swan`` binary, or None when unavailable.
+    path: str | None = None
+    #: Number of logical CPU cores on this host (from os.cpu_count()).
+    cpu_cores: int
+
+
+@router.get("/marine/swan-check", response_model=MarineSwanCheckResponse)
+async def marine_swan_check(request: Request) -> MarineSwanCheckResponse:
+    """Probe whether the SWAN Fortran binary is installed and return core count (T4.4).
+
+    Called by the wizard's SWAN+TruShore setup step to:
+      - Determine whether SWAN is available (blocks the step with install
+        instructions when ``available`` is False).
+      - Show the operator the host's CPU core count for the ``omp_num_threads``
+        configuration slider.
+      - Display the installed SWAN version for information/debugging.
+
+    Version detection:
+      SWAN does not have a standard ``--version`` flag.  The binary is invoked
+      with empty stdin; SWAN typically prints a version header to stdout before
+      exiting with a non-zero code due to missing input.  The first line
+      containing a numeric token is taken as the version.  Version detection
+      is best-effort — a failure does not affect the ``available`` field.
+    """
+    await require_setup_session(request)
+
+    cpu_cores = os.cpu_count() or 1
+    swan_path = shutil.which("swan")
+
+    if swan_path is None:
+        return MarineSwanCheckResponse(
+            available=False,
+            version=None,
+            path=None,
+            cpu_cores=cpu_cores,
+        )
+
+    # Best-effort SWAN version detection.  SWAN prints its version to stdout
+    # or stderr on startup even when given no valid input.
+    version: str | None = None
+    try:
+        probe = subprocess.run(
+            [swan_path],
+            input="STOP\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        combined = probe.stdout + probe.stderr
+        for line in combined.splitlines():
+            line_lower = line.lower()
+            if "swan" in line_lower and any(c.isdigit() for c in line):
+                # Typical SWAN header: "SWAN version 41.45  ..."
+                parts = line.split()
+                for i, token in enumerate(parts):
+                    if token.lower() in ("version", "v") and i + 1 < len(parts):
+                        candidate = parts[i + 1].rstrip(".,;")
+                        if candidate and candidate[0].isdigit():
+                            version = candidate
+                            break
+                if version:
+                    break
+    except Exception:
+        pass  # version is non-critical; leave as None
+
+    return MarineSwanCheckResponse(
+        available=True,
+        version=version,
+        path=swan_path,
+        cpu_cores=cpu_cores,
+    )
 
 
 class MarineNdbcStationEntry(BaseModel):

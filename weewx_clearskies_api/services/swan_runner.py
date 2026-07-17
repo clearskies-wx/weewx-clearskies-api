@@ -23,12 +23,16 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 import subprocess
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
@@ -371,6 +375,9 @@ class SWANRunner:
         self._compute_dt_min: int = int(config.get("compute_dt_min", 10))
         self._output_interval_hr: float = float(config.get("output_interval_hr", 1.0))
         self._swan_timeout_s: int = int(config.get("swan_timeout_s", 900))
+        # omp_num_threads: 0 = let OpenMP use all available cores (default).
+        # Positive integer = cap SWAN CPU usage to that many threads.
+        self._omp_num_threads: int = int(config.get("omp_num_threads", 0))
 
     # ------------------------------------------------------------------
     # Public API
@@ -504,6 +511,27 @@ class SWANRunner:
             SWANRunError: Non-zero exit code or subprocess timeout.
         """
         input_file = tmpdir / "INPUT"
+
+        # OpenMP thread control: pass OMP_NUM_THREADS when explicitly configured.
+        # omp_num_threads == 0 means "let OpenMP decide" (all available cores) —
+        # in that case we do NOT set OMP_NUM_THREADS so OpenMP's own default
+        # applies.  Explicitly setting it to os.cpu_count() would interfere with
+        # any operator-level OMP_NUM_THREADS already in the environment.
+        cpu_count = os.cpu_count() or 1
+        if self._omp_num_threads > 0:
+            logger.info(
+                "SWAN runner: OMP_NUM_THREADS=%d", self._omp_num_threads
+            )
+            swan_env: dict[str, str] | None = {
+                **os.environ,
+                "OMP_NUM_THREADS": str(self._omp_num_threads),
+            }
+        else:
+            logger.info(
+                "SWAN runner: using all %d available cores (default)", cpu_count
+            )
+            swan_env = None  # inherit environment unchanged
+
         try:
             result = subprocess.run(
                 [self._swan_binary],
@@ -513,6 +541,7 @@ class SWANRunner:
                 cwd=str(tmpdir),
                 timeout=self._swan_timeout_s,
                 check=False,
+                env=swan_env,
             )
         except subprocess.TimeoutExpired as exc:
             raise SWANRunError(

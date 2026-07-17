@@ -53,9 +53,13 @@ import json
 import logging
 import shutil
 import tempfile
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import (
@@ -90,6 +94,34 @@ _DEFAULT_SWAN_TIMEOUT_S = 900
 # and HRRR wind bbox from configured surf spot coordinates.
 _DOMAIN_MARGIN_DEG = 0.5    # nearshore SWAN domain: ±0.5° (~55 km per side)
 _HRRR_MARGIN_DEG = 1.0      # HRRR bbox: ±1° (matches _warm_hrrr_wind() margin)
+
+# ---------------------------------------------------------------------------
+# Remote mode state (T4.2 / T4.3 — set when [trushore] service_url is active)
+# ---------------------------------------------------------------------------
+
+#: URL of the standalone TruShore service (None = bundled mode).
+_remote_url: str | None = None
+
+#: Number of consecutive health check failures since last success.
+_remote_consecutive_failures: int = 0
+
+#: True when the remote service is considered healthy (or bundled mode active).
+_remote_healthy: bool = True
+
+#: True after we have logged the "unreachable" ERROR (avoid log spam).
+_remote_warned_unreachable: bool = False
+
+#: Lock protecting lazy remote-mode initialisation in run_all_spots().
+_remote_init_lock = threading.Lock()
+
+#: Background health check thread (started by configure_remote_mode()).
+_remote_health_thread: threading.Thread | None = None
+
+#: Health check interval in seconds (T4.3).
+_REMOTE_HEALTH_INTERVAL_S: int = 60
+
+#: Consecutive failure threshold before ERROR is logged and stale cache is served.
+_REMOTE_FAILURE_THRESHOLD: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +256,201 @@ class _SWANRunnerWithCleanup(SWANRunner):
 
 
 # ---------------------------------------------------------------------------
+# Remote mode — health check thread and startup probe (T4.2 / T4.3)
+# ---------------------------------------------------------------------------
+
+
+def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
+    """Background daemon thread: poll remote /health every 60 s (T4.3).
+
+    On each successful health check:
+      - Resets _remote_consecutive_failures to 0.
+      - Fetches fresh forecast data for each configured spot from the remote
+        service's /surf/{spot_id}/forecast endpoint.
+      - Stores results in the local last-good cache (7-day TTL, same cache
+        keys as bundled mode) so fetch() can serve them from the request path.
+
+    On consecutive failures:
+      - Increments _remote_consecutive_failures.
+      - After _REMOTE_FAILURE_THRESHOLD (3) consecutive failures: logs ERROR
+        once, sets _remote_healthy = False.  Subsequent failures are logged
+        at DEBUG to avoid log spam.
+      - fetch() continues to serve the last-good cache (stale indefinitely per
+        PROVIDER-MANUAL §14.15 — stale is always preferred to no data).
+
+    Recovery:
+      - When the remote service becomes reachable again: resets state, logs
+        INFO "TruShore remote service recovered", resumes fresh data.
+
+    Args:
+        service_url: Base URL of the standalone TruShore service (e.g.
+                     ``http://192.168.1.50:8767``).
+        spot_ids: Surf spot IDs from marine config.  The health response may
+                  supply an updated spot list; we merge both to avoid missing
+                  spots that were added to the remote config later.
+    """
+    global _remote_consecutive_failures, _remote_healthy, _remote_warned_unreachable  # noqa: PLW0603
+
+    while True:
+        try:
+            resp = httpx.get(f"{service_url}/health", timeout=10.0)
+            resp.raise_for_status()
+            health_data: dict[str, Any] = resp.json()
+
+            # Recovery path: reset failure state.
+            recovered = _remote_consecutive_failures >= _REMOTE_FAILURE_THRESHOLD or not _remote_healthy
+            _remote_consecutive_failures = 0
+            if recovered:
+                _remote_healthy = True
+                _remote_warned_unreachable = False
+                logger.info(
+                    "TruShore remote service recovered: %s (last_run=%s)",
+                    service_url,
+                    health_data.get("last_run"),
+                )
+
+            # Merge spot IDs from config and from health response.
+            remote_spots: list[str] = health_data.get("spots") or []
+            all_spots = list(dict.fromkeys(spot_ids + remote_spots))  # preserve order, deduplicate
+
+            # Refresh per-spot forecast data in local last-good cache.
+            cache = get_cache()
+            for spot_id in all_spots:
+                try:
+                    forecast_resp = httpx.get(
+                        f"{service_url}/surf/{spot_id}/forecast",
+                        timeout=30.0,
+                    )
+                    if forecast_resp.status_code == 200:
+                        data: dict[str, Any] = forecast_resp.json()
+                        cache.set(
+                            _build_last_good_key(spot_id),
+                            {
+                                "forecast": data.get("forecast", []),
+                                "run_time": data.get("run_time"),
+                                "hrrr_cycle_time": data.get("hrrr_cycle_time", ""),
+                            },
+                            _LAST_GOOD_TTL_SECONDS,
+                        )
+                        logger.debug(
+                            "TruShore remote: refreshed spot %r (run_time=%s)",
+                            spot_id,
+                            data.get("run_time"),
+                        )
+                    elif forecast_resp.status_code == 503:
+                        # No data yet — first SWAN run may be in progress.
+                        logger.debug(
+                            "TruShore remote: spot %r has no data yet (503)", spot_id
+                        )
+                    else:
+                        logger.warning(
+                            "TruShore remote: /surf/%s/forecast returned %d; skipping",
+                            spot_id,
+                            forecast_resp.status_code,
+                        )
+                except Exception:
+                    logger.warning(
+                        "TruShore remote: failed to refresh spot %r",
+                        spot_id,
+                        exc_info=True,
+                    )
+
+        except Exception:
+            _remote_consecutive_failures += 1
+            failures = _remote_consecutive_failures
+
+            if failures < _REMOTE_FAILURE_THRESHOLD:
+                logger.warning(
+                    "TruShore remote health check failed (%d/%d): %s",
+                    failures,
+                    _REMOTE_FAILURE_THRESHOLD,
+                    service_url,
+                    exc_info=True,
+                )
+            elif failures == _REMOTE_FAILURE_THRESHOLD:
+                _remote_healthy = False
+                _remote_warned_unreachable = True
+                logger.error(
+                    "TruShore remote service unreachable after %d consecutive "
+                    "health check failures: %s — serving stale cache indefinitely",
+                    _REMOTE_FAILURE_THRESHOLD,
+                    service_url,
+                )
+            else:
+                # Already logged ERROR; stay quiet to avoid log spam.
+                logger.debug(
+                    "TruShore remote health check still failing (%d failures): %s",
+                    failures,
+                    service_url,
+                )
+
+        time.sleep(_REMOTE_HEALTH_INTERVAL_S)
+
+
+def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
+    """Attempt to activate remote TruShore mode and start the health check thread.
+
+    Called lazily from run_all_spots() on the first invocation when
+    ``marine_config.trushore.is_remote`` is True (T4.2).  Protected by
+    ``_remote_init_lock`` so concurrent callers (e.g. tests) are safe.
+
+    Startup probe:
+      Calls ``GET {service_url}/health`` with a 10 s timeout.  On failure:
+        - Logs ERROR with fallback notice.
+        - Returns False → caller falls through to bundled SWAN mode.
+      On success: sets ``_remote_url``, starts the background health thread,
+      returns True.
+
+    Args:
+        service_url: Base URL of the standalone TruShore service.
+        marine_config: MarineConfig from api.conf (supplies spot_ids for the
+                       health thread's initial spot list).
+
+    Returns:
+        True if remote mode was activated; False if the startup probe failed
+        and the caller should fall back to bundled mode.
+    """
+    global _remote_url, _remote_health_thread  # noqa: PLW0603
+
+    logger.info("TruShore: probing remote service at %s", service_url)
+    try:
+        resp = httpx.get(f"{service_url}/health", timeout=10.0)
+        resp.raise_for_status()
+        logger.info(
+            "TruShore remote service reachable: %s (last_run=%s)",
+            service_url,
+            resp.json().get("last_run"),
+        )
+    except Exception as exc:
+        logger.error(
+            "TruShore: remote service unreachable at startup (%s: %s); "
+            "falling back to bundled SWAN mode if SWAN binary is available",
+            service_url,
+            exc,
+        )
+        return False
+
+    spot_ids = list(getattr(marine_config, "surf_spots", {}).keys()) if marine_config else []
+
+    _remote_url = service_url
+    _remote_health_thread = threading.Thread(
+        target=_remote_health_loop,
+        args=(service_url, spot_ids),
+        daemon=True,
+        name="trushore-remote-health",
+    )
+    _remote_health_thread.start()
+    logger.info(
+        "TruShore: remote mode active (service_url=%s, %d spot(s), "
+        "health check every %ds)",
+        service_url,
+        len(spot_ids),
+        _REMOTE_HEALTH_INTERVAL_S,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Public fetch entrypoint (PROVIDER-MANUAL §14.15)
 # ---------------------------------------------------------------------------
 
@@ -247,7 +474,15 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
     """
     last_good = get_cache().get(_build_last_good_key(spot_id))
     if last_good is None:
-        logger.debug("TruShore: no cached data for spot %r", spot_id)
+        if _remote_url:
+            logger.debug(
+                "TruShore remote: no cached data for spot %r — health thread has "
+                "not yet completed a successful fetch from %s",
+                spot_id,
+                _remote_url,
+            )
+        else:
+            logger.debug("TruShore: no cached data for spot %r", spot_id)
         return None
 
     # Compute live data age from the stored run_time.
@@ -312,6 +547,35 @@ def run_all_spots(
         Nothing.  All exceptions are caught, logged, and the last-good cache
         is left intact.
     """
+    # ---------------------------------------------------------------------------
+    # Remote mode detection — lazy initialisation on first run_all_spots() call.
+    # Protected by _remote_init_lock so parallel test runners are safe.
+    # ---------------------------------------------------------------------------
+    if _remote_url is None and marine_config is not None:
+        trushore_cfg = getattr(marine_config, "trushore", None)
+        if trushore_cfg is not None and trushore_cfg.is_remote:
+            with _remote_init_lock:
+                # Double-check after acquiring the lock (another thread may have
+                # initialised while we were waiting).
+                if _remote_url is None:
+                    activated = configure_remote_mode(trushore_cfg.service_url, marine_config)
+                    if not activated:
+                        logger.warning(
+                            "TruShore: remote mode startup probe failed; "
+                            "continuing with bundled SWAN mode"
+                        )
+                        # _remote_url stays None → bundled mode continues.
+
+    if _remote_url is not None:
+        # Remote mode active: the background health thread fetches forecast data
+        # from the remote service and populates the local last-good cache.
+        # This function is a no-op — do NOT run SWAN locally.
+        logger.debug(
+            "TruShore: remote mode active (%s); local SWAN run skipped",
+            _remote_url,
+        )
+        return
+
     if not _NEARSHORE_AVAILABLE:
         logger.debug(
             "TruShore: [nearshore] extra not installed; skipping SWAN run"
@@ -411,6 +675,11 @@ def run_all_spots(
         loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations
     }
 
+    # Read omp_num_threads from TrushoreConfig (T4.2 / coordinator addition).
+    # 0 means "let OpenMP decide" (all available cores — default behaviour).
+    trushore_cfg = getattr(marine_config, "trushore", None)
+    omp_num_threads: int = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
+
     swan_config: dict[str, Any] = {
         "domain_bbox": list(domain_bbox),
         "surf_spots": surf_spots_config,
@@ -419,6 +688,7 @@ def run_all_spots(
         "compute_dt_min": compute_dt_min,
         "output_interval_hr": output_interval_hr,
         "swan_timeout_s": swan_timeout_s,
+        "omp_num_threads": omp_num_threads,
     }
 
     runner = _SWANRunnerWithCleanup(swan_config)
