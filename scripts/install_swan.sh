@@ -39,9 +39,9 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration — pin the exact version we have tested against
 # ---------------------------------------------------------------------------
-readonly SWAN_VERSION="41.45"
-readonly SWAN_ARCHIVE="swan4145.tar.gz"
-readonly SWAN_URL="https://sourceforge.net/projects/swanmodel/files/swan/${SWAN_VERSION}/${SWAN_ARCHIVE}/download"
+readonly SWAN_VERSION="41.51"
+readonly SWAN_ARCHIVE="SWAN-${SWAN_VERSION}-Linux.tar.gz"
+readonly SWAN_URL="https://sourceforge.net/projects/swanmodel/files/swan/${SWAN_ARCHIVE}/download"
 readonly INSTALL_BIN="/usr/local/bin/swan"
 readonly LOG_PREFIX="[install_swan]"
 
@@ -155,65 +155,25 @@ log "Source directory: ${SRC_DIR}"
 cd "${SRC_DIR}"
 
 # ---------------------------------------------------------------------------
-# Configure: select gfortran + OpenMP macros file
+# Locate the pre-compiled binary
 #
-# SWAN 41.45 ships several pre-made macros template files. We copy the
-# appropriate one to 'macros' before running make.
-#
-# Priority:
-#   1. macros.gfortran_omp   — gfortran with OpenMP (preferred: parallel)
-#   2. macros.gfortran       — gfortran serial (fallback with warning)
-#   3. Abort if neither found
+# SWAN 41.51 Linux distribution ships pre-compiled binaries in bin/.
+# The binary is named 'swan.exe' (historical convention from SWAN's
+# Windows/PC origins — the .exe suffix is used on all platforms).
 # ---------------------------------------------------------------------------
-log "Configuring for gfortran + OpenMP..."
-
-if [ -f "macros.gfortran_omp" ]; then
-    cp macros.gfortran_omp macros
-    log "Macros: macros.gfortran_omp (gfortran + OpenMP — parallel build)"
-elif [ -f "macros.gfortran" ]; then
-    warn "macros.gfortran_omp not found; using macros.gfortran (serial — no OpenMP)."
-    warn "Performance will be lower. Consider installing libopenmpi-dev and retrying."
-    cp macros.gfortran macros
-else
-    log "No pre-made macros file found. Files available:"
-    ls macros.* 2>/dev/null | sed 's/^/  /' || echo "  (none)"
-    die "Cannot configure SWAN. Check the SWAN 41.45 source archive and the " \
-        "SWAN installation manual for your platform."
-fi
-
-# ---------------------------------------------------------------------------
-# Compile
-# ---------------------------------------------------------------------------
-# Determine available CPU count for parallel make (-j N).
-# Clamp to 8 to avoid overwhelming small systems with many cores.
-NCORES="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
-if [ "${NCORES}" -gt 8 ]; then NCORES=8; fi
-
-log "Compiling SWAN with ${NCORES} parallel jobs (typically 2–5 minutes)..."
-if ! make -j"${NCORES}" 2>&1 | tee /tmp/swan_build_log.txt; then
-    die "SWAN compilation failed. Build log at /tmp/swan_build_log.txt. " \
-        "Common causes:\n" \
-        "  - gfortran or libgomp not installed\n" \
-        "  - Incompatible macros file for this SWAN version\n" \
-        "Check the last 20 lines of the build log:\n" \
-        "$(tail -20 /tmp/swan_build_log.txt)"
-fi
-log "Compilation complete."
-
-# ---------------------------------------------------------------------------
-# Locate the compiled binary
-#
-# SWAN names its binary 'swan.exe' even on Linux (historical build-system
-# convention from its Windows/PC origins). Some builds may produce 'swan'.
-# ---------------------------------------------------------------------------
-if [ -f "swan.exe" ]; then
+if [ -f "${SRC_DIR}/bin/swan.exe" ]; then
+    SWAN_BIN="${SRC_DIR}/bin/swan.exe"
+    log "Pre-compiled binary found: ${SWAN_BIN}"
+elif [ -f "${SRC_DIR}/swan.exe" ]; then
     SWAN_BIN="${SRC_DIR}/swan.exe"
-elif [ -f "swan" ]; then
+    log "Binary found: ${SWAN_BIN}"
+elif [ -f "${SRC_DIR}/swan" ]; then
     SWAN_BIN="${SRC_DIR}/swan"
+    log "Binary found: ${SWAN_BIN}"
 else
-    log "Build directory contents:"
-    ls -la | head -30
-    die "Build completed but SWAN binary not found. Expected 'swan.exe' or 'swan' in ${SRC_DIR}."
+    log "No pre-compiled binary found. Contents:"
+    find "${SRC_DIR}" -maxdepth 2 -type f | head -20
+    die "SWAN binary not found in ${SRC_DIR}. Expected bin/swan.exe or swan.exe."
 fi
 log "Binary located: ${SWAN_BIN}"
 
