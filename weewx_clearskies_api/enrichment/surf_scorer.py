@@ -504,14 +504,20 @@ def score_surf(
     sunrise_utc: str | None = None,
     sunset_utc: str | None = None,
     locale: str | None = None,
+    wind_source: str = "station",
 ) -> SurfForecast:
     """Score surf quality and produce a SurfForecast model instance.
 
     Args:
-        wave_height: meters; post-supplement wave height (dominant swell).
+        wave_height: meters; breaking face height (``breakingFaceHeight`` from
+            ``breaker_height.hsig_to_face_height()``). As of T3.2, the scorer
+            receives the trough-to-crest face height, not raw post-supplement
+            Hsig. ``_WAVE_HEIGHT_RANGES_FT`` thresholds are calibrated
+            accordingly (+17%, T2.6).
         wave_period: seconds; dominant period.
         wave_direction: degrees true north; dominant swell direction.
-        wind_speed: m/s; from NDBC or WaveWatch III. None if unavailable.
+        wind_speed: m/s; at-beach wind (station hardware for t=0, HRRR
+            forecast wind for t>0 per ADR-094). None if unavailable.
         wind_direction: degrees true north. None if unavailable.
         spectral_components: NDBC spectral swell systems (dicts shaped like
             SpectralWaveComponent), or None if unavailable.
@@ -522,6 +528,12 @@ def score_surf(
         sunset_utc: ISO-8601 UTC; reserved for dusk detection.
         locale: BCP-47 locale code. When None, resolves to
             i18n.get_active_locale() (API-MANUAL.md §17 "Marine i18n").
+        wind_source: metadata field indicating the wind data source for this
+            timestep. One of ``"station"``, ``"forecast_provider"``, or
+            ``"hrrr_trushore"`` (ADR-094). Not stored in the returned
+            SurfForecast model (models/responses.py is out of scope here) —
+            the surf endpoint adds ``windSource`` to the serialised entry dict
+            after calling ``model_dump()``.
     """
     loc = locale or i18n.get_active_locale()
 

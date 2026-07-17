@@ -1,12 +1,13 @@
-"""NWPS supplement processor (Phase 3, T3.2).
+"""SWAN+TruShore supplement processor (Phase 3, T3.1).
 
-Applies four targeted supplements to NWPS/SWAN nearshore wave data, per
-API-MANUAL.md §17 "NWPS supplement processor". Registered against the surf
-scoring pipeline: runs after the NWPS fetch, before ``surf_scorer.py``.
+Applies four targeted supplements to SWAN+TruShore nearshore wave data, per
+API-MANUAL.md §17 "SWAN+TruShore nearshore model". Registered against the
+surf scoring pipeline: runs after TrushoreProvider.fetch(), before
+``surf_scorer.py``.
 
 The four supplements, applied in this order:
 
-1. Sub-grid spatial interpolation (bilinear) — refines the NWPS grid-cell
+1. Sub-grid spatial interpolation (bilinear) — refines the SWAN grid-cell
    value to the exact spot coordinates. Runs first because it establishes
    the wave height baseline the other three supplements correct.
 2. Breaker index correction (Battjes 1974 γ tuning) — replaces SWAN's
@@ -20,13 +21,12 @@ The four supplements, applied in this order:
 4. Topographic focusing/sheltering — a multiplicative adjustment based on
    the spot's operator-classified topographic feature.
 
-No-op when NWPS data is unavailable — WaveWatch III (or any other
-provider's) data passes through unmodified because ``apply_supplements``
-is simply not called in that case.
+No-op when wave data is None or empty — passes through unmodified because
+``apply_supplements`` is simply not called in that case.
 
 **What is NOT supplemented:** Shoaling, refraction, bottom friction,
-wave-current interaction. NWPS/SWAN computes these with its own bathymetry
-and RTOFS currents; re-running them here would duplicate NWPS's work
+wave-current interaction. SWAN computes these with its own bathymetry
+and RTOFS currents; re-running them here would duplicate SWAN's work
 without improving it. Do not add ``calculate_shoaling_coefficient`` or
 ``calculate_refraction_coefficient`` functions to this module.
 """
@@ -280,7 +280,7 @@ def bilinear_interpolate(
     target_lat: float,
     target_lon: float,
 ) -> float:
-    """Standard bilinear interpolation over a 2D NWPS grid.
+    """Standard bilinear interpolation over a 2D nearshore wave grid.
 
     ``grid_data`` is indexed ``grid_data[lat_index][lon_index]``. Finds the
     four surrounding grid nodes and computes a weighted average based on the
@@ -328,30 +328,34 @@ def apply_topographic_adjustment(wave_height: float, topographic_feature: str) -
 
 
 def apply_supplements(
-    nwps_data: dict[str, Any] | None,
+    wave_data: dict[str, Any] | None,
     spot_config: Any,
     spot_lat: float,
     spot_lon: float,
 ) -> dict[str, Any] | None:
-    """Apply the four NWPS supplements and return corrected wave data.
+    """Apply the four SWAN+TruShore supplements and return corrected wave data.
 
     Processing order: interpolation (3) -> breaker correction (1) ->
     structure effects (2) -> topographic adjustment (4).
+
+    Input ``wave_data`` is a dict with keys ``wave_height`` (meters, SWAN Hsig),
+    ``wave_period`` (seconds), ``wave_direction`` (degrees true north), and
+    optionally ``grid_data``, ``grid_lats``, ``grid_lons`` for the bilinear
+    interpolation supplement.
 
     Returns a dict with keys ``wave_height``, ``wave_period``,
     ``wave_direction``, ``breaker_gamma``, ``structure_applied`` (bool), and
     ``supplements_applied`` (list of the supplement names that were actually
     applied, in application order).
 
-    Returns None when ``nwps_data`` is None or empty (no-op — WaveWatch III
-    or other non-NWPS data is not touched by this processor).
+    Returns None when ``wave_data`` is None or empty.
     """
-    if not nwps_data:
+    if not wave_data:
         return None
 
-    wave_height = nwps_data.get("wave_height")
-    wave_period = nwps_data.get("wave_period")
-    wave_direction = nwps_data.get("wave_direction")
+    wave_height = wave_data.get("wave_height")
+    wave_period = wave_data.get("wave_period")
+    wave_direction = wave_data.get("wave_direction")
 
     supplements_applied: list[str] = []
     breaker_gamma: float | None = None
@@ -359,9 +363,9 @@ def apply_supplements(
 
     # Supplement 3 — sub-grid interpolation. Runs first: it establishes the
     # wave-height baseline the remaining supplements correct.
-    grid_data = nwps_data.get("grid_data")
-    grid_lats = nwps_data.get("grid_lats")
-    grid_lons = nwps_data.get("grid_lons")
+    grid_data = wave_data.get("grid_data")
+    grid_lats = wave_data.get("grid_lats")
+    grid_lons = wave_data.get("grid_lons")
     if grid_data is not None and grid_lats is not None and grid_lons is not None:
         try:
             wave_height = bilinear_interpolate(
