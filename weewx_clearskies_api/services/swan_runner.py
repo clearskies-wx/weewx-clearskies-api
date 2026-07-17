@@ -257,7 +257,7 @@ class SWANRunner:
 
     Two sequential SWAN runs per cycle (PROVIDER-MANUAL §14.15):
       1. Outer grid (continental shelf approach, ~200km × 150km, 2–3 km resolution)
-         — propagates WW3 swell across the shelf; writes NEST boundary files.
+         — propagates WW3 swell across the shelf; writes NESTOUT boundary files.
       2. Inner nest (tight nearshore, ~20–30km × 10–15km, 200–500m resolution)
          — reads outer boundary via NGRID; outputs TABLE at surf spot coordinates.
 
@@ -282,7 +282,7 @@ class SWANRunner:
     When gfs_wind_field is None a shortened forecast (HRRR hours only) is produced.
     """
 
-    _NEST_BOUNDARY_FILE = "nest_boundary.dat"
+    _NESTOUT_BOUNDARY_FILE = "nest_boundary.dat"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
@@ -334,8 +334,8 @@ class SWANRunner:
           1. Blend HRRR + GFS wind fields into a 72-hour (or shortened) uniform
              hourly wind input via _stitch_wind().
           2. Create a temporary working directory with outer/ and inner/ subdirs.
-          3. Run the outer grid (shelf approach): writes NEST boundary data.
-          4. Run the inner nest (nearshore): reads NEST via NGRID; writes TABLE.
+          3. Run the outer grid (shelf approach): writes NESTOUT boundary data.
+          4. Run the inner nest (nearshore): reads NESTOUT via NGRID; writes TABLE.
           5. Parse inner nest OUTPUT_TABLE.txt and return per-spot results.
 
         The temporary directory is NOT deleted on failure so that operators can
@@ -513,14 +513,14 @@ class SWANRunner:
         inner_dir.mkdir(exist_ok=True)
 
         # Copy nest boundary file from outer run into inner working dir
-        src = tmpdir / "outer" / self._NEST_BOUNDARY_FILE
-        dst = inner_dir / self._NEST_BOUNDARY_FILE
+        src = tmpdir / "outer" / self._NESTOUT_BOUNDARY_FILE
+        dst = inner_dir / self._NESTOUT_BOUNDARY_FILE
         if src.exists():
             shutil.copy2(str(src), str(dst))
         else:
             logger.warning(
                 "SWAN inner nest: outer grid did not produce %s — inner nest will run without nesting",
-                self._NEST_BOUNDARY_FILE,
+                self._NESTOUT_BOUNDARY_FILE,
             )
 
         grid_info = self._write_input_files(
@@ -608,7 +608,7 @@ class SWANRunner:
         # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
         grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
 
-        # Compute inner_dims for outer NEST command
+        # Compute inner_dims for outer NESTOUT command
         inner_dims_for_input: dict[str, Any] | None = None
         if grid_level == "outer":
             from weewx_clearskies_api.services.swan_formats import _compute_swan_grid_dims
@@ -623,7 +623,7 @@ class SWANRunner:
             inner_dims=inner_dims_for_input,
             output_interval_hr=self._output_interval_hr,
             compute_dt_min=self._compute_dt_min,
-            nest_boundary_file=self._NEST_BOUNDARY_FILE,
+            nest_boundary_file=self._NESTOUT_BOUNDARY_FILE,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
