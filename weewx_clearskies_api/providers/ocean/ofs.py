@@ -116,14 +116,18 @@ def _get_grid(model: str, url: str) -> dict[str, Any] | None:
     cache_key = f"{PROVIDER_ID}:grid:{model}"
     cached = get_cache().get(cache_key)
     if cached is not None:
-        return cached
+        import numpy as np
+        return {
+            k: np.array(v) if isinstance(v, list) else v
+            for k, v in cached.items()
+        }
 
     try:
         import numpy as np
         import xarray as xr
 
         ds = xr.open_dataset(url, engine="netcdf4")
-        grid = {
+        grid_raw = {
             "lat": ds["Latitude"].values,
             "lon": ds["Longitude"].values,
             "depth": ds["Depth"].values if "Depth" in ds else None,
@@ -132,11 +136,17 @@ def _get_grid(model: str, url: str) -> dict[str, Any] | None:
         }
         ds.close()
 
-        if grid["mask"] is not None and np.all(grid["mask"] == 0):
+        if grid_raw["mask"] is not None and np.all(grid_raw["mask"] == 0):
             return None
 
-        get_cache().set(cache_key, grid, ttl_seconds=_GRID_CACHE_TTL)
-        return grid
+        # Cache needs JSON-serializable data; convert numpy arrays to lists.
+        # _find_nearest_water_point and _extract_data work with both.
+        grid_for_cache = {
+            k: v.tolist() if hasattr(v, "tolist") else v
+            for k, v in grid_raw.items()
+        }
+        get_cache().set(cache_key, grid_for_cache, ttl_seconds=_GRID_CACHE_TTL)
+        return grid_raw
     except Exception:
         logger.warning("Failed to fetch grid for OFS model %s", model, exc_info=True)
         return None
