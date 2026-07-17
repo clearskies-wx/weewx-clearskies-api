@@ -373,6 +373,9 @@ class MarineLocation:
         self.nws_srf_wfo = nws_srf_wfo.lower() if nws_srf_wfo is not None else None
         self.nwps_cg_grid = _opt_str(section, "nwps_cg_grid")
         self.station_distance_km = float(section.get("station_distance_km", 0.0))
+        self.ofs_model = _opt_str(section, "ofs_model")
+        self.ofs_fallback = _opt_str(section, "ofs_fallback")
+        self.ofs_region = _opt_str(section, "ofs_region")
 
     def validate(self) -> None:
         """Raise ValueError naming the field + location on bad values."""
