@@ -303,6 +303,16 @@ path = /var/lib/weewx/weewx.sdb
 #       # unlisted directions default to false).
 #       directional_exposure = N:false, NE:false, E:true, SE:true, S:true, SW:true, W:false, NW:false
 #
+#       # Breaker height conversion formula (ADR-093, T2.6).
+#       # komar_gaughan (default) — general purpose, works for all coastlines.
+#       # caldwell — empirical H1/10 for steep volcanic coasts (Hawaii, Indonesia).
+#       breaker_formula = komar_gaughan
+#
+#       # Surf height display convention.
+#       # face (default) — trough-to-crest face height (Western scale).
+#       # hawaiian — back-of-wave (~half face height, traditional Hawaii/Australia).
+#       surf_height_display = face
+#
 #       # Optional: nearby coastal structures affecting wave transmission.
 #       # Uncomment and repeat [[[[[<structure_id>]]]]] blocks as needed.
 #       # [[[[[jetty_north]]]]]
