@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# install_swan.sh — Download, compile, and install SWAN 41.45 for TruShore
+# install_swan.sh — Download and install SWAN 41.51 for TruShore
 #
 # SWAN (Simulating WAves Nearshore) is the Fortran wave physics engine used by
 # the TruShore nearshore wave model (T2.1, ADR-093). It is NOT a pip package.
-# This script automates the full build from source.
+# This script downloads the pre-compiled Linux distribution from SourceForge.
+#
+# Source code: https://gitlab.tudelft.nl/citg/wavemodels/swan
 #
 # What this script does:
-#   1. Checks prerequisites (gfortran, make, curl/wget)
-#   2. Downloads SWAN 41.45 source from SourceForge
-#   3. Configures for gfortran + OpenMP parallelism
-#   4. Compiles (2–5 minutes on typical hardware)
-#   5. Installs the binary to /usr/local/bin/swan
-#   6. Runs a version check to confirm success
+#   1. Checks prerequisites (gfortran runtime libraries)
+#   2. Downloads SWAN 41.51 pre-compiled Linux binary from SourceForge
+#   3. Installs the binary to /usr/local/bin/swan
+#   4. Runs a version check to confirm success
 #
 # Prerequisites (Debian/Ubuntu 22.04+):
 #   sudo apt install gfortran libopenmpi-dev

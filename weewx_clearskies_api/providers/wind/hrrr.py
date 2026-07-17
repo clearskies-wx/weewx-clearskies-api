@@ -339,18 +339,43 @@ def _extract_eccodes(file_path: str) -> _HrrrGribData | None:
 
                 if not meta_extracted:
                     ni, nj = _ni, _nj
-                    lat_first = float(
-                        eccodes.codes_get(msgid, "latitudeOfFirstGridPointInDegrees")
+
+                    # Extract per-grid-point lat/lon arrays first — these
+                    # are always available regardless of GRIB encoding.
+                    all_lats = list(
+                        eccodes.codes_get_double_array(msgid, "latitudes")
                     )
-                    lon_first = float(
-                        eccodes.codes_get(msgid, "longitudeOfFirstGridPointInDegrees")
+                    all_lons = list(
+                        eccodes.codes_get_double_array(msgid, "longitudes")
                     )
-                    lat_last = float(
-                        eccodes.codes_get(msgid, "latitudeOfLastGridPointInDegrees")
-                    )
-                    lon_last = float(
-                        eccodes.codes_get(msgid, "longitudeOfLastGridPointInDegrees")
-                    )
+                    lons_2d = [
+                        [all_lons[j * _ni + i] for i in range(_ni)]
+                        for j in range(_nj)
+                    ]
+
+                    # Grid corner coordinates. NOMADS subregion-filtered
+                    # GRIB2 files may lack the "last grid point" keys, so
+                    # fall back to min/max of the coordinate arrays.
+                    try:
+                        lat_first = float(
+                            eccodes.codes_get(msgid, "latitudeOfFirstGridPointInDegrees")
+                        )
+                        lon_first = float(
+                            eccodes.codes_get(msgid, "longitudeOfFirstGridPointInDegrees")
+                        )
+                    except Exception:
+                        lat_first = all_lats[0]
+                        lon_first = all_lons[0]
+                    try:
+                        lat_last = float(
+                            eccodes.codes_get(msgid, "latitudeOfLastGridPointInDegrees")
+                        )
+                        lon_last = float(
+                            eccodes.codes_get(msgid, "longitudeOfLastGridPointInDegrees")
+                        )
+                    except Exception:
+                        lat_last = all_lats[-1]
+                        lon_last = all_lons[-1]
 
                     # Lambert Conformal projection parameters for wind rotation
                     try:
@@ -362,22 +387,6 @@ def _extract_eccodes(file_path: str) -> _HrrrGribData | None:
                             "HRRR GRIB2: could not extract Lambert Conformal parameters "
                             "(LoV/Latin1/Latin2); wind rotation will use lon_first/lon_last "
                             "approximation"
-                        )
-
-                    # Per-grid-point longitudes for accurate per-point rotation.
-                    # eccodes computes these from the Lambert Conformal projection.
-                    try:
-                        all_lons = list(
-                            eccodes.codes_get_double_array(msgid, "longitudes")
-                        )
-                        lons_2d = [
-                            [all_lons[j * _ni + i] for i in range(_ni)]
-                            for j in range(_nj)
-                        ]
-                    except Exception:
-                        logger.debug(
-                            "HRRR GRIB2: could not extract per-point longitudes; "
-                            "will approximate using corner coordinates"
                         )
 
                     meta_extracted = True
