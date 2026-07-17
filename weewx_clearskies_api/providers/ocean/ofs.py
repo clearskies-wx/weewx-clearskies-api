@@ -13,7 +13,7 @@ work; nearest-neighbor lookup via numpy distance with land masking.
 Grid coordinates (Latitude, Longitude, Depth, mask, h) are cached per
 model (24h TTL) — grid topology is fixed across forecast cycles.
 
-Cycle fallback pattern matches providers/marine/nwps.py.
+Cycle fallback pattern: try most recent cycle first, step back up to 3 prior cycles.
 """
 
 from __future__ import annotations

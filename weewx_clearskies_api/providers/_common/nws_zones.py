@@ -13,9 +13,6 @@ shared building block consumed by four call sites:
      `get_cwa()`.
   3. Marine zone alerts extension (PROVIDER-MANUAL §8, ADR-089) — discovers
      zone IDs within the operator's configured alert radius at setup time.
-  4. NWPS nearshore wave data provider (`providers/marine/nwps.py`,
-     PROVIDER-MANUAL §14.6) — first attempt at WFO determination via
-     `get_cwa()`, falling back to a bounding-box lookup.
 
 `get_wfo_for_zone()` (2026-07-11, NWS marine zone text forecast fix):
   The NWS API has no `/zones/coastal/{zoneId}/forecast` endpoint (confirmed

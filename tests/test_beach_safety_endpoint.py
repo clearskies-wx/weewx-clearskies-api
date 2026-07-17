@@ -15,7 +15,7 @@ Scope, per brief: keep it simple.
      "beach_safety" in its activities).
   6. Alert filter helper (_filter_beach_safety_alerts) — ADR-090 event types.
 
-Live provider calls (NWPS / NDBC / NWS SRF / CO-OPS / NWS alerts via
+Live provider calls (NDBC / NWS SRF / CO-OPS / NWS alerts via
 GET /beach-safety/{location_id} or the list endpoint for a *found*
 location) are intentionally not exercised here -- those are Phase 8
 integration tests (PROVIDER-MANUAL §11 "No live-network tests in CI").

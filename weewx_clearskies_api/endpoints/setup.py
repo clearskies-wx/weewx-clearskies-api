@@ -99,7 +99,6 @@ from weewx_clearskies_api.enrichment.fishing_species import (
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
-from weewx_clearskies_api.providers._common.nws_zones import get_cwa
 from weewx_clearskies_api.providers.ocean.ofs import find_ofs_model as _find_ofs_model
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
 from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
@@ -692,8 +691,7 @@ class ApplyRequest(BaseModel):
     #: Optional marine location configuration (T6.3).  When present, written to
     #: the [marine] section of api.conf (additive — a station with no marine
     #: locations configured behaves identically to a non-marine installation,
-    #: per API-MANUAL §18 "Capability gating"). NWPS WFO domain is resolved
-    #: per-location at apply time via nws_zones.get_cwa() before writing.
+    #: per API-MANUAL §18 "Capability gating").
     marine: MarineApplyConfig | None = None
 
 
@@ -935,37 +933,6 @@ def _provider_secrets(domain: str, pc: ProviderConfig) -> dict[str, str]:
     return secrets
 
 
-def _resolve_marine_wfo(
-    marine: MarineApplyConfig, nws_user_agent_contact: str | None
-) -> dict[str, str | None]:
-    """Resolve the NWPS WFO domain per marine location via nws_zones.get_cwa().
-
-    One NWS ``/points`` lookup per location — a setup-time operation, not a
-    per-request one (PROVIDER-MANUAL §14.8 "Invocation context"; §14.6 "WFO
-    domain determination"). A per-location failure (location outside NWS
-    coverage -> GeographicallyUnsupported, or a transient NWS error) is logged
-    at WARNING and that location's WFO is left ``None`` rather than failing
-    the whole ``/setup/apply`` call — one bad or unreachable location must not
-    block saving the rest of the payload. Exceptions from get_cwa() are the
-    canonical ProviderError taxonomy already (ProviderHTTPClient never lets
-    upstream exception types leak) — caught here, never re-wrapped.
-    """
-    result: dict[str, str | None] = {}
-    for location in marine.locations:
-        try:
-            result[location.id] = get_cwa(
-                location.lat, location.lon, user_agent_contact=nws_user_agent_contact
-            )
-        except ProviderError as exc:
-            logger.warning(
-                "Marine location %r: NWPS WFO lookup failed (%s: %s); nwps_wfo will be unset.",
-                location.id,
-                type(exc).__name__,
-                exc,
-            )
-            result[location.id] = None
-    return result
-
 
 def _resolve_marine_bathymetry(marine: MarineApplyConfig) -> dict[str, list[BathymetryPoint]]:
     """Auto-download a CUDEM bathymetric profile for every marine location's
@@ -1017,7 +984,6 @@ def _resolve_marine_bathymetry(marine: MarineApplyConfig) -> dict[str, list[Bath
 
 def _build_marine_conf_section(
     marine: MarineApplyConfig,
-    wfo_by_location: dict[str, str | None],
     bathymetry_by_location: dict[str, list[BathymetryPoint]] | None = None,
 ) -> dict[str, Any]:
     """Build the ``[marine]`` configobj section dict from the validated apply payload.
@@ -1058,9 +1024,6 @@ def _build_marine_conf_section(
             loc_section["coops_station_ids"] = list(loc.coops_station_ids)
         if loc.nws_marine_zone_id:
             loc_section["nws_marine_zone_id"] = loc.nws_marine_zone_id
-        wfo = wfo_by_location.get(loc.id)
-        if wfo:
-            loc_section["nwps_wfo"] = wfo
 
         ofs_primary, ofs_fallback = _find_ofs_model(loc.lat, loc.lon)
         if ofs_primary:
@@ -1131,7 +1094,6 @@ def _build_marine_conf_section(
 def _write_api_conf(
     config_dir: Path,
     apply: ApplyRequest,
-    marine_wfo_by_location: dict[str, str | None] | None = None,
     marine_bathymetry_by_location: dict[str, list[BathymetryPoint]] | None = None,
 ) -> None:
     """Write (or update) api.conf in config_dir with non-secret settings from apply."""
@@ -1326,7 +1288,7 @@ def _write_api_conf(
     # this merge.
     if apply.marine is not None:
         new_marine = _build_marine_conf_section(
-            apply.marine, marine_wfo_by_location or {}, marine_bathymetry_by_location or {}
+            apply.marine, marine_bathymetry_by_location or {}
         )
         existing_marine = cfg.get("marine")
         if isinstance(existing_marine, dict):
@@ -1807,21 +1769,6 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         if not wcp.startswith("/") or not wcp.endswith(".conf") or not Path(wcp).exists():
             raise HTTPException(422, detail="Invalid weewx.conf path")
 
-    # 0b. Resolve NWPS WFO domain per marine location (T6.3), before writing.
-    # A per-location NWS lookup failure is logged and leaves that location's
-    # nwps_wfo unset — see _resolve_marine_wfo() docstring — it never fails
-    # the whole apply.
-    marine_wfo_by_location: dict[str, str | None] = {}
-    if body.marine is not None:
-        nws_contact: str | None = None
-        if body.providers:
-            for domain in ("forecast", "alerts"):
-                pc = body.providers.get(domain)
-                if pc is not None and pc.nws_user_agent_contact:
-                    nws_contact = pc.nws_user_agent_contact
-                    break
-        marine_wfo_by_location = _resolve_marine_wfo(body.marine, nws_contact)
-
     # 0c. Auto-download CUDEM bathymetric profiles for marine surf spots
     # (Marine Remediation T1.2 "unified bounding box" apply flow) — one pass
     # across all configured locations, before writing. See
@@ -1833,7 +1780,7 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
 
     # 1. Write non-secret settings to api.conf.
     try:
-        _write_api_conf(config_dir, body, marine_wfo_by_location, marine_bathymetry_by_location)
+        _write_api_conf(config_dir, body, marine_bathymetry_by_location)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write api.conf during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write configuration file.") from exc
@@ -2245,8 +2192,8 @@ async def get_skin_file(
 
 class MarineEccodesCheckResponse(BaseModel):
     #: True when a GRIB2 backend (eccodes or the pygrib fallback) is
-    #: importable in this process. False means the marine feature's NWPS
-    #: nearshore wave provider (PROVIDER-MANUAL §14.6) cannot run.
+    #: importable in this process. Required by HRRR wind provider
+    #: (providers/marine/grib_processor.py) for SWAN boundary forcing.
     available: bool
     #: Platform-agnostic install instructions (matches
     #: grib_processor.check_grib_available()'s RuntimeError message).
@@ -2259,11 +2206,11 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
     """Probe whether a GRIB2 backend is installed (Marine Remediation Plan T3.6).
 
     Called by the wizard's marine step on load, before the operator is
-    allowed to enable marine features — the NWPS nearshore wave provider
-    (PROVIDER-MANUAL §14.6) hard-requires eccodes (or the pygrib fallback)
-    and cannot function without it. Reuses the same backend-detection state
-    (``GRIB_AVAILABLE``, set once at process start when
-    ``providers/marine/grib_processor.py`` is imported) and the same
+    allowed to enable marine features — GRIB2 processing (eccodes or the
+    pygrib fallback) is required for HRRR wind field ingestion that drives
+    the SWAN+TruShore nearshore model (ADR-093). Reuses the same
+    backend-detection state (``GRIB_AVAILABLE``, set once at process start
+    when ``providers/marine/grib_processor.py`` is imported) and the same
     install-instructions text that the provider registration path already
     raises with, rather than re-probing ``import eccodes`` / ``import
     pygrib`` here — one source of truth for GRIB backend detection.
@@ -2872,8 +2819,8 @@ async def marine_discover_structures(
 
     Used by the wizard to auto-populate the `structures` list of a surf
     spot's config/marine_config.py StructureConfig entries, which feed the
-    NWPS supplement processor's coastal-structure transmission/reflection
-    correction (API-MANUAL §17 "Supplement 2 — Coastal structure effects").
+    wave_transform coastal-structure transmission/reflection correction
+    (API-MANUAL §17 "Supplement 2 — Coastal structure effects").
 
     Results are cached 24h (structures rarely change) via get_cache() — see
     _build_structure_discovery_cache_key() docstring for the key
@@ -3224,7 +3171,6 @@ class MarineCoverageResponse(BaseModel):
     nearest_coops_station: _CoverageNearestStation | None = None
     nearest_ndbc_buoy: _CoverageNearestStation | None = None
     nws_marine_zone: str | None = None
-    nwps_wfo: str | None = None
     on_premises_sensor: str
 
 
@@ -3256,7 +3202,7 @@ async def marine_coverage(
 ) -> MarineCoverageResponse:
     """Return data source coverage information for a marine location (T3.6).
 
-    Checks OFS model assignment, nearest stations, NWS zone, NWPS WFO, and
+    Checks OFS model assignment, nearest stations, NWS zone, and
     on-premises sensor proximity. Used by the wizard and admin to show what
     data sources are available at a given coordinate before/after configuration.
     """
@@ -3322,13 +3268,6 @@ async def marine_coverage(
     except Exception:
         logger.warning("Coverage: NWS zone discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True)
 
-    # --- NWPS WFO ---
-    nwps_wfo: str | None = None
-    try:
-        nwps_wfo = get_cwa(lat, lon, user_agent_contact=None)
-    except Exception:
-        logger.warning("Coverage: NWPS WFO lookup failed at (%.4f, %.4f)", lat, lon, exc_info=True)
-
     # --- On-premises sensor proximity ---
     try:
         from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
@@ -3358,6 +3297,5 @@ async def marine_coverage(
         nearest_coops_station=nearest_coops,
         nearest_ndbc_buoy=nearest_ndbc,
         nws_marine_zone=nws_zone,
-        nwps_wfo=nwps_wfo,
         on_premises_sensor=on_premises,
     )

@@ -1,7 +1,7 @@
 """GRIB2 processing with eccodes/pygrib dual backend (PROVIDER-MANUAL §14.6).
 
 Provides read_grib_fields() for extracting named fields from GRIB2 files
-into Python lists (no numpy dependency — NWPS CG1 grids are small, ~100×100).
+into Python lists (no numpy dependency — HRRR and SWAN grids are tractable in pure Python).
 
 Backend selection:
   1. Try ``import eccodes`` (ECMWF's C-library Python binding).
@@ -248,8 +248,8 @@ def read_grib_fields(
     Args:
         file_path: Path to the GRIB2 file on disk.
         field_names: GRIB2 shortName values to extract (e.g. ``["HTSGW", "PERPW"]``).
-        target_step: Forecast hour (GRIB2 ``endStep``) to select. NWPS GRIB2
-            files contain 144 hourly forecast timesteps per field; without
+        target_step: Forecast hour (GRIB2 ``endStep``) to select. HRRR GRIB2
+            files contain 48 hourly forecast timesteps per field; without
             filtering, messages are read in file order and the last match
             wins. Pass ``target_step=0`` to select only the analysis/current
             conditions timestep. When ``None``, all messages are read and the
@@ -334,8 +334,8 @@ def bilinear_interpolate(
 ) -> float | None:
     """Bilinear interpolation of grid values at exact (lat, lon).
 
-    ADR-084 Supplement 3: sub-grid spatial interpolation using the four
-    surrounding NWPS grid nodes.
+    Sub-grid spatial interpolation using the four surrounding grid nodes
+    (bilinear; same algorithm applied to HRRR and SWAN output grids).
 
     Returns None if the point falls outside the grid or any surrounding
     node has a missing value.

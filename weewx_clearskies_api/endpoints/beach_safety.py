@@ -25,15 +25,10 @@ table, not the thresholds; thresholds below match the task brief verbatim):
     <55°F  -> "dangerous"
 
 Data sources:
-  - Nearshore wave height/period: NWPS (providers/marine/nwps.py) preferred,
-    NDBC buoy (providers/buoy/ndbc.py) as fallback.
+  - Nearshore wave height/period: NDBC buoy (providers/buoy/ndbc.py).
   - Rip current risk + UV index: NWS SRF (providers/marine/nws_srf.py).
   - Water temperature: NDBC, falling back to CO-OPS water_temperature.
   - Tides / water levels: CO-OPS (providers/tides/coops.py).
-  - NWPS v1.5 show-when-available fields (rip current probability, total
-    water level, wave runup): surfaced under `data.nwpsV15` when the
-    covering WFO supplies them (~12 WFOs per PROVIDER-MANUAL §14.6); absent
-    (key omitted's value is None) otherwise, without error.
   - Active alerts filtered per ADR-090 to beach-safety-relevant event types:
     Beach Hazards Statement, High Surf Advisory, High Surf Warning, Rip
     Current Statement, Coastal Flood Advisory, Coastal Flood Warning.
@@ -260,31 +255,10 @@ def _gather_wave_and_temp(location: MarineLocation) -> dict:
         "water_temp_c": None,
         "rip_current_risk": None,
         "uv_index": None,
-        "nwps_v15": None,
         "wind_speed": None,
         "wind_direction": None,
         "visibility": None,
     }
-
-    try:
-        from weewx_clearskies_api.providers.marine import nwps  # noqa: PLC0415
-
-        nwps_result = nwps.fetch(lat=location.lat, lon=location.lon, wfo_override=location.nwps_wfo)
-        nearshore = nwps_result.get("nearshore") if nwps_result else None
-        if nearshore:
-            result["wave_height_m"] = nearshore.get("waveHeight")
-            result["wave_period_s"] = nearshore.get("wavePeriod")
-            v15_fields = {
-                "ripCurrentProbability": nearshore.get("ripCurrentProbability"),
-                "totalWaterLevel": nearshore.get("totalWaterLevel"),
-                "waveRunup": nearshore.get("waveRunup"),
-            }
-            if any(v is not None for v in v15_fields.values()):
-                result["nwps_v15"] = v15_fields
-    except Exception:
-        logger.warning(
-            "beach-safety endpoint: NWPS fetch failed for %s", location.id, exc_info=True
-        )
 
     try:
         if location.ndbc_station_ids:
@@ -507,11 +481,10 @@ def get_beach_safety(location_id: str) -> dict:
         "locationName": location.name,
         "coordinates": {"lat": location.lat, "lon": location.lon},
         "assessment": assessment,
-        "nwpsV15": gathered["nwps_v15"],
         "tidePredictions": tide_predictions,
         "waterLevels": water_levels,
         "externalLinks": external_links,
-        "source": "nwps+ndbc+nws_srf+coops+nws_alerts",
+        "source": "ndbc+nws_srf+coops+nws_alerts",
         "generatedAt": now_str,
     }
 

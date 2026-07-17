@@ -21,8 +21,6 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
           ndbc_station_ids = 41110, 41037
           coops_station_ids = 8658163
           nws_marine_zone_id = AMZ250
-          nwps_wfo = ILM
-          nwps_cg_grid = CG1
           # Optional overrides for the SRF provider (T1.4, Marine
           # Remediation Plan) -- only needed when the spot's coordinates
           # resolve to a marine zone or a WFO that doesn't issue its SRF:
@@ -353,7 +351,6 @@ class MarineLocation:
     ndbc_station_ids: list[str]
     coops_station_ids: list[str]
     nws_marine_zone_id: str | None
-    nwps_wfo: str | None
     #: NWS public forecast (county) zone ID for the Surf Zone Forecast (SRF)
     #: text product (e.g. "CAZ552" for Orange County, CA). Optional — when
     #: unset, providers/marine/nws_srf.py auto-resolves the zone from
@@ -368,12 +365,6 @@ class MarineLocation:
     #: County's SRF is issued by SGX). Optional; passed as nws_srf.fetch()'s
     #: wfo_override kwarg when set.
     nws_srf_wfo: str | None
-    #: Parsed and stored, but NOT currently read by any provider (T4.5,
-    #: Phase 4 cleanup). providers/marine/nwps.py's fetch() hardcodes the
-    #: NWPS grid to "CG1" everywhere (v1 simplification: CG1 only, per that
-    #: module's docstring) and takes no cg_grid parameter. This field is
-    #: reserved for future CG2-5 support and has zero runtime effect today.
-    nwps_cg_grid: str | None
     #: Computed at config time (haversine from weewx station to this location).
     station_distance_km: float
     #: OFS model assigned at config time via find_ofs_model(lat, lon).
@@ -391,12 +382,9 @@ class MarineLocation:
         self.coops_station_ids = _as_list(section.get("coops_station_ids", []))
         nws_marine_zone_id = _opt_str(section, "nws_marine_zone_id")
         self.nws_marine_zone_id = nws_marine_zone_id.upper() if nws_marine_zone_id is not None else None
-        nwps_wfo = _opt_str(section, "nwps_wfo")
-        self.nwps_wfo = nwps_wfo.lower() if nwps_wfo is not None else None
         self.nws_srf_zone_id = _opt_str(section, "nws_srf_zone_id")
         nws_srf_wfo = _opt_str(section, "nws_srf_wfo")
         self.nws_srf_wfo = nws_srf_wfo.lower() if nws_srf_wfo is not None else None
-        self.nwps_cg_grid = _opt_str(section, "nwps_cg_grid")
         self.station_distance_km = float(section.get("station_distance_km", 0.0))
         self.ofs_model = _opt_str(section, "ofs_model")
         self.ofs_fallback = _opt_str(section, "ofs_fallback")

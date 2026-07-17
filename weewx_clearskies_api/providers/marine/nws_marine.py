@@ -32,8 +32,7 @@ WFO determination (PROVIDER-MANUAL §14.4, §14.8):
   list `discover_marine_zones()` uses). This keeps the existing
   `fetch(zone_id=...)` call shape used by `endpoints/marine.py` and by
   `tests/integration/test_nws_marine_integration.py` unchanged. An optional
-  `wfo_override` kwarg (naming mirrors `providers/marine/nwps.py`'s
-  `wfo_override` pattern) lets a caller that already knows the WFO skip
+  `wfo_override` kwarg lets a caller that already knows the WFO skip
   this lookup.
 
 NWS User-Agent (ADR-006):
@@ -556,8 +555,7 @@ def fetch(
     Args:
         zone_id: NWS coastal marine zone ID (e.g. "AMZ250").
         wfo_override: If provided, skip the zone_id -> WFO lookup and use
-            this WFO code directly (mirrors providers/marine/nwps.py's
-            wfo_override pattern). When None, the WFO is resolved via
+            this WFO code directly. When None, the WFO is resolved via
             providers/_common/nws_zones.py::get_wfo_for_zone(zone_id).
         user_agent_contact: Operator-configured NWS UA contact (ADR-006).
 

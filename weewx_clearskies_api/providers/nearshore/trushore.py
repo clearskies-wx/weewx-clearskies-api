@@ -43,7 +43,7 @@ References:
   - PROVIDER-MANUAL §14.15 (SWAN+TruShore runner specification)
   - SWAN-TRUSHORE-PLAN.md T2.5
   - services/swan_runner.py (SWANRunner.run() interface)
-  - ADR-093 (SWAN+TruShore replaces NWPS)
+  - ADR-093 (SWAN+TruShore nearshore model)
 """
 
 from __future__ import annotations

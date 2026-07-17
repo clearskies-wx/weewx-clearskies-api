@@ -19,7 +19,7 @@ Marine Remediation Plan T1.4 — see docs/planning/MARINE-REMEDIATION-PLAN.md):
   LOX, but Orange County's SRF is issued by SGX). fetch() now resolves the
   WFO with this priority:
     1. `wfo_override` kwarg, when the caller already knows the issuing WFO
-       (operator config, mirroring nwps.py's `wfo_override` pattern).
+       (operator config).
     2. The zone's own `cwa` property from the `/zones/forecast/{zoneId}`
        response (already fetched for the zone *name* — see
        `_resolve_zone_name_and_cwa` below) — used only when the zone ID was
@@ -1101,8 +1101,8 @@ def fetch(
             via /points -> properties.forecastZone (with marine-zone retry,
             see `_resolve_forecast_zone_id`).
         wfo_override: WFO office ID (e.g. "SGX") if the caller already knows
-            which WFO issues the SRF for this spot (operator config; naming
-            mirrors nwps.py's `wfo_override` pattern). Takes priority over
+            which WFO issues the SRF for this spot (operator config). Takes
+            priority over
             both zone-derived and coordinate-derived WFO resolution — use
             this when a spot's SRF-issuing WFO differs from its coordinate
             CWA (T1.4, Marine Remediation Plan; see module docstring "WFO

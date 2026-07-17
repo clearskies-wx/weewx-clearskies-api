@@ -10,8 +10,8 @@ WaveWatch III / NWS marine text via GET /marine/{location_id} for a *found*
 location) are intentionally not exercised here").
 
 This module fills that gap: it wires a real Wrightsville Beach, NC marine
-location (matching the ndbc/coops/nws_marine_zone_id/nwps_wfo ids already
-used across the existing unit-test fixtures) and calls each endpoint's
+location (matching the ndbc/coops/nws_marine_zone_id ids already used
+across the existing unit-test fixtures) and calls each endpoint's
 detail-view function directly against the real NDBC/CO-OPS/WaveWatch
 III/NWS marine/NWS SRF/NWS alerts services — actual provider calls ->
 enrichment -> endpoint response, end to end. It intentionally does NOT
@@ -103,7 +103,6 @@ def _make_wrightsville_config() -> MarineConfig:
             "ndbc_station_ids": ["41110"],
             "coops_station_ids": ["8658163"],
             "nws_marine_zone_id": "AMZ250",
-            "nwps_wfo": "ILM",
         },
     )
     location.validate()
@@ -272,7 +271,7 @@ class TestFishingEndpointFullStack:
 
 
 class TestBeachSafetyEndpointFullStack:
-    """GET /beach-safety/{locationId} -> real NWPS/NDBC + NWS SRF + CO-OPS + NWS alerts."""
+    """GET /beach-safety/{locationId} -> real NDBC + NWS SRF + CO-OPS + NWS alerts."""
 
     def test_get_beach_safety_returns_full_envelope(self) -> None:
         import weewx_clearskies_api.endpoints.beach_safety as beach_safety
@@ -285,7 +284,7 @@ class TestBeachSafetyEndpointFullStack:
 
         bundle = response["data"]
         assert bundle["locationId"] == _LOCATION_ID
-        assert bundle["source"] == "nwps+ndbc+nws_srf+coops+nws_alerts"
+        assert bundle["source"] == "ndbc+nws_srf+coops+nws_alerts"
 
     def test_assessment_fields_present_in_response(self) -> None:
         import weewx_clearskies_api.endpoints.beach_safety as beach_safety
