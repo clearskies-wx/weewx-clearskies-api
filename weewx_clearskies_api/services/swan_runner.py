@@ -177,12 +177,13 @@ def _build_input_file(
         ),
         "READINP WIND 1. 'WIND.txt' 3 0 FREE",
         "",
-        # Boundary conditions: uniform WW3 spectrum on western and southern sides
-        "BOUNDSPEC SIDE W CCW CONSTANT FILE 'BOUND_SPEC.txt' 1",
-        "BOUNDSPEC SIDE S CCW CONSTANT FILE 'BOUND_SPEC.txt' 1",
+        # Boundary conditions: uniform WW3 spectrum on western and southern sides.
+        # SWAN can't open the same file twice, so we use separate copies.
+        "BOUNDSPEC SIDE W CCW CONSTANT FILE 'BOUND_W.txt' 1",
+        "BOUNDSPEC SIDE S CCW CONSTANT FILE 'BOUND_S.txt' 1",
         "",
-        # Source term settings (PROVIDER-MANUAL §14.15)
-        "GEN3 WESTIN",
+        # Source term settings
+        "GEN3 WESTHUYSEN",
         "BREAKING CONSTANT 1.0 0.73",
         "FRICTION JON 0.067",
         "TRIADS",
@@ -480,7 +481,8 @@ class SWANRunner:
                     f"{_swan_time(t0)}  0.500  8.000  270.0  30.0\n"
                     f"{_swan_time(t1)}  0.500  8.000  270.0  30.0\n"
                 )
-        (tmpdir / "BOUND_SPEC.txt").write_text(boundary_text, encoding="ascii")
+        (tmpdir / "BOUND_W.txt").write_text(boundary_text, encoding="ascii")
+        (tmpdir / "BOUND_S.txt").write_text(boundary_text, encoding="ascii")
 
         # Generate OUTPUT_POINTS.txt: lon lat per line, in surf_spots insertion order
         pts_lines: list[str] = []
