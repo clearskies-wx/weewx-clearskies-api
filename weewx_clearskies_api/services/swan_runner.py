@@ -158,9 +158,12 @@ def _build_input_file(
     lines = [
         "PROJECT 'TruShore' 'v1'",
         "",
-        "SET CGRID SPHERICAL NAUTICAL",
+        "SET LEVEL 0.",
+        "SET NAUTICAL",
+        "COORDINATES SPHERICAL",
         "",
-        f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}",
+        f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}"
+        " CIRCLE 36 0.0418 1.0 31",
         "",
         # BOTTOM grid: static (no NONSTAT keyword)
         f"INPGRID BOTTOM REG {lon_sw:.6f} {lat_sw:.6f} 0. {mxc} {myc} {dlon:.6f} {dlat:.6f}",
