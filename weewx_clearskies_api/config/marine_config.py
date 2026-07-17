@@ -556,7 +556,7 @@ class MarineWeatherConfig:
 
 
 _HRRR_MARGIN_DEG = 1.0
-_SWAN_DOMAIN_MARGIN_DEG = 0.5
+_SWAN_DOMAIN_MARGIN_DEG = 0.1  # ±0.1° ≈ ±11 km — matches NWPS SGX inner nest scale
 
 
 class MarineConfig:
