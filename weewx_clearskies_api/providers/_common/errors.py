@@ -8,6 +8,7 @@ happens inside the calling provider module or in ProviderHTTPClient.
 HTTP status mapping (wired in weewx_clearskies_api/errors.py exception handler):
   QuotaExhausted           → 503 + Retry-After header
   GeographicallyUnsupported→ 503
+  ProviderUnavailableError → 503 (data not yet available; retry later)
   KeyInvalid               → 502
   FieldUnsupported         → 502
   TransientNetworkError    → 502
@@ -83,6 +84,19 @@ class TransientNetworkError(ProviderError):
 
     Maps to HTTP 502.
     Raised after all retry attempts are exhausted.
+    """
+
+
+class ProviderUnavailableError(ProviderError):
+    """Provider data not yet available after all cycle fallback attempts.
+
+    Raised when the server is reachable but data has not been posted yet
+    (e.g. NOMADS returns 404 for all attempted model-cycle files because the
+    current cycle is still processing).  Distinct from TransientNetworkError
+    (network-level failure) and ProviderProtocolError (unexpected response
+    format).  Retry after the next model cycle is expected to be available.
+
+    Maps to HTTP 503.
     """
 
 
