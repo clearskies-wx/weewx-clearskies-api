@@ -178,7 +178,8 @@ def _build_input_file(
         "READINP WIND 1. 'WIND.txt' 3 0 FREE",
         "",
         # Boundary conditions: parametric spectrum on western and southern sides
-        "BOUND SPEC SIDES W S CCW VARIABLE PAR 'BOUND_SPEC.txt'",
+        "BOUNDSPEC SIDE W CCW VARIABLE FILE 'BOUND_SPEC.txt' 1",
+        "BOUNDSPEC SIDE S CCW VARIABLE FILE 'BOUND_SPEC.txt' 1",
         "",
         # Source term settings (PROVIDER-MANUAL §14.15)
         "GEN3 WESTIN",
