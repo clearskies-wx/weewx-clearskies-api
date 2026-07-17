@@ -639,8 +639,8 @@ def run_all_spots(
     # ------------------------------------------------------------------
     # 2. Fetch WW3 boundary conditions (expected cache hit).
     # ------------------------------------------------------------------
-    center_lat = (min(lats) + max(lats)) / 2.0
-    center_lon = (min(lons) + max(lons)) / 2.0
+    center_lat = (domain_bbox[1] + domain_bbox[3]) / 2.0
+    center_lon = (domain_bbox[0] + domain_bbox[2]) / 2.0
     try:
         from weewx_clearskies_api.providers.marine import wavewatch
 
