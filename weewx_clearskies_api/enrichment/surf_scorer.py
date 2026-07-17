@@ -1,10 +1,12 @@
 """Surf quality scoring processor (API-MANUAL.md §17 "Surf quality scorer").
 
 Registered against the surf endpoint pipeline. Runs after
-``enrichment/wave_transform.py`` has applied the NWPS bathymetric/structure/
-topographic supplements (API-MANUAL.md §17 "NWPS supplement processor") —
-this module scores whatever wave data it is handed and does not itself
-correct for shoaling, refraction, or site-specific breaker physics.
+``enrichment/wave_transform.py`` has applied the SWAN+TruShore bathymetric/
+structure/topographic supplements and ``enrichment/breaker_height.py`` has
+converted the corrected Hsig to breaking face height (API-MANUAL.md §17
+"SWAN+TruShore nearshore model") — this module scores whatever wave data it
+is handed and does not itself correct for shoaling, refraction, or
+site-specific breaker physics.
 
 Four weighted scoring factors combine into a 1-5 star rating:
 
