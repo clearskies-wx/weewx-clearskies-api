@@ -22,12 +22,6 @@ Five responsibilities per PROVIDER-MANUAL §1:
      Source: NCEP Office Note 388, Appendix C.
      HRRR parameters: lov=262.5°, latin1=latin2=38.5°, n≈0.6225.
 
-     Note: PROVIDER-MANUAL §14.14 documents a simplified form omitting n
-     (rot_angle = lon − lov).  That form is only exact for Polar Stereographic
-     (n=1); for HRRR's Lambert Conformal (n≈0.62) it would over-rotate by
-     ~60%.  The full formula is used here; the lead has been notified
-     (SWAN-TRUSHORE-PLAN.md T1.2 flag).
-
   4. Capability declaration — CAPABILITY symbol; None when no GRIB2 backend
      is available, so the provider is not registered.
   5. Error handling — 404 on all cycle attempts → ProviderUnavailableError;
