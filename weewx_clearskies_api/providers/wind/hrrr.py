@@ -634,19 +634,35 @@ def _build_cache_key(
 # ---------------------------------------------------------------------------
 
 
-def _compute_hrrr_cycle(now: datetime) -> datetime:
+_EXTENDED_CYCLE_HOURS = (0, 6, 12, 18)
+
+
+def _compute_hrrr_cycle(now: datetime, *, extended_only: bool = False) -> datetime:
     """Return the most recently expected available HRRR cycle.
 
     HRRR runs every hour (00Z–23Z). Data is available ~45–60 minutes after
     the nominal cycle hour. A 1-hour lag is applied so we request a cycle that
-    has had time to be published to NOMADS. The cycle for the previous hour is
-    almost always present; the current hour is frequently not yet ready.
+    has had time to be published to NOMADS.
+
+    When extended_only=True, snaps to the nearest 00/06/12/18Z extended cycle
+    (which produce 48-hour forecasts). Standard hourly cycles only reach 18
+    hours and are useless for TruShore's 48-hour HRRR requirement.
 
     If the computed cycle's f00 returns 404, fetch() falls back to the
-    cycle 1 hour earlier.
+    cycle 1 hour (or 6 hours if extended_only) earlier.
     """
     adjusted = now - _CYCLE_AVAILABILITY_LAG
-    return adjusted.replace(minute=0, second=0, microsecond=0)
+    base = adjusted.replace(minute=0, second=0, microsecond=0)
+
+    if not extended_only:
+        return base
+
+    # Snap to the most recent extended cycle at or before `base`
+    candidates = [h for h in _EXTENDED_CYCLE_HOURS if h <= base.hour]
+    if candidates:
+        return base.replace(hour=max(candidates))
+    # Before 00Z adjusted → use 18Z from the previous day
+    return (base - timedelta(days=1)).replace(hour=18)
 
 
 # ---------------------------------------------------------------------------
@@ -750,10 +766,12 @@ def fetch(
             "Install the [nearshore] extra: pip install 'weewx-clearskies-api[nearshore]'"
         )
 
-    base_cycle = _compute_hrrr_cycle(datetime.now(UTC))
+    extended_only = max_forecast_hours > _MAX_FORECAST_HOURS
+    base_cycle = _compute_hrrr_cycle(datetime.now(UTC), extended_only=extended_only)
+    fallback_step_hours = 6 if extended_only else 1
 
     for attempt in range(_MAX_CYCLE_FALLBACKS + 1):
-        cycle_dt = base_cycle - timedelta(hours=attempt)
+        cycle_dt = base_cycle - timedelta(hours=attempt * fallback_step_hours)
         cache_key = _build_cache_key(bbox, cycle_dt)
 
         cached = get_cache().get(cache_key)
