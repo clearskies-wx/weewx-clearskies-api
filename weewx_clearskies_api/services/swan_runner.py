@@ -187,15 +187,23 @@ def _parse_table_output(
         if not parts:
             continue
 
-        # Resolve required column indices
+        # Resolve required column indices.  SWAN 41.51 uses "Hsig" (→ HSIG)
+        # as the column header for significant wave height; older versions
+        # may use "Hs" (→ HS).  Accept both.
         try:
             i_xp = col_idx["XP"]
             i_yp = col_idx["YP"]
-            i_hs = col_idx["HS"]
+            i_hs = col_idx.get("HSIG", col_idx.get("HS"))
+            if i_hs is None:
+                raise KeyError("HSIG/HS")
             i_tm = col_idx["TM01"]
             i_dir = col_idx["DIR"]
         except KeyError:
-            # Header not yet parsed or missing expected columns — skip
+            if header_found and col_idx:
+                logger.warning(
+                    "SWAN TABLE: missing required column — have %s",
+                    list(col_idx.keys()),
+                )
             continue
 
         # Time is always the first data token (before Xp in SWAN output)
