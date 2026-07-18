@@ -909,11 +909,23 @@ def build_swan_input(
                 if cfg is None:
                     continue
 
+                _rt = cfg.get("runtime_profile")
+                if isinstance(_rt, dict) and "profile" in _rt:
+                    _bp = _rt["profile"]
+                    _cl = _rt.get("coastline_lat")
+                    _cln = _rt.get("coastline_lon")
+                else:
+                    _bp = cfg.get("bathymetric_profile") or []
+                    _cl = None
+                    _cln = None
+
                 transect = compute_spot_transect(
                     spot_lon,
                     spot_lat,
                     float(cfg.get("beach_facing_degrees", 0.0)),
-                    cfg.get("bathymetric_profile") or [],
+                    _bp,
+                    coastline_lat=_cl,
+                    coastline_lon=_cln,
                 )
 
                 spot_order.append(spot_id)
