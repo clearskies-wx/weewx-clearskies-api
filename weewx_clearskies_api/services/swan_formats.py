@@ -457,7 +457,7 @@ def compute_spot_transect(
     target_spec_m: float = 10.0,
     spacing_m: float = 50.0,
     min_points: int = 10,
-    max_points: int = 20,
+    max_points: int = 200,
     *,
     coastline_lat: float | None = None,
     coastline_lon: float | None = None,
