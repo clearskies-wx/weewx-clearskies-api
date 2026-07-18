@@ -358,6 +358,7 @@ def build_swan_input(
     compute_dt_min: int = 10,
     nest_boundary_file: str = "nest_boundary.dat",
     hotstart_file: str | None = None,
+    stationary: bool = False,
 ) -> str:
     """Render the SWAN ASCII INPUT command file for a given grid level.
 
@@ -449,11 +450,11 @@ def build_swan_input(
         f"INPGRID BOTTOM REG {lon_sw:.6f} {lat_sw:.6f} 0. {mxc} {myc} {dlon:.6f} {dlat:.6f}",
         "READINP BOTTOM 1. 'BOTTOM.txt' 3 0 FREE",
         "",
-        # WIND grid: non-stationary 1-hour intervals
+        # WIND grid
         (
             f"INPGRID WIND REG {lon_sw:.6f} {lat_sw:.6f} 0."
             f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
-            f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}"
+            + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
         ),
         "READINP WIND 1. 'WIND.txt' 3 0 FREE",
         "",
@@ -526,15 +527,20 @@ def build_swan_input(
             "",
             (
                 f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-                f" TIME XP YP HSIGN TM01 DIR OUTPUT {swan_t_start} {output_dt_min} MIN"
+                f" TIME XP YP HSIGN TM01 DIR"
+                + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
             ),
             "",
         ]
 
-    # Non-stationary computation (same for both levels)
-    lines += [
-        f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}",
-    ]
+    # Computation command
+    if stationary:
+        # SWAN user manual §4.7: "For small domains (< 100 km), a stationary
+        # computation is recommended."  Solves the steady-state wave field for
+        # the current wind + boundary snapshot — no time-stepping.
+        lines.append(f"COMPUTE STAT {swan_t_start}")
+    else:
+        lines.append(f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}")
 
     if hotstart_file:
         lines.append(f"HOTFILE '{hotstart_file}'")

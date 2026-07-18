@@ -890,6 +890,9 @@ def run_all_spots(
     # attempts for this cycle.
     if spots_cached > 0:
         cache.set(run_marker_key, {"run_time": run_time_iso}, _CACHE_TTL_SECONDS)
+        global _last_full_run_monotonic  # noqa: PLW0603
+        import time as _time
+        _last_full_run_monotonic = _time.monotonic()
     else:
         logger.warning(
             "TruShore: SWAN exited cleanly but 0/%d spot(s) produced valid "
@@ -917,4 +920,173 @@ def run_all_spots(
         spots_cached,
         len(surf_spots_config),
         hrrr_cycle_time,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quick update — stationary inner nest only (hourly, between full runs)
+# ---------------------------------------------------------------------------
+
+#: Timestamp of the last full run completion (monotonic), used to skip
+#: quick updates for 30 minutes after a full run.
+_last_full_run_monotonic: float = 0.0
+_QUICK_UPDATE_COOLDOWN_S: float = 1800.0  # 30 min
+
+
+def run_quick_update(
+    marine_config: Any,
+    *,
+    hrrr_wind_field: dict | None = None,
+) -> None:
+    """Run a stationary SWAN inner-nest-only update with the latest HRRR wind.
+
+    Produces a single "current snapshot" and merges it into the existing
+    forecast cache (replaces the entry closest to the snapshot time).
+    Reuses the outer grid's nest_boundary.dat from the last full run.
+
+    Skipped when:
+      - A full run completed within the last 30 minutes
+      - No previous full run has produced an outer nest_boundary.dat
+      - [nearshore] extra not installed
+      - No surf spots configured
+    """
+    global _last_full_run_monotonic  # noqa: PLW0602 — read-only here
+
+    import time as _time
+
+    if _time.monotonic() - _last_full_run_monotonic < _QUICK_UPDATE_COOLDOWN_S:
+        logger.debug("TruShore quick update: skipped (full run completed %.0fs ago)",
+                     _time.monotonic() - _last_full_run_monotonic)
+        return
+
+    if not _NEARSHORE_AVAILABLE:
+        return
+    if marine_config is None:
+        return
+    if _remote_url is not None:
+        return
+
+    surf_spot_ids = set(getattr(marine_config, "surf_spots", {}).keys())
+    if not surf_spot_ids:
+        return
+
+    surf_locations = [
+        loc for loc in getattr(marine_config, "locations", [])
+        if loc.id in surf_spot_ids
+    ]
+    if not surf_locations:
+        return
+
+    inner_bbox = marine_config.swan_domain_bbox
+    outer_bbox = marine_config.hrrr_bbox
+    if inner_bbox is None or outer_bbox is None:
+        return
+
+    # Wind: use the provided HRRR field (single timestep is enough for stationary)
+    if hrrr_wind_field is None:
+        return
+
+    # Resolve config
+    trushore_cfg = getattr(marine_config, "trushore", None)
+    _cfg_outer_km = getattr(trushore_cfg, "outer_grid_resolution_km", None) if trushore_cfg else None
+    _cfg_inner_m = getattr(trushore_cfg, "inner_nest_resolution_m", None) if trushore_cfg else None
+    resolved_outer_km = float(_cfg_outer_km) if _cfg_outer_km is not None else _DEFAULT_OUTER_GRID_RESOLUTION_KM
+    resolved_inner_m = float(_cfg_inner_m) if _cfg_inner_m is not None else _DEFAULT_GRID_RESOLUTION_M
+    omp_threads = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
+
+    # Check that outer nest_boundary.dat exists from a previous full run
+    swan_work = Path("/var/run/weewx-clearskies/swan")
+    nest_boundary = swan_work / "outer" / "nest_boundary.dat"
+    if not nest_boundary.exists():
+        logger.debug("TruShore quick update: no nest_boundary.dat from outer grid; skipping")
+        return
+
+    # CUDEM bathymetry (cached on disk from first full run)
+    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
+
+    surf_spots_config = {loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations}
+    swan_config: dict[str, Any] = {
+        "outer_bbox": list(outer_bbox),
+        "inner_bbox": list(inner_bbox),
+        "surf_spots": surf_spots_config,
+        "swan_binary": _DEFAULT_SWAN_BINARY,
+        "outer_grid_resolution_km": resolved_outer_km,
+        "inner_nest_resolution_m": resolved_inner_m,
+        "compute_dt_min": _DEFAULT_COMPUTE_DT_MIN,
+        "output_interval_hr": _DEFAULT_OUTPUT_INTERVAL_HR,
+        "swan_timeout_s": 120,  # stationary should be fast
+        "omp_num_threads": omp_threads,
+    }
+
+    runner = _SWANRunnerWithCleanup(swan_config)
+    run_time = datetime.now(UTC)
+
+    hrrr_cycle = hrrr_wind_field.get("cycle_time", "")
+    logger.info(
+        "TruShore quick update: stationary inner nest for %d spot(s) (HRRR cycle=%s)",
+        len(surf_spots_config), hrrr_cycle,
+    )
+
+    try:
+        results = runner.run_stationary_inner(swan_work, hrrr_wind_field, cudem_bathymetry)
+    except SWANRunError as exc:
+        logger.warning(
+            "TruShore quick update failed: %s\nSWAN stderr: %s",
+            exc, exc.stderr[:500] if exc.stderr else "",
+        )
+        return
+    except Exception:
+        logger.warning("TruShore quick update failed unexpectedly", exc_info=True)
+        return
+
+    # Merge results into the existing forecast cache
+    run_time_iso = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    cache = get_cache()
+    spots_updated = 0
+
+    for spot_id, forecast_points in results.items():
+        if not forecast_points:
+            continue
+
+        # Build the snapshot entry
+        snapshot = forecast_points[0]
+        snapshot_dict = snapshot.model_dump()
+        snapshot_dict["windSource"] = "hrrr_trushore"
+
+        # Read existing forecast cache
+        last_good = cache.get(_build_last_good_key(spot_id))
+        if last_good is None:
+            continue
+
+        existing_forecast: list[dict] = last_good.get("forecast", [])
+        if not existing_forecast:
+            continue
+
+        # Find the entry closest to the snapshot time and replace it
+        snapshot_time = snapshot.time
+        best_idx = 0
+        best_diff = float("inf")
+        for idx, entry in enumerate(existing_forecast):
+            entry_time = entry.get("time", "")
+            if entry_time and snapshot_time:
+                try:
+                    t1 = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
+                    t2 = datetime.fromisoformat(snapshot_time.replace("Z", "+00:00"))
+                    diff = abs((t1 - t2).total_seconds())
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_idx = idx
+                except (ValueError, TypeError):
+                    pass
+
+        existing_forecast[best_idx] = snapshot_dict
+        last_good["forecast"] = existing_forecast
+        last_good["run_time"] = run_time_iso
+        cache.set(_build_last_good_key(spot_id), last_good, _LAST_GOOD_TTL_SECONDS)
+        spots_updated += 1
+
+    elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
+    logger.info(
+        "TruShore quick update complete in %ds — %d spot(s) updated (HRRR cycle=%s)",
+        elapsed_s, spots_updated, hrrr_cycle,
     )

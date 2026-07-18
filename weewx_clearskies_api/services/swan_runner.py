@@ -581,6 +581,50 @@ class SWANRunner:
         logger.info("SWAN inner nest complete")
         return self._parse_output(inner_dir, grid_info)
 
+    def run_stationary_inner(
+        self,
+        tmpdir: Path,
+        wind_field: dict[str, Any],
+        cudem_bathymetry: dict[str, Any],
+    ) -> dict[str, list[MarineForecastPoint]]:
+        """Run a stationary SWAN computation on the inner nest only.
+
+        Uses the most recent nest_boundary.dat from the last full run
+        (expected at tmpdir/outer/nest_boundary.dat or
+        tmpdir/outer_hotstart.dat context).  Produces a single-timestep
+        snapshot of the nearshore wave field with the latest wind.
+
+        Per SWAN manual §4.7: "For small domains (< 100 km), a stationary
+        computation is recommended."  Inner nest is ~20km.
+        """
+        inner_dir = tmpdir / "inner"
+        inner_dir.mkdir(exist_ok=True)
+
+        # Reuse nest_boundary.dat from the last full run's outer grid
+        src = tmpdir / "outer" / self._NESTOUT_BOUNDARY_FILE
+        dst = inner_dir / self._NESTOUT_BOUNDARY_FILE
+        if src.exists():
+            shutil.copy2(str(src), str(dst))
+        else:
+            logger.warning(
+                "SWAN stationary: no nest_boundary.dat from outer grid — "
+                "running without nesting (quick update may be inaccurate)"
+            )
+
+        grid_info = self._write_input_files(
+            inner_dir, wind_field, {}, cudem_bathymetry, "inner",
+            stationary=True,
+        )
+        logger.info(
+            "SWAN stationary inner: %d×%d cells at %.0f m resolution",
+            grid_info["mxc"], grid_info["myc"],
+            self._inner_resolution_m,
+        )
+        self._spawn_swan(inner_dir)
+        self._save_hotstart(inner_dir, "inner")
+        logger.info("SWAN stationary inner complete")
+        return self._parse_output(inner_dir, grid_info)
+
     def _write_input_files(
         self,
         run_dir: Path,
@@ -588,6 +632,7 @@ class SWANRunner:
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
         grid_level: str,
+        stationary: bool = False,
     ) -> dict[str, Any]:
         """Write SWAN input files for a given grid level and return grid_info.
 
@@ -681,6 +726,7 @@ class SWANRunner:
             compute_dt_min=self._compute_dt_min,
             nest_boundary_file=self._NESTOUT_BOUNDARY_FILE,
             hotstart_file=hotstart_arg,
+            stationary=stationary,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 

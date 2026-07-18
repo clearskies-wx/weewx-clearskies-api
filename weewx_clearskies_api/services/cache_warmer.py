@@ -216,6 +216,7 @@ class BackgroundCacheWarmer:
         last_hrrr_wind: float = _NEVER
         last_gfs_wind: float = _NEVER   # T7.3 — fires on same 4×/day schedule as HRRR
         last_swan: float = _NEVER  # T2.5/T7.3 — always fires after HRRR+GFS
+        last_quick_update: float = _NEVER  # hourly stationary inner nest
         last_forecast: float = _NEVER
         last_current_conditions: float = _NEVER
 
@@ -271,6 +272,15 @@ class BackgroundCacheWarmer:
                 last_gfs_wind = time.monotonic()
                 self._warm_swan(hrrr_wind, gfs_wind)  # sequential — uses both fields
                 last_swan = time.monotonic()
+
+            # 3600 s = hourly quick update — stationary inner nest only.
+            # Reuses outer grid boundary from the last full run; refreshes
+            # nearshore wind effects with the latest HRRR cycle.
+            # Skipped automatically by run_quick_update() for 30 min after
+            # a full run (no overlap).
+            if last_quick_update == _NEVER or (now - last_quick_update) >= 3600:
+                self._warm_swan_quick_update()
+                last_quick_update = time.monotonic()
 
             # 1500 s < the 1800 s /forecast TTL (ADR-017), leaving margin so
             # a warm cycle always lands before the cached bundle expires.
@@ -1151,6 +1161,53 @@ class BackgroundCacheWarmer:
             logger.error(
                 "Cache warmer: SWAN warm failed unexpectedly; "
                 "last-good cache preserved",
+                exc_info=True,
+            )
+
+    def _warm_swan_quick_update(self) -> None:
+        """Hourly stationary inner-nest-only SWAN update.
+
+        Fetches the latest HRRR wind (any cycle, not just extended) and
+        runs a stationary SWAN computation on the inner nest, reusing the
+        outer grid boundary from the last full run.  Produces a single
+        "current snapshot" merged into the forecast cache.
+
+        Skipped when [nearshore] is not installed, no marine config, or
+        run_quick_update() determines a full run just completed.
+        """
+        if self._marine_config is None or not getattr(
+            self._marine_config, "surf_spots", {}
+        ):
+            return
+
+        try:
+            from weewx_clearskies_api.providers.wind.hrrr import GRIB_AVAILABLE
+        except ImportError:
+            return
+        if not GRIB_AVAILABLE:
+            return
+
+        # Fetch latest HRRR — any cycle, not just extended
+        try:
+            from weewx_clearskies_api.providers.wind import hrrr as _hrrr
+
+            hrrr_wind = _hrrr.fetch(
+                bbox=self._marine_config.hrrr_bbox, max_forecast_hours=1
+            )
+        except Exception:
+            logger.debug("Cache warmer: HRRR quick fetch failed; skipping quick update")
+            return
+
+        try:
+            from weewx_clearskies_api.providers.nearshore import trushore
+
+            trushore.run_quick_update(
+                self._marine_config,
+                hrrr_wind_field=hrrr_wind,
+            )
+        except Exception:
+            logger.warning(
+                "Cache warmer: SWAN quick update failed",
                 exc_info=True,
             )
 
