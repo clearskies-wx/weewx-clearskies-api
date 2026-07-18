@@ -97,7 +97,49 @@ def parse_specout_file(text: str) -> list[dict[str, Any]]:
         while i < n_lines and (lines[i].startswith("$") or not lines[i].strip()):
             i += 1
 
-    # ---- Parse header until AFREQ ----
+    def _read_count_on_next_line() -> int:
+        """Read an integer count from the next non-comment line.
+
+        SWAN standard spectral file format: keyword + description on the
+        keyword line, count on the NEXT line.  E.g.:
+            AFREQ                       absolute frequencies in Hz
+                32                      number of frequencies
+        """
+        nonlocal i
+        i += 1
+        _skip_comments_and_blanks()
+        if i >= n_lines:
+            return 0
+        try:
+            count = int(lines[i].split()[0])
+        except (ValueError, IndexError):
+            count = 0
+        i += 1
+        return count
+
+    # ---- Parse header sections ----
+    # SWAN standard spectral file layout (Appendix D):
+    #   SWAN 1  ...           version line
+    #   $ comments
+    #   TIME                  (keyword + description)
+    #        1                (time coding option)
+    #   LONLAT                (keyword + description)
+    #        1                (number of locations)
+    #   lon  lat              (one per location)
+    #   AFREQ                 (keyword + description)
+    #       32                (number of frequencies)
+    #   f1 ... f32            (one per line)
+    #   NDIR                  (keyword + description)
+    #       36                (number of directions)
+    #   d1 ... d36            (one per line)
+    #   QUANT
+    #        1                (number of quantities)
+    #   VaDens                (quantity name)
+    #   m2/Hz/degr            (unit)
+    #   -0.99E+02             (exception value)
+    #   YYYYMMDD.HHmmss       (first timestep)
+    #   FACTOR / NODATA
+    #   ...
     while i < n_lines:
         _skip_comments_and_blanks()
         if i >= n_lines:
@@ -107,9 +149,10 @@ def parse_specout_file(text: str) -> list[dict[str, Any]]:
             i += 1
             continue
 
-        if tok[0].upper() == "AFREQ" and len(tok) >= 2:
-            nf = int(tok[1])
-            i += 1
+        keyword = tok[0].upper()
+
+        if keyword == "AFREQ":
+            nf = _read_count_on_next_line()
             for _ in range(nf):
                 _skip_comments_and_blanks()
                 if i < n_lines:
@@ -120,9 +163,8 @@ def parse_specout_file(text: str) -> list[dict[str, Any]]:
                     i += 1
             continue
 
-        if tok[0].upper() == "NDIR" and len(tok) >= 2:
-            nd = int(tok[1])
-            i += 1
+        if keyword == "NDIR":
+            nd = _read_count_on_next_line()
             for _ in range(nd):
                 _skip_comments_and_blanks()
                 if i < n_lines:
@@ -133,8 +175,36 @@ def parse_specout_file(text: str) -> list[dict[str, Any]]:
                     i += 1
             continue
 
-        # Skip QUANT section header lines
-        if tok[0].upper() in ("QUANT", "SWAN", "LOCATIONS", "NODATA"):
+        if keyword in ("LONLAT", "LOCATIONS"):
+            nloc = _read_count_on_next_line()
+            for _ in range(nloc):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+            continue
+
+        if keyword == "TIME":
+            i += 1
+            _skip_comments_and_blanks()
+            if i < n_lines:
+                i += 1
+            continue
+
+        if keyword == "QUANT":
+            nq = _read_count_on_next_line()
+            for _ in range(nq):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+            continue
+
+        if keyword in ("SWAN", "NODATA"):
             i += 1
             continue
 
