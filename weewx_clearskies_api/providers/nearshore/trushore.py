@@ -761,29 +761,25 @@ def run_all_spots(
         ww3_boundary = {"forecast": [], "grid": "unavailable", "model_run": ""}
 
     # ------------------------------------------------------------------
-    # 3. CUDEM 2-D bathymetry grid — downloaded once from NCEI getSamples,
-    #    cached to disk.  Covers the outer_bbox (both grids interpolate
-    #    from the same source grid via cudem_to_swan_bottom).
-    # ------------------------------------------------------------------
-    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
-
-    # ------------------------------------------------------------------
-    # 4. Build SWANRunner config and run SWAN.
+    # 3. Resolve grid resolution config before CUDEM download (needs resolution).
     # ------------------------------------------------------------------
     surf_spots_config: dict[str, dict[str, float]] = {
         loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations
     }
 
-    # Read resolution and thread config from TrushoreConfig (T4.2/T7.3).
-    # 0 means "let OpenMP decide" (all available cores — default behaviour).
     trushore_cfg = getattr(marine_config, "trushore", None)
     omp_num_threads: int = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
-    # Use resolution from TrushoreConfig when available (wizard-configured); fall
-    # back to the caller-supplied default (or the module-level constant).
     _cfg_outer_km = getattr(trushore_cfg, "outer_grid_resolution_km", None) if trushore_cfg else None
     _cfg_inner_m = getattr(trushore_cfg, "inner_nest_resolution_m", None) if trushore_cfg else None
     resolved_outer_km: float = float(_cfg_outer_km) if _cfg_outer_km is not None else outer_grid_resolution_km
     resolved_inner_m: float = float(_cfg_inner_m) if _cfg_inner_m is not None else inner_nest_resolution_m
+
+    # ------------------------------------------------------------------
+    # 4. CUDEM 2-D bathymetry grid — downloaded once from NCEI getSamples,
+    #    cached to disk.  Covers the outer_bbox (both grids interpolate
+    #    from the same source grid via cudem_to_swan_bottom).
+    # ------------------------------------------------------------------
+    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
 
     swan_config: dict[str, Any] = {
         # Nested grid architecture (T7.2 / PROVIDER-MANUAL §14.15):
