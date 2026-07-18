@@ -425,7 +425,10 @@ def build_swan_input(
     lines = [
         "PROJECT 'TruShore' 'v1'",
         "",
-        "SET LEVEL 0.",
+        # SET [level] [nor] [depmin] [maxmes] [maxerr] — positional params.
+        # MAXERR=3: only stop on severe errors, not warnings or auto-repaired
+        # errors (default 1 stops on the boundary-mismatch warning at level 2).
+        "SET 0. 90. 0.05 200 3",
         "SET NAUTICAL",
         "COORDINATES SPHERICAL",
         "",
