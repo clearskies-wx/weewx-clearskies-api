@@ -540,7 +540,7 @@ def get_surf(location_id: str) -> dict:
             wave_direction=wave_direction_pt,
             wind_speed=ts_wind_speed,
             wind_direction=ts_wind_direction,
-            spectral_components=spectral_components or None,
+            spectral_components=spectral_components if i == 0 else None,
             spot_config=spot_config,
             time_utc=valid_time,
             wind_source=ts_wind_source,
