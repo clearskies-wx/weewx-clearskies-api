@@ -150,6 +150,14 @@ def _parse_table_output(
     """
     result: dict[str, list[MarineForecastPoint]] = {sid: [] for sid in spots}
 
+    # T7.5 debug: log first few raw lines to see what SWAN produced
+    raw_lines = table_text.splitlines()
+    logger.warning(
+        "SWAN TABLE raw preview (%d lines total): %s",
+        len(raw_lines),
+        raw_lines[:8],
+    )
+
     col_idx: dict[str, int] = {}
     header_found = False
     data_header_count = 0  # count of % lines seen (first = col names, second = units)
@@ -207,8 +215,13 @@ def _parse_table_output(
         except (ValueError, IndexError):
             continue
 
-        # Physical validation
+        # Physical validation — log at WARNING temporarily for T7.5 debugging
         if not _is_valid_point(hs, tm01, mwd):
+            logger.warning(
+                "SWAN output rejected: Xp=%.4f Yp=%.4f Hs=%.2f Tm01=%.2f Dir=%.1f "
+                "(time=%s)",
+                xp, yp, hs, tm01, mwd, time_token,
+            )
             continue
 
         # Convert SWAN time token YYYYMMDD.HHmmss → ISO-8601
@@ -233,6 +246,12 @@ def _parse_table_output(
                 break
 
         if matched_id is None:
+            logger.warning(
+                "SWAN output unmatched coord: Xp=%.4f Yp=%.4f (spots=%s, tol=%.4f)",
+                xp, yp,
+                {sid: (slon, slat) for sid, (slon, slat) in spots.items()},
+                coord_tolerance_deg,
+            )
             continue
 
         result[matched_id].append(

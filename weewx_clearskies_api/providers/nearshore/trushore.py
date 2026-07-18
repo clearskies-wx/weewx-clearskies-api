@@ -262,7 +262,16 @@ class _SWANRunnerWithCleanup(SWANRunner):
             ValueError:   Required config keys are missing or input data is empty.
         """
         blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
-        tmpdir = Path(tempfile.mkdtemp(prefix="swan_run_"))
+        # Fixed working directory — no tempfile.  Visible from SSH, survives
+        # service restarts, and we control the lifecycle explicitly.
+        swan_work = Path("/var/run/weewx-clearskies/swan")
+        swan_work.mkdir(parents=True, exist_ok=True)
+        tmpdir = swan_work
+        # Clean previous run's files (outer/ and inner/ subdirs)
+        for sub in ("outer", "inner"):
+            sub_path = tmpdir / sub
+            if sub_path.exists():
+                shutil.rmtree(sub_path)
         self._run_outer_grid(tmpdir, blended_wind, ww3_boundary, cudem_bathymetry)
         results = self._run_inner_nest(tmpdir, blended_wind, cudem_bathymetry)
         return results, tmpdir
