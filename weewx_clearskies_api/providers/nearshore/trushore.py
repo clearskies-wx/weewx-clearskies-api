@@ -94,6 +94,55 @@ _DEFAULT_SWAN_TIMEOUT_S = 900
 # Bounding-box expansion margins (degrees) used to derive the SWAN domain
 # and HRRR wind bbox from configured surf spot coordinates.
 
+# CUDEM 2-D bathymetry grid cache path (persistent across restarts).
+_CUDEM_GRID_PATH = Path("/etc/weewx-clearskies/swan_bathymetry.json")
+
+
+def _load_or_download_cudem_grid(
+    bbox: tuple[float, float, float, float],
+    outer_resolution_km: float,
+) -> dict[str, Any]:
+    """Load cached CUDEM 2-D grid from disk, or download from NCEI if absent.
+
+    The grid covers the outer SWAN domain at the outer grid resolution.
+    ``cudem_to_swan_bottom()`` bilinear-interpolates this onto whichever
+    SWAN grid level needs it (outer or inner).
+    """
+    if _CUDEM_GRID_PATH.exists():
+        try:
+            grid = json.loads(_CUDEM_GRID_PATH.read_text(encoding="utf-8"))
+            if grid.get("depths"):
+                logger.debug("CUDEM 2-D grid loaded from %s", _CUDEM_GRID_PATH)
+                return grid
+        except Exception:
+            logger.warning(
+                "CUDEM 2-D grid file %s is corrupt; re-downloading",
+                _CUDEM_GRID_PATH,
+                exc_info=True,
+            )
+
+    try:
+        from weewx_clearskies_api.enrichment.bathymetry import download_swan_depth_grid
+
+        grid = download_swan_depth_grid(bbox, outer_resolution_km * 1000.0)
+        _CUDEM_GRID_PATH.write_text(
+            json.dumps(grid), encoding="utf-8"
+        )
+        logger.info(
+            "CUDEM 2-D grid downloaded and cached to %s (%d x %d)",
+            _CUDEM_GRID_PATH,
+            grid["ni"],
+            grid["nj"],
+        )
+        return grid
+    except Exception:
+        logger.warning(
+            "CUDEM 2-D grid download failed; SWAN will use uniform 15m depth",
+            exc_info=True,
+        )
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Remote mode state (T4.2 / T4.3 — set when [trushore] service_url is active)
 # ---------------------------------------------------------------------------
@@ -712,12 +761,11 @@ def run_all_spots(
         ww3_boundary = {"forecast": [], "grid": "unavailable", "model_run": ""}
 
     # ------------------------------------------------------------------
-    # 3. CUDEM bathymetry — stored in spot config (setup-time download).
-    #    Pass {} when CUDEM data is not available; cudem_to_swan_bottom()
-    #    defaults to a uniform 15m ocean depth (acceptable placeholder
-    #    until CUDEM provider is implemented in a later task).
+    # 3. CUDEM 2-D bathymetry grid — downloaded once from NCEI getSamples,
+    #    cached to disk.  Covers the outer_bbox (both grids interpolate
+    #    from the same source grid via cudem_to_swan_bottom).
     # ------------------------------------------------------------------
-    cudem_bathymetry: dict[str, Any] = {}
+    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
 
     # ------------------------------------------------------------------
     # 4. Build SWANRunner config and run SWAN.

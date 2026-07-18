@@ -97,7 +97,7 @@ ATTRIBUTION = "NOAA National Centers for Environmental Information"
 DISCLAIMER = "Not for navigation"
 
 # ---------------------------------------------------------------------------
-# NCEI ArcGIS ImageServer CUDEM endpoint (T1.2 — see module docstring for why
+# NCEI ArcGIS ImageServer CUDEM endpoints (T1.2 — see module docstring for why
 # this replaced the nonexistent OpenTopoData ``/v1/cudem`` endpoint).
 # ---------------------------------------------------------------------------
 
@@ -105,6 +105,9 @@ PROVIDER_ID = "cudem"
 DOMAIN = "bathymetry"
 _NCEI_IMAGESERVER_URL = (
     "https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_all/ImageServer/identify"
+)
+_NCEI_GETSAMPLES_URL = (
+    "https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_all/ImageServer/getSamples"
 )
 _USER_AGENT = "weewx-clearskies-api-bathymetry/0.1 (NOAA CUDEM via NCEI ArcGIS)"
 
@@ -1083,3 +1086,98 @@ def identify_habitat_features(profile: list[BathymetryPoint]) -> list[dict[str, 
             )
 
     return features
+
+
+# ---------------------------------------------------------------------------
+# 2-D depth grid download for SWAN (T7.5)
+# ---------------------------------------------------------------------------
+
+_GETSAMPLES_BATCH_SIZE = 1000
+
+
+def download_swan_depth_grid(
+    bbox: tuple[float, float, float, float],
+    resolution_m: float,
+) -> dict[str, Any]:
+    """Download a 2-D CUDEM depth grid covering *bbox* at *resolution_m* spacing.
+
+    Uses the NCEI ArcGIS ImageServer ``getSamples`` multipoint endpoint
+    (POST, batched at 1000 points per request).  Returns a dict in the
+    format ``cudem_to_swan_bottom()`` expects::
+
+        {"lat_first", "lon_first", "lat_last", "lon_last",
+         "ni", "nj", "depths": [[float]]}
+
+    ``depths`` uses CUDEM sign convention (negative = ocean, positive = land).
+    """
+    import json as _json
+    import urllib.parse
+    import urllib.request
+
+    lon_sw, lat_sw, lon_ne, lat_ne = bbox
+
+    deg_per_m_lat = 1.0 / 111_320.0
+    deg_per_m_lon = 1.0 / (111_320.0 * math.cos(math.radians((lat_sw + lat_ne) / 2.0)))
+    dlat = resolution_m * deg_per_m_lat
+    dlon = resolution_m * deg_per_m_lon
+
+    ny = max(2, int(round((lat_ne - lat_sw) / dlat)) + 1)
+    nx = max(2, int(round((lon_ne - lon_sw) / dlon)) + 1)
+
+    all_points: list[list[float]] = []
+    for j in range(ny):
+        lat = lat_sw + j * (lat_ne - lat_sw) / (ny - 1)
+        for i in range(nx):
+            lon = lon_sw + i * (lon_ne - lon_sw) / (nx - 1)
+            all_points.append([round(lon, 6), round(lat, 6)])
+
+    logger.info(
+        "CUDEM 2-D grid download: %d x %d = %d points, bbox=%s, res=%.0fm",
+        nx, ny, len(all_points), bbox, resolution_m,
+    )
+
+    all_values: list[float] = []
+    for batch_start in range(0, len(all_points), _GETSAMPLES_BATCH_SIZE):
+        batch = all_points[batch_start:batch_start + _GETSAMPLES_BATCH_SIZE]
+        geometry = _json.dumps({"points": batch})
+        post_data = urllib.parse.urlencode({
+            "geometry": geometry,
+            "geometryType": "esriGeometryMultipoint",
+            "f": "json",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            _NCEI_GETSAMPLES_URL,
+            data=post_data,
+            headers={"User-Agent": _USER_AGENT},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = _json.loads(resp.read())
+
+        for sample in data.get("samples", []):
+            raw = sample.get("value")
+            if raw is None or str(raw).strip().lower() == "nodata":
+                all_values.append(-15.0)
+            else:
+                all_values.append(float(raw))
+
+    depths_2d: list[list[float]] = []
+    for j in range(ny):
+        row = all_values[j * nx : (j + 1) * nx]
+        depths_2d.append(row)
+
+    logger.info(
+        "CUDEM 2-D grid download complete: %d x %d values, ocean=%d land=%d",
+        nx, ny,
+        sum(1 for v in all_values if v <= 0),
+        sum(1 for v in all_values if v > 0),
+    )
+
+    return {
+        "lat_first": lat_sw,
+        "lon_first": lon_sw,
+        "lat_last": lat_ne,
+        "lon_last": lon_ne,
+        "ni": nx,
+        "nj": ny,
+        "depths": depths_2d,
+    }
