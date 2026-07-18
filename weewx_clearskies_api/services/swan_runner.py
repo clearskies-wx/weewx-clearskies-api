@@ -1240,23 +1240,21 @@ class SWANRunner:
                 transect_spot_order.append(spot_id)
                 transect_points_map[spot_id] = tr["transect_points"]
 
+        # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
+        grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
+
         # OUTPUT_POINTS.txt (inner only — only when NOT using CURVE transect)
         if grid_level == "inner" and not transect_spot_order:
-            _utm_zone = grid_info.get("_utm_zone")
+            from weewx_clearskies_api.services.swan_formats import lonlat_to_utm, utm_zone  # noqa: PLC0415
+            center_lon = bottom_dims["lon_sw"] + bottom_dims["mxc"] * bottom_dims["dlon"] / 2
+            _utm_zone = utm_zone(center_lon)
             pts_lines: list[str] = []
             for _sid, (lon, lat) in self._surf_spots.items():
-                if _utm_zone is not None:
-                    from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
-                    x, y = lonlat_to_utm(lon, lat, _utm_zone)
-                    pts_lines.append(f"{x:.2f}   {y:.2f}")
-                else:
-                    pts_lines.append(f"{lon:.6f}   {lat:.6f}")
+                x, y = lonlat_to_utm(lon, lat, _utm_zone)
+                pts_lines.append(f"{x:.2f}   {y:.2f}")
             (run_dir / "OUTPUT_POINTS.txt").write_text(
                 "\n".join(pts_lines) + "\n", encoding="ascii"
             )
-
-        # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
-        grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
 
         # Attach transect metadata so _parse_output can retrieve it.
         if transect_spot_order:
