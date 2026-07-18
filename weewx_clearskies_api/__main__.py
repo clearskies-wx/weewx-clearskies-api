@@ -84,6 +84,7 @@ from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_f
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.setup import wire_forecast_correction_settings
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
+from weewx_clearskies_api.endpoints.beach_profile import wire_beach_profile_config
 from weewx_clearskies_api.endpoints.beach_safety import wire_beach_safety_config
 from weewx_clearskies_api.endpoints.fishing import wire_fishing_config
 from weewx_clearskies_api.endpoints.marine import wire_marine_config
@@ -1044,6 +1045,7 @@ def main() -> None:
     wire_marine_config(settings)
     wire_tides_config(settings)
     wire_surf_config(settings)
+    wire_beach_profile_config(settings)
     wire_fishing_config(settings)
     wire_beach_safety_config(settings)
 

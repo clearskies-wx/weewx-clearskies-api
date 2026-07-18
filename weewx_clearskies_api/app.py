@@ -63,6 +63,7 @@ from weewx_clearskies_api.endpoints.fishing import router as fishing_router
 from weewx_clearskies_api.endpoints.marine import router as marine_router
 from weewx_clearskies_api.endpoints.seeing import router as seeing_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
+from weewx_clearskies_api.endpoints.beach_profile import router as beach_profile_router
 from weewx_clearskies_api.endpoints.surf import router as surf_router
 from weewx_clearskies_api.endpoints.tides import router as tides_router
 from weewx_clearskies_api.endpoints.sse import router as sse_router
@@ -199,6 +200,7 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(marine_router, prefix="/api/v1")
         app.include_router(tides_router, prefix="/api/v1")
         app.include_router(surf_router, prefix="/api/v1")
+        app.include_router(beach_profile_router, prefix="/api/v1")
         app.include_router(fishing_router, prefix="/api/v1")
         app.include_router(beach_safety_router, prefix="/api/v1")
 

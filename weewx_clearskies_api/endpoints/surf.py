@@ -651,6 +651,10 @@ def get_surf(location_id: str) -> dict:
         )
         entry["windSource"] = ts_wind_source
 
+        # T5.2: DSPR and SETUP from SWAN TABLE at ~10m depth point.
+        entry["directionalSpread"] = ref_point.get("directionalSpread")
+        entry["setup"] = ref_point.get("setup")
+
         # T3.5: multiSwell from SWAN SPECOUT decomposition for this timestep,
         # NOT from NDBC spectral.  Each timestep gets its own spectral decomposition.
         # Fall back to None (empty) when SPECOUT is unavailable.

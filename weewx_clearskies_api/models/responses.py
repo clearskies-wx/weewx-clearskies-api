@@ -1669,6 +1669,9 @@ class SurfForecast(BaseModel):
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
     windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
     breakPoints: list[dict] | None = None  # QB peak locations [{distanceFromShore, depth, waveHeight}] (T3.4)
+    # T5.2 — SWAN TABLE quantities at ~10m depth
+    directionalSpread: float | None = None  # DSPR — directional spreading (degrees)
+    setup: float | None = None              # SETUP — wave-induced water level rise (meters)
 
 
 class FishingForecast(BaseModel):
