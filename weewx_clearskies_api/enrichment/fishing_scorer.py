@@ -74,7 +74,7 @@ from datetime import datetime
 from typing import Any
 
 from weewx_clearskies_api import i18n
-from weewx_clearskies_api.config.marine_config import BathymetryPoint
+from weewx_clearskies_api.enrichment.bathymetry import BathymetryPoint
 from weewx_clearskies_api.enrichment.bathymetry import identify_habitat_features
 from weewx_clearskies_api.enrichment.fishing_species import (
     SEASONAL_BEHAVIOR,

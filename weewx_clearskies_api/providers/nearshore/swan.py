@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import tempfile
 import threading
@@ -114,17 +115,24 @@ def _load_or_download_cudem_grid(
     SWAN grid level needs it (outer or inner).
     """
     if _CUDEM_GRID_PATH.exists():
-        try:
-            grid = json.loads(_CUDEM_GRID_PATH.read_text(encoding="utf-8"))
-            if grid.get("depths"):
-                logger.debug("CUDEM 2-D grid loaded from %s", _CUDEM_GRID_PATH)
-                return grid
-        except Exception:
-            logger.warning(
-                "CUDEM 2-D grid file %s is corrupt; re-downloading",
-                _CUDEM_GRID_PATH,
-                exc_info=True,
+        age_s = time.time() - os.path.getmtime(str(_CUDEM_GRID_PATH))
+        if age_s > _PROFILE_MAX_AGE_S:
+            logger.info(
+                "CUDEM 2-D grid cache is %.0f days old — refreshing",
+                age_s / 86400,
             )
+        else:
+            try:
+                grid = json.loads(_CUDEM_GRID_PATH.read_text(encoding="utf-8"))
+                if grid.get("depths"):
+                    logger.debug("CUDEM 2-D grid loaded from %s", _CUDEM_GRID_PATH)
+                    return grid
+            except Exception:
+                logger.warning(
+                    "CUDEM 2-D grid file %s is corrupt; re-downloading",
+                    _CUDEM_GRID_PATH,
+                    exc_info=True,
+                )
 
     try:
         from weewx_clearskies_api.enrichment.bathymetry import download_swan_depth_grid

@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from weewx_clearskies_api.config.marine_config import BathymetryPoint
+from weewx_clearskies_api.enrichment.bathymetry import BathymetryPoint
 from weewx_clearskies_api.enrichment import bathymetry
 from weewx_clearskies_api.providers._common.errors import TransientNetworkError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient

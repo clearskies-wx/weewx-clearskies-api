@@ -472,12 +472,13 @@ def get_surf(location_id: str) -> dict:
 
     # Fallback output depth from bathymetric profile (used when no depth info
     # from SWAN TABLE DEPTH column — old single-point mode).
+    # bathymetric_profile was removed from SurfSpotConfig when the wizard-time
+    # CUDEM download was replaced by runtime bidirectional profiles; getattr
+    # keeps this code path safe for configs that pre-date that change.
     _fallback_depth_m: float | None = None
-    if (
-        spot_config.bathymetric_profile
-        and spot_config.bathymetric_profile[0] is not None
-    ):
-        _fallback_depth_m = spot_config.bathymetric_profile[0].depth_m
+    _bath_profile = getattr(spot_config, "bathymetric_profile", None)
+    if _bath_profile and _bath_profile[0] is not None:
+        _fallback_depth_m = _bath_profile[0].depth_m
 
     # --- Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast timestep") ---
     forecast_entries: list[dict] = []

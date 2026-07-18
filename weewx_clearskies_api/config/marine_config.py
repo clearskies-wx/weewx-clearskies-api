@@ -248,17 +248,6 @@ class SwanConfig:
 # ---------------------------------------------------------------------------
 
 
-class BathymetryPoint:
-    """One point in a surf spot's bathymetric profile (CUDEM-derived)."""
-
-    distance_m: float
-    depth_m: float
-
-    def __init__(self, section: dict[str, Any]) -> None:
-        self.distance_m = float(section.get("distance_m", 0.0))
-        self.depth_m = float(section.get("depth_m", 0.0))
-
-
 class ExternalLink:
     """Operator-provided informational link (beach safety resources)."""
 
@@ -333,7 +322,6 @@ class SurfSpotConfig:
     bottom_type: str
     beach_slope: float | None
     structures: list[StructureConfig]
-    bathymetric_profile: list[BathymetryPoint] | None
     topographic_feature: str
     directional_exposure: dict[str, bool]
     # T2.6 — breaker height pipeline config keys
@@ -360,13 +348,10 @@ class SurfSpotConfig:
 
         raw_structures = _as_dict(section.get("structures", {}))
         self.structures = [StructureConfig(_as_dict(v)) for v in raw_structures.values()]
-
-        raw_profile = _as_dict(section.get("bathymetric_profile", {}))
-        self.bathymetric_profile = (
-            [BathymetryPoint(_as_dict(v)) for v in raw_profile.values()]
-            if raw_profile
-            else None
-        )
+        # Note: if api.conf still has a [[[[bathymetric_profile]]]] subsection,
+        # ConfigObj loads it into the section dict but we intentionally do not
+        # read it here — runtime CUDEM profiles are cached at
+        # /etc/weewx-clearskies/spot_profiles/ and loaded on-demand by SWAN.
 
     def validate(self, location_id: str) -> None:
         """Raise ValueError naming the field + location on bad values."""
