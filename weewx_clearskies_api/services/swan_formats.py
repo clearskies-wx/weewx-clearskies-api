@@ -522,6 +522,17 @@ def compute_spot_transect(
     profile = [p for p in (bathymetric_profile or []) if p.get("depth_m") is not None]
     profile.sort(key=lambda p: p.get("distance_m", 0.0))
 
+    import logging as _log
+    _log.getLogger(__name__).info(
+        "compute_spot_transect: input_len=%d filtered_len=%d first=%s last=%s coastline=(%s,%s)",
+        len(bathymetric_profile or []),
+        len(profile),
+        profile[0] if profile else "EMPTY",
+        profile[-1] if profile else "EMPTY",
+        coastline_lat,
+        coastline_lon,
+    )
+
     def _dist_at_depth(target_depth: float, fallback: float) -> float:
         """Return distance_m for the point closest to *target_depth*."""
         if not profile:
