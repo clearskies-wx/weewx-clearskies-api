@@ -456,3 +456,210 @@ def fetch_forecast(*, model: str, lat: float, lon: float) -> list[dict[str, Any]
         "OFS forecast: all cycles exhausted for %s at (%.4f, %.4f)", model, lat, lon
     )
     return []
+
+
+def fetch_surface_currents(
+    bbox: tuple[float, float, float, float],
+    forecast_hours: int = 48,
+) -> list[dict[str, Any]]:
+    """Fetch gridded OFS surface currents covering a bounding box.
+
+    Used by the SWAN nearshore wave model to include current forcing
+    (PROVIDER-MANUAL §14.15, T2.2).  Returns one entry per forecast
+    timestep with full 2-D U/V grids interpolated onto the OFS regulargrid
+    cells that fall within ``bbox``.
+
+    Args:
+        bbox: (lon_sw, lat_sw, lon_ne, lat_ne) — SWAN outer domain in
+            geographic degrees.
+        forecast_hours: Maximum number of forecast hours to retrieve
+            (default 48).  Capped at the OFS model's own ``max_fhr``.
+
+    Returns:
+        List of dicts, one per OFS forecast timestep:
+          ``{"time": ISO-8601 str,
+             "u":  list[list[float]],   # eastward m/s, shape [nj][ni]
+             "v":  list[list[float]],   # northward m/s, shape [nj][ni]
+             "ni": int, "nj": int,
+             "lat_first": float, "lon_first": float,
+             "lat_last":  float, "lon_last":  float}``
+        Empty list on any failure — SWAN runs without current input
+        (safe default; current forcing is optional per SWAN manual).
+
+    Notes:
+        NaN current values (land-masked cells) are replaced with 0.0
+        so SWAN sees calm water rather than an invalid sentinel.
+        Variable-name conventions tried in order: ``water_u``/``water_v``
+        then ``u_eastward``/``v_northward``.
+    """
+    try:
+        import numpy as np
+        import xarray as xr
+    except ImportError:
+        logger.debug("fetch_surface_currents: xarray/numpy not installed; skipping")
+        return []
+
+    lon_sw, lat_sw, lon_ne, lat_ne = bbox
+    center_lat = (lat_sw + lat_ne) / 2.0
+    center_lon = (lon_sw + lon_ne) / 2.0
+
+    model, _ = find_ofs_model(center_lat, center_lon)
+    if model is None:
+        logger.debug(
+            "fetch_surface_currents: no OFS model covers bbox center "
+            "(%.4f, %.4f); skipping current forcing",
+            center_lat,
+            center_lon,
+        )
+        return []
+
+    cfg = OFS_MODELS[model]
+    step: int = cfg["step"]
+    max_fhr: int = min(cfg["max_fhr"], forecast_hours)
+    candidates = _select_cycle(model)
+    if not candidates:
+        logger.debug("fetch_surface_currents: no OFS cycle candidates for %s", model)
+        return []
+
+    for cycle_dt, cycle_hour in candidates:
+        first_url = _build_regulargrid_url(model, cycle_dt, cycle_hour, step)
+
+        # Read grid coordinates to determine bbox indices.
+        try:
+            ds0 = xr.open_dataset(first_url, engine="netcdf4")
+            lat_2d: Any = ds0["Latitude"].values   # shape [ny, nx]
+            lon_2d: Any = ds0["Longitude"].values  # shape [ny, nx]
+            ds0.close()
+        except Exception:
+            logger.debug(
+                "fetch_surface_currents: could not open %s; trying earlier cycle",
+                first_url,
+                exc_info=True,
+            )
+            continue
+
+        # For OFS regulargrid, lat varies along axis 0 (ny) and lon along axis 1 (nx).
+        lat_1d = lat_2d[:, 0]
+        lon_1d = lon_2d[0, :]
+
+        j_indices = np.where((lat_1d >= lat_sw) & (lat_1d <= lat_ne))[0]
+        i_indices = np.where((lon_1d >= lon_sw) & (lon_1d <= lon_ne))[0]
+
+        if len(j_indices) == 0 or len(i_indices) == 0:
+            logger.debug(
+                "fetch_surface_currents: bbox does not overlap OFS %s grid domain",
+                model,
+            )
+            return []
+
+        j0, j1 = int(j_indices[0]), int(j_indices[-1]) + 1
+        i0, i1 = int(i_indices[0]), int(i_indices[-1]) + 1
+
+        lat_sub = lat_2d[j0:j1, i0:i1]
+        lon_sub = lon_2d[j0:j1, i0:i1]
+        nj, ni = lat_sub.shape
+        lat_first = float(lat_sub[0, 0])
+        lat_last = float(lat_sub[-1, 0])
+        lon_first = float(lon_sub[0, 0])
+        lon_last = float(lon_sub[0, -1])
+
+        results: list[dict[str, Any]] = []
+
+        for fhr in range(step, max_fhr + 1, step):
+            url = _build_regulargrid_url(model, cycle_dt, cycle_hour, fhr)
+            try:
+                ds = xr.open_dataset(url, engine="netcdf4")
+
+                # Resolve current variable names — try multiple OFS conventions.
+                u_var: str | None = None
+                v_var: str | None = None
+                for u_name, v_name in (
+                    ("water_u", "water_v"),
+                    ("u_eastward", "v_northward"),
+                    ("u", "v"),
+                ):
+                    if u_name in ds and v_name in ds:
+                        u_var, v_var = u_name, v_name
+                        break
+
+                if u_var is None:
+                    ds.close()
+                    logger.debug(
+                        "fetch_surface_currents: no U/V variables in OFS %s fhr=%03d",
+                        model,
+                        fhr,
+                    )
+                    continue
+
+                u_da = ds[u_var].isel(time=0)
+                v_da = ds[v_var].isel(time=0)
+
+                # Select surface (depth index 0) when a vertical dimension is present.
+                for depth_dim in ("Depth", "depth", "s_rho", "s_w", "sigma"):
+                    if depth_dim in u_da.dims:
+                        u_da = u_da.isel(**{depth_dim: 0})
+                        v_da = v_da.isel(**{depth_dim: 0})
+                        break
+
+                # Spatial subset via OFS regulargrid ny/nx dimension names.
+                u_arr = u_da.values[j0:j1, i0:i1]
+                v_arr = v_da.values[j0:j1, i0:i1]
+
+                forecast_time = cycle_dt + timedelta(hours=fhr)
+                t_iso = forecast_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                ds.close()
+
+                # Replace NaN (land-masked) with 0.0 (calm — no effect on SWAN).
+                u_clean = np.where(np.isnan(u_arr), 0.0, u_arr)
+                v_clean = np.where(np.isnan(v_arr), 0.0, v_arr)
+
+                results.append({
+                    "time": t_iso,
+                    "u": u_clean.tolist(),
+                    "v": v_clean.tolist(),
+                    "ni": ni,
+                    "nj": nj,
+                    "lat_first": lat_first,
+                    "lon_first": lon_first,
+                    "lat_last": lat_last,
+                    "lon_last": lon_last,
+                })
+
+            except Exception:
+                logger.debug(
+                    "fetch_surface_currents: failed fhr=%03d from %s",
+                    fhr,
+                    url,
+                    exc_info=True,
+                )
+                continue
+
+        if results:
+            logger.info(
+                "fetch_surface_currents: OFS %s cycle %s/%02dz → %d timestep(s) "
+                "(%dx%d grid, bbox=%s)",
+                model,
+                cycle_dt.strftime("%Y-%m-%d"),
+                cycle_hour,
+                len(results),
+                ni,
+                nj,
+                bbox,
+            )
+            return results
+
+        logger.debug(
+            "fetch_surface_currents: OFS %s cycle %s/%02dz yielded 0 current grids; "
+            "trying earlier cycle",
+            model,
+            cycle_dt.strftime("%Y-%m-%d"),
+            cycle_hour,
+        )
+
+    logger.warning(
+        "fetch_surface_currents: all OFS cycles exhausted for bbox %s; "
+        "SWAN will run without current forcing",
+        bbox,
+    )
+    return []

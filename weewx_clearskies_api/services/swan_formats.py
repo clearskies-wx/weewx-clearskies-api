@@ -359,6 +359,9 @@ def build_swan_input(
     nest_boundary_file: str = "nest_boundary.dat",
     hotstart_file: str | None = None,
     stationary: bool = False,
+    has_wlevel: bool = False,
+    has_current: bool = False,
+    structures: list[dict] | None = None,
 ) -> str:
     """Render the SWAN ASCII INPUT command file for a given grid level.
 
@@ -392,6 +395,17 @@ def build_swan_input(
         nest_boundary_file: Filename for NESTOUT / NGRID boundary data.
         hotstart_file: If set and the file exists in the run directory, add
             ``INIT HOTSTART 'fname'`` and write ``HOTFILE`` after COMPUTE.
+        has_wlevel: If True, emit ``INPGRID WLEVEL`` + ``READINP WLEV``
+            commands. ``_write_input_files`` must write ``WLEVEL.txt`` when
+            this is True.
+        has_current: If True, emit ``INPGRID CURRENT`` + ``READINP CURRENT``
+            commands. ``_write_input_files`` must write ``CURRENT.txt`` when
+            this is True.
+        structures: List of structure dicts, each with keys ``type``
+            (pier/breakwater/jetty/seawall/groin) and ``coordinates``
+            (list of [lon, lat] pairs defining the OBSTACLE LINE).
+            When provided, OBSTACLE commands are emitted after the source
+            terms section. None/empty → no OBSTACLE commands.
 
     Returns:
         String content of the SWAN INPUT command file.
@@ -460,6 +474,30 @@ def build_swan_input(
         "",
     ]
 
+    # WLEVEL (time-varying water level from CO-OPS tidal predictions — T2.1)
+    if has_wlevel:
+        lines += [
+            (
+                f"INPGRID WLEVEL REG {lon_sw:.6f} {lat_sw:.6f} 0."
+                f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+                + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
+            ),
+            "READINP WLEV 1. 'WLEVEL.txt' 3 0 FREE",
+            "",
+        ]
+
+    # CURRENT (time-varying ocean surface currents from OFS — T2.2)
+    if has_current:
+        lines += [
+            (
+                f"INPGRID CURRENT REG {lon_sw:.6f} {lat_sw:.6f} 0."
+                f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+                + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
+            ),
+            "READINP CURRENT 1. 'CURRENT.txt' 3 0 FREE",
+            "",
+        ]
+
     if grid_level == "outer":
         # WW3 boundary conditions on west and south sides
         lines += [
@@ -481,7 +519,11 @@ def build_swan_input(
         "GEN3 WESTHUYSEN",
         "BREAKING CONSTANT 1.0 0.73",
         "FRICTION JON 0.067",
-        "TRIADS",
+        # T2.4: TRIAD (singular per SWAN user manual) for triad wave-wave
+        # interactions in shallow water (Eldeberky 1996 defaults).
+        # SETUP enables wave-induced water level output at nearshore points.
+        "TRIAD",
+        "SETUP",
         "DIFFRACTION",
         "",
         # Exception values for no-data / dry points (SWAN user manual §3.5).
@@ -491,6 +533,33 @@ def build_swan_input(
         "QUANTITY HSIGN TM01 DIR excv=-9.",
         "",
     ]
+
+    # OBSTACLE commands — coastal structure transmission/reflection (T2.3).
+    # Replaces wave_transform.py Supplement 2 (see ADR-095).  Each structure
+    # dict has 'type' (pier/breakwater/jetty/seawall/groin) and 'coordinates'
+    # (list of [lon, lat] pairs defining the OBSTACLE LINE).
+    _OBSTACLE_PARAMS: dict[str, str] = {
+        "pier":       "TRANSM 0.8",
+        "breakwater": "DAM DANGremond 2.0 0.5 10.0",
+        "jetty":      "DAM GODA 3.0 0.4 0.8",
+        "seawall":    "REFL 0.5",
+        "groin":      "DAM GODA 2.0 0.4 0.8",
+    }
+    if structures:
+        for structure in structures:
+            s_type = str(structure.get("type", "")).lower()
+            coords = structure.get("coordinates", [])
+            if not coords or s_type not in _OBSTACLE_PARAMS:
+                continue
+            params = _OBSTACLE_PARAMS[s_type]
+            coord_str = " ".join(f"{pt[0]:.6f} {pt[1]:.6f}" for pt in coords)
+            lines.append(f"OBSTACLE {params} LINE {coord_str}")
+        if any(
+            structure.get("coordinates")
+            and str(structure.get("type", "")).lower() in _OBSTACLE_PARAMS
+            for structure in structures
+        ):
+            lines.append("")
 
     if grid_level == "outer":
         # SWAN 41.51 nested output: two commands needed.
@@ -527,7 +596,7 @@ def build_swan_input(
             "",
             (
                 f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-                f" TIME XP YP HSIGN TM01 DIR"
+                f" TIME XP YP HSIGN TM01 DIR SETUP"
                 + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
             ),
             "",

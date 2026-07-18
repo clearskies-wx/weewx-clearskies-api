@@ -288,6 +288,9 @@ class _SWANRunnerWithCleanup(SWANRunner):
         gfs_wind_field: dict[str, Any] | None,
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> tuple[dict[str, list], Path]:
         """Run nested SWAN and return (results, tmpdir).
 
@@ -305,6 +308,11 @@ class _SWANRunnerWithCleanup(SWANRunner):
                              When None, the forecast is shortened to HRRR hours only.
             ww3_boundary:    Return value of wavewatch.fetch().
             cudem_bathymetry: Dict with CUDEM depth grid data.
+            tide_predictions: CO-OPS tidal predictions (time, height dicts).
+                              When provided, WLEVEL.txt is written and
+                              INPGRID WLEVEL is included in SWAN INPUT.
+            ofs_currents: OFS surface currents.  When provided, CURRENT.txt is written.
+            structures: Coastal structures for OBSTACLE commands.
 
         Raises:
             SWANRunError: A SWAN subprocess exited with non-zero status or timed out.
@@ -321,8 +329,18 @@ class _SWANRunnerWithCleanup(SWANRunner):
             sub_path = tmpdir / sub
             if sub_path.exists():
                 shutil.rmtree(sub_path)
-        self._run_outer_grid(tmpdir, blended_wind, ww3_boundary, cudem_bathymetry)
-        results = self._run_inner_nest(tmpdir, blended_wind, cudem_bathymetry)
+        self._run_outer_grid(
+            tmpdir, blended_wind, ww3_boundary, cudem_bathymetry,
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+        )
+        results = self._run_inner_nest(
+            tmpdir, blended_wind, cudem_bathymetry,
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+        )
         return results, tmpdir
 
 
@@ -761,6 +779,96 @@ def run_all_spots(
         ww3_boundary = {"forecast": [], "grid": "unavailable", "model_run": ""}
 
     # ------------------------------------------------------------------
+    # 2b. CO-OPS tide predictions for SWAN WLEVEL input (T2.1).
+    #     Fetches harmonic tidal predictions for the nearest CO-OPS station.
+    #     On failure: tide_predictions = None → SWAN runs at static MSL.
+    # ------------------------------------------------------------------
+    tide_predictions: list[dict] | None = None
+    for loc in surf_locations:
+        coops_ids: list[str] = getattr(loc, "coops_station_ids", [])
+        if coops_ids:
+            try:
+                from weewx_clearskies_api.providers.tides import coops as _coops
+
+                coops_result = _coops.fetch(
+                    station_id=coops_ids[0],
+                    products=("predictions",),
+                )
+                preds = coops_result.get("predictions", [])
+                if preds:
+                    # Convert TidePrediction objects to plain dicts for runner
+                    tide_predictions = [
+                        {"time": p.time, "height": p.height}
+                        for p in preds
+                        if p.time and p.height is not None
+                    ]
+                    logger.info(
+                        "SWAN: fetched %d CO-OPS tide predictions "
+                        "from station %s for WLEVEL input",
+                        len(tide_predictions),
+                        coops_ids[0],
+                    )
+                    break
+            except Exception:
+                logger.warning(
+                    "SWAN: CO-OPS tide predictions unavailable "
+                    "(station %s); SWAN will run at static MSL",
+                    coops_ids[0],
+                    exc_info=True,
+                )
+                break  # Don't try remaining stations if first fails — same tidal regime
+
+    # OFS gridded surface currents (T2.2).  Fetched as full 2-D U/V arrays
+    # via ofs.fetch_surface_currents().  On any failure, falls back to None
+    # so SWAN runs without current forcing (safe default per SWAN manual).
+    ofs_currents: list[dict] | None = None
+    try:
+        from weewx_clearskies_api.providers.ocean import ofs as _ofs
+
+        _raw_currents = _ofs.fetch_surface_currents(
+            bbox=outer_bbox,
+            forecast_hours=72,
+        )
+        if _raw_currents:
+            ofs_currents = _raw_currents
+            logger.info(
+                "SWAN: OFS surface currents fetched (%d timestep(s))",
+                len(ofs_currents),
+            )
+        else:
+            logger.debug(
+                "SWAN: OFS surface currents unavailable; SWAN will run "
+                "without current forcing"
+            )
+    except Exception:
+        logger.warning(
+            "SWAN: OFS surface current fetch failed; SWAN will run "
+            "without current forcing",
+            exc_info=True,
+        )
+
+    # ------------------------------------------------------------------
+    # 2c. Build coastal structures for OBSTACLE commands (T2.3).
+    #     StructureConfig.coordinates is populated by the wizard Overpass
+    #     discovery endpoint.  Structures without coordinates are skipped —
+    #     they continue to receive post-processing via wave_transform.py
+    #     Supplement 2 until coordinates are available.
+    # ------------------------------------------------------------------
+    obstacle_structures: list[dict] = []
+    for loc in surf_locations:
+        surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
+        if surf_cfg is None:
+            continue
+        for structure in getattr(surf_cfg, "structures", []):
+            coords = getattr(structure, "coordinates", None)
+            if coords and isinstance(coords, list) and len(coords) >= 2:
+                obstacle_structures.append({
+                    "type": structure.type,
+                    "coordinates": coords,
+                })
+    structures_for_swan: list[dict] | None = obstacle_structures or None
+
+    # ------------------------------------------------------------------
     # 3. Resolve grid resolution config before CUDEM download (needs resolution).
     # ------------------------------------------------------------------
     surf_spots_config: dict[str, dict[str, float]] = {
@@ -813,7 +921,13 @@ def run_all_spots(
     tmpdir: Path | None = None
     try:
         results, tmpdir = runner.run_with_tmpdir(
-            hrrr_wind_field, gfs_wind_field, ww3_boundary, cudem_bathymetry
+            hrrr_wind_field,
+            gfs_wind_field,
+            ww3_boundary,
+            cudem_bathymetry,
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures_for_swan,
         )
     except SWANRunError as exc:
         logger.error(

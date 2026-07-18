@@ -293,6 +293,226 @@ def _parse_table_output(
 # ---------------------------------------------------------------------------
 # SWANRunner
 # ---------------------------------------------------------------------------
+# WLEVEL.txt and CURRENT.txt writers (T2.1, T2.2)
+# ---------------------------------------------------------------------------
+
+
+def _interp_tide_to_wind_times(
+    tide_predictions: list[dict],
+    wind_times_iso: list[str],
+) -> list[float]:
+    """Linear-interpolate CO-OPS tide heights onto wind forecast timesteps.
+
+    Args:
+        tide_predictions: List of dicts with "time" (ISO-8601) and "height" (m).
+        wind_times_iso: Ordered list of ISO-8601 UTC strings (one per wind timestep).
+
+    Returns:
+        List of tidal heights (m) at each wind timestep, same length as
+        wind_times_iso.  Returns 0.0 for timesteps outside the tide range.
+    """
+    if not tide_predictions:
+        return [0.0] * len(wind_times_iso)
+
+    # Parse and sort tide predictions
+    parsed: list[tuple[float, float]] = []  # (unix_s, height_m)
+    for pt in tide_predictions:
+        t_str = pt.get("time", "")
+        h = pt.get("height")
+        if not t_str or h is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(t_str.replace("Z", "+00:00")).astimezone(UTC)
+            parsed.append((dt.timestamp(), float(h)))
+        except (ValueError, TypeError):
+            continue
+    parsed.sort(key=lambda x: x[0])
+
+    if not parsed:
+        return [0.0] * len(wind_times_iso)
+
+    result: list[float] = []
+    for ts_iso in wind_times_iso:
+        try:
+            wt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00")).astimezone(UTC)
+            wt_s = wt.timestamp()
+        except (ValueError, TypeError):
+            result.append(0.0)
+            continue
+
+        # Find bracketing tide predictions
+        if wt_s <= parsed[0][0]:
+            result.append(parsed[0][1])
+        elif wt_s >= parsed[-1][0]:
+            result.append(parsed[-1][1])
+        else:
+            # Linear interpolation between the two surrounding predictions
+            for i in range(len(parsed) - 1):
+                t0, h0 = parsed[i]
+                t1, h1 = parsed[i + 1]
+                if t0 <= wt_s <= t1:
+                    alpha = (wt_s - t0) / (t1 - t0) if t1 != t0 else 0.0
+                    result.append(h0 + alpha * (h1 - h0))
+                    break
+            else:
+                result.append(0.0)
+
+    return result
+
+
+def _write_wlevel_txt(
+    tide_predictions: list[dict],
+    wind_times_iso: list[str],
+    mxc: int,
+    myc: int,
+) -> str:
+    """Build WLEVEL.txt content for SWAN READINP WLEV (IDLA=3, FREE format).
+
+    One block per wind timestep.  Each block is (myc+1) rows × (mxc+1) columns,
+    all cells set to the same tidal elevation (meters, positive up from MSL).
+    Tides are treated as spatially uniform across the domain — valid for the
+    ~30km inner nest where the tidal gradient is negligible compared to the
+    forecast uncertainty.
+
+    Args:
+        tide_predictions: CO-OPS tidal predictions (time, height dicts).
+        wind_times_iso: Ordered ISO-8601 timesteps (one per SWAN wind grid).
+        mxc: Number of SWAN grid intervals in x (mxc+1 columns).
+        myc: Number of SWAN grid intervals in y (myc+1 rows).
+
+    Returns:
+        String content of WLEVEL.txt.  Empty string if tide interpolation
+        produces no data (caller skips WLEVEL input in that case).
+    """
+    heights = _interp_tide_to_wind_times(tide_predictions, wind_times_iso)
+    if not heights:
+        return ""
+
+    nx = mxc + 1  # number of columns (x points)
+    ny = myc + 1  # number of rows (y points)
+
+    lines: list[str] = []
+    for h in heights:
+        h_str = f"{h:.4f}"
+        # Each row: nx identical values
+        row = " ".join([h_str] * nx)
+        # Write ny rows with the same value
+        for _ in range(ny):
+            lines.append(row)
+
+    return "\n".join(lines) + "\n"
+
+
+def _write_current_txt(
+    ofs_currents: list[dict],
+    wind_times_iso: list[str],
+    mxc: int,
+    myc: int,
+) -> str:
+    """Build CURRENT.txt content for SWAN READINP CURRENT (IDLA=3, FREE format).
+
+    One block per wind timestep.  Each block = U grid (myc+1 rows × mxc+1 cols)
+    followed immediately by V grid (same dims).  U = east component (m/s),
+    V = north component (m/s).
+
+    ofs_currents entries are matched to wind timesteps by the closest available
+    OFS timestep within a 2-hour window.  When no OFS timestep is available
+    within 2 hours, that wind timestep gets zero currents (calm).
+
+    Args:
+        ofs_currents: List of dicts, each with:
+            "time" — ISO-8601 UTC string of the OFS timestep.
+            "u_grid" — list[list[float]] shape (ny, nx), east current m/s.
+            "v_grid" — list[list[float]] shape (ny, nx), north current m/s.
+        wind_times_iso: Ordered ISO-8601 timesteps (one per SWAN wind grid).
+        mxc: SWAN grid intervals in x.
+        myc: SWAN grid intervals in y.
+
+    Returns:
+        String content of CURRENT.txt.  Empty string if ofs_currents is empty.
+    """
+    if not ofs_currents:
+        return ""
+
+    nx = mxc + 1
+    ny = myc + 1
+
+    # Parse OFS timesteps
+    ofs_parsed: list[tuple[float, list[list[float]], list[list[float]]]] = []
+    for entry in ofs_currents:
+        t_str = entry.get("time", "")
+        u_grid = entry.get("u_grid")
+        v_grid = entry.get("v_grid")
+        if not t_str or u_grid is None or v_grid is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(t_str.replace("Z", "+00:00")).astimezone(UTC)
+            ofs_parsed.append((dt.timestamp(), u_grid, v_grid))
+        except (ValueError, TypeError):
+            continue
+    ofs_parsed.sort(key=lambda x: x[0])
+
+    if not ofs_parsed:
+        return ""
+
+    _ZERO_ROW = " ".join(["0.0000"] * nx)
+    _ZERO_BLOCK: list[str] = [_ZERO_ROW] * ny
+
+    def _nearest_ofs(wt_s: float) -> tuple[list[list[float]], list[list[float]]] | None:
+        """Return (u_grid, v_grid) for the OFS entry closest to wt_s (within 2h)."""
+        best_diff = float("inf")
+        best_u: list[list[float]] | None = None
+        best_v: list[list[float]] | None = None
+        for ofs_t, u, v in ofs_parsed:
+            diff = abs(ofs_t - wt_s)
+            if diff < best_diff:
+                best_diff = diff
+                best_u = u
+                best_v = v
+        if best_diff > 7200:  # > 2 hours → no match
+            return None
+        return best_u, best_v  # type: ignore[return-value]
+
+    lines: list[str] = []
+    for ts_iso in wind_times_iso:
+        try:
+            wt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00")).astimezone(UTC)
+            wt_s = wt.timestamp()
+        except (ValueError, TypeError):
+            lines.extend(_ZERO_BLOCK)  # U block
+            lines.extend(_ZERO_BLOCK)  # V block
+            continue
+
+        match = _nearest_ofs(wt_s)
+        if match is None:
+            lines.extend(_ZERO_BLOCK)
+            lines.extend(_ZERO_BLOCK)
+            continue
+
+        u_grid, v_grid = match
+
+        # U block: ny rows × nx cols
+        for j in range(ny):
+            if j < len(u_grid):
+                row = u_grid[j]
+                vals = [f"{row[i]:.4f}" if i < len(row) else "0.0000" for i in range(nx)]
+            else:
+                vals = ["0.0000"] * nx
+            lines.append(" ".join(vals))
+
+        # V block: ny rows × nx cols
+        for j in range(ny):
+            if j < len(v_grid):
+                row = v_grid[j]
+                vals = [f"{row[i]:.4f}" if i < len(row) else "0.0000" for i in range(nx)]
+            else:
+                vals = ["0.0000"] * nx
+            lines.append(" ".join(vals))
+
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 
 
 class SWANRunner:
@@ -371,6 +591,9 @@ class SWANRunner:
         gfs_wind_field: dict[str, Any] | None,
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> dict[str, list[MarineForecastPoint]]:
         """Execute a two-level nested SWAN run and return per-spot wave forecasts.
 
@@ -392,6 +615,15 @@ class SWANRunner:
             ww3_boundary:    Return value of wavewatch.fetch().
             cudem_bathymetry: Dict with keys lat_first, lon_first, lat_last,
                               lon_last, ni, nj, depths (list[list[float]]).
+            tide_predictions: CO-OPS tidal predictions for the forecast period
+                              (list of dicts with "time" ISO-8601 and "height" meters).
+                              When provided, WLEVEL.txt is written and INPGRID WLEVEL
+                              is included in the SWAN INPUT file.  None → no WLEVEL.
+            ofs_currents: OFS surface current data (list of dicts with "time",
+                          "u_grid" and "v_grid" arrays per timestep).
+                          When provided, CURRENT.txt is written.  None → no CURRENT.
+            structures: List of structure dicts (keys: "type", "coordinates") for
+                        OBSTACLE commands.  None/empty → no OBSTACLE commands.
 
         Returns:
             dict[spot_id, list[MarineForecastPoint]] — empty list for spots
@@ -404,8 +636,18 @@ class SWANRunner:
         blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
         tmpdir = Path(tempfile.mkdtemp(prefix="swan_run_"))
         logger.info("SWAN nested run starting in %s", tmpdir)
-        self._run_outer_grid(tmpdir, blended_wind, ww3_boundary, cudem_bathymetry)
-        return self._run_inner_nest(tmpdir, blended_wind, cudem_bathymetry)
+        self._run_outer_grid(
+            tmpdir, blended_wind, ww3_boundary, cudem_bathymetry,
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+        )
+        return self._run_inner_nest(
+            tmpdir, blended_wind, cudem_bathymetry,
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+        )
 
     # ------------------------------------------------------------------
     # Internal steps
@@ -509,6 +751,9 @@ class SWANRunner:
         blended_wind: dict[str, Any],
         ww3_boundary: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> None:
         """Run the outer SWAN grid (continental shelf approach domain).
 
@@ -520,11 +765,17 @@ class SWANRunner:
             blended_wind: Stitched HRRR+GFS wind field from _stitch_wind().
             ww3_boundary: Return value of wavewatch.fetch().
             cudem_bathymetry: CUDEM depth grid dict.
+            tide_predictions: CO-OPS tidal predictions (passed to _write_input_files).
+            ofs_currents: OFS surface currents (passed to _write_input_files).
+            structures: Coastal structures for OBSTACLE commands.
         """
         outer_dir = tmpdir / "outer"
         outer_dir.mkdir(exist_ok=True)
         grid_info = self._write_input_files(
-            outer_dir, blended_wind, ww3_boundary, cudem_bathymetry, "outer"
+            outer_dir, blended_wind, ww3_boundary, cudem_bathymetry, "outer",
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
         )
         logger.info(
             "SWAN outer grid: %d×%d cells at %.1f km resolution in %s",
@@ -540,6 +791,9 @@ class SWANRunner:
         tmpdir: Path,
         blended_wind: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> dict[str, list[MarineForecastPoint]]:
         """Run the inner nested SWAN grid (tight nearshore domain around surf spots).
 
@@ -550,6 +804,9 @@ class SWANRunner:
             tmpdir: Root temporary directory (must contain outer/ with nest_boundary.dat).
             blended_wind: Stitched HRRR+GFS wind field.
             cudem_bathymetry: CUDEM depth grid dict.
+            tide_predictions: CO-OPS tidal predictions (passed to _write_input_files).
+            ofs_currents: OFS surface currents (passed to _write_input_files).
+            structures: Coastal structures for OBSTACLE commands.
 
         Returns:
             dict[spot_id, list[MarineForecastPoint]]
@@ -569,7 +826,10 @@ class SWANRunner:
             )
 
         grid_info = self._write_input_files(
-            inner_dir, blended_wind, {}, cudem_bathymetry, "inner"
+            inner_dir, blended_wind, {}, cudem_bathymetry, "inner",
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
         )
         logger.info(
             "SWAN inner nest: %d×%d cells at %.0f m resolution in %s",
@@ -633,12 +893,17 @@ class SWANRunner:
         cudem_bathymetry: dict[str, Any],
         grid_level: str,
         stationary: bool = False,
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> dict[str, Any]:
         """Write SWAN input files for a given grid level and return grid_info.
 
         Files written to run_dir:
           BOTTOM.txt          — depth grid (SWAN positive-down convention)
           WIND.txt            — interpolated wind components (IDLA=3)
+          WLEVEL.txt          — time-varying water level grid (CO-OPS tides; when provided)
+          CURRENT.txt         — time-varying U/V current grids (OFS; when provided)
           BOUND_W.txt         — WW3 TPAR west-side boundary (outer only)
           BOUND_S.txt         — WW3 TPAR south-side boundary (outer only)
           OUTPUT_POINTS.txt   — (lon lat) pairs for surf spots (inner only)
@@ -650,6 +915,15 @@ class SWANRunner:
             ww3_boundary: WW3 data (used for outer level only; ignored for inner).
             cudem_bathymetry: CUDEM depth grid dict.
             grid_level: ``"outer"`` or ``"inner"``.
+            stationary: When True, build a single-snapshot stationary computation.
+            tide_predictions: CO-OPS tidal predictions (list of dicts with "time"
+                ISO-8601 and "height" meters).  When provided, WLEVEL.txt is written
+                and has_wlevel=True is passed to build_swan_input.  None → no WLEVEL.
+            ofs_currents: OFS surface currents (list of dicts with "time", "u_grid",
+                "v_grid" — each grid is a list[list[float]] at (myc+1)×(mxc+1)).
+                When provided, CURRENT.txt is written.  None → no CURRENT.
+            structures: Coastal structures for OBSTACLE commands passed to
+                build_swan_input.  None/empty → no OBSTACLE commands.
 
         Returns:
             grid_info dict with SWAN grid dimensions and valid_times.
@@ -668,6 +942,43 @@ class SWANRunner:
         # WIND.txt — reuse hrrr_to_swan_wind which accepts any wind_field with "grids"
         wind_dims, wind_text = hrrr_to_swan_wind(wind_field, bbox, resolution_m)
         (run_dir / "WIND.txt").write_text(wind_text, encoding="ascii")
+
+        # WLEVEL.txt — time-varying water level from CO-OPS tidal predictions (T2.1).
+        # One block per wind timestep: (myc+1) rows × (mxc+1) columns, uniform value
+        # across the domain (tides vary slowly over the ~30km inner nest domain).
+        has_wlevel = False
+        if tide_predictions:
+            wlevel_text = _write_wlevel_txt(
+                tide_predictions,
+                wind_dims["valid_times"],
+                wind_dims["mxc"],
+                wind_dims["myc"],
+            )
+            if wlevel_text:
+                (run_dir / "WLEVEL.txt").write_text(wlevel_text, encoding="ascii")
+                has_wlevel = True
+                logger.debug(
+                    "SWAN %s: wrote WLEVEL.txt (%d chars) from %d tide predictions",
+                    grid_level, len(wlevel_text), len(tide_predictions),
+                )
+
+        # CURRENT.txt — time-varying surface currents from OFS (T2.2).
+        # One block per timestep: U grid (myc+1)×(mxc+1) then V grid same dims.
+        has_current = False
+        if ofs_currents:
+            current_text = _write_current_txt(
+                ofs_currents,
+                wind_dims["valid_times"],
+                wind_dims["mxc"],
+                wind_dims["myc"],
+            )
+            if current_text:
+                (run_dir / "CURRENT.txt").write_text(current_text, encoding="ascii")
+                has_current = True
+                logger.debug(
+                    "SWAN %s: wrote CURRENT.txt (%d chars) from %d OFS timesteps",
+                    grid_level, len(current_text), len(ofs_currents),
+                )
 
         # WW3 boundary files (outer only)
         if grid_level == "outer":
@@ -727,6 +1038,9 @@ class SWANRunner:
             nest_boundary_file=self._NESTOUT_BOUNDARY_FILE,
             hotstart_file=hotstart_arg,
             stationary=stationary,
+            has_wlevel=has_wlevel,
+            has_current=has_current,
+            structures=structures,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 

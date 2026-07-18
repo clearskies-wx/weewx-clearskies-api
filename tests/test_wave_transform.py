@@ -216,9 +216,9 @@ def test_full_pipeline():
     assert 0.0 < result["wave_height"] < 10.0
     assert result["wave_period"] == 10.0
     assert result["wave_direction"] == 180.0
-    assert result["structure_applied"] is True
+    assert result["structure_applied"] is False  # Supplement 2 removed — SWAN OBSTACLE handles structures (ADR-095)
     assert "breaker_correction" in result["supplements_applied"]
-    assert "structure_effects" in result["supplements_applied"]
+    assert "structure_effects" not in result["supplements_applied"]
     assert "topographic_adjustment" in result["supplements_applied"]
 
 
@@ -274,6 +274,5 @@ def test_supplements_applied_list():
     assert result["supplements_applied"] == [
         "interpolation",
         "breaker_correction",
-        "structure_effects",
         "topographic_adjustment",
-    ]
+    ]  # structure_effects removed — SWAN OBSTACLE (ADR-095)

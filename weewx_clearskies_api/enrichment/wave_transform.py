@@ -333,10 +333,14 @@ def apply_supplements(
     spot_lat: float,
     spot_lon: float,
 ) -> dict[str, Any] | None:
-    """Apply the four SWAN supplements and return corrected wave data.
+    """Apply the three SWAN supplements and return corrected wave data.
+
+    Supplement 2 (coastal structure transmission/reflection effects) was
+    removed per ADR-095; structure effects are now handled natively by the
+    SWAN OBSTACLE command during wave propagation.
 
     Processing order: interpolation (3) -> breaker correction (1) ->
-    structure effects (2) -> topographic adjustment (4).
+    topographic adjustment (4).
 
     Input ``wave_data`` is a dict with keys ``wave_height`` (meters, SWAN Hsig),
     ``wave_period`` (seconds), ``wave_direction`` (degrees true north), and
@@ -394,14 +398,13 @@ def apply_supplements(
         )
         supplements_applied.append("breaker_correction")
 
-    # Supplement 2 — coastal structure effects.
-    structures = getattr(spot_config, "structures", None) or []
-    if wave_height is not None:
-        wave_height, structure_applied = apply_structure_effects(
-            wave_height, structures, wave_direction=wave_direction
-        )
-        if structure_applied:
-            supplements_applied.append("structure_effects")
+    # Supplement 2 removed — structure effects handled by SWAN OBSTACLE (ADR-095).
+    # apply_structure_effects() and its helpers remain in this module as dead
+    # code for now (future reference / potential reactivation).  Do not call
+    # them here.  The SWAN OBSTACLE command (T2.3) natively models structure
+    # transmission and reflection during the wave propagation computation,
+    # which is more physically correct than the post-processing approach here.
+    structure_applied = False
 
     # Supplement 4 — topographic focusing/sheltering.
     topographic_feature = getattr(spot_config, "topographic_feature", None)

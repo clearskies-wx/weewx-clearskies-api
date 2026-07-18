@@ -284,6 +284,9 @@ class StructureConfig:
     #: Auto-populated by GET /setup/marine/discover-structures; None for
     #: manually-entered structures unless the operator supplies it.
     bearing_to_spot_degrees: float | None
+    #: Line geometry for the SWAN OBSTACLE command — list of [lon, lat] pairs.
+    #: When empty, the OBSTACLE command is skipped for this structure.
+    coordinates: list[list[float]]
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.type = str(section.get("type", "")).strip()
@@ -292,6 +295,9 @@ class StructureConfig:
         self.bearing_degrees = float(section.get("bearing_degrees", 0.0))
         self.distance_m = float(section.get("distance_m", 0.0))
         self.bearing_to_spot_degrees = _opt_float(section, "bearing_to_spot_degrees")
+        self.coordinates = [
+            [float(c[0]), float(c[1])] for c in section.get("coordinates", [])
+        ]
 
     def validate(self, location_id: str) -> None:
         """Raise ValueError naming the field + location on bad values."""
