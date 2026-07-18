@@ -1664,7 +1664,7 @@ class SurfForecast(BaseModel):
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
     # T2.6 — breaker height pipeline (API-MANUAL §16, §17)
-    swellHeight: float | None = None            # raw SWAN Hsig before supplements (meters)
+    swellHeight: float | None = None            # HSWELL at ~10m depth (display units, ADR-095)
     breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
     windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
