@@ -187,15 +187,17 @@ def _parse_table_output(
         if not parts:
             continue
 
-        # Resolve required column indices.  SWAN 41.51 uses "Hsig" (→ HSIG)
-        # as the column header for significant wave height; older versions
-        # may use "Hs" (→ HS).  Accept both.
+        # Resolve required column indices from the SWAN TABLE header.
+        # SWAN output quantity names (user manual §3.5 / BLOCK/TABLE docs):
+        #   HSIGN → header "Hsig", TIME → header "Time", TM01, DIR, XP, YP.
+        # All lookups are uppercased.  Accept "HSIG" as a fallback for HSIGN.
         try:
+            i_time = col_idx.get("TIME")
             i_xp = col_idx["XP"]
             i_yp = col_idx["YP"]
-            i_hs = col_idx.get("HSIG", col_idx.get("HS"))
+            i_hs = col_idx.get("HSIG", col_idx.get("HSIGN", col_idx.get("HS")))
             if i_hs is None:
-                raise KeyError("HSIG/HS")
+                raise KeyError("HSIG/HSIGN/HS")
             i_tm = col_idx["TM01"]
             i_dir = col_idx["DIR"]
         except KeyError:
@@ -206,11 +208,10 @@ def _parse_table_output(
                 )
             continue
 
-        # Time is always the first data token (before Xp in SWAN output)
-        # The "Time" column header occupies a wide field in the header but the
-        # actual time token is the first field in each data row.
-        # col_idx["TIME"] points to 0 given the header layout; we use parts[0].
-        if len(parts) < max(i_xp, i_yp, i_hs, i_tm, i_dir) + 1:
+        max_idx = max(i_xp, i_yp, i_hs, i_tm, i_dir)
+        if i_time is not None:
+            max_idx = max(max_idx, i_time)
+        if len(parts) < max_idx + 1:
             continue
 
         try:
@@ -219,7 +220,7 @@ def _parse_table_output(
             hs = float(parts[i_hs])
             tm01 = float(parts[i_tm])
             mwd = float(parts[i_dir])
-            time_token = parts[0]  # always column 0 regardless of header offset
+            time_token = parts[i_time] if i_time is not None else None
         except (ValueError, IndexError):
             continue
 
@@ -233,14 +234,19 @@ def _parse_table_output(
             continue
 
         # Convert SWAN time token YYYYMMDD.HHmmss → ISO-8601
-        try:
-            dt_str = time_token  # e.g. "20240101.010000"
-            date_part, time_part = dt_str.split(".")
-            iso = (
-                f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
-                f"T{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}Z"
-            )
-        except (ValueError, IndexError):
+        if time_token is not None:
+            try:
+                date_part, time_part = time_token.split(".")
+                iso = (
+                    f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                    f"T{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}Z"
+                )
+            except (ValueError, IndexError):
+                continue
+        else:
+            # TIME column missing — should not happen since we request it,
+            # but handle gracefully.
+            logger.warning("SWAN TABLE row has no TIME column — skipping")
             continue
 
         # Match (Xp, Yp) to a spot

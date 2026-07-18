@@ -507,7 +507,7 @@ def build_swan_input(
             "",
             (
                 f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-                f" XP YP HS TM01 DIR OUTPUT {swan_t_start} {output_dt_min} MIN"
+                f" TIME XP YP HSIGN TM01 DIR OUTPUT {swan_t_start} {output_dt_min} MIN"
             ),
             "",
         ]
