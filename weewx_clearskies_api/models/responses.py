@@ -1607,22 +1607,39 @@ class OceanDataResult(BaseModel):
 class SurfScoringBreakdown(BaseModel):
     """Individual factor scores for the surf quality rating (API-MANUAL §17).
 
-    All factor scores are expressed as 0-100 values (raw 0-1 scorer output × 100).
-    windQuality can exceed 100 in the raw scorer (offshore boost up to 1.2); it is
-    clamped to 100 for display purposes before being stored here.
+    Three weighted factors express the core surf quality (max points shown):
+      waveHeight (max 35) + wavePeriod (max 35) + waveOrganization (max 30)
+
+    Three signed-integer adjustments surface all penalty/bonus factors:
+      beachAlignment + directionalExposure + timeOfDay
+
+    Additive identity:
+      total = waveHeight + wavePeriod + waveOrganization
+              + beachAlignment + directionalExposure + timeOfDay
+
+    Organization sub-factors show each component's point contribution within
+    the 30-point organization budget:
+      organizationWind (max ~15) + organizationSwellDominance (max 7.5)
+      + organizationDirectionalSpread (max 4.5) + organizationCrossSwell (max 3)
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    waveHeight: float        # 0-100; height component score
-    wavePeriod: float        # 0-100; period component score
-    windQuality: float       # 0-100; wind quality component score (clamped from raw ≤1.2)
-    swellDominance: float    # 0-100; swell dominance component score
-    beachAlignment: float    # 0-100; multiplier × 100 (100 = direct hit, 30 = 70% penalty)
-    waveHeightWeight: int    # 35
-    wavePeriodWeight: int    # 35
-    windQualityWeight: int   # 20
-    swellDominanceWeight: int  # 10
+    # Top-level weighted factors (in their own scoring units)
+    waveHeight: int              # 0-35; wave height component score
+    wavePeriod: int              # 0-35+; wave period component score (multipliers may exceed 35)
+    waveOrganization: int        # 0-30; wave organization composite score
+
+    # Organization composite sub-factors (point contributions, not 0-1 ratios)
+    organizationWind: float              # 0-~15; wind effect contribution (50% of 30)
+    organizationSwellDominance: float    # 0-7.5; swell dominance contribution (25% of 30)
+    organizationDirectionalSpread: float  # 0-4.5; directional spread contribution (15% of 30)
+    organizationCrossSwell: float        # 0-3; cross-swell interference contribution (10% of 30)
+
+    # Signed adjustment factors (negative = penalty, positive = bonus, 0 = neutral)
+    beachAlignment: int      # signed; beach angle alignment adjustment
+    directionalExposure: int  # signed; 0 when open, negative when blocked by headland/bathymetry
+    timeOfDay: int            # signed; positive at dawn, negative in afternoon, 0 otherwise
 
 
 class SurfForecast(BaseModel):

@@ -608,21 +608,32 @@ def get_surf(location_id: str) -> dict:
                     valid_time_iso=valid_time,
                 )
 
+        # T3.5/T4.1: Fetch SWAN SPECOUT components for this timestep.
+        # Used by the scorer for swell dominance and cross-swell sub-factors
+        # (T4.1), and also for the multiSwell display field (T3.5).
+        # Pre-fetched here so it can be passed to score_surf() before the
+        # entry dict is built.
+        ts_spectral = _spectral_by_time.get(valid_time)
+
         # Step 6: score surf using breakingFaceHeight (ADR-094)
-        # T3.5: spectral_components=None — NDBC spectral data is NO LONGER passed
-        # to the scorer.  Scoring uses SWAN values only.  The NDBC fetch still
+        # T3.5: spectral_components=None — NDBC spectral data is NOT passed to
+        # the scorer.  Scoring uses SWAN values only.  The NDBC fetch still
         # runs and spectralComponents is still in the response (reference data),
         # but it no longer feeds the surf score or multiSwell display.
+        # T4.1: directional_spread and multi_swell pass SWAN DSPR/SPECOUT data
+        # to the organization composite sub-factors.
         surf_forecast = score_surf(
             wave_height=face_height_m,
             wave_period=wave_period_pt,
             wave_direction=wave_direction_pt,
             wind_speed=ts_wind_speed,
             wind_direction=ts_wind_direction,
-            spectral_components=None,  # T3.5: NDBC spectral disconnected from scoring
+            spectral_components=None,  # deprecated — NDBC not used in scoring
             spot_config=spot_config,
             time_utc=valid_time,
             wind_source=ts_wind_source,
+            directional_spread=ref_point.get("directionalSpread"),  # T4.1: SWAN DSPR at ~10m
+            multi_swell=ts_spectral,  # T4.1: SWAN SPECOUT for organization sub-factors
         )
 
         entry = surf_forecast.model_dump()
@@ -643,7 +654,6 @@ def get_surf(location_id: str) -> dict:
         # T3.5: multiSwell from SWAN SPECOUT decomposition for this timestep,
         # NOT from NDBC spectral.  Each timestep gets its own spectral decomposition.
         # Fall back to None (empty) when SPECOUT is unavailable.
-        ts_spectral = _spectral_by_time.get(valid_time)
         if ts_spectral:
             entry["multiSwell"] = [
                 {

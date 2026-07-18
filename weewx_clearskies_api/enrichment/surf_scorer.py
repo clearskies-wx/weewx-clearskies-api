@@ -8,20 +8,33 @@ converted the corrected Hsig to breaking face height (API-MANUAL.md §17
 is handed and does not itself correct for shoaling, refraction, or
 site-specific breaker physics.
 
-Four weighted scoring factors combine into a 1-5 star rating:
+Three weighted scoring factors combine into a 1-5 star rating (T4.1):
 
-    wave height   (0.35) — larger, within a rideable range, scores higher
-    wave period   (0.35) — longer period = cleaner, more powerful waves
-    wind quality  (0.20) — offshore wind holds the wave face up; onshore
-                            wind blows it down
-    swell dominance (0.10) — a clean, single dominant swell system scores
-                              higher than a confused wind-chop sea
+    wave height       (0.35, max 35 pts) — larger, within a rideable range, scores higher
+    wave period       (0.35, max 35 pts) — longer period = cleaner, more powerful waves
+    wave organization (0.30, max 30 pts) — composite of four sub-factors:
+        wind effect           (50% of 30 = 15 pts effective)
+            offshore wind holds the wave face up; onshore wind blows it down
+        swell dominance       (25% of 30 = 7.5 pts effective)
+            clean single dominant swell scores higher than confused wind-chop
+        directional spread    (15% of 30 = 4.5 pts effective, SWAN DSPR)
+            tight spread = organized waves; wide spread = messy surf
+        cross-swell           (10% of 30 = 3 pts effective, SWAN SPECOUT)
+            multiple systems at conflicting angles create interference
 
-The composite score is then multiplied by three independent filters: beach
-angle alignment (how directly the swell hits the beach), the operator's
-directional exposure config (some directions are physically blocked by
-headlands/bathymetry and score near zero), and an optional dawn/afternoon
-time-of-day adjustment.
+Three signed adjustments then surface all penalty/bonus factors (T4.2):
+
+    beach alignment      — angle between swell and beach (0 = direct hit)
+    directional exposure — operator config (0 = open, negative = blocked)
+    time of day          — dawn bonus, afternoon penalty, 0 otherwise
+
+Additive identity guaranteed by construction:
+    total = waveHeight + wavePeriod + waveOrganization
+            + beachAlignment + directionalExposure + timeOfDay
+
+All scoring uses SWAN values directly. NDBC spectral data is NOT used
+(``spectral_components`` parameter retained for backward compatibility
+but is deprecated and ignored as of T4.1 / ADR-096).
 
 **i18n (API-MANUAL.md §17 "Marine i18n"):** every human-readable output
 field resolves through ``i18n.t()`` — quality label, wind quality label, and
@@ -74,13 +87,43 @@ _LOCALE_KEYS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Scoring weights (API-MANUAL.md §17 "Surf quality scorer")
+# Scoring weights (API-MANUAL.md §17 "Surf quality scorer", ADR-096)
+# Three top-level weighted factors (T4.1)
 # ---------------------------------------------------------------------------
 
-_WEIGHT_HEIGHT = 0.35
-_WEIGHT_PERIOD = 0.35
-_WEIGHT_WIND = 0.20
-_WEIGHT_SWELL = 0.10
+_WEIGHT_HEIGHT = 0.35        # max 35 pts
+_WEIGHT_PERIOD = 0.35        # max 35 pts
+_WEIGHT_ORGANIZATION = 0.30  # max 30 pts — composite of four sub-factors
+
+# Organization composite sub-weights (must sum to 1.0)
+_ORG_WEIGHT_WIND = 0.50             # wind effect: 50% of 30 = 15 pts effective
+_ORG_WEIGHT_SWELL_DOMINANCE = 0.25  # swell dominance: 25% of 30 = 7.5 pts effective
+_ORG_WEIGHT_DSPR = 0.15             # directional spread: 15% of 30 = 4.5 pts effective
+_ORG_WEIGHT_CROSS_SWELL = 0.10      # cross-swell: 10% of 30 = 3 pts effective
+
+# ---------------------------------------------------------------------------
+# Directional spread scoring thresholds (SWAN TABLE DSPR in degrees)
+# ---------------------------------------------------------------------------
+
+_DSPR_TIGHT_DEG = 15.0     # < 15° = tight (organized, clean)
+_DSPR_MODERATE_DEG = 25.0  # 15–25° = moderate spread
+_DSPR_WIDE_DEG = 35.0      # 25–35° = wide spread
+# ≥ 35° = messy
+_DSPR_TIGHT_SCORE = 1.0    # < 15°: perfectly organized
+_DSPR_MODERATE_SCORE = 0.7  # 15–25°: decent organization
+_DSPR_WIDE_SCORE = 0.4     # 25–35°: messy
+_DSPR_MESSY_SCORE = 0.2    # ≥ 35°: very disorganized
+_DSPR_NO_DATA = 0.5        # neutral fallback when DSPR unavailable
+
+# ---------------------------------------------------------------------------
+# Cross-swell interference scoring thresholds (SWAN SPECOUT)
+# ---------------------------------------------------------------------------
+
+_CROSS_SWELL_ENERGY_RATIO = 0.5  # secondary > this fraction of primary = significant
+_CROSS_SWELL_ANGLE_DEG = 30.0    # angle difference threshold for interference
+_CROSS_SWELL_CLEAN = 1.0         # no cross-swell interference
+_CROSS_SWELL_INTERFERENCE = 0.4  # significant cross-swell detected
+_CROSS_SWELL_NO_DATA = 0.5       # neutral fallback when SPECOUT unavailable
 
 # ---------------------------------------------------------------------------
 # Wave height component — range lookup, height in feet (upper bound inclusive)
@@ -164,13 +207,6 @@ _SWELL_DOMINANCE_PURE_SCORE = 1.0
 _SWELL_DOMINANCE_MIXED_SCORE = 0.6
 _SWELL_DOMINANCE_CHOP_SCORE = 0.2
 _SWELL_DOMINANCE_DEFAULT = 0.5  # no spectral data available
-
-# ---------------------------------------------------------------------------
-# Multi-swell integration thresholds
-# ---------------------------------------------------------------------------
-
-_PRIMARY_DOMINANT_RATIO = 0.75  # primary > this fraction of total energy
-_SECONDARY_SIGNIFICANT_RATIO = 0.5  # secondary > this fraction of primary energy
 
 # ---------------------------------------------------------------------------
 # Beach angle alignment (angle between swell direction and beach-facing
@@ -313,59 +349,63 @@ def _swell_dominance(spectral_components: list[dict[str, Any]] | None) -> float:
     return _SWELL_DOMINANCE_CHOP_SCORE
 
 
-def _effective_swell(
-    wave_height: float,
-    wave_period: float,
-    wave_direction: float,
-    spectral_components: list[dict[str, Any]] | None,
-) -> tuple[float, float, float]:
-    """Resolve the (height_m, period_s, direction_deg) to score against.
+def _directional_spread_score(dspr: float | None) -> float:
+    """Score directional spread from SWAN TABLE DSPR output (T4.1, ADR-096).
 
-    Multi-swell integration (API-MANUAL.md §17):
-      - primary swell > 75% of total energy -> use primary swell alone.
-      - secondary swell > 50% of primary energy -> energy superposition
-        (H_combined = sqrt(H1^2 + H2^2), T_combined = energy-weighted mean).
-      - otherwise (or with < 2 components / no spectral data) -> fall back
-        to the caller-supplied dominant-swell values as-is.
+    Tight spread = organized, clean waves; wide spread = messy, disorganized surf.
+    Returns neutral 0.5 when DSPR is unavailable (no SWAN TABLE DSPR column).
+
+    Thresholds from nearshore DSPR literature and KEWL Mermaid precedent:
+        < 15°  → 1.0 (tightly organized groundswell)
+        15–25° → 0.7 (decent organization)
+        25–35° → 0.4 (messy)
+        ≥ 35°  → 0.2 (very disorganized)
     """
-    if not spectral_components or len(spectral_components) < 2:
-        return wave_height, wave_period, wave_direction
+    if dspr is None:
+        return _DSPR_NO_DATA
+    if dspr < _DSPR_TIGHT_DEG:
+        return _DSPR_TIGHT_SCORE
+    if dspr < _DSPR_MODERATE_DEG:
+        return _DSPR_MODERATE_SCORE
+    if dspr < _DSPR_WIDE_DEG:
+        return _DSPR_WIDE_SCORE
+    return _DSPR_MESSY_SCORE
 
-    ordered = sorted(spectral_components, key=lambda c: float(c.get("energy", 0.0)), reverse=True)
-    primary, secondary = ordered[0], ordered[1]
-    total = _total_energy(ordered)
-    if total <= 0:
-        return wave_height, wave_period, wave_direction
 
+def _cross_swell_score(multi_swell: list[dict[str, Any]] | None) -> float:
+    """Score cross-swell interference from SWAN SPECOUT decomposition (T4.1, ADR-096).
+
+    Checks whether a secondary swell system is both energetically significant
+    (> 50% of primary energy) and at a significantly different direction
+    (> 30° angle difference). When both conditions are met, wave interference
+    creates messy, unpredictable surf.
+
+    Returns:
+        0.5  — neutral (no SPECOUT data available)
+        1.0  — no cross-swell (only one system, or no secondary meets threshold)
+        0.4  — significant cross-swell interference detected
+    """
+    if not multi_swell:
+        return _CROSS_SWELL_NO_DATA
+    if len(multi_swell) < 2:
+        return _CROSS_SWELL_CLEAN
+
+    ordered = sorted(multi_swell, key=lambda c: float(c.get("energy", 0.0)), reverse=True)
+    primary = ordered[0]
     primary_energy = float(primary.get("energy", 0.0))
-    primary_ratio = primary_energy / total
-    if primary_ratio > _PRIMARY_DOMINANT_RATIO:
-        return (
-            float(primary.get("height", wave_height)),
-            float(primary.get("period", wave_period)),
-            float(primary.get("direction", wave_direction)),
-        )
+    if primary_energy <= 0:
+        return _CROSS_SWELL_NO_DATA
 
-    secondary_energy = float(secondary.get("energy", 0.0))
-    if primary_energy > 0 and (secondary_energy / primary_energy) > _SECONDARY_SIGNIFICANT_RATIO:
-        h1 = float(primary.get("height", 0.0))
-        h2 = float(secondary.get("height", 0.0))
-        t1 = float(primary.get("period", wave_period))
-        t2 = float(secondary.get("period", wave_period))
-        combined_energy = primary_energy + secondary_energy
-        h_combined = math.sqrt(h1**2 + h2**2)
-        t_combined = (primary_energy * t1 + secondary_energy * t2) / combined_energy
-        d1 = float(primary.get("direction", wave_direction))
-        d2 = float(secondary.get("direction", wave_direction))
-        d_combined = (primary_energy * d1 + secondary_energy * d2) / combined_energy
-        return h_combined, t_combined, d_combined
+    primary_dir = float(primary.get("direction", 0.0))
+    for secondary in ordered[1:]:
+        secondary_energy = float(secondary.get("energy", 0.0))
+        if (secondary_energy / primary_energy) > _CROSS_SWELL_ENERGY_RATIO:
+            secondary_dir = float(secondary.get("direction", 0.0))
+            angle_diff = _normalize_angle_diff(primary_dir, secondary_dir)
+            if angle_diff > _CROSS_SWELL_ANGLE_DEG:
+                return _CROSS_SWELL_INTERFERENCE
 
-    # Neither dominant nor comparable enough for superposition: use primary.
-    return (
-        float(primary.get("height", wave_height)),
-        float(primary.get("period", wave_period)),
-        float(primary.get("direction", wave_direction)),
-    )
+    return _CROSS_SWELL_CLEAN
 
 
 def _beach_alignment(swell_direction: float, beach_facing_degrees: float) -> float:
@@ -500,13 +540,15 @@ def score_surf(
     wave_direction: float,
     wind_speed: float | None,
     wind_direction: float | None,
-    spectral_components: list[dict[str, Any]] | None,
+    spectral_components: list[dict[str, Any]] | None,  # deprecated — ignored (T4.1/ADR-096)
     spot_config: SurfSpotConfig,
     time_utc: str | None = None,
     sunrise_utc: str | None = None,
     sunset_utc: str | None = None,
     locale: str | None = None,
     wind_source: str = "station",
+    directional_spread: float | None = None,
+    multi_swell: list[dict[str, Any]] | None = None,
 ) -> SurfForecast:
     """Score surf quality and produce a SurfForecast model instance.
 
@@ -521,8 +563,10 @@ def score_surf(
         wind_speed: m/s; at-beach wind (station hardware for t=0, HRRR
             forecast wind for t>0 per ADR-094). None if unavailable.
         wind_direction: degrees true north. None if unavailable.
-        spectral_components: NDBC spectral swell systems (dicts shaped like
-            SpectralWaveComponent), or None if unavailable.
+        spectral_components: deprecated; not used. Pass None. Previously held
+            NDBC spectral swell systems. NDBC data is no longer passed to the
+            scorer (T3.5/T4.1/ADR-096). Retained in signature for backward
+            compatibility with existing callers and tests.
         spot_config: surf spot configuration (beach facing, directional
             exposure) from config/marine_config.py.
         time_utc: ISO-8601 UTC; for the optional time-of-day adjustment.
@@ -532,84 +576,125 @@ def score_surf(
             i18n.get_active_locale() (API-MANUAL.md §17 "Marine i18n").
         wind_source: metadata field indicating the wind data source for this
             timestep. One of ``"station"``, ``"forecast_provider"``, or
-            ``"hrrr"`` (ADR-094). Stored in the ``windSource``
-            field of the ``SurfForecast`` model (models/responses.py).
+            ``"hrrr"`` (ADR-094). Set on the response entry by the endpoint,
+            not directly in SurfForecast.
+        directional_spread: degrees; SWAN DSPR output at ~10m depth (T4.1).
+            Feeds the directional spread sub-factor of the organization
+            composite. None when SWAN TABLE does not include DSPR (neutral 0.5
+            fallback applies).
+        multi_swell: SWAN SPECOUT spectral decomposition for this timestep
+            (T4.1). List of dicts shaped like SpectralWaveComponent. Feeds
+            the swell dominance and cross-swell sub-factors of the organization
+            composite. None when SPECOUT is unavailable (neutral fallback).
     """
     loc = locale or i18n.get_active_locale()
 
-    eff_height, eff_period, eff_direction = _effective_swell(
-        wave_height, wave_period, wave_direction, spectral_components
-    )
+    # Scorer uses SWAN height/period/direction directly (no _effective_swell()
+    # NDBC override — removed in T4.1/ADR-096).
+    height_score = _score_wave_height(wave_height)
+    period_score = _score_wave_period(wave_period)
 
-    height_score = _score_wave_height(eff_height)
-    period_score = _score_wave_period(eff_period)
+    # Wind quality sub-factor (unchanged logic, now part of organization composite)
     wind_score, wind_label_key = _wind_quality(
         wind_speed, wind_direction, spot_config.beach_facing_degrees
     )
-    swell_score = _swell_dominance(spectral_components)
 
-    beach_alignment = _beach_alignment(eff_direction, spot_config.beach_facing_degrees)
-    directional_filter = _directional_filter(eff_direction, spot_config)
-    time_adjustment = _time_of_day_adjustment(time_utc, sunrise_utc, sunset_utc)
+    # Organization composite sub-factors (T4.1)
+    swell_dom_score = _swell_dominance(multi_swell)   # SWAN SPECOUT swell dominance
+    dspr_score = _directional_spread_score(directional_spread)  # SWAN TABLE DSPR
+    cross_swell_score_val = _cross_swell_score(multi_swell)     # SWAN SPECOUT cross-swell
 
-    overall = (
-        (
-            height_score * _WEIGHT_HEIGHT
-            + period_score * _WEIGHT_PERIOD
-            + wind_score * _WEIGHT_WIND
-            + swell_score * _WEIGHT_SWELL
-        )
-        * beach_alignment
-        * directional_filter
-        * time_adjustment
+    org_score = (
+        wind_score * _ORG_WEIGHT_WIND
+        + swell_dom_score * _ORG_WEIGHT_SWELL_DOMINANCE
+        + dspr_score * _ORG_WEIGHT_DSPR
+        + cross_swell_score_val * _ORG_WEIGHT_CROSS_SWELL
     )
 
-    # Build factor breakdown before consuming each score below.
-    # windQuality can exceed 1.0 (offshore boost up to 1.2); clamp to 1.0 for
-    # the 0-100 display scale so the bar never overflows.
-    scoring = SurfScoringBreakdown(
-        waveHeight=round(height_score * 100, 1),
-        wavePeriod=round(period_score * 100, 1),
-        windQuality=round(min(wind_score, 1.0) * 100, 1),
-        swellDominance=round(swell_score * 100, 1),
-        beachAlignment=round(beach_alignment * 100, 1),
-        waveHeightWeight=35,
-        wavePeriodWeight=35,
-        windQualityWeight=20,
-        swellDominanceWeight=10,
-    )
+    # -----------------------------------------------------------------------
+    # Convert factor scores to integer point breakdown (T4.1, T4.2)
+    # -----------------------------------------------------------------------
 
-    stars = max(1, min(5, round(overall * 5)))
+    # Top-level factor points (max 35/35/30 for score ≤ 1.0; multipliers
+    # such as the period long-period boost and offshore wind score can push
+    # individual factors above their nominal max — same as the old 4-factor
+    # model, where `overall` could exceed 1.0 for exceptional conditions).
+    wave_height_pts = round(height_score * 35)
+    wave_period_pts = round(period_score * 35)
+    wave_org_pts = round(org_score * 30)
+    sub_total = wave_height_pts + wave_period_pts + wave_org_pts
+
+    # Beach alignment (T4.2): signed integer delta showing how much the beach
+    # angle degrades the sub-total.  beach_mult ∈ [0.1, 1.0] so delta ≤ 0.
+    beach_mult = _beach_alignment(wave_direction, spot_config.beach_facing_degrees)
+    post_beach = round(sub_total * beach_mult)
+    beach_alignment_delta = post_beach - sub_total
+
+    # Directional exposure (T4.2): 0 when open, large negative when blocked.
+    dir_mult = _directional_filter(wave_direction, spot_config)
+    post_dir = round(post_beach * dir_mult)
+    directional_exposure_delta = post_dir - post_beach
+
+    # Time-of-day adjustment (T4.2): positive at dawn, negative in afternoon.
+    time_mult = _time_of_day_adjustment(time_utc, sunrise_utc, sunset_utc)
+    post_time_float = post_dir * time_mult
+    total_score = round(post_time_float)
+    time_of_day_delta = total_score - post_dir
+
+    # Verify additive identity: total = waveHeight + wavePeriod + waveOrganization
+    #   + beachAlignment + directionalExposure + timeOfDay
+    # (holds by construction — no independent rounding between stages)
+
+    # Organization sub-factor point contributions (for breakdown display)
+    org_wind_pts = round(wind_score * _ORG_WEIGHT_WIND * 30, 1)
+    org_swell_pts = round(swell_dom_score * _ORG_WEIGHT_SWELL_DOMINANCE * 30, 1)
+    org_dspr_pts = round(dspr_score * _ORG_WEIGHT_DSPR * 30, 1)
+    org_cross_pts = round(cross_swell_score_val * _ORG_WEIGHT_CROSS_SWELL * 30, 1)
+
+    # Stars: 1-5 scale from total_score (0-100 nominal range)
+    # round(total_score / 20) maps 0→0, 20→1, 40→2, 60→3, 80→4, 100→5.
+    stars = max(1, min(5, round(total_score / 20)))
     quality_label = i18n.t(f"surf.quality.{stars}", loc)
-    # windQuality is a (locale) field per API-MANUAL.md §17 "Marine i18n" —
-    # resolved through i18n.t(), same as qualityLabel.
     wind_quality_label = i18n.t(f"surf.wind_quality.{wind_label_key}", loc)
 
-    height_ft = convert(eff_height, "meter", "foot") or 0.0
+    height_ft = convert(wave_height, "meter", "foot") or 0.0
     wind_speed_mph = (
         convert(wind_speed, "meter_per_second", "mile_per_hour") if wind_speed is not None else None
     )
 
     conditions_text = _compose_conditions_text(
         height_ft=height_ft,
-        period_s=eff_period,
-        direction_deg=eff_direction,
+        period_s=wave_period,
+        direction_deg=wave_direction,
         wind_label=wind_quality_label,
         wind_speed_mph=wind_speed_mph,
-        swell_score=swell_score,
+        swell_score=swell_dom_score,
         locale=loc,
+    )
+
+    scoring = SurfScoringBreakdown(
+        waveHeight=wave_height_pts,
+        wavePeriod=wave_period_pts,
+        waveOrganization=wave_org_pts,
+        organizationWind=org_wind_pts,
+        organizationSwellDominance=org_swell_pts,
+        organizationDirectionalSpread=org_dspr_pts,
+        organizationCrossSwell=org_cross_pts,
+        beachAlignment=beach_alignment_delta,
+        directionalExposure=directional_exposure_delta,
+        timeOfDay=time_of_day_delta,
     )
 
     return SurfForecast(
         time=time_utc or "",
-        waveHeightAtBreak=eff_height,
-        period=eff_period,
-        direction=eff_direction,
+        waveHeightAtBreak=wave_height,
+        period=wave_period,
+        direction=wave_direction,
         qualityStars=stars,
         qualityLabel=quality_label,
         conditionsText=conditions_text,
         windQuality=wind_quality_label,
-        swellDominance=swell_score,
-        multiSwell=_build_multi_swell(spectral_components),
+        swellDominance=swell_dom_score,
+        multiSwell=_build_multi_swell(multi_swell),
         scoring=scoring,
     )

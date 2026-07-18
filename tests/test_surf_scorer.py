@@ -138,21 +138,23 @@ def test_multi_swell_primary_dominant():
         {"height": 6.0, "period": 14.0, "direction": 200.0, "energy": 80.0},
         {"height": 3.0, "period": 9.0, "direction": 150.0, "energy": 20.0},
     ]
-    height, period, direction = surf_scorer._effective_swell(1.0, 1.0, 1.0, components)
-    assert height == pytest.approx(6.0)
-    assert period == pytest.approx(14.0)
-    assert direction == pytest.approx(200.0)
+    # _effective_swell() removed per ADR-096 — replaced by DSPR/cross-swell scoring
+    score = surf_scorer._directional_spread_score(10.0)
+    assert score == pytest.approx(1.0)  # < 15° = clean, tight spread
 
 
-def test_multi_swell_superposition():
+def test_directional_spread_wide():
+    score = surf_scorer._directional_spread_score(30.0)
+    assert score == pytest.approx(0.4)  # 25-35° = messy
+
+
+def test_cross_swell_no_interference():
     components = [
-        {"height": 6.0, "period": 14.0, "direction": 200.0, "energy": 60.0},
-        {"height": 4.0, "period": 10.0, "direction": 160.0, "energy": 40.0},
+        {"height": 6.0, "period": 14.0, "direction": 200.0, "energy": 80.0},
+        {"height": 3.0, "period": 9.0, "direction": 210.0, "energy": 20.0},
     ]
-    height, period, direction = surf_scorer._effective_swell(1.0, 1.0, 1.0, components)
-    assert height == pytest.approx((6.0**2 + 4.0**2) ** 0.5)
-    assert period == pytest.approx((60.0 * 14.0 + 40.0 * 10.0) / 100.0)
-    assert direction == pytest.approx((60.0 * 200.0 + 40.0 * 160.0) / 100.0)
+    score = surf_scorer._cross_swell_score(components)
+    assert score == pytest.approx(1.0)  # secondary < 50% primary energy OR < 30° angle diff
 
 
 # ---------------------------------------------------------------------------
