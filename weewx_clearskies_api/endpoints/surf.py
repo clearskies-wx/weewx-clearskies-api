@@ -496,6 +496,38 @@ def get_surf(location_id: str) -> dict:
                 return float(d) if d is not None else 9999.0
             ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
 
+        # T3.4: Scan for QB peaks (break points) along the transect.
+        # Sort transect points deepest-to-shallowest (offshore → onshore).
+        # A QB peak is a local maximum >= 0.25 (threshold for meaningful breaking).
+        # Multiple peaks identify outer bar + inner bar break zones.
+        break_points: list[dict] = []
+        if len(pts_at_time) > 1:
+            sorted_pts = sorted(
+                pts_at_time,
+                key=lambda p: p.get("distanceFromShore") or 0,
+                reverse=True,
+            )
+            for _bp_idx, _bp_pt in enumerate(sorted_pts):
+                _qb = _bp_pt.get("breakingFraction")
+                if _qb is None or _qb < 0.25:
+                    continue
+                _prev_qb = (
+                    (sorted_pts[_bp_idx - 1].get("breakingFraction") or 0.0)
+                    if _bp_idx > 0
+                    else 0.0
+                )
+                _next_qb = (
+                    (sorted_pts[_bp_idx + 1].get("breakingFraction") or 0.0)
+                    if _bp_idx < len(sorted_pts) - 1
+                    else 0.0
+                )
+                if _qb >= _prev_qb and _qb >= _next_qb:
+                    break_points.append({
+                        "distanceFromShore": _bp_pt.get("distanceFromShore"),
+                        "depth": _bp_pt.get("depth"),
+                        "waveHeight": _bp_pt.get("waveHeight"),
+                    })
+
         raw_hsig = ref_point.get("waveHeight")
         if raw_hsig is None:
             continue
@@ -594,6 +626,10 @@ def get_surf(location_id: str) -> dict:
         )
 
         entry = surf_forecast.model_dump()
+
+        # T3.4: Attach QB break points detected above.  None when no peaks
+        # were found (flat conditions, single-point mode, or QB data absent).
+        entry["breakPoints"] = break_points if break_points else None
 
         # Overwrite height fields with the four canonical values (unit-converted).
         entry["swellHeight"] = _convert_unit(swell_height_m, "meter", wave_height_internal)

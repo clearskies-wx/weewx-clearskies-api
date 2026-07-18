@@ -55,6 +55,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -590,6 +591,8 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
         "forecast": last_good.get("forecast", []),
         # T3.3 — SPECOUT spectral decomposition (list of {time, components} dicts)
         "spectral": last_good.get("spectral", []),
+        # T3.4 — full cross-shore transect per timestep (keyed by ISO time string)
+        "transect": last_good.get("transect", {}),
         "run_time": run_time_str,
         "data_age_seconds": data_age_seconds,
     }
@@ -1011,10 +1014,46 @@ def run_all_spots(
                 d["windSource"] = "hrrr"
             forecast_dicts.append(d)
 
+        # T3.4 — Build transect data for beach profile endpoint (T5.1).
+        # Groups all cross-shore transect points by timestep (ISO time key).
+        # This preserves the full spatial profile at every timestep so T5.1
+        # can render the beach bathymetry / wave-height cross-section.
+        transect_by_time: dict[str, list] = defaultdict(list)
+        for pt in forecast_points:
+            _pt_time = getattr(pt, "time", None)
+            if not _pt_time:
+                continue
+            transect_by_time[_pt_time].append({
+                "distanceFromShore": getattr(pt, "distanceFromShore", None),
+                "depth": getattr(pt, "depth", None),
+                "waveHeight": (
+                    round(pt.waveHeight, 3)
+                    if getattr(pt, "waveHeight", None) is not None
+                    else None
+                ),
+                "swellHeight": (
+                    round(pt.swellHeight, 3)
+                    if getattr(pt, "swellHeight", None) is not None
+                    else None
+                ),
+                "breakingFraction": (
+                    round(pt.breakingFraction, 4)
+                    if getattr(pt, "breakingFraction", None) is not None
+                    else None
+                ),
+                "breakingDissipation": (
+                    round(pt.breakingDissipation, 3)
+                    if getattr(pt, "breakingDissipation", None) is not None
+                    else None
+                ),
+            })
+
         payload = {
             "forecast": forecast_dicts,
             # T3.3 — per-timestep spectral decomposition from SWAN SPECOUT
             "spectral": spectral_results.get(spot_id, []),
+            # T3.4 — full cross-shore transect per timestep (for beach profile endpoint T5.1)
+            "transect": dict(transect_by_time),
             "run_time": run_time_iso,
             "hrrr_cycle_time": hrrr_cycle_time,
         }

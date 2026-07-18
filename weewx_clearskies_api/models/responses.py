@@ -1651,6 +1651,7 @@ class SurfForecast(BaseModel):
     breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
     windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
+    breakPoints: list[dict] | None = None  # QB peak locations [{distanceFromShore, depth, waveHeight}] (T3.4)
 
 
 class FishingForecast(BaseModel):
