@@ -905,13 +905,8 @@ def run_all_spots(
         spot_cfg = marine_config.surf_spots.get(loc.id)
         if spot_cfg is None:
             continue
-        profile = spot_cfg.bathymetric_profile or []
         cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
-            "bathymetric_profile": [
-                {"distance_m": float(pt.distance_m), "depth_m": float(pt.depth_m)}
-                for pt in profile
-            ],
         }
 
         # Load or refresh the bidirectional CUDEM profile for this spot.
@@ -1001,7 +996,7 @@ def run_all_spots(
         "output_interval_hr": output_interval_hr,
         "swan_timeout_s": swan_timeout_s,
         "omp_num_threads": omp_num_threads,
-        # T3.1 — cross-shore transect configs (beach_facing_degrees, bathymetric_profile)
+        # T3.1 — cross-shore transect configs (beach_facing_degrees, runtime_profile)
         "spot_configs": spot_configs_for_runner or None,
     }
 
