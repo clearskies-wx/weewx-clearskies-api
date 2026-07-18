@@ -470,6 +470,12 @@ def build_swan_input(
         "TRIADS",
         "DIFFRACTION",
         "",
+        # Exception values for no-data / dry points (SWAN user manual §3.5).
+        # Without this, SWAN uses an implementation-specific default that is
+        # hard to distinguish from real near-zero values.  -9.0 is the
+        # conventional sentinel used in oceanographic models.
+        "QUANTITY HSIGN TM01 DIR excv=-9.",
+        "",
     ]
 
     if grid_level == "outer":

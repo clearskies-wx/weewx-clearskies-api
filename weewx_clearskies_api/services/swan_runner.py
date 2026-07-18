@@ -79,19 +79,29 @@ class SWANRunError(Exception):
 # Validation thresholds (PROVIDER-MANUAL §14.15)
 # ---------------------------------------------------------------------------
 
-_HS_MIN_M = 0.0    # exclusive lower bound (0.0 is flat-calm, physically valid)
-_HS_MAX_M = 20.0   # inclusive upper bound
-_TM_MIN_S = 1.0    # inclusive lower bound
-_TM_MAX_S = 30.0   # inclusive upper bound
+# SWAN exception value — set via QUANTITY ... excv=-9. in the INPUT file
+# (SWAN user manual §3.5).  Points with this value are dry land or have
+# no spectral energy.  Any value <= this sentinel is treated as no-data.
+_SWAN_EXCEPTION_VALUE = -9.0
+
+# Upper sanity bounds — values above these indicate numerical instability,
+# not physical waves.  Lower bounds are not applied because SWAN legitimately
+# produces very small Hs and short Tm01 for weak wind-sea conditions.
+_HS_MAX_M = 25.0
+_TM_MAX_S = 35.0
 
 
 def _is_valid_point(hs: float, tm01: float, mwd: float) -> bool:
-    """Physical plausibility check on SWAN TABLE output values."""
+    """Reject SWAN exception values and numerical instabilities.
+
+    Does NOT reject small-but-real values — SWAN can produce Hs=0.01m and
+    Tm01=0.5s for weak wind-sea, and these are physically valid output.
+    """
     if math.isnan(hs) or math.isnan(tm01) or math.isnan(mwd):
         return False
-    if hs <= _HS_MIN_M or hs > _HS_MAX_M:
+    if hs <= _SWAN_EXCEPTION_VALUE or tm01 <= _SWAN_EXCEPTION_VALUE:
         return False
-    if tm01 < _TM_MIN_S or tm01 > _TM_MAX_S:
+    if hs > _HS_MAX_M or tm01 > _TM_MAX_S:
         return False
     return True
 
@@ -160,7 +170,6 @@ def _parse_table_output(
 
     col_idx: dict[str, int] = {}
     header_found = False
-    data_header_count = 0  # count of % lines seen (first = col names, second = units)
 
     for raw_line in table_text.splitlines():
         line = raw_line.strip()
@@ -168,15 +177,16 @@ def _parse_table_output(
             continue
 
         if line.startswith("%"):
-            data_header_count += 1
-            if data_header_count == 1:
-                # First % line: column names
-                # Strip leading "%" and split — but SWAN sometimes puts "%   Time ..."
-                tokens = line.lstrip("%").split()
-                # Normalize to uppercase for case-insensitive matching
-                col_idx = {tok.upper(): idx for idx, tok in enumerate(tokens)}
-                header_found = True
-            # Skip second % line (units) and any subsequent comment lines
+            # SWAN TABLE HEAD format (user manual §3.5): multiple % lines.
+            # The column-name line contains tokens like Xp, Yp, Hsig, Tm01, Dir.
+            # Blank % lines, the "Run:" line, and the units line are skipped.
+            tokens = line.lstrip("%").split()
+            if not header_found and tokens and tokens[0].upper() not in ("RUN:V1", "[DEGR]", "[M]", "[SEC]"):
+                # Heuristic: first % line with alphabetic tokens that aren't
+                # the Run: label or unit labels is the column header.
+                if any(t.upper() in ("XP", "YP", "HSIG", "HSIGN", "HS", "TM01", "DIR", "TIME") for t in tokens):
+                    col_idx = {tok.upper(): idx for idx, tok in enumerate(tokens)}
+                    header_found = True
             continue
 
         if not header_found:
