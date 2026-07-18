@@ -1,4 +1,4 @@
-"""SWAN input file format writers for the TruShore nearshore wave model pipeline.
+"""SWAN input file format writers for the SWAN nearshore wave model pipeline.
 
 These utilities convert provider data formats (HRRR wind field, CUDEM bathymetry,
 WaveWatch III boundary conditions) into ASCII files that the SWAN wave model reads.
@@ -19,8 +19,8 @@ Nested grid support (T7.2):
 
 References:
   - SWAN User Manual v41.45, §5 (input file syntax)
-  - PROVIDER-MANUAL §14.14 (HRRR), §14.15 (SWAN+TruShore runner)
-  - SWAN-TRUSHORE-PLAN.md T2.3, T7.2
+  - PROVIDER-MANUAL §14.14 (HRRR), §14.15 (SWAN+SWAN runner)
+  - SWAN-CORRECTIONS-PLAN.md
 """
 
 from __future__ import annotations
@@ -427,7 +427,7 @@ def build_swan_input(
     ylenc = myc * dlat
 
     lines = [
-        "PROJECT 'TruShore' 'v1'",
+        "PROJECT 'SWAN' 'v1'",
         "",
         # SET [level] [nor] [depmin] [maxmes] [maxerr] — positional params.
         # MAXERR=3: only stop on severe errors, not warnings or auto-repaired

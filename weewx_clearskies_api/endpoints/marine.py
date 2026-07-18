@@ -424,7 +424,7 @@ def _location_summary(location: MarineLocation) -> MarineLocationSummary:
     # meters). Each level is independently try/excepted; a wave-height source
     # outage falls through to the next rather than failing the whole summary.
     # WaveWatch III is the wave-height source for the marine card —
-    # surf forecasts use SWAN+TruShore via the dedicated surf endpoint.
+    # surf forecasts use SWAN via the dedicated surf endpoint.
     wave_height_meters: float | None = None
 
     try:
@@ -736,7 +736,7 @@ def get_marine_location(location_id: str) -> dict:
     # --- waveHeight source: WaveWatch III (offshore, deep-water) -> NDBC buoy
     # Hs (already on `observation`, used automatically as last resort by doing
     # nothing below). WaveWatch III is the wave-height source for the marine
-    # detail endpoint — surf forecasts use SWAN+TruShore. ---
+    # detail endpoint — surf forecasts use SWAN. ---
     wave_height_meters: float | None = None
 
     try:
@@ -926,7 +926,7 @@ def get_marine_location(location_id: str) -> dict:
     # marine endpoint. No wave_transform supplements are applied — this is the
     # general-purpose marine bundle, not a surf-spot-specific score, and not
     # every marine location carries a SurfSpotConfig to supplement against.
-    # Surf forecasts use SWAN+TruShore via the dedicated surf endpoint.
+    # Surf forecasts use SWAN via the dedicated surf endpoint.
     # WaveWatch III serves the marine deep-water forecast only — see API-MANUAL §17.
     forecast: list[MarineForecastPoint] = []
     try:

@@ -33,14 +33,14 @@ Warmed endpoints:
     blending): calls the provider's own fetch_current_conditions() so the
     endpoint's own call gets a cache hit (FIX-24; see
     `_warm_current_conditions` docstring).
-  - HRRR wind field for configured marine locations (SWAN+TruShore plan
+  - HRRR wind field for configured marine locations (SWAN plan
     T1.3 / T7.3): pre-fetches the HRRR 10m AGL wind forecast from NOMADS
     Grib Filter for a bounding box derived from all configured [marine]
     locations.  Active only when the [nearshore] pip extra is installed
     (eccodes or pygrib present, GRIB_AVAILABLE == True).  Fires at startup
     and on the 4×/day extended cycle schedule (00/06/12/18Z, 21600 s).
     Extended cycles (max_forecast_hours=48) only — standard hourly cycles
-    produce only 18-hour forecasts and are not useful for TruShore.
+    produce only 18-hour forecasts and are not useful for SWAN.
     The HRRR provider caches internally (ADR-017, TTL 21600 s).
     See `_warm_hrrr_wind` docstring.
   - GFS wind field for configured marine locations (T7.3): pre-fetches the
@@ -48,9 +48,9 @@ Warmed endpoints:
     the same bounding box as HRRR.  Supplements HRRR for the 72-hour surf
     forecast card.  Active only when [nearshore] is installed.  Fires at
     startup and on the same 4×/day schedule (00/06/12/18Z, 21600 s).
-    On failure: logs WARNING, TruShore produces shortened forecast (HRRR
+    On failure: logs WARNING, SWAN produces shortened forecast (HRRR
     hours only).  See `_warm_gfs_wind` docstring.
-  - SWAN+TruShore nearshore wave model (SWAN-TRUSHORE-PLAN T2.5 / T7.3):
+  - SWAN nearshore wave model (SWAN-CORRECTIONS-PLAN T2.5 / T7.3):
     runs the SWAN wave model for all configured surf spot locations after
     both HRRR and GFS wind data are warm.  Active only when the [nearshore]
     pip extra is installed.  Fires at startup (after HRRR+GFS warm) and on
@@ -259,7 +259,7 @@ class BackgroundCacheWarmer:
                 last_marine = time.monotonic()
 
             # 21600 s = extended HRRR cycle interval (4×/day at 00/06/12/18Z).
-            # TruShore uses only extended cycles (48-hour forecasts).  The HRRR
+            # SWAN uses only extended cycles (48-hour forecasts).  The HRRR
             # provider caches internally with a 21600 s TTL (PROVIDER-MANUAL
             # §14.14) matching this schedule.  Active only when [nearshore]
             # extra is installed; _warm_hrrr_wind() / _warm_gfs_wind() return
@@ -1054,7 +1054,7 @@ class BackgroundCacheWarmer:
         """Pre-fetch HRRR wind field using MarineConfig.hrrr_bbox.
 
         Returns the wind field dict on success so _warm_swan() can pass it
-        directly to TruShore — one fetch, one consumer chain, no cache-key
+        directly to SWAN — one fetch, one consumer chain, no cache-key
         divergence.  Returns None on failure or when the extra is absent.
         """
         if self._marine_config is None or self._marine_config.hrrr_bbox is None:
@@ -1073,7 +1073,7 @@ class BackgroundCacheWarmer:
 
             # max_forecast_hours=48: only extended cycles (00/06/12/18Z) provide
             # 48-hour forecasts.  Passing 48 here ensures we request the full
-            # extended range needed for the TruShore 72-hour surf forecast
+            # extended range needed for the SWAN 72-hour surf forecast
             # (HRRR hours 0–48 + GFS hours 48–72).
             result = _hrrr.fetch(bbox=self._marine_config.hrrr_bbox, max_forecast_hours=48)
             logger.info(
@@ -1091,10 +1091,10 @@ class BackgroundCacheWarmer:
         GFS uses the same bounding box as HRRR (PROVIDER-MANUAL §14.16).
         Fired on the same 4×/day (00/06/12/18Z) schedule as HRRR warming.
         Returns the wind field dict on success so _warm_swan() can pass it
-        directly to TruShore alongside HRRR.  Returns None on failure or when
+        directly to SWAN alongside HRRR.  Returns None on failure or when
         the [nearshore] extra is absent.
 
-        On GFS failure, TruShore produces a shortened forecast (HRRR hours 0–48
+        On GFS failure, SWAN produces a shortened forecast (HRRR hours 0–48
         only) rather than no forecast.
         """
         if self._marine_config is None or self._marine_config.hrrr_bbox is None:
@@ -1123,11 +1123,11 @@ class BackgroundCacheWarmer:
             return None
 
     def _warm_swan(self, hrrr_wind_field: dict | None, gfs_wind_field: dict | None = None) -> None:
-        """Run SWAN+TruShore using pre-fetched HRRR and GFS wind fields.
+        """Run SWAN using pre-fetched HRRR and GFS wind fields.
 
-        Receives the already-fetched wind data so TruShore never re-fetches.
+        Receives the already-fetched wind data so SWAN never re-fetches.
         gfs_wind_field supplements HRRR for 72-hour forecast (T7.3); when None,
-        TruShore produces a shortened forecast (HRRR hours only).
+        SWAN produces a shortened forecast (HRRR hours only).
         On failure: logs ERROR, last-good per-spot cache preserved.
         """
         if self._marine_config is None or not getattr(
@@ -1150,9 +1150,9 @@ class BackgroundCacheWarmer:
             return
 
         try:
-            from weewx_clearskies_api.providers.nearshore import trushore
+            from weewx_clearskies_api.providers.nearshore import swan
 
-            trushore.run_all_spots(
+            swan.run_all_spots(
                 self._marine_config,
                 hrrr_wind_field=hrrr_wind_field,
                 gfs_wind_field=gfs_wind_field,
@@ -1201,9 +1201,9 @@ class BackgroundCacheWarmer:
             return
 
         try:
-            from weewx_clearskies_api.providers.nearshore import trushore
+            from weewx_clearskies_api.providers.nearshore import swan
 
-            trushore.run_quick_update(
+            swan.run_quick_update(
                 self._marine_config,
                 hrrr_wind_field=hrrr_wind,
             )

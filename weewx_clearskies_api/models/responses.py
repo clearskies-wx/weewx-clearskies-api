@@ -1643,7 +1643,7 @@ class SurfForecast(BaseModel):
     swellHeight: float | None = None            # raw SWAN Hsig before supplements (meters)
     breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
-    windSource: str | None = None  # "hrrr_trushore" for forecast timesteps, "station" for t=0
+    windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
 
 
 class FishingForecast(BaseModel):

@@ -1,8 +1,8 @@
-"""SWAN+TruShore supplement processor (Phase 3, T3.1).
+"""SWAN supplement processor (Phase 3, T3.1).
 
-Applies four targeted supplements to SWAN+TruShore nearshore wave data, per
-API-MANUAL.md §17 "SWAN+TruShore nearshore model". Registered against the
-surf scoring pipeline: runs after TrushoreProvider.fetch(), before
+Applies four targeted supplements to SWAN nearshore wave data, per
+API-MANUAL.md §17 "SWAN nearshore model". Registered against the
+surf scoring pipeline: runs after SwanProvider.fetch(), before
 ``surf_scorer.py``.
 
 The four supplements, applied in this order:
@@ -333,7 +333,7 @@ def apply_supplements(
     spot_lat: float,
     spot_lon: float,
 ) -> dict[str, Any] | None:
-    """Apply the four SWAN+TruShore supplements and return corrected wave data.
+    """Apply the four SWAN supplements and return corrected wave data.
 
     Processing order: interpolation (3) -> breaker correction (1) ->
     structure effects (2) -> topographic adjustment (4).

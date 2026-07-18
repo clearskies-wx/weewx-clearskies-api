@@ -8,14 +8,14 @@ Behavior:
 
 Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14.15:
 
-  SWAN+TruShore is the ONLY nearshore wave model (ADR-093). WaveWatch III
+  SWAN is the ONLY nearshore wave model (ADR-093). WaveWatch III
   is NOT used as a surf data source. The surf endpoint serves the last
-  successful SWAN+TruShore cache if the runner fails — no fallback to any
+  successful SWAN cache if the runner fails — no fallback to any
   other model.
 
   Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast
   timestep"):
-    1. TrushoreProvider.fetch(spot_id) → SWAN Hsig (stored as swellHeight).
+    1. SwanProvider.fetch(spot_id) → SWAN Hsig (stored as swellHeight).
     2. wave_transform.apply_supplements() → corrected Hsig (waveHeightAtBreak).
     3. breaker_height.hsig_to_face_height(corrected_hsig, Tp, depth, formula)
        → breakingFaceHeight.
@@ -30,7 +30,7 @@ Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14.15:
     NDBC buoy wind is NEVER used for surf quality scoring.
 
   Fallback chain:
-    SWAN+TruShore cache (current) → SWAN+TruShore (last good, any age)
+    SWAN cache (current) → SWAN (last good, any age)
     → empty forecast list (surfForecastError populated). Never WW3.
 
   Supporting providers:
@@ -41,7 +41,7 @@ Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14.15:
     - ocean_data_resolver: water temperature (tiered OFS/ERDDAP/RTOFS fallback).
 
 Response bundle top-level fields (API-MANUAL §17 "Surf endpoint response"):
-  nearshoreModel: "swan_trushore"
+  nearshoreModel: "swan"
   lastRunTime: ISO-8601 timestamp of the SWAN run that produced this data.
   dataAge: seconds elapsed since that run.
   breakerFormula: "komar_gaughan" or "caldwell" (per spot config).
@@ -321,17 +321,17 @@ def get_surf(location_id: str) -> dict:
 
     wave_height_internal, _ = _wave_height_unit()
 
-    # --- SWAN+TruShore: sole nearshore wave source (ADR-093, API-MANUAL §17) ---
+    # --- SWAN: sole nearshore wave source (ADR-093, API-MANUAL §17) ---
     # Fallback: current cache → last-good cache (any age) → empty list.
     # Never falls to WaveWatch III for surf data.
-    trushore_result: dict | None = None
+    swan_result: dict | None = None
     try:
-        from weewx_clearskies_api.providers.nearshore import trushore  # noqa: PLC0415
+        from weewx_clearskies_api.providers.nearshore import swan  # noqa: PLC0415
 
-        trushore_result = trushore.fetch(spot_id=location_id)
+        swan_result = swan.fetch(spot_id=location_id)
     except Exception:
         logger.warning(
-            "surf endpoint: TruShore fetch failed for %s", location_id, exc_info=True
+            "surf endpoint: SWAN fetch failed for %s", location_id, exc_info=True
         )
 
     swan_points: list[dict] = []
@@ -339,24 +339,24 @@ def get_surf(location_id: str) -> dict:
     data_age_seconds: int | None = None
     surf_forecast_error: str | None = None
 
-    if trushore_result is not None:
-        swan_points = trushore_result.get("forecast") or []
-        last_run_time = trushore_result.get("run_time")
-        data_age_seconds = trushore_result.get("data_age_seconds")
+    if swan_result is not None:
+        swan_points = swan_result.get("forecast") or []
+        last_run_time = swan_result.get("run_time")
+        data_age_seconds = swan_result.get("data_age_seconds")
         if not swan_points:
             surf_forecast_error = "surf forecast unavailable"
             logger.warning(
-                "surf endpoint: TruShore returned empty forecast for %s", location_id
+                "surf endpoint: SWAN returned empty forecast for %s", location_id
             )
     else:
         surf_forecast_error = "surf forecast unavailable"
         logger.warning(
-            "surf endpoint: no TruShore data cached for %s — SWAN may not have run yet",
+            "surf endpoint: no SWAN data cached for %s — SWAN may not have run yet",
             location_id,
         )
 
     # --- HRRR wind field (ADR-094): for forecast timesteps (t>0) ---
-    # Same bbox TruShore uses (±1°) guarantees a cache hit.
+    # Same bbox SWAN uses (±1°) guarantees a cache hit.
     hrrr_field: dict | None = None
     _HRRR_MARGIN_DEG = 1.0
     try:
@@ -519,12 +519,12 @@ def get_surf(location_id: str) -> dict:
                     forecast_hour=0,
                 )
                 if ts_wind_speed is not None:
-                    ts_wind_source = "hrrr_trushore"
+                    ts_wind_source = "hrrr"
         else:
             # t>0: HRRR forecast wind (same model run that forced SWAN).
             ts_wind_speed = None
             ts_wind_direction = None
-            ts_wind_source = "hrrr_trushore"
+            ts_wind_source = "hrrr"
             if hrrr_field is not None:
                 ts_wind_speed, ts_wind_direction = _interpolate_hrrr_wind(
                     hrrr_field,
@@ -640,8 +640,8 @@ def get_surf(location_id: str) -> dict:
         "locationId": location.id,
         "locationName": location.name,
         "coordinates": {"lat": location.lat, "lon": location.lon},
-        # SWAN+TruShore metadata (API-MANUAL §17)
-        "nearshoreModel": "swan_trushore",
+        # SWAN metadata (API-MANUAL §17)
+        "nearshoreModel": "swan",
         "lastRunTime": last_run_time,
         "dataAge": data_age_seconds,
         "breakerFormula": spot_config.breaker_formula,
@@ -651,11 +651,11 @@ def get_surf(location_id: str) -> dict:
         "waterTemp": water_temp,
         "spectralComponents": spectral_components,
         "tidePredictions": tide_predictions,
-        "source": "swan_trushore+ndbc+coops+nws_srf",
+        "source": "swan+ndbc+coops+nws_srf",
         "generatedAt": now_str,
     }
 
-    # Include error note when no TruShore data is available.
+    # Include error note when no SWAN data is available.
     if surf_forecast_error is not None:
         bundle["surfForecastError"] = surf_forecast_error
 

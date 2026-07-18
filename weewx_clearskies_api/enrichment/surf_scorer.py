@@ -1,10 +1,10 @@
 """Surf quality scoring processor (API-MANUAL.md §17 "Surf quality scorer").
 
 Registered against the surf endpoint pipeline. Runs after
-``enrichment/wave_transform.py`` has applied the SWAN+TruShore bathymetric/
+``enrichment/wave_transform.py`` has applied the SWAN bathymetric/
 structure/topographic supplements and ``enrichment/breaker_height.py`` has
 converted the corrected Hsig to breaking face height (API-MANUAL.md §17
-"SWAN+TruShore nearshore model") — this module scores whatever wave data it
+"SWAN nearshore model") — this module scores whatever wave data it
 is handed and does not itself correct for shoaling, refraction, or
 site-specific breaker physics.
 
@@ -532,7 +532,7 @@ def score_surf(
             i18n.get_active_locale() (API-MANUAL.md §17 "Marine i18n").
         wind_source: metadata field indicating the wind data source for this
             timestep. One of ``"station"``, ``"forecast_provider"``, or
-            ``"hrrr_trushore"`` (ADR-094). Stored in the ``windSource``
+            ``"hrrr"`` (ADR-094). Stored in the ``windSource``
             field of the ``SurfForecast`` model (models/responses.py).
     """
     loc = locale or i18n.get_active_locale()

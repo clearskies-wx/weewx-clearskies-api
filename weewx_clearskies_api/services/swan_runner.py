@@ -1,4 +1,4 @@
-"""SWAN nearshore wave model subprocess orchestrator for the TruShore pipeline.
+"""SWAN nearshore wave model subprocess orchestrator for the SWAN pipeline.
 
 Responsibilities:
   1. Blend HRRR (hours 0–48) and GFS (hours 48–72) wind fields into a single
@@ -27,10 +27,10 @@ Key design decisions:
     (confirmed by coordinator 2026-07-16).
 
 References:
-  - PROVIDER-MANUAL.md §14.15 (SWAN+TruShore runner)
+  - PROVIDER-MANUAL.md §14.15 (SWAN+SWAN runner)
   - PROVIDER-MANUAL.md §14.16 (GFS wind provider)
-  - SWAN-TRUSHORE-PLAN.md T2.2 + T2.4 + T7.2
-  - ADR-093 (SWAN+TruShore nearshore model)
+  - SWAN-CORRECTIONS-PLAN.md
+  - ADR-093 (SWAN+SWAN nearshore model)
 """
 
 from __future__ import annotations

@@ -27,7 +27,7 @@ Marine domains (Phase 1–2 — Marine Plan):
   Marine: wavewatch (WaveWatch III ERDDAP, keyless), nws_marine (NWS zone text forecast, keyless),
     nws_srf (NWS Surf Zone Forecast text product, keyless).
   Tides: coops (CO-OPS predictions + water levels, keyless).
-  Nearshore: trushore (SWAN+TruShore locally-run model, keyless — see ADR-093).
+  Nearshore: swan (SWAN locally-run model, keyless — see ADR-093).
 """
 
 from __future__ import annotations

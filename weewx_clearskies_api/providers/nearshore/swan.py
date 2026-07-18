@@ -1,4 +1,4 @@
-"""TruShore nearshore wave model provider (PROVIDER-MANUAL §14.15, ADR-093).
+"""SWAN nearshore wave model provider (PROVIDER-MANUAL §14.15, ADR-093).
 
 Not a network provider.  This module is a thin provider wrapper around
 ``services/swan_runner.py``.  It follows the existing provider interface pattern
@@ -25,7 +25,7 @@ Key design decisions:
       run_marker_key (55-min TTL, same as HRRR): marks that a SWAN run
         completed for the current HRRR cycle, preventing duplicate runs when
         the warmer ticks more than once before HRRR data updates.
-  - Temp directory lifecycle: TrushoreProvider creates the tmpdir itself (via
+  - Temp directory lifecycle: SwanProvider creates the tmpdir itself (via
     _SWANRunnerWithCleanup) and deletes it on success.  On SWANRunError the
     tmpdir is preserved and its path is logged at ERROR level.
   - CUDEM bathymetry: passed as an empty dict when no CUDEM provider data is
@@ -40,10 +40,10 @@ providers/wind/hrrr.py).  CAPABILITY is None otherwise so the provider is not
 registered.
 
 References:
-  - PROVIDER-MANUAL §14.15 (SWAN+TruShore runner specification)
-  - SWAN-TRUSHORE-PLAN.md T2.5
+  - PROVIDER-MANUAL §14.15 (SWAN runner specification)
+  - SWAN-CORRECTIONS-PLAN.md
   - services/swan_runner.py (SWANRunner.run() interface)
-  - ADR-093 (SWAN+TruShore nearshore model)
+  - ADR-093 (SWAN nearshore model)
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-PROVIDER_ID = "trushore"
+PROVIDER_ID = "swan"
 DOMAIN = "nearshore"
 
 _API_VERSION = "0.1.0"
@@ -144,10 +144,10 @@ def _load_or_download_cudem_grid(
 
 
 # ---------------------------------------------------------------------------
-# Remote mode state (T4.2 / T4.3 — set when [trushore] service_url is active)
+# Remote mode state (T4.2 / T4.3 — set when [swan] service_url is active)
 # ---------------------------------------------------------------------------
 
-#: URL of the standalone TruShore service (None = bundled mode).
+#: URL of the standalone SWAN service (None = bundled mode).
 _remote_url: str | None = None
 
 #: Number of consecutive health check failures since last success.
@@ -203,7 +203,7 @@ if _NEARSHORE_AVAILABLE:
         auth_required=(),
         default_poll_interval_seconds=_CACHE_TTL_SECONDS,
         operator_notes=(
-            "SWAN+TruShore locally-run nearshore wave model (PROVIDER-MANUAL §14.15). "
+            "SWAN locally-run nearshore wave model (PROVIDER-MANUAL §14.15). "
             "Requires SWAN binary on PATH (default: /usr/local/bin/swan) and the "
             "[nearshore] pip extra (eccodes or pygrib). "
             "Runs 4× daily on extended HRRR cycles (00/06/12/18Z) — not a network provider. "
@@ -213,12 +213,12 @@ if _NEARSHORE_AVAILABLE:
         refresh_interval=_CACHE_TTL_SECONDS,
         attribution=ProviderAttribution(
             attribution_required=False,
-            display_name="SWAN+TruShore",
+            display_name="SWAN",
             attribution_text=(
-                "Nearshore wave forecast powered by SWAN+TruShore (Clear Skies)"
+                "Nearshore wave forecast powered by SWAN (Clear Skies)"
             ),
             text_prefix="Powered by",
-            text_provider_name="SWAN+TruShore",
+            text_provider_name="SWAN",
             url="https://swanmodel.sourceforge.io/",
         ),
     )
@@ -278,7 +278,7 @@ class _SWANRunnerWithCleanup(SWANRunner):
     SWANRunner.run() creates a tmpdir internally and does not expose it — the
     caller has no path to clean up.  This subclass delegates to the nested grid
     methods (_stitch_wind, _run_outer_grid, _run_inner_nest) with a
-    caller-visible tmpdir so TrushoreProvider can delete on success and
+    caller-visible tmpdir so SwanProvider can delete on success and
     preserve-plus-log on failure per PROVIDER-MANUAL §14.15.
     """
 
@@ -351,10 +351,10 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
 
     Recovery:
       - When the remote service becomes reachable again: resets state, logs
-        INFO "TruShore remote service recovered", resumes fresh data.
+        INFO "SWAN remote service recovered", resumes fresh data.
 
     Args:
-        service_url: Base URL of the standalone TruShore service (e.g.
+        service_url: Base URL of the standalone SWAN service (e.g.
                      ``http://192.168.1.50:8767``).
         spot_ids: Surf spot IDs from marine config.  The health response may
                   supply an updated spot list; we merge both to avoid missing
@@ -375,7 +375,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
                 _remote_healthy = True
                 _remote_warned_unreachable = False
                 logger.info(
-                    "TruShore remote service recovered: %s (last_run=%s)",
+                    "SWAN remote service recovered: %s (last_run=%s)",
                     service_url,
                     health_data.get("last_run"),
                 )
@@ -404,24 +404,24 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
                             _LAST_GOOD_TTL_SECONDS,
                         )
                         logger.debug(
-                            "TruShore remote: refreshed spot %r (run_time=%s)",
+                            "SWAN remote: refreshed spot %r (run_time=%s)",
                             spot_id,
                             data.get("run_time"),
                         )
                     elif forecast_resp.status_code == 503:
                         # No data yet — first SWAN run may be in progress.
                         logger.debug(
-                            "TruShore remote: spot %r has no data yet (503)", spot_id
+                            "SWAN remote: spot %r has no data yet (503)", spot_id
                         )
                     else:
                         logger.warning(
-                            "TruShore remote: /surf/%s/forecast returned %d; skipping",
+                            "SWAN remote: /surf/%s/forecast returned %d; skipping",
                             spot_id,
                             forecast_resp.status_code,
                         )
                 except Exception:
                     logger.warning(
-                        "TruShore remote: failed to refresh spot %r",
+                        "SWAN remote: failed to refresh spot %r",
                         spot_id,
                         exc_info=True,
                     )
@@ -432,7 +432,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
 
             if failures < _REMOTE_FAILURE_THRESHOLD:
                 logger.warning(
-                    "TruShore remote health check failed (%d/%d): %s",
+                    "SWAN remote health check failed (%d/%d): %s",
                     failures,
                     _REMOTE_FAILURE_THRESHOLD,
                     service_url,
@@ -442,7 +442,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
                 _remote_healthy = False
                 _remote_warned_unreachable = True
                 logger.error(
-                    "TruShore remote service unreachable after %d consecutive "
+                    "SWAN remote service unreachable after %d consecutive "
                     "health check failures: %s — serving stale cache indefinitely",
                     _REMOTE_FAILURE_THRESHOLD,
                     service_url,
@@ -450,7 +450,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
             else:
                 # Already logged ERROR; stay quiet to avoid log spam.
                 logger.debug(
-                    "TruShore remote health check still failing (%d failures): %s",
+                    "SWAN remote health check still failing (%d failures): %s",
                     failures,
                     service_url,
                 )
@@ -459,10 +459,10 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
 
 
 def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
-    """Attempt to activate remote TruShore mode and start the health check thread.
+    """Attempt to activate remote SWAN mode and start the health check thread.
 
     Called lazily from run_all_spots() on the first invocation when
-    ``marine_config.trushore.is_remote`` is True (T4.2).  Protected by
+    ``marine_config.swan.is_remote`` is True (T4.2).  Protected by
     ``_remote_init_lock`` so concurrent callers (e.g. tests) are safe.
 
     Startup probe:
@@ -473,7 +473,7 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
       returns True.
 
     Args:
-        service_url: Base URL of the standalone TruShore service.
+        service_url: Base URL of the standalone SWAN service.
         marine_config: MarineConfig from api.conf (supplies spot_ids for the
                        health thread's initial spot list).
 
@@ -483,18 +483,18 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
     """
     global _remote_url, _remote_health_thread  # noqa: PLW0603
 
-    logger.info("TruShore: probing remote service at %s", service_url)
+    logger.info("SWAN: probing remote service at %s", service_url)
     try:
         resp = httpx.get(f"{service_url}/health", timeout=10.0)
         resp.raise_for_status()
         logger.info(
-            "TruShore remote service reachable: %s (last_run=%s)",
+            "SWAN remote service reachable: %s (last_run=%s)",
             service_url,
             resp.json().get("last_run"),
         )
     except Exception as exc:
         logger.error(
-            "TruShore: remote service unreachable at startup (%s: %s); "
+            "SWAN: remote service unreachable at startup (%s: %s); "
             "falling back to bundled SWAN mode if SWAN binary is available",
             service_url,
             exc,
@@ -508,11 +508,11 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
         target=_remote_health_loop,
         args=(service_url, spot_ids),
         daemon=True,
-        name="trushore-remote-health",
+        name="swan-remote-health",
     )
     _remote_health_thread.start()
     logger.info(
-        "TruShore: remote mode active (service_url=%s, %d spot(s), "
+        "SWAN: remote mode active (service_url=%s, %d spot(s), "
         "health check every %ds)",
         service_url,
         len(spot_ids),
@@ -547,13 +547,13 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
     if last_good is None:
         if _remote_url:
             logger.debug(
-                "TruShore remote: no cached data for spot %r — health thread has "
+                "SWAN remote: no cached data for spot %r — health thread has "
                 "not yet completed a successful fetch from %s",
                 spot_id,
                 _remote_url,
             )
         else:
-            logger.debug("TruShore: no cached data for spot %r", spot_id)
+            logger.debug("SWAN: no cached data for spot %r", spot_id)
         return None
 
     # Compute live data age from the stored run_time.
@@ -606,7 +606,7 @@ def run_all_spots(
             Must have .locations (list[MarineLocation]) and .surf_spots
             (dict[str, SurfSpotConfig]).
         hrrr_wind_field: Pre-fetched HRRR wind field dict from the cache
-            warmer.  When provided, TruShore uses it directly instead of
+            warmer.  When provided, SWAN uses it directly instead of
             calling _hrrr.fetch() — single fetch, single cache key, no
             divergence.  When None, falls back to fetching (legacy path).
         gfs_wind_field: Pre-fetched GFS wind field dict (hours 48–72) from
@@ -632,16 +632,16 @@ def run_all_spots(
     # Protected by _remote_init_lock so parallel test runners are safe.
     # ---------------------------------------------------------------------------
     if _remote_url is None and marine_config is not None:
-        trushore_cfg = getattr(marine_config, "trushore", None)
-        if trushore_cfg is not None and trushore_cfg.is_remote:
+        swan_cfg = getattr(marine_config, "swan", None)
+        if swan_cfg is not None and swan_cfg.is_remote:
             with _remote_init_lock:
                 # Double-check after acquiring the lock (another thread may have
                 # initialised while we were waiting).
                 if _remote_url is None:
-                    activated = configure_remote_mode(trushore_cfg.service_url, marine_config)
+                    activated = configure_remote_mode(swan_cfg.service_url, marine_config)
                     if not activated:
                         logger.warning(
-                            "TruShore: remote mode startup probe failed; "
+                            "SWAN: remote mode startup probe failed; "
                             "continuing with bundled SWAN mode"
                         )
                         # _remote_url stays None → bundled mode continues.
@@ -651,14 +651,14 @@ def run_all_spots(
         # from the remote service and populates the local last-good cache.
         # This function is a no-op — do NOT run SWAN locally.
         logger.debug(
-            "TruShore: remote mode active (%s); local SWAN run skipped",
+            "SWAN: remote mode active (%s); local SWAN run skipped",
             _remote_url,
         )
         return
 
     if not _NEARSHORE_AVAILABLE:
         logger.debug(
-            "TruShore: [nearshore] extra not installed; skipping SWAN run"
+            "SWAN: [nearshore] extra not installed; skipping SWAN run"
         )
         return
 
@@ -668,7 +668,7 @@ def run_all_spots(
     # Collect surf locations (locations that have a surf config block).
     surf_spot_ids: set[str] = set(getattr(marine_config, "surf_spots", {}).keys())
     if not surf_spot_ids:
-        logger.debug("TruShore: no surf spots configured; skipping SWAN run")
+        logger.debug("SWAN: no surf spots configured; skipping SWAN run")
         return
 
     surf_locations = [
@@ -677,7 +677,7 @@ def run_all_spots(
         if loc.id in surf_spot_ids
     ]
     if not surf_locations:
-        logger.debug("TruShore: no surf locations found; skipping SWAN run")
+        logger.debug("SWAN: no surf locations found; skipping SWAN run")
         return
 
     # Use canonical bboxes from MarineConfig (computed once at parse time).
@@ -685,12 +685,12 @@ def run_all_spots(
     # outer_bbox = wider HRRR-fetch area for the continental shelf approach
     inner_bbox = marine_config.swan_domain_bbox
     if inner_bbox is None:
-        logger.debug("TruShore: no SWAN domain bbox (inner nest); skipping")
+        logger.debug("SWAN: no SWAN domain bbox (inner nest); skipping")
         return
 
     outer_bbox = marine_config.hrrr_bbox
     if outer_bbox is None:
-        logger.debug("TruShore: no HRRR bbox (outer grid); skipping")
+        logger.debug("SWAN: no HRRR bbox (outer grid); skipping")
         return
 
     # Preserve domain_bbox alias for readability in code below that uses it
@@ -708,7 +708,7 @@ def run_all_spots(
             hrrr_wind_field = _hrrr.fetch(bbox=outer_bbox, max_forecast_hours=48)
         except Exception:
             logger.error(
-                "TruShore: HRRR wind data unavailable; skipping SWAN run",
+                "SWAN: HRRR wind data unavailable; skipping SWAN run",
                 exc_info=True,
             )
             return
@@ -723,12 +723,12 @@ def run_all_spots(
         try:
             gfs_wind_field = _gfs_wind.fetch(bbox=outer_bbox)
             logger.debug(
-                "TruShore: GFS wind fetched inline (cycle=%s)",
+                "SWAN: GFS wind fetched inline (cycle=%s)",
                 gfs_wind_field.get("cycle_time"),
             )
         except Exception:
             logger.warning(
-                "TruShore: GFS wind unavailable; SWAN will produce shortened "
+                "SWAN: GFS wind unavailable; SWAN will produce shortened "
                 "forecast (HRRR hours 0–48 only)",
                 exc_info=True,
             )
@@ -739,7 +739,7 @@ def run_all_spots(
     run_marker_key = _build_run_marker_key(hrrr_cycle_time)
     if get_cache().get(run_marker_key) is not None:
         logger.debug(
-            "TruShore: SWAN run already completed for HRRR cycle %s; skipping",
+            "SWAN: SWAN run already completed for HRRR cycle %s; skipping",
             hrrr_cycle_time,
         )
         return
@@ -755,7 +755,7 @@ def run_all_spots(
         ww3_boundary = wavewatch.fetch(lat=center_lat, lon=center_lon)
     except Exception:
         logger.warning(
-            "TruShore: WW3 boundary data unavailable; SWAN will use calm boundary",
+            "SWAN: WW3 boundary data unavailable; SWAN will use calm boundary",
             exc_info=True,
         )
         ww3_boundary = {"forecast": [], "grid": "unavailable", "model_run": ""}
@@ -767,10 +767,10 @@ def run_all_spots(
         loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations
     }
 
-    trushore_cfg = getattr(marine_config, "trushore", None)
-    omp_num_threads: int = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
-    _cfg_outer_km = getattr(trushore_cfg, "outer_grid_resolution_km", None) if trushore_cfg else None
-    _cfg_inner_m = getattr(trushore_cfg, "inner_nest_resolution_m", None) if trushore_cfg else None
+    swan_cfg = getattr(marine_config, "swan", None)
+    omp_num_threads: int = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0
+    _cfg_outer_km = getattr(swan_cfg, "outer_grid_resolution_km", None) if swan_cfg else None
+    _cfg_inner_m = getattr(swan_cfg, "inner_nest_resolution_m", None) if swan_cfg else None
     resolved_outer_km: float = float(_cfg_outer_km) if _cfg_outer_km is not None else outer_grid_resolution_km
     resolved_inner_m: float = float(_cfg_inner_m) if _cfg_inner_m is not None else inner_nest_resolution_m
 
@@ -801,7 +801,7 @@ def run_all_spots(
     run_time = datetime.now(UTC)
 
     logger.info(
-        "TruShore: starting SWAN run for %d spot(s) "
+        "SWAN: starting SWAN run for %d spot(s) "
         "(HRRR cycle=%s, GFS=%s, outer=%s, inner=%s)",
         len(surf_spots_config),
         hrrr_cycle_time,
@@ -817,7 +817,7 @@ def run_all_spots(
         )
     except SWANRunError as exc:
         logger.error(
-            "TruShore: SWAN run failed (returncode=%s); "
+            "SWAN: SWAN run failed (returncode=%s); "
             "last-good cache preserved; tmpdir=%s\nSWAN stderr: %s",
             exc.returncode,
             tmpdir,
@@ -827,7 +827,7 @@ def run_all_spots(
         return
     except Exception:
         logger.error(
-            "TruShore: unexpected error during SWAN run; "
+            "SWAN: unexpected error during SWAN run; "
             "last-good cache preserved",
             exc_info=True,
         )
@@ -851,7 +851,7 @@ def run_all_spots(
     for spot_id, forecast_points in results.items():
         if not forecast_points:
             logger.warning(
-                "TruShore: spot %r returned no valid wave data (all timesteps "
+                "SWAN: spot %r returned no valid wave data (all timesteps "
                 "failed physical validation); skipping cache update for this spot",
                 spot_id,
             )
@@ -865,11 +865,11 @@ def run_all_spots(
                 try:
                     pt_dt = datetime.fromisoformat(pt.time.replace("Z", "+00:00"))
                     fhour = (pt_dt - hrrr_cycle_dt).total_seconds() / 3600.0
-                    d["windSource"] = "gfs_trushore" if fhour > 48.0 else "hrrr_trushore"
+                    d["windSource"] = "gfs" if fhour > 48.0 else "hrrr"
                 except (ValueError, TypeError):
-                    d["windSource"] = "hrrr_trushore"
+                    d["windSource"] = "hrrr"
             else:
-                d["windSource"] = "hrrr_trushore"
+                d["windSource"] = "hrrr"
             forecast_dicts.append(d)
 
         payload = {
@@ -895,7 +895,7 @@ def run_all_spots(
         _last_full_run_monotonic = _time.monotonic()
     else:
         logger.warning(
-            "TruShore: SWAN exited cleanly but 0/%d spot(s) produced valid "
+            "SWAN: SWAN exited cleanly but 0/%d spot(s) produced valid "
             "data — run marker NOT stored (will retry on next cycle)",
             len(surf_spots_config),
         )
@@ -903,18 +903,18 @@ def run_all_spots(
     # Clean up tmpdir on success — TEMPORARILY DISABLED for T7.5 debugging.
     # TODO: re-enable after validating SWAN TABLE output format.
     if tmpdir is not None and tmpdir.exists():
-        logger.info("TruShore: preserving tmpdir for debugging: %s", tmpdir)
+        logger.info("SWAN: preserving tmpdir for debugging: %s", tmpdir)
         # try:
         #     shutil.rmtree(tmpdir)
-        #     logger.debug("TruShore: cleaned up tmpdir %s", tmpdir)
+        #     logger.debug("SWAN: cleaned up tmpdir %s", tmpdir)
         # except OSError:
         #     logger.warning(
-        #         "TruShore: could not remove tmpdir %s", tmpdir, exc_info=True
+        #         "SWAN: could not remove tmpdir %s", tmpdir, exc_info=True
         #     )
 
     elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
     logger.info(
-        "TruShore: SWAN run complete in %ds — %d/%d spot(s) cached "
+        "SWAN: SWAN run complete in %ds — %d/%d spot(s) cached "
         "(HRRR cycle=%s)",
         elapsed_s,
         spots_cached,
@@ -955,7 +955,7 @@ def run_quick_update(
     import time as _time
 
     if _time.monotonic() - _last_full_run_monotonic < _QUICK_UPDATE_COOLDOWN_S:
-        logger.debug("TruShore quick update: skipped (full run completed %.0fs ago)",
+        logger.debug("SWAN quick update: skipped (full run completed %.0fs ago)",
                      _time.monotonic() - _last_full_run_monotonic)
         return
 
@@ -987,18 +987,18 @@ def run_quick_update(
         return
 
     # Resolve config
-    trushore_cfg = getattr(marine_config, "trushore", None)
-    _cfg_outer_km = getattr(trushore_cfg, "outer_grid_resolution_km", None) if trushore_cfg else None
-    _cfg_inner_m = getattr(trushore_cfg, "inner_nest_resolution_m", None) if trushore_cfg else None
+    swan_cfg = getattr(marine_config, "swan", None)
+    _cfg_outer_km = getattr(swan_cfg, "outer_grid_resolution_km", None) if swan_cfg else None
+    _cfg_inner_m = getattr(swan_cfg, "inner_nest_resolution_m", None) if swan_cfg else None
     resolved_outer_km = float(_cfg_outer_km) if _cfg_outer_km is not None else _DEFAULT_OUTER_GRID_RESOLUTION_KM
     resolved_inner_m = float(_cfg_inner_m) if _cfg_inner_m is not None else _DEFAULT_GRID_RESOLUTION_M
-    omp_threads = getattr(trushore_cfg, "omp_num_threads", 0) if trushore_cfg else 0
+    omp_threads = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0
 
     # Check that outer nest_boundary.dat exists from a previous full run
     swan_work = Path("/var/run/weewx-clearskies/swan")
     nest_boundary = swan_work / "outer" / "nest_boundary.dat"
     if not nest_boundary.exists():
-        logger.debug("TruShore quick update: no nest_boundary.dat from outer grid; skipping")
+        logger.debug("SWAN quick update: no nest_boundary.dat from outer grid; skipping")
         return
 
     # CUDEM bathymetry (cached on disk from first full run)
@@ -1023,7 +1023,7 @@ def run_quick_update(
 
     hrrr_cycle = hrrr_wind_field.get("cycle_time", "")
     logger.info(
-        "TruShore quick update: stationary inner nest for %d spot(s) (HRRR cycle=%s)",
+        "SWAN quick update: stationary inner nest for %d spot(s) (HRRR cycle=%s)",
         len(surf_spots_config), hrrr_cycle,
     )
 
@@ -1031,12 +1031,12 @@ def run_quick_update(
         results = runner.run_stationary_inner(swan_work, hrrr_wind_field, cudem_bathymetry)
     except SWANRunError as exc:
         logger.warning(
-            "TruShore quick update failed: %s\nSWAN stderr: %s",
+            "SWAN quick update failed: %s\nSWAN stderr: %s",
             exc, exc.stderr[:500] if exc.stderr else "",
         )
         return
     except Exception:
-        logger.warning("TruShore quick update failed unexpectedly", exc_info=True)
+        logger.warning("SWAN quick update failed unexpectedly", exc_info=True)
         return
 
     # Merge results into the existing forecast cache
@@ -1051,7 +1051,7 @@ def run_quick_update(
         # Build the snapshot entry
         snapshot = forecast_points[0]
         snapshot_dict = snapshot.model_dump()
-        snapshot_dict["windSource"] = "hrrr_trushore"
+        snapshot_dict["windSource"] = "hrrr"
 
         # Read existing forecast cache
         last_good = cache.get(_build_last_good_key(spot_id))
@@ -1087,6 +1087,6 @@ def run_quick_update(
 
     elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
     logger.info(
-        "TruShore quick update complete in %ds — %d spot(s) updated (HRRR cycle=%s)",
+        "SWAN quick update complete in %ds — %d spot(s) updated (HRRR cycle=%s)",
         elapsed_s, spots_updated, hrrr_cycle,
     )

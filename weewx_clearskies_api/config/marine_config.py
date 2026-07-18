@@ -137,26 +137,26 @@ def _parse_directional_exposure(raw: Any) -> dict[str, bool]:
 
 
 # ---------------------------------------------------------------------------
-# [trushore] section constants and config class (T4.2, SWAN-TRUSHORE-PLAN)
+# [swan] section constants and config class (T4.2)
 # ---------------------------------------------------------------------------
 
-#: Sentinel value for [trushore] service_url that means "bundled mode" (run
+#: Sentinel value for [swan] service_url that means "bundled mode" (run
 #: SWAN as a local subprocess inside the API process).  Any other non-empty
-#: value activates remote mode (TrushoreProvider calls the remote HTTP endpoint
+#: value activates remote mode (SwanProvider calls the remote HTTP endpoint
 #: instead of running SWAN locally).
-_TRUSHORE_BUNDLED_SENTINEL = "http://localhost:trushore"
+_SWAN_BUNDLED_SENTINEL = "http://localhost:swan"
 
 
-class TrushoreConfig:
-    """Parsed ``[trushore]`` top-level config section (T4.2, T7.2).
+class SwanConfig:
+    """Parsed ``[swan]`` top-level config section (T4.2, T7.2).
 
-    The ``[trushore]`` section is optional.  When absent, all fields take their
+    The ``[swan]`` section is optional.  When absent, all fields take their
     documented defaults (bundled mode, all cores).
 
     Config keys:
       service_url (str):
-        URL of the standalone TruShore service.  Default:
-        ``http://localhost:trushore`` (the bundled-mode sentinel — means "run
+        URL of the standalone SWAN service.  Default:
+        ``http://localhost:swan`` (the bundled-mode sentinel — means "run
         SWAN locally as a subprocess").  Set to ``http://<remote-host>:8767``
         to activate remote mode.
       omp_num_threads (int, default 0):
@@ -173,7 +173,7 @@ class TrushoreConfig:
         Valid range: 50–1000.
 
     Example api.conf (remote mode, 4 threads, custom resolutions):
-      [trushore]
+      [swan]
         service_url = http://192.168.1.50:8767
         omp_num_threads = 4
         outer_grid_resolution_km = 3.0
@@ -187,7 +187,7 @@ class TrushoreConfig:
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.service_url = str(
-            section.get("service_url", _TRUSHORE_BUNDLED_SENTINEL)
+            section.get("service_url", _SWAN_BUNDLED_SENTINEL)
         ).strip()
         raw_threads = section.get("omp_num_threads")
         if raw_threads is not None and str(raw_threads).strip():
@@ -212,33 +212,33 @@ class TrushoreConfig:
     def is_remote(self) -> bool:
         """True when service_url is set to a non-sentinel, non-empty value.
 
-        In remote mode, TrushoreProvider fetches wave forecasts from the
-        configured standalone TruShore service via HTTP instead of running
+        In remote mode, SwanProvider fetches wave forecasts from the
+        configured standalone SWAN service via HTTP instead of running
         SWAN locally.
         """
-        return bool(self.service_url) and self.service_url != _TRUSHORE_BUNDLED_SENTINEL
+        return bool(self.service_url) and self.service_url != _SWAN_BUNDLED_SENTINEL
 
     def validate(self) -> None:
         """Raise ValueError on bad config values."""
         if self.omp_num_threads < 0:
             raise ValueError(
-                f"[trushore] omp_num_threads must be >= 0 (0 = all cores), "
+                f"[swan] omp_num_threads must be >= 0 (0 = all cores), "
                 f"got {self.omp_num_threads}"
             )
         if not (1.0 <= self.outer_grid_resolution_km <= 10.0):
             raise ValueError(
-                f"[trushore] outer_grid_resolution_km must be 1.0–10.0, "
+                f"[swan] outer_grid_resolution_km must be 1.0–10.0, "
                 f"got {self.outer_grid_resolution_km}"
             )
         if not (50.0 <= self.inner_nest_resolution_m <= 1000.0):
             raise ValueError(
-                f"[trushore] inner_nest_resolution_m must be 50–1000, "
+                f"[swan] inner_nest_resolution_m must be 50–1000, "
                 f"got {self.inner_nest_resolution_m}"
             )
         if self.is_remote:
             if not self.service_url.startswith(("http://", "https://")):
                 raise ValueError(
-                    f"[trushore] service_url must start with http:// or https://, "
+                    f"[swan] service_url must start with http:// or https://, "
                     f"got {self.service_url!r}"
                 )
 
@@ -560,19 +560,19 @@ _SWAN_DOMAIN_MARGIN_DEG = 0.1  # ±0.1° ≈ ±11 km — matches NWPS SGX inner 
 
 
 class MarineConfig:
-    """Top-level parsed ``[marine]`` section, with optional ``[trushore]`` settings."""
+    """Top-level parsed ``[marine]`` section, with optional ``[swan]`` settings."""
 
     locations: list[MarineLocation]
     surf_spots: dict[str, SurfSpotConfig]
     fishing_spots: dict[str, FishingSpotConfig]
     beach_safety: dict[str, BeachSafetyConfig]
     weather: MarineWeatherConfig
-    #: Parsed ``[trushore]`` section (T4.2).  Always present — defaults to
+    #: Parsed ``[swan]`` section (T4.2).  Always present — defaults to
     #: bundled mode (sentinel service_url, omp_num_threads=0) when the section
     #: is absent from api.conf.
-    trushore: TrushoreConfig
+    swan: SwanConfig
     #: Canonical HRRR wind bbox — computed once from ALL marine locations
-    #: with a 1° margin.  Both the cache warmer and TruShore read this
+    #: with a 1° margin.  Both the cache warmer and SWAN read this
     #: instead of computing their own.  None when no locations configured.
     hrrr_bbox: tuple[float, float, float, float] | None
     #: SWAN computational domain — tighter ±0.5° around surf locations only.
@@ -586,14 +586,14 @@ class MarineConfig:
         fishing_spots: dict[str, FishingSpotConfig] | None = None,
         beach_safety: dict[str, BeachSafetyConfig] | None = None,
         weather: MarineWeatherConfig | None = None,
-        trushore: TrushoreConfig | None = None,
+        swan: SwanConfig | None = None,
     ) -> None:
         self.locations = locations if locations is not None else []
         self.surf_spots = surf_spots if surf_spots is not None else {}
         self.fishing_spots = fishing_spots if fishing_spots is not None else {}
         self.beach_safety = beach_safety if beach_safety is not None else {}
         self.weather = weather if weather is not None else MarineWeatherConfig()
-        self.trushore = trushore if trushore is not None else TrushoreConfig({})
+        self.swan = swan if swan is not None else SwanConfig({})
 
         all_lats = [loc.lat for loc in self.locations]
         all_lons = [loc.lon for loc in self.locations]
@@ -685,8 +685,8 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
     else:
         weather = MarineWeatherConfig()
 
-    # [trushore] — optional top-level section alongside [marine] (T4.2).
-    trushore_config = load_trushore_config(config)
+    # [swan] — optional top-level section alongside [marine] (T4.2).
+    swan_config = load_swan_config(config)
 
     return MarineConfig(
         locations=locations,
@@ -694,21 +694,21 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
         fishing_spots=fishing_spots,
         beach_safety=beach_safety,
         weather=weather,
-        trushore=trushore_config,
+        swan=swan_config,
     )
 
 
-def load_trushore_config(config: configobj.ConfigObj) -> TrushoreConfig:
-    """Parse the ``[trushore]`` top-level section of api.conf (or trushore.conf).
+def load_swan_config(config: configobj.ConfigObj) -> SwanConfig:
+    """Parse the ``[swan]`` top-level section of api.conf.
 
-    Returns a TrushoreConfig with defaults (bundled mode, omp_num_threads=0)
+    Returns a SwanConfig with defaults (bundled mode, omp_num_threads=0)
     when the section is absent.  Called from load_marine_config() and also
     directly by the standalone service's config loader.
 
     Raises:
         ValueError: A config value failed validation (e.g. negative omp_num_threads).
     """
-    trushore_section = _as_dict(config.get("trushore", {}))
-    trushore = TrushoreConfig(trushore_section)
-    trushore.validate()
-    return trushore
+    swan_section = _as_dict(config.get("swan", {}))
+    swan = SwanConfig(swan_section)
+    swan.validate()
+    return swan

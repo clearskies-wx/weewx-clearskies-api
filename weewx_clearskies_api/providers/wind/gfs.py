@@ -98,7 +98,7 @@ _CACHE_TTL_SECONDS = 21600          # 6 hours per PROVIDER-MANUAL §14.16
 _GRIB_READ_TIMEOUT = 60.0           # large GRIB2 files; allow a full minute
 _MAX_CYCLE_FALLBACKS = 2            # try up to 3 cycles (current + 2 previous)
 
-# GFS default forecast range for TruShore (hours 48–72, 3-hour steps)
+# GFS default forecast range for SWAN (hours 48–72, 3-hour steps)
 _DEFAULT_HOURS_START = 48
 _DEFAULT_HOURS_END = 72
 _GFS_HOUR_STEP = 3                  # GFS 0.25° uses 3-hour timesteps

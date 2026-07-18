@@ -17,8 +17,8 @@ Endpoints:
                                             (Marine Remediation Plan T3.6)
   GET  /setup/marine/swan-check          — probe whether the SWAN Fortran binary is on
                                             PATH; returns version, path, and host CPU
-                                            core count for the wizard's TruShore step
-                                            (T4.4 / SWAN-TRUSHORE-PLAN T4.1)
+                                            core count for the wizard's SWAN step
+                                            (T4.4 / SWAN-CORRECTIONS-PLAN T4.1)
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
   POST /setup/marine/bathymetry          — download a CUDEM bathymetric profile for one
                                             surf spot (T6.3; admin/individual re-download —
@@ -657,14 +657,14 @@ class MarineApplyConfig(BaseModel):
         return v
 
 
-class TrushoreApplyConfig(BaseModel):
-    """``[trushore]`` section for api.conf (T4.2 / T4.4 / T7.3 wizard).
+class SwanApplyConfig(BaseModel):
+    """``[swan]`` section for api.conf (T4.2 / T4.4 / T7.3 wizard).
 
-    Written by the wizard's SWAN+TruShore step.  All fields have defaults
+    Written by the wizard's SWAN step.  All fields have defaults
     so existing wizard clients that don't send this block are unaffected.
 
     service_url:
-      URL of the standalone TruShore service.  None (the default) means
+      URL of the standalone SWAN service.  None (the default) means
       bundled mode — SWAN runs as a subprocess inside the API process.
       Set to ``http://<host>:8767`` for the separated service deployment.
 
@@ -758,10 +758,10 @@ class ApplyRequest(BaseModel):
     #: locations configured behaves identically to a non-marine installation,
     #: per API-MANUAL §18 "Capability gating").
     marine: MarineApplyConfig | None = None
-    #: Optional SWAN+TruShore configuration (T4.2 / T4.4 wizard).  When present,
-    #: written to the [trushore] section of api.conf.  None → skip (leaves any
-    #: existing [trushore] section unchanged, preserving manually-set values).
-    trushore: TrushoreApplyConfig | None = None
+    #: Optional SWAN configuration (T4.2 / T4.4 wizard).  When present,
+    #: written to the [swan] section of api.conf.  None → skip (leaves any
+    #: existing [swan] section unchanged, preserving manually-set values).
+    swan: SwanApplyConfig | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -1375,22 +1375,22 @@ def _write_api_conf(
                                 new_loc[key] = old_loc[key]
         cfg["marine"] = new_marine
 
-    # [trushore] — optional; written when the wizard's SWAN+TruShore step sends
+    # [swan] — optional; written when the wizard's SWAN step sends
     # this block (T4.2 / T4.4).  None → skip (existing values unchanged).
-    if apply.trushore is not None:
-        ts = apply.trushore
-        if "trushore" not in cfg:
-            cfg["trushore"] = {}
+    if apply.swan is not None:
+        ts = apply.swan
+        if "swan" not in cfg:
+            cfg["swan"] = {}
         if ts.service_url is not None:
-            cfg["trushore"]["service_url"] = ts.service_url
+            cfg["swan"]["service_url"] = ts.service_url
         else:
             # None means bundled mode — write the sentinel so the section is
             # explicit and operators can see what's configured.
-            from weewx_clearskies_api.config.marine_config import _TRUSHORE_BUNDLED_SENTINEL
-            cfg["trushore"]["service_url"] = _TRUSHORE_BUNDLED_SENTINEL
-        cfg["trushore"]["omp_num_threads"] = str(ts.omp_num_threads)
-        cfg["trushore"]["outer_grid_resolution_km"] = str(ts.outer_grid_resolution_km)
-        cfg["trushore"]["inner_nest_resolution_m"] = str(ts.inner_nest_resolution_m)
+            from weewx_clearskies_api.config.marine_config import _SWAN_BUNDLED_SENTINEL
+            cfg["swan"]["service_url"] = _SWAN_BUNDLED_SENTINEL
+        cfg["swan"]["omp_num_threads"] = str(ts.omp_num_threads)
+        cfg["swan"]["outer_grid_resolution_km"] = str(ts.outer_grid_resolution_km)
+        cfg["swan"]["inner_nest_resolution_m"] = str(ts.inner_nest_resolution_m)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -2297,7 +2297,7 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
     Called by the wizard's marine step on load, before the operator is
     allowed to enable marine features — GRIB2 processing (eccodes or the
     pygrib fallback) is required for HRRR wind field ingestion that drives
-    the SWAN+TruShore nearshore model (ADR-093). Reuses the same
+    the SWAN nearshore model (ADR-093). Reuses the same
     backend-detection state (``GRIB_AVAILABLE``, set once at process start
     when ``providers/marine/grib_processor.py`` is imported) and the same
     install-instructions text that the provider registration path already
@@ -2321,7 +2321,7 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
 class MarineSwanCheckResponse(BaseModel):
     """Response shape for ``GET /setup/marine/swan-check`` (T4.4 / T4.1).
 
-    The wizard's SWAN+TruShore step calls this endpoint on load to determine
+    The wizard's SWAN step calls this endpoint on load to determine
     whether the SWAN Fortran binary is installed and to show the operator how
     many CPU cores are available for the ``omp_num_threads`` slider.
     """
@@ -2341,7 +2341,7 @@ class MarineSwanCheckResponse(BaseModel):
 async def marine_swan_check(request: Request) -> MarineSwanCheckResponse:
     """Probe whether the SWAN Fortran binary is installed and return core count (T4.4).
 
-    Called by the wizard's SWAN+TruShore setup step to:
+    Called by the wizard's SWAN setup step to:
       - Determine whether SWAN is available (blocks the step with install
         instructions when ``available`` is False).
       - Show the operator the host's CPU core count for the ``omp_num_threads``

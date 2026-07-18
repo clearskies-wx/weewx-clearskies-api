@@ -647,7 +647,7 @@ def _compute_hrrr_cycle(now: datetime, *, extended_only: bool = False) -> dateti
 
     When extended_only=True, snaps to the nearest 00/06/12/18Z extended cycle
     (which produce 48-hour forecasts). Standard hourly cycles only reach 18
-    hours and are useless for TruShore's 48-hour HRRR requirement.
+    hours and are useless for SWAN's 48-hour HRRR requirement.
 
     If the computed cycle's f00 returns 404, fetch() falls back to the
     cycle 1 hour (or 6 hours if extended_only) earlier.
