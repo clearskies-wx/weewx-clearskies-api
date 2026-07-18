@@ -26,6 +26,7 @@ from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
     _bilinear_interp,
     _compute_swan_grid_dims,
+    build_swan_input,
     cudem_to_swan_bottom,
     hrrr_to_swan_wind,
     ww3_to_swan_boundary,
@@ -705,3 +706,56 @@ class TestSWANRunnerRunPatched:
 
         assert exc_info.value.stderr == "swan error"
         assert exc_info.value.returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# build_swan_input — HOTFILE bootstrap (regression test for hotstart chain bug)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSwanInputHotstart:
+    """Verify HOTFILE bootstrap behavior.
+
+    Bug: HOTFILE was gated on ``if hotstart_file:``, same as INIT HOTSTART.
+    On first run (no previous hotstart) neither command was emitted, so SWAN
+    never wrote a hotstart file.  Every subsequent run was also a cold start —
+    the chain never bootstrapped.
+
+    Fix: HOTFILE 'hotstart.dat' is unconditional.  INIT HOTSTART stays
+    conditional (only reads when a previous file already exists).
+    """
+
+    def _call(self, hotstart_file: str | None) -> str:
+        dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M)
+        return build_swan_input(
+            dims=dims,
+            valid_times=["2024-01-01T00:00:00Z"],
+            spots={"spot_a": (-118.10, 33.60)},
+            grid_level="inner",
+            stationary=True,
+            hotstart_file=hotstart_file,
+        )
+
+    def test_hotfile_present_on_cold_start(self) -> None:
+        """HOTFILE must appear even when hotstart_file=None (first-run bootstrap)."""
+        content = self._call(hotstart_file=None)
+        assert "HOTFILE 'hotstart.dat'" in content, (
+            "HOTFILE must be unconditional so first run creates hotstart for subsequent runs"
+        )
+
+    def test_hotfile_present_when_previous_hotstart_exists(self) -> None:
+        """When hotstart_file is set, both INIT HOTSTART and HOTFILE must appear."""
+        content = self._call(hotstart_file="hotstart.dat")
+        assert "INIT HOTSTART 'hotstart.dat'" in content, (
+            "INIT HOTSTART must appear when a previous hotstart file is provided"
+        )
+        assert "HOTFILE 'hotstart.dat'" in content, (
+            "HOTFILE must also appear when hotstart_file is provided"
+        )
+
+    def test_init_hotstart_absent_on_cold_start(self) -> None:
+        """INIT HOTSTART must NOT appear when hotstart_file=None (cold start)."""
+        content = self._call(hotstart_file=None)
+        assert "INIT HOTSTART" not in content, (
+            "INIT HOTSTART should only appear when a previous hotstart file exists"
+        )

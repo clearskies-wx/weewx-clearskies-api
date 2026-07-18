@@ -942,8 +942,7 @@ def build_swan_input(
     else:
         lines.append(f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}")
 
-    if hotstart_file:
-        lines.append(f"HOTFILE '{hotstart_file}'")
+    lines.append("HOTFILE 'hotstart.dat'")
 
     lines += [
         "",
