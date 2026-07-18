@@ -45,6 +45,105 @@ def _parse_iso(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(UTC)
 
 
+# ---------------------------------------------------------------------------
+# UTM coordinate transformer (for SWAN Cartesian mode)
+#
+# SWAN SETUP requires Cartesian (metric) coordinates — the radiation stress
+# gradient computation needs meters, not degrees.  We convert lon/lat to UTM
+# for the SWAN INPUT file and convert Xp/Yp back to lon/lat when parsing
+# TABLE output.  No external library needed — UTM is a standard Transverse
+# Mercator projection with well-known constants.
+# ---------------------------------------------------------------------------
+
+_UTM_K0 = 0.9996
+_UTM_A  = 6378137.0        # WGS-84 semi-major axis (m)
+_UTM_E  = 0.00669437999014  # WGS-84 first eccentricity squared
+_UTM_E2 = _UTM_E / (1 - _UTM_E)
+
+
+def utm_zone(lon: float) -> int:
+    """Return the UTM zone number for a longitude."""
+    return int((lon + 180.0) / 6.0) + 1
+
+
+def lonlat_to_utm(lon: float, lat: float, zone: int | None = None) -> tuple[float, float]:
+    """Convert WGS-84 lon/lat to UTM easting/northing (meters).
+
+    Returns (easting, northing).  Northern hemisphere only (our use case).
+    """
+    if zone is None:
+        zone = utm_zone(lon)
+    lon0 = (zone - 1) * 6.0 - 180.0 + 3.0  # central meridian
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    lon0_rad = math.radians(lon0)
+
+    N = _UTM_A / math.sqrt(1 - _UTM_E * math.sin(lat_rad) ** 2)
+    T = math.tan(lat_rad) ** 2
+    C = _UTM_E2 * math.cos(lat_rad) ** 2
+    A = math.cos(lat_rad) * (lon_rad - lon0_rad)
+
+    M = _UTM_A * (
+        (1 - _UTM_E / 4 - 3 * _UTM_E**2 / 64 - 5 * _UTM_E**3 / 256) * lat_rad
+        - (3 * _UTM_E / 8 + 3 * _UTM_E**2 / 32 + 45 * _UTM_E**3 / 1024) * math.sin(2 * lat_rad)
+        + (15 * _UTM_E**2 / 256 + 45 * _UTM_E**3 / 1024) * math.sin(4 * lat_rad)
+        - (35 * _UTM_E**3 / 3072) * math.sin(6 * lat_rad)
+    )
+
+    easting = _UTM_K0 * N * (
+        A + (1 - T + C) * A**3 / 6
+        + (5 - 18 * T + T**2 + 72 * C - 58 * _UTM_E2) * A**5 / 120
+    ) + 500000.0
+
+    northing = _UTM_K0 * (
+        M + N * math.tan(lat_rad) * (
+            A**2 / 2
+            + (5 - T + 9 * C + 4 * C**2) * A**4 / 24
+            + (61 - 58 * T + T**2 + 600 * C - 330 * _UTM_E2) * A**6 / 720
+        )
+    )
+
+    return easting, northing
+
+
+def utm_to_lonlat(easting: float, northing: float, zone: int) -> tuple[float, float]:
+    """Convert UTM easting/northing back to WGS-84 lon/lat.
+
+    Northern hemisphere only.  Returns (lon, lat).
+    """
+    lon0 = (zone - 1) * 6.0 - 180.0 + 3.0
+    e1 = (1 - math.sqrt(1 - _UTM_E)) / (1 + math.sqrt(1 - _UTM_E))
+    x = easting - 500000.0
+    y = northing
+
+    M = y / _UTM_K0
+    mu = M / (_UTM_A * (1 - _UTM_E / 4 - 3 * _UTM_E**2 / 64 - 5 * _UTM_E**3 / 256))
+
+    phi1 = mu + (3 * e1 / 2 - 27 * e1**3 / 32) * math.sin(2 * mu)
+    phi1 += (21 * e1**2 / 16 - 55 * e1**4 / 32) * math.sin(4 * mu)
+    phi1 += (151 * e1**3 / 96) * math.sin(6 * mu)
+    phi1 += (1097 * e1**4 / 512) * math.sin(8 * mu)
+
+    N1 = _UTM_A / math.sqrt(1 - _UTM_E * math.sin(phi1) ** 2)
+    T1 = math.tan(phi1) ** 2
+    C1 = _UTM_E2 * math.cos(phi1) ** 2
+    R1 = _UTM_A * (1 - _UTM_E) / (1 - _UTM_E * math.sin(phi1) ** 2) ** 1.5
+    D = x / (N1 * _UTM_K0)
+
+    lat = phi1 - (N1 * math.tan(phi1) / R1) * (
+        D**2 / 2
+        - (5 + 3 * T1 + 10 * C1 - 4 * C1**2 - 9 * _UTM_E2) * D**4 / 24
+        + (61 + 90 * T1 + 298 * C1 + 45 * T1**2 - 252 * _UTM_E2 - 3 * C1**2) * D**6 / 720
+    )
+
+    lon_rad = (
+        D - (1 + 2 * T1 + C1) * D**3 / 6
+        + (5 - 2 * C1 + 28 * T1 - 3 * C1**2 + 8 * _UTM_E2 + 24 * T1**2) * D**5 / 120
+    ) / math.cos(phi1)
+
+    return math.degrees(lon_rad) + lon0, math.degrees(lat)
+
+
 def _bilinear_interp(
     grid: list[list[float]],
     lat_first: float,
@@ -592,8 +691,18 @@ def build_swan_input(
     dlat = dims["dlat"]
     lon_sw = dims["lon_sw"]
     lat_sw = dims["lat_sw"]
-    xlenc = mxc * dlon
-    ylenc = myc * dlat
+
+    # UTM projection for Cartesian mode (required for SETUP — spherical
+    # coordinates produce incorrect radiation stress gradients).
+    _zone = utm_zone((lon_sw + lon_sw + mxc * dlon) / 2)
+    dims["_utm_zone"] = _zone  # stash for output parser
+
+    x_sw, y_sw = lonlat_to_utm(lon_sw, lat_sw, _zone)
+    x_ne, y_ne = lonlat_to_utm(lon_sw + mxc * dlon, lat_sw + myc * dlat, _zone)
+    xlenc = x_ne - x_sw
+    ylenc = y_ne - y_sw
+    dx = xlenc / mxc
+    dy = ylenc / myc
 
     lines = [
         "PROJECT 'SWAN' 'v1'",
@@ -603,7 +712,7 @@ def build_swan_input(
         # errors (default 1 stops on the boundary-mismatch warning at level 2).
         "SET 0. 90. 0.05 200 3",
         "SET NAUTICAL",
-        "COORDINATES SPHERICAL",
+        "COORDINATES CARTESIAN",
         "",
     ]
 
@@ -612,17 +721,17 @@ def build_swan_input(
         lines.append("")
 
     lines += [
-        f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}"
+        f"CGRID REG {x_sw:.2f} {y_sw:.2f} 0. {xlenc:.2f} {ylenc:.2f} {mxc} {myc}"
         " CIRCLE 36 0.0418 1.0 31",
         "",
         # BOTTOM grid: static
-        f"INPGRID BOTTOM REG {lon_sw:.6f} {lat_sw:.6f} 0. {mxc} {myc} {dlon:.6f} {dlat:.6f}",
+        f"INPGRID BOTTOM REG {x_sw:.2f} {y_sw:.2f} 0. {mxc} {myc} {dx:.2f} {dy:.2f}",
         "READINP BOTTOM 1. 'BOTTOM.txt' 3 0 FREE",
         "",
         # WIND grid
         (
-            f"INPGRID WIND REG {lon_sw:.6f} {lat_sw:.6f} 0."
-            f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+            f"INPGRID WIND REG {x_sw:.2f} {y_sw:.2f} 0."
+            f" {mxc} {myc} {dx:.2f} {dy:.2f}"
             + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
         ),
         "READINP WIND 1. 'WIND.txt' 3 0 FREE",
@@ -633,8 +742,8 @@ def build_swan_input(
     if has_wlevel:
         lines += [
             (
-                f"INPGRID WLEVEL REG {lon_sw:.6f} {lat_sw:.6f} 0."
-                f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+                f"INPGRID WLEVEL REG {x_sw:.2f} {y_sw:.2f} 0."
+                f" {mxc} {myc} {dx:.2f} {dy:.2f}"
                 + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
             ),
             "READINP WLEV 1. 'WLEVEL.txt' 3 0 FREE",
@@ -645,8 +754,8 @@ def build_swan_input(
     if has_current:
         lines += [
             (
-                f"INPGRID CURRENT REG {lon_sw:.6f} {lat_sw:.6f} 0."
-                f" {mxc} {myc} {dlon:.6f} {dlat:.6f}"
+                f"INPGRID CURRENT REG {x_sw:.2f} {y_sw:.2f} 0."
+                f" {mxc} {myc} {dx:.2f} {dy:.2f}"
                 + (f" NONSTAT {swan_t_start} {wind_dt_hr} HR {swan_t_end}" if not stationary else "")
             ),
             "READINP CURRENT 1. 'CURRENT.txt' 3 0 FREE",
@@ -707,7 +816,11 @@ def build_swan_input(
             if not coords or s_type not in _OBSTACLE_PARAMS:
                 continue
             params = _OBSTACLE_PARAMS[s_type]
-            coord_str = " ".join(f"{pt[0]:.6f} {pt[1]:.6f}" for pt in coords)
+            coord_parts = []
+            for pt in coords:
+                ox, oy = lonlat_to_utm(pt[0], pt[1], _zone)
+                coord_parts.append(f"{ox:.2f} {oy:.2f}")
+            coord_str = " ".join(coord_parts)
             lines.append(f"OBSTACLE {params} LINE {coord_str}")
         if any(
             structure.get("coordinates")
@@ -728,14 +841,19 @@ def build_swan_input(
         inner_myc = inner_dims["myc"]
         inner_dlon = inner_dims["dlon"]
         inner_dlat = inner_dims["dlat"]
-        inner_xlenc = inner_mxc * inner_dlon
-        inner_ylenc = inner_myc * inner_dlat
+        inner_x_sw, inner_y_sw = lonlat_to_utm(inner_lon_sw, inner_lat_sw, _zone)
+        inner_x_ne, inner_y_ne = lonlat_to_utm(
+            inner_lon_sw + inner_mxc * inner_dlon,
+            inner_lat_sw + inner_myc * inner_dlat, _zone,
+        )
+        inner_xlenc = inner_x_ne - inner_x_sw
+        inner_ylenc = inner_y_ne - inner_y_sw
         lines += [
             (
                 f"NGRID 'inner'"
-                f" {inner_lon_sw:.6f} {inner_lat_sw:.6f}"
+                f" {inner_x_sw:.2f} {inner_y_sw:.2f}"
                 f" 0.0"
-                f" {inner_xlenc:.6f} {inner_ylenc:.6f}"
+                f" {inner_xlenc:.2f} {inner_ylenc:.2f}"
                 f" {inner_mxc} {inner_myc}"
             ),
             (
@@ -779,12 +897,15 @@ def build_swan_input(
                 table_file = f"TABLE_{n}.txt"
                 spec_file  = f"SPEC_{n}.txt"
 
+                cx1, cy1 = lonlat_to_utm(transect['start_lon'], transect['start_lat'], _zone)
+                cx2, cy2 = lonlat_to_utm(transect['end_lon'], transect['end_lat'], _zone)
+                sx, sy   = lonlat_to_utm(transect['specout_lon'], transect['specout_lat'], _zone)
                 lines += [
                     (
                         f"CURVE '{curve_name}'"
-                        f" {transect['start_lon']:.6f} {transect['start_lat']:.6f}"
+                        f" {cx1:.2f} {cy1:.2f}"
                         f" {transect['n_intervals']}"
-                        f" {transect['end_lon']:.6f} {transect['end_lat']:.6f}"
+                        f" {cx2:.2f} {cy2:.2f}"
                     ),
                     "",
                     (
@@ -793,7 +914,7 @@ def build_swan_input(
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                     ),
                     "",
-                    f"POINTS '{spec_name}' {transect['specout_lon']:.6f} {transect['specout_lat']:.6f}",
+                    f"POINTS '{spec_name}' {sx:.2f} {sy:.2f}",
                     (
                         f"SPECOUT '{spec_name}' SPEC2D ABS '{spec_file}'"
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")

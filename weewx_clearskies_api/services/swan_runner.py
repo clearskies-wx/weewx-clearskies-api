@@ -329,6 +329,7 @@ def _parse_transect_table(
     spot_id: str,
     transect_points: list[dict],
     coord_tolerance_deg: float = 0.003,
+    utm_zone: int | None = None,
 ) -> list[MarineForecastPoint]:
     """Parse a single-spot CURVE TABLE file (T3.2).
 
@@ -342,16 +343,28 @@ def _parse_transect_table(
         transect_points: list of dicts from compute_spot_transect(), each with
             keys "lon", "lat", "depth_m", "distance_m".
         coord_tolerance_deg: Tolerance for matching Xp/Yp to transect points.
+            When utm_zone is set, this is interpreted as meters (use ~200).
+        utm_zone: When set, Xp/Yp in TABLE output are UTM meters (Cartesian
+            mode). Transect lookup is built in UTM; tolerance in meters.
 
     Returns:
         list[MarineForecastPoint] — one per valid row; may contain multiple
         points per timestep (one per transect output point).
     """
-    # Build fast lookup: (lon_rounded, lat_rounded) → (depth_m, distance_m)
+    from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
+
+    # Build fast lookup: (x, y) → (depth_m, distance_m)
+    # When utm_zone is set, keys are UTM (meters); otherwise lon/lat (degrees).
     transect_lookup: dict[tuple[float, float], tuple[float, float]] = {}
     for tp in transect_points:
-        key = (round(float(tp["lon"]), 4), round(float(tp["lat"]), 4))
+        if utm_zone is not None:
+            tx, ty = lonlat_to_utm(float(tp["lon"]), float(tp["lat"]), utm_zone)
+            key = (round(tx, 1), round(ty, 1))
+        else:
+            key = (round(float(tp["lon"]), 4), round(float(tp["lat"]), 4))
         transect_lookup[key] = (float(tp.get("depth_m", 0.0)), float(tp.get("distance_m", 0.0)))
+
+    coord_tol = 200.0 if utm_zone is not None else coord_tolerance_deg
 
     raw_lines = table_text.splitlines()
     logger.debug(
@@ -451,19 +464,24 @@ def _parse_transect_table(
 
         # Determine depth and distance from transect lookup (prefer TABLE DEPTH
         # column; fall back to transect interpolation).
-        xp_rounded = round(xp, 4)
-        yp_rounded = round(yp, 4)
+        # In Cartesian mode, Xp/Yp are UTM meters; round accordingly.
+        if utm_zone is not None:
+            xp_rounded = round(xp, 1)
+            yp_rounded = round(yp, 1)
+        else:
+            xp_rounded = round(xp, 4)
+            yp_rounded = round(yp, 4)
 
         depth_m: float | None = depth_swan
         distance_m: float | None = None
 
         # Search transect lookup within tolerance
-        best_dist_deg = float("inf")
-        for (tp_lon, tp_lat), (tp_depth, tp_dist) in transect_lookup.items():
-            dist_deg = math.sqrt((xp_rounded - tp_lon) ** 2 + (yp_rounded - tp_lat) ** 2)
-            if dist_deg < coord_tolerance_deg and dist_deg < best_dist_deg:
-                best_dist_deg = dist_deg
-                if depth_m is None:  # prefer DEPTH column; use lookup only as fallback
+        best_match_dist = float("inf")
+        for (tp_x, tp_y), (tp_depth, tp_dist) in transect_lookup.items():
+            d = math.sqrt((xp_rounded - tp_x) ** 2 + (yp_rounded - tp_y) ** 2)
+            if d < coord_tol and d < best_match_dist:
+                best_match_dist = d
+                if depth_m is None:
                     depth_m = tp_depth
                 distance_m = tp_dist
 
@@ -1224,10 +1242,15 @@ class SWANRunner:
 
         # OUTPUT_POINTS.txt (inner only — only when NOT using CURVE transect)
         if grid_level == "inner" and not transect_spot_order:
-            pts_lines: list[str] = [
-                f"{lon:.6f}   {lat:.6f}"
-                for _sid, (lon, lat) in self._surf_spots.items()
-            ]
+            _utm_zone = grid_info.get("_utm_zone")
+            pts_lines: list[str] = []
+            for _sid, (lon, lat) in self._surf_spots.items():
+                if _utm_zone is not None:
+                    from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
+                    x, y = lonlat_to_utm(lon, lat, _utm_zone)
+                    pts_lines.append(f"{x:.2f}   {y:.2f}")
+                else:
+                    pts_lines.append(f"{lon:.6f}   {lat:.6f}")
             (run_dir / "OUTPUT_POINTS.txt").write_text(
                 "\n".join(pts_lines) + "\n", encoding="ascii"
             )
@@ -1435,6 +1458,7 @@ class SWANRunner:
                     table_text,
                     spot_id,
                     transect_points_map.get(spot_id) or [],
+                    utm_zone=grid_info.get("_utm_zone"),
                 )
                 result[spot_id] = pts
                 logger.info(
