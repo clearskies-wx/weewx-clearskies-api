@@ -486,21 +486,14 @@ def get_surf(location_id: str) -> dict:
         if not pts_at_time:
             continue
 
-        # T3.4: Select the reference point closest to 10m depth for K-G and
-        # HSWELL display.  If no depth info is available (old single-point mode),
-        # use the only point in the group.
-        ref_point = pts_at_time[0]
-        if len(pts_at_time) > 1:
-            def _depth_of(pt: dict) -> float:
-                d = pt.get("depth")
-                return float(d) if d is not None else 9999.0
-            ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
-
-        # T3.4: Scan for QB peaks (break points) along the transect.
+        # T3.4+T7.2: Scan for QB peaks (break points) along the transect FIRST,
+        # so the reference point can be selected just offshore of the biggest break.
         # Sort transect points deepest-to-shallowest (offshore → onshore).
         # A QB peak is a local maximum >= 0.25 (threshold for meaningful breaking).
         # Multiple peaks identify outer bar + inner bar break zones.
         break_points: list[dict] = []
+        _break_src_pts: list[dict] = []         # parallel: full transect pt at each break
+        _break_offshore_pts: list[dict | None] = []  # parallel: just-offshore pt per break
         if len(pts_at_time) > 1:
             sorted_pts = sorted(
                 pts_at_time,
@@ -527,6 +520,34 @@ def get_surf(location_id: str) -> dict:
                         "depth": _bp_pt.get("depth"),
                         "waveHeight": _bp_pt.get("waveHeight"),
                     })
+                    _break_src_pts.append(_bp_pt)
+                    _break_offshore_pts.append(
+                        sorted_pts[_bp_idx - 1] if _bp_idx > 0 else None
+                    )
+
+        # T3.4+T7.2: Select the reference point.
+        # If breaks detected: use the transect point just offshore of the biggest
+        # break (highest waveHeight × breakingFraction product). Falls back to
+        # closest-to-10m when no breaking is detected (flat/no-break conditions)
+        # or when the biggest break is already the most offshore point available.
+        def _depth_of(pt: dict) -> float:
+            d = pt.get("depth")
+            return float(d) if d is not None else 9999.0
+
+        ref_point = pts_at_time[0]
+        if break_points:
+            _biggest_idx = max(
+                range(len(break_points)),
+                key=lambda i: (_break_src_pts[i].get("waveHeight") or 0)
+                              * (_break_src_pts[i].get("breakingFraction") or 0),
+            )
+            _offshore_ref = _break_offshore_pts[_biggest_idx]
+            if _offshore_ref is not None:
+                ref_point = _offshore_ref
+            elif len(pts_at_time) > 1:
+                ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
+        elif len(pts_at_time) > 1:
+            ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
 
         raw_hsig = ref_point.get("waveHeight")
         if raw_hsig is None:
