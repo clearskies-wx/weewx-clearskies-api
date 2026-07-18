@@ -686,8 +686,8 @@ def download_bidirectional_profile(
     coastline_lat = lat
     coastline_lon = lon
 
-    if pin_depth is None or pin_depth == 0.0:
-        # Pin is on land (depth == 0) or outside CUDEM coverage — treat as shore.
+    if pin_depth is None or pin_depth <= 0.0:
+        # Pin is on land (depth <= 0) or outside CUDEM coverage — treat as shore.
         logger.debug(
             "Bidirectional profile: pin at lat=%.6f,lon=%.6f depth=%s "
             "(land/no-coverage); treating pin as coastline.",
@@ -699,7 +699,7 @@ def download_bidirectional_profile(
         while dist <= max_search_m:
             pt_lat, pt_lon = point_along_bearing(lat, lon, shoreward_bearing, dist)
             depth = _query_depths_m([(pt_lat, pt_lon)])[0]
-            if depth is not None and depth == 0.0:
+            if depth is not None and depth <= 0.0:
                 coastline_lat = pt_lat
                 coastline_lon = pt_lon
                 found_coast = True
