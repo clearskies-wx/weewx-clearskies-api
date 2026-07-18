@@ -326,6 +326,7 @@ class SWANRunner:
     """
 
     _NESTOUT_BOUNDARY_FILE = "nest_boundary.dat"
+    _HOTSTART_FILE = "hotstart.dat"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
@@ -531,6 +532,7 @@ class SWANRunner:
             self._outer_resolution_m / 1000.0, outer_dir,
         )
         self._spawn_swan(outer_dir)
+        self._save_hotstart(outer_dir, "outer")
         logger.info("SWAN outer grid complete")
 
     def _run_inner_nest(
@@ -575,6 +577,7 @@ class SWANRunner:
             self._inner_resolution_m, inner_dir,
         )
         self._spawn_swan(inner_dir)
+        self._save_hotstart(inner_dir, "inner")
         logger.info("SWAN inner nest complete")
         return self._parse_output(inner_dir, grid_info)
 
@@ -657,6 +660,16 @@ class SWANRunner:
             from weewx_clearskies_api.services.swan_formats import _compute_swan_grid_dims
             inner_dims_for_input = _compute_swan_grid_dims(self._inner_bbox, self._inner_resolution_m)
 
+        # Hotstart: copy previous run's hotstart file into this run dir.
+        # The persistent copy lives one level up (tmpdir / "{level}_hotstart.dat")
+        # so it survives the outer/inner subdir cleanup between runs.
+        hotstart_arg: str | None = None
+        persistent_hot = run_dir.parent / f"{grid_level}_{self._HOTSTART_FILE}"
+        if persistent_hot.exists():
+            shutil.copy2(str(persistent_hot), str(run_dir / self._HOTSTART_FILE))
+            hotstart_arg = self._HOTSTART_FILE
+            logger.info("SWAN %s: using hotstart from previous run", grid_level)
+
         # SWAN INPUT command file
         input_text = build_swan_input(
             dims=grid_info,
@@ -667,6 +680,7 @@ class SWANRunner:
             output_interval_hr=self._output_interval_hr,
             compute_dt_min=self._compute_dt_min,
             nest_boundary_file=self._NESTOUT_BOUNDARY_FILE,
+            hotstart_file=hotstart_arg,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
@@ -750,6 +764,19 @@ class SWANRunner:
                 stderr=combined_errors.strip()[:2000],
                 returncode=0,
             )
+
+    def _save_hotstart(self, run_dir: Path, grid_level: str) -> None:
+        """Copy the hotstart file from the run dir to the persistent parent dir."""
+        src = run_dir / self._HOTSTART_FILE
+        if src.exists():
+            dst = run_dir.parent / f"{grid_level}_{self._HOTSTART_FILE}"
+            shutil.copy2(str(src), str(dst))
+            logger.info(
+                "SWAN %s: hotstart saved (%d bytes) for next run",
+                grid_level, src.stat().st_size,
+            )
+        else:
+            logger.warning("SWAN %s: no hotstart file produced", grid_level)
 
     def _parse_output(
         self,

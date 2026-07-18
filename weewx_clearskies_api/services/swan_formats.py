@@ -357,6 +357,7 @@ def build_swan_input(
     output_interval_hr: float = 1.0,
     compute_dt_min: int = 10,
     nest_boundary_file: str = "nest_boundary.dat",
+    hotstart_file: str | None = None,
 ) -> str:
     """Render the SWAN ASCII INPUT command file for a given grid level.
 
@@ -388,6 +389,8 @@ def build_swan_input(
         output_interval_hr: Hours between TABLE output rows (inner only).
         compute_dt_min: SWAN internal time step in minutes.
         nest_boundary_file: Filename for NESTOUT / NGRID boundary data.
+        hotstart_file: If set and the file exists in the run directory, add
+            ``INIT HOTSTART 'fname'`` and write ``HOTFILE`` after COMPUTE.
 
     Returns:
         String content of the SWAN INPUT command file.
@@ -432,6 +435,13 @@ def build_swan_input(
         "SET NAUTICAL",
         "COORDINATES SPHERICAL",
         "",
+    ]
+
+    if hotstart_file:
+        lines.append(f"INIT HOTSTART '{hotstart_file}'")
+        lines.append("")
+
+    lines += [
         f"CGRID REG {lon_sw:.6f} {lat_sw:.6f} 0. {xlenc:.6f} {ylenc:.6f} {mxc} {myc}"
         " CIRCLE 36 0.0418 1.0 31",
         "",
@@ -524,6 +534,12 @@ def build_swan_input(
     # Non-stationary computation (same for both levels)
     lines += [
         f"COMPUTE NONST {swan_t_start} {compute_dt_min} MIN {swan_t_end}",
+    ]
+
+    if hotstart_file:
+        lines.append(f"HOTFILE '{hotstart_file}'")
+
+    lines += [
         "",
         "STOP",
     ]
