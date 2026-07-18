@@ -1502,18 +1502,25 @@ class MarineForecastPoint(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     time: str  # UTC ISO-8601 with Z; forecast valid time
-    waveHeight: float | None = None       # group_wave_height; significant wave height
+    waveHeight: float | None = None       # group_wave_height; significant wave height (HSIGN)
     wavePeriod: float | None = None       # group_wave_period; peak wave period
     waveDirection: float | None = None    # degrees true north; peak wave direction
     windSpeed: float | None = None        # group_ocean_speed; 10m wind speed
     windDirection: float | None = None    # degrees true north
-    swellHeight: float | None = None      # group_wave_height; primary swell height
+    swellHeight: float | None = None      # group_wave_height; SWAN HSWELL (swell-only Hs) at this point
     swellPeriod: float | None = None      # group_wave_period; primary swell period
     swellDirection: float | None = None   # degrees true north; primary swell direction
     windWaveHeight: float | None = None      # group_wave_height
     windWavePeriod: float | None = None      # group_wave_period
     windWaveDirection: float | None = None   # degrees true north
     waterTemp: float | None = None           # group_temperature; OFS model forecast water temp
+    # T3.2 — cross-shore transect fields (SWAN CURVE TABLE output, API-MANUAL §17)
+    depth: float | None = None                   # water depth at this transect point (m, positive = wet)
+    breakingFraction: float | None = None        # QB — fraction of breaking waves (0.0–1.0)
+    breakingDissipation: float | None = None     # DISSURF — depth-induced wave breaking dissipation (W/m²)
+    setup: float | None = None                   # SETUP — wave-induced water level rise (m)
+    directionalSpread: float | None = None       # DSPR — directional spreading of the wave spectrum (°)
+    distanceFromShore: float | None = None       # distance along transect from the shoreline (m)
 
 
 class MarineTextForecast(BaseModel):

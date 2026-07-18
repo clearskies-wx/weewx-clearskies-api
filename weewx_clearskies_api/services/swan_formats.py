@@ -344,6 +344,153 @@ def cudem_to_swan_bottom(
 
 
 # ---------------------------------------------------------------------------
+# Cross-shore transect helper (T3.1)
+# ---------------------------------------------------------------------------
+
+
+def compute_spot_transect(
+    spot_lon: float,
+    spot_lat: float,
+    beach_facing_degrees: float,
+    bathymetric_profile: list[dict[str, float]],
+    target_deep_m: float = 15.0,
+    target_shallow_m: float = 1.0,
+    target_spec_m: float = 10.0,
+    spacing_m: float = 50.0,
+    min_points: int = 10,
+    max_points: int = 20,
+) -> dict[str, Any]:
+    """Compute the cross-shore CURVE transect for one surf spot.
+
+    The transect extends from the ~``target_deep_m``-depth contour to the
+    ~``target_shallow_m``-depth contour, perpendicular to the beach (in the
+    ``beach_facing_degrees`` compass direction from shore to ocean).
+
+    Coordinate offsets use a flat-earth equirectangular approximation appropriate
+    for coastal domains of ≤30 km extent.
+
+    Args:
+        spot_lon: Longitude of the surf spot (degrees).
+        spot_lat: Latitude of the surf spot (degrees).
+        beach_facing_degrees: Compass bearing (degrees, clockwise from north)
+            pointing from shore toward the ocean.
+        bathymetric_profile: Ordered list of dicts with keys "distance_m" (metres
+            from shore, increasing offshore) and "depth_m" (positive = wet).
+            Need not be sorted; this function sorts by distance_m internally.
+            When empty or None, default distances (500 m, 300 m, 50 m) are used
+            for deep/spec/shallow respectively.
+        target_deep_m: Target depth for the offshore (deep) CURVE start (m).
+        target_shallow_m: Target depth for the nearshore (shallow) CURVE end (m).
+        target_spec_m: Target depth for the SPECOUT single-point output (m).
+        spacing_m: Nominal spacing between transect output points (m).
+        min_points: Minimum number of CURVE output points (inclusive).
+        max_points: Maximum number of CURVE output points (inclusive).
+
+    Returns:
+        dict with keys:
+          start_lon, start_lat (float): coordinates of the offshore CURVE endpoint.
+          end_lon, end_lat (float): coordinates of the nearshore CURVE endpoint.
+          specout_lon, specout_lat (float): coordinates of the ~10 m SPECOUT point.
+          n_intervals (int): number of CURVE intervals (total points = n_intervals + 1).
+          transect_points (list[dict]): each dict has keys "lon", "lat",
+            "depth_m", "distance_m"; ordered from offshore to nearshore.
+    """
+    meters_per_lat = 111_000.0
+    meters_per_lon = 111_000.0 * math.cos(math.radians(spot_lat))
+    bearing_rad = math.radians(beach_facing_degrees)
+
+    def _offset(distance_m: float) -> tuple[float, float]:
+        """Return (lon, lat) at *distance_m* in the offshore direction."""
+        dlon = distance_m * math.sin(bearing_rad) / meters_per_lon
+        dlat = distance_m * math.cos(bearing_rad) / meters_per_lat
+        return spot_lon + dlon, spot_lat + dlat
+
+    # ---- Derive distances from the bathymetric profile ----
+    profile = [p for p in (bathymetric_profile or []) if p.get("depth_m") is not None]
+    profile.sort(key=lambda p: p.get("distance_m", 0.0))
+
+    def _dist_at_depth(target_depth: float, fallback: float) -> float:
+        """Return distance_m for the point closest to *target_depth*."""
+        if not profile:
+            return fallback
+        # Find the two bracketing entries and linearly interpolate
+        best_d = fallback
+        best_err = float("inf")
+        for idx, pt in enumerate(profile):
+            err = abs(pt.get("depth_m", 0.0) - target_depth)
+            if err < best_err:
+                best_err = err
+                best_d = pt.get("distance_m", fallback)
+        return float(best_d)
+
+    d_deep = _dist_at_depth(target_deep_m, 500.0)
+    d_spec = _dist_at_depth(target_spec_m, 300.0)
+    d_shallow = _dist_at_depth(target_shallow_m, 50.0)
+
+    # Ensure sensible ordering (deep > spec > shallow)
+    if d_deep <= d_shallow:
+        d_deep = max(d_shallow + spacing_m * min_points, 100.0)
+    if not (d_shallow < d_spec < d_deep):
+        d_spec = (d_deep + d_shallow) / 2.0
+
+    # ---- Compute number of intervals ----
+    n_points = int(round((d_deep - d_shallow) / spacing_m)) + 1
+    n_points = max(min_points, min(max_points, n_points))
+    n_intervals = n_points - 1
+
+    # ---- Build transect point list (offshore → nearshore) ----
+    transect_points: list[dict[str, Any]] = []
+    for k in range(n_points):
+        # Linear interpolation from d_deep to d_shallow
+        frac = k / max(n_intervals, 1)
+        d = d_deep + frac * (d_shallow - d_deep)
+
+        # Interpolate depth from profile at this distance
+        depth_at_d = 0.0
+        if profile:
+            if d <= profile[0].get("distance_m", 0.0):
+                depth_at_d = profile[0].get("depth_m", 0.0)
+            elif d >= profile[-1].get("distance_m", d):
+                depth_at_d = profile[-1].get("depth_m", 0.0)
+            else:
+                for idx in range(len(profile) - 1):
+                    p0 = profile[idx]
+                    p1 = profile[idx + 1]
+                    d0 = p0.get("distance_m", 0.0)
+                    d1 = p1.get("distance_m", 0.0)
+                    if d0 <= d <= d1 and d1 > d0:
+                        alpha = (d - d0) / (d1 - d0)
+                        depth_at_d = p0.get("depth_m", 0.0) * (1 - alpha) + p1.get("depth_m", 0.0) * alpha
+                        break
+        else:
+            # No profile — linearly interpolate depth from assumed values
+            depth_at_d = target_deep_m + (target_shallow_m - target_deep_m) * frac
+
+        lon, lat = _offset(d)
+        transect_points.append({
+            "lon": round(lon, 6),
+            "lat": round(lat, 6),
+            "depth_m": round(depth_at_d, 2),
+            "distance_m": round(d, 1),
+        })
+
+    start_lon, start_lat = _offset(d_deep)
+    end_lon, end_lat = _offset(d_shallow)
+    specout_lon, specout_lat = _offset(d_spec)
+
+    return {
+        "start_lon": round(start_lon, 6),
+        "start_lat": round(start_lat, 6),
+        "end_lon": round(end_lon, 6),
+        "end_lat": round(end_lat, 6),
+        "specout_lon": round(specout_lon, 6),
+        "specout_lat": round(specout_lat, 6),
+        "n_intervals": n_intervals,
+        "transect_points": transect_points,
+    }
+
+
+# ---------------------------------------------------------------------------
 # SWAN INPUT command file builder — nested grid support (T7.2)
 # ---------------------------------------------------------------------------
 
@@ -362,6 +509,7 @@ def build_swan_input(
     has_wlevel: bool = False,
     has_current: bool = False,
     structures: list[dict] | None = None,
+    spot_configs: dict[str, dict] | None = None,
 ) -> str:
     """Render the SWAN ASCII INPUT command file for a given grid level.
 
@@ -406,6 +554,13 @@ def build_swan_input(
             (list of [lon, lat] pairs defining the OBSTACLE LINE).
             When provided, OBSTACLE commands are emitted after the source
             terms section. None/empty → no OBSTACLE commands.
+        spot_configs: Optional dict mapping spot_id → config dict with keys
+            ``"beach_facing_degrees"`` (float, compass bearing toward ocean) and
+            ``"bathymetric_profile"`` (list of {"distance_m", "depth_m"} dicts).
+            When provided for the ``"inner"`` level, the existing POINTS + TABLE
+            block is replaced with per-spot CURVE + expanded TABLE (HSIGN HSWELL
+            TM01 DIR DEPTH QB DISSURF SETUP DSPR) + SPECOUT commands (T3.1).
+            When None, the existing POINTS + TABLE approach is used unchanged.
 
     Returns:
         String content of the SWAN INPUT command file.
@@ -590,17 +745,72 @@ def build_swan_input(
             "",
         ]
     else:
-        # Inner: surf spot output points and TABLE output
-        lines += [
-            "POINTS 'SPOTS' FILE 'OUTPUT_POINTS.txt'",
-            "",
-            (
-                f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-                f" TIME XP YP HSIGN TM01 DIR SETUP"
-                + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
-            ),
-            "",
-        ]
+        # Inner: surf spot output section.
+        #
+        # T3.1 — when spot_configs is provided, replace the single POINTS +
+        # TABLE with a per-spot CURVE (cross-shore transect) + expanded TABLE
+        # (HSIGN HSWELL TM01 DIR DEPTH QB DISSURF SETUP DSPR) + SPECOUT at
+        # the ~10 m transect point.  QUANTITY HSWELL sets the swell frequency
+        # cutoff to 0.1 Hz (T > 10 s) before any output commands.
+        #
+        # When spot_configs is None, fall back to the original POINTS + TABLE
+        # approach for backward compatibility.
+        if spot_configs:
+            lines += [
+                "QUANTITY HSWELL fswell=0.1",
+                "",
+            ]
+            spot_order: list[str] = []
+            for n, (spot_id, (spot_lon, spot_lat)) in enumerate(spots.items(), start=1):
+                cfg = spot_configs.get(spot_id)
+                if cfg is None:
+                    continue
+
+                transect = compute_spot_transect(
+                    spot_lon,
+                    spot_lat,
+                    float(cfg.get("beach_facing_degrees", 0.0)),
+                    cfg.get("bathymetric_profile") or [],
+                )
+
+                spot_order.append(spot_id)
+                curve_name = f"CV{n}"    # max 8 chars (CV + up to 6 digits = fine for any realistic N)
+                spec_name  = f"SP{n}"   # ditto
+                table_file = f"TABLE_{n}.txt"
+                spec_file  = f"SPEC_{n}.txt"
+
+                lines += [
+                    (
+                        f"CURVE '{curve_name}'"
+                        f" {transect['start_lon']:.6f} {transect['start_lat']:.6f}"
+                        f" {transect['n_intervals']}"
+                        f" {transect['end_lon']:.6f} {transect['end_lat']:.6f}"
+                    ),
+                    "",
+                    (
+                        f"TABLE '{curve_name}' HEAD '{table_file}'"
+                        f" TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF SETUP DSPR"
+                        + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
+                    ),
+                    "",
+                    f"POINTS '{spec_name}' {transect['specout_lon']:.6f} {transect['specout_lat']:.6f}",
+                    (
+                        f"SPECOUT '{spec_name}' SPEC2D ABS '{spec_file}'"
+                        + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
+                    ),
+                    "",
+                ]
+        else:
+            lines += [
+                "POINTS 'SPOTS' FILE 'OUTPUT_POINTS.txt'",
+                "",
+                (
+                    f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
+                    f" TIME XP YP HSIGN TM01 DIR SETUP"
+                    + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
+                ),
+                "",
+            ]
 
     # Computation command
     if stationary:

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import defaultdict
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
@@ -339,8 +340,11 @@ def get_surf(location_id: str) -> dict:
     data_age_seconds: int | None = None
     surf_forecast_error: str | None = None
 
+    swan_spectral: list[dict] = []  # T3.3 — per-timestep SPECOUT spectral decompositions
+
     if swan_result is not None:
         swan_points = swan_result.get("forecast") or []
+        swan_spectral = swan_result.get("spectral") or []  # T3.3
         last_run_time = swan_result.get("run_time")
         data_age_seconds = swan_result.get("data_age_seconds")
         if not swan_points:
@@ -440,42 +444,81 @@ def get_surf(location_id: str) -> dict:
             "surf endpoint: NDBC spectral fetch failed for %s", location_id, exc_info=True
         )
 
-    # --- Depth for breaker height conversion ---
-    # Uses bathymetric_profile[0].depth_m as the SWAN output point depth.
-    # None = assume deepwater (no shallow-water depth correction applied).
-    output_depth_m: float | None = None
+    # --- T3.4: Group transect points by timestep ---
+    # With CURVE transect output, swan_points contains multiple rows per timestep
+    # (one per transect point).  We group by time and select the reference point
+    # at ~10m depth for K-G/Caldwell and HSWELL display.
+    # With the old single POINTS output, each timestep has exactly one point;
+    # the grouping still works (group has one element).
+
+    # Build a lookup: time_iso → list[point_dict]
+    _points_by_time: dict[str, list[dict]] = defaultdict(list)
+    for _p in swan_points:
+        _t = (_p.get("time") if isinstance(_p, dict) else getattr(_p, "time", "")) or ""
+        if _t:
+            _d = _p if isinstance(_p, dict) else _p.model_dump()
+            _points_by_time[_t].append(_d)
+
+    # Order timesteps chronologically
+    _ordered_times: list[str] = sorted(_points_by_time.keys())
+
+    # Spectral lookup by timestep: time_iso → list[SpectralWaveComponent-like dicts]
+    # (T3.3 / T3.5 — replaces NDBC for multiSwell)
+    _spectral_by_time: dict[str, list[dict]] = {}
+    for _spec_entry in swan_spectral:
+        _spec_t = _spec_entry.get("time", "")
+        if _spec_t:
+            _spectral_by_time[_spec_t] = _spec_entry.get("components", [])
+
+    # Fallback output depth from bathymetric profile (used when no depth info
+    # from SWAN TABLE DEPTH column — old single-point mode).
+    _fallback_depth_m: float | None = None
     if (
         spot_config.bathymetric_profile
         and spot_config.bathymetric_profile[0] is not None
     ):
-        output_depth_m = spot_config.bathymetric_profile[0].depth_m
+        _fallback_depth_m = spot_config.bathymetric_profile[0].depth_m
 
     # --- Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast timestep") ---
     forecast_entries: list[dict] = []
-    for i, point in enumerate(swan_points):
-        raw_hsig = point.get("waveHeight") if isinstance(point, dict) else getattr(point, "waveHeight", None)
+    for ts_idx, valid_time in enumerate(_ordered_times):
+        pts_at_time = _points_by_time[valid_time]
+        if not pts_at_time:
+            continue
+
+        # T3.4: Select the reference point closest to 10m depth for K-G and
+        # HSWELL display.  If no depth info is available (old single-point mode),
+        # use the only point in the group.
+        ref_point = pts_at_time[0]
+        if len(pts_at_time) > 1:
+            def _depth_of(pt: dict) -> float:
+                d = pt.get("depth")
+                return float(d) if d is not None else 9999.0
+            ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
+
+        raw_hsig = ref_point.get("waveHeight")
         if raw_hsig is None:
             continue
 
-        wave_period_pt = (
-            point.get("wavePeriod") if isinstance(point, dict) else getattr(point, "wavePeriod", None)
-        ) or 0.0
-        wave_direction_pt = (
-            point.get("waveDirection") if isinstance(point, dict) else getattr(point, "waveDirection", None)
-        ) or 0.0
-        valid_time = (
-            point.get("time") if isinstance(point, dict) else getattr(point, "time", "")
-        ) or ""
+        wave_period_pt = float(ref_point.get("wavePeriod") or 0.0)
+        wave_direction_pt = float(ref_point.get("waveDirection") or 0.0)
 
-        # Step 1: raw SWAN Hsig = swellHeight
-        swell_height_m = raw_hsig
+        # T3.4: HSWELL at ~10m depth point is the "Swell Height" display value.
+        # Fall back to raw_hsig when HSWELL is absent (old single-point mode).
+        swell_height_raw = ref_point.get("swellHeight")
+        swell_height_m: float = float(swell_height_raw) if swell_height_raw is not None else float(raw_hsig)
+
+        # T3.4: Output depth from SWAN TABLE DEPTH column (more accurate than
+        # the static bathymetric_profile value used previously).
+        ref_depth = ref_point.get("depth")
+        output_depth_m: float | None = float(ref_depth) if ref_depth is not None else _fallback_depth_m
 
         # Step 2: wave_transform supplements → corrected Hsig = waveHeightAtBreak
-        # grid_data omitted: SWAN outputs at exact spot coordinates (OUTPUT POINTS),
-        # so Supplement 3 (spatial interpolation) is handled by SWAN internally.
+        # grid_data omitted: SWAN outputs at spot/transect coordinates, so
+        # Supplement 3 (spatial interpolation) is handled by SWAN internally.
         supplemented = wave_transform.apply_supplements(
             {
-                "wave_height": raw_hsig,
+                "wave_height": float(raw_hsig),
                 "wave_period": wave_period_pt,
                 "wave_direction": wave_direction_pt,
             },
@@ -488,9 +531,12 @@ def get_surf(location_id: str) -> dict:
             wave_period_pt = supplemented.get("wave_period") or wave_period_pt
             wave_direction_pt = supplemented.get("wave_direction") or wave_direction_pt
         else:
-            corrected_hsig = raw_hsig
+            corrected_hsig = float(raw_hsig)
 
         # Step 3: breaker height conversion → breakingFaceHeight
+        # T3.4: K-G/Caldwell applied at ~10m depth (ref_point depth) instead of
+        # the old pin-drop depth.  At 10m, SWAN has handled refraction but not
+        # final shoaling-to-breaking, so K-G applies ~60–80% amplification.
         face_height_m = _breaker_height.hsig_to_face_height(
             corrected_hsig,
             wave_period_pt,
@@ -502,15 +548,13 @@ def get_surf(location_id: str) -> dict:
         hawaiian_height_m = _breaker_height.hawaiian_height(face_height_m)
 
         # Step 5: wind source per timestep (ADR-094)
-        # Index 0 = t=0 (current conditions): station hardware → HRRR f00.
-        # Index > 0 = forecast: HRRR wind at this timestep's valid_time.
-        if i == 0:
-            # t=0: use station hardware if available.
+        # First timestep (closest to now) = t=0 (current conditions).
+        # Remaining timesteps = forecast.
+        is_first_ts = ts_idx == 0
+        if is_first_ts:
             ts_wind_speed = wind_speed_station
             ts_wind_direction = wind_direction_station
             ts_wind_source = wind_source_station
-
-            # If station hardware unavailable, fall back to HRRR f00.
             if ts_wind_speed is None and hrrr_field is not None:
                 ts_wind_speed, ts_wind_direction = _interpolate_hrrr_wind(
                     hrrr_field,
@@ -521,7 +565,6 @@ def get_surf(location_id: str) -> dict:
                 if ts_wind_speed is not None:
                     ts_wind_source = "hrrr"
         else:
-            # t>0: HRRR forecast wind (same model run that forced SWAN).
             ts_wind_speed = None
             ts_wind_direction = None
             ts_wind_source = "hrrr"
@@ -533,14 +576,18 @@ def get_surf(location_id: str) -> dict:
                     valid_time_iso=valid_time,
                 )
 
-        # Step 6: score surf using breakingFaceHeight (T3.2 / ADR-094)
+        # Step 6: score surf using breakingFaceHeight (ADR-094)
+        # T3.5: spectral_components=None — NDBC spectral data is NO LONGER passed
+        # to the scorer.  Scoring uses SWAN values only.  The NDBC fetch still
+        # runs and spectralComponents is still in the response (reference data),
+        # but it no longer feeds the surf score or multiSwell display.
         surf_forecast = score_surf(
             wave_height=face_height_m,
             wave_period=wave_period_pt,
             wave_direction=wave_direction_pt,
             wind_speed=ts_wind_speed,
             wind_direction=ts_wind_direction,
-            spectral_components=spectral_components,
+            spectral_components=None,  # T3.5: NDBC spectral disconnected from scoring
             spot_config=spot_config,
             time_utc=valid_time,
             wind_source=ts_wind_source,
@@ -549,9 +596,6 @@ def get_surf(location_id: str) -> dict:
         entry = surf_forecast.model_dump()
 
         # Overwrite height fields with the four canonical values (unit-converted).
-        # The scorer internally uses wave_height (= face_height_m) for scoring
-        # and stores it as waveHeightAtBreak — we overwrite with the correct
-        # post-supplement Hsig so the response matches the documented field meaning.
         entry["swellHeight"] = _convert_unit(swell_height_m, "meter", wave_height_internal)
         entry["waveHeightAtBreak"] = _convert_unit(corrected_hsig, "meter", wave_height_internal)
         entry["breakingFaceHeight"] = _convert_unit(face_height_m, "meter", wave_height_internal)
@@ -559,6 +603,25 @@ def get_surf(location_id: str) -> dict:
             hawaiian_height_m, "meter", wave_height_internal
         )
         entry["windSource"] = ts_wind_source
+
+        # T3.5: multiSwell from SWAN SPECOUT decomposition for this timestep,
+        # NOT from NDBC spectral.  Each timestep gets its own spectral decomposition.
+        # Fall back to None (empty) when SPECOUT is unavailable.
+        ts_spectral = _spectral_by_time.get(valid_time)
+        if ts_spectral:
+            entry["multiSwell"] = [
+                {
+                    "height": _convert_unit(c.get("height", 0.0), "meter", wave_height_internal),
+                    "period": c.get("period", 0.0),
+                    "direction": c.get("direction", 0.0),
+                    "energy": c.get("energy", 0.0),
+                    "frequencyRange": c.get("frequencyRange", [0.0, 0.0]),
+                    "classification": c.get("classification", "swell"),
+                }
+                for c in ts_spectral
+            ]
+        else:
+            entry["multiSwell"] = None  # SPECOUT not available for this timestep
 
         forecast_entries.append(entry)
 

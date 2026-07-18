@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
     build_swan_input,
+    compute_spot_transect,
     cudem_to_swan_bottom,
     hrrr_to_swan_wind,
     ww3_to_swan_boundary,
@@ -218,9 +219,19 @@ def _parse_table_output(
                 )
             continue
 
+        # T3.2 — optional extended columns (present in CURVE TABLE, absent in
+        # old POINTS TABLE).  Accepted name variants for SWAN header tokens.
+        i_hswell  = col_idx.get("HSWELL")
+        i_depth   = col_idx.get("DEPTH")
+        i_qb      = col_idx.get("QB")
+        i_dissurf = col_idx.get("DISSURF") or col_idx.get("DISS")
+        i_setup   = col_idx.get("SETUP")
+        i_dspr    = col_idx.get("DSPR")
+
         max_idx = max(i_xp, i_yp, i_hs, i_tm, i_dir)
-        if i_time is not None:
-            max_idx = max(max_idx, i_time)
+        for _opt in (i_time, i_hswell, i_depth, i_qb, i_dissurf, i_setup, i_dspr):
+            if _opt is not None:
+                max_idx = max(max_idx, _opt)
         if len(parts) < max_idx + 1:
             continue
 
@@ -233,6 +244,23 @@ def _parse_table_output(
             time_token = parts[i_time] if i_time is not None else None
         except (ValueError, IndexError):
             continue
+
+        def _opt_float(idx: int | None) -> float | None:
+            if idx is None or idx >= len(parts):
+                return None
+            try:
+                v = float(parts[idx])
+                # Treat SWAN exception value as no-data
+                return None if v <= _SWAN_EXCEPTION_VALUE else v
+            except (ValueError, TypeError):
+                return None
+
+        hswell   = _opt_float(i_hswell)
+        depth    = _opt_float(i_depth)
+        qb       = _opt_float(i_qb)
+        dissurf  = _opt_float(i_dissurf)
+        setup_v  = _opt_float(i_setup)
+        dspr     = _opt_float(i_dspr)
 
         # Physical validation — log at WARNING temporarily for T7.5 debugging
         if not _is_valid_point(hs, tm01, mwd):
@@ -284,10 +312,178 @@ def _parse_table_output(
                 waveHeight=round(hs, 2),
                 wavePeriod=round(tm01, 1),
                 waveDirection=round(mwd, 1),
+                swellHeight=round(hswell, 2) if hswell is not None else None,
+                depth=round(depth, 2) if depth is not None else None,
+                breakingFraction=round(qb, 4) if qb is not None else None,
+                breakingDissipation=round(dissurf, 2) if dissurf is not None else None,
+                setup=round(setup_v, 3) if setup_v is not None else None,
+                directionalSpread=round(dspr, 1) if dspr is not None else None,
             )
         )
 
     return result
+
+
+def _parse_transect_table(
+    table_text: str,
+    spot_id: str,
+    transect_points: list[dict],
+    coord_tolerance_deg: float = 0.003,
+) -> list[MarineForecastPoint]:
+    """Parse a single-spot CURVE TABLE file (T3.2).
+
+    Similar to _parse_table_output but for a per-spot TABLE file where all
+    rows belong to *spot_id*.  Transect points are matched by (Xp, Yp) to
+    retrieve depth_m and distance_m metadata.
+
+    Args:
+        table_text: Content of the per-spot TABLE file (e.g. TABLE_1.txt).
+        spot_id: The surf spot this file was written for.
+        transect_points: list of dicts from compute_spot_transect(), each with
+            keys "lon", "lat", "depth_m", "distance_m".
+        coord_tolerance_deg: Tolerance for matching Xp/Yp to transect points.
+
+    Returns:
+        list[MarineForecastPoint] — one per valid row; may contain multiple
+        points per timestep (one per transect output point).
+    """
+    # Build fast lookup: (lon_rounded, lat_rounded) → (depth_m, distance_m)
+    transect_lookup: dict[tuple[float, float], tuple[float, float]] = {}
+    for tp in transect_points:
+        key = (round(float(tp["lon"]), 4), round(float(tp["lat"]), 4))
+        transect_lookup[key] = (float(tp.get("depth_m", 0.0)), float(tp.get("distance_m", 0.0)))
+
+    raw_lines = table_text.splitlines()
+    logger.debug(
+        "SWAN CURVE TABLE %r: %d raw lines",
+        spot_id, len(raw_lines),
+    )
+
+    col_idx: dict[str, int] = {}
+    header_found = False
+    results: list[MarineForecastPoint] = []
+
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("%"):
+            tokens = line.lstrip("%").split()
+            if not header_found and tokens and tokens[0].upper() not in ("RUN:V1", "[DEGR]", "[M]", "[SEC]"):
+                if any(t.upper() in ("XP", "YP", "HSIG", "HSIGN", "HS", "TM01", "DIR", "TIME") for t in tokens):
+                    col_idx = {tok.upper(): idx for idx, tok in enumerate(tokens)}
+                    header_found = True
+            continue
+
+        if not header_found:
+            continue
+
+        parts = line.split()
+        if not parts:
+            continue
+
+        try:
+            i_time = col_idx.get("TIME")
+            i_xp = col_idx["XP"]
+            i_yp = col_idx["YP"]
+            i_hs = col_idx.get("HSIG", col_idx.get("HSIGN", col_idx.get("HS")))
+            if i_hs is None:
+                raise KeyError("HSIG/HSIGN/HS")
+            i_tm = col_idx["TM01"]
+            i_dir = col_idx["DIR"]
+        except KeyError:
+            continue
+
+        i_hswell  = col_idx.get("HSWELL")
+        i_depth   = col_idx.get("DEPTH")
+        i_qb      = col_idx.get("QB")
+        i_dissurf = col_idx.get("DISSURF") or col_idx.get("DISS")
+        i_setup   = col_idx.get("SETUP")
+        i_dspr    = col_idx.get("DSPR")
+
+        max_idx = max(i_xp, i_yp, i_hs, i_tm, i_dir)
+        for _opt in (i_time, i_hswell, i_depth, i_qb, i_dissurf, i_setup, i_dspr):
+            if _opt is not None:
+                max_idx = max(max_idx, _opt)
+        if len(parts) < max_idx + 1:
+            continue
+
+        try:
+            xp = float(parts[i_xp])
+            yp = float(parts[i_yp])
+            hs = float(parts[i_hs])
+            tm01 = float(parts[i_tm])
+            mwd = float(parts[i_dir])
+            time_token = parts[i_time] if i_time is not None else None
+        except (ValueError, IndexError):
+            continue
+
+        def _opt_val(idx: int | None) -> float | None:
+            if idx is None or idx >= len(parts):
+                return None
+            try:
+                v = float(parts[idx])
+                return None if v <= _SWAN_EXCEPTION_VALUE else v
+            except (ValueError, TypeError):
+                return None
+
+        hswell   = _opt_val(i_hswell)
+        depth_swan = _opt_val(i_depth)  # SWAN DEPTH column
+        qb       = _opt_val(i_qb)
+        dissurf  = _opt_val(i_dissurf)
+        setup_v  = _opt_val(i_setup)
+        dspr     = _opt_val(i_dspr)
+
+        if not _is_valid_point(hs, tm01, mwd):
+            continue
+
+        if time_token is None:
+            continue
+        try:
+            date_part, time_part = time_token.split(".")
+            iso = (
+                f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                f"T{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}Z"
+            )
+        except (ValueError, IndexError):
+            continue
+
+        # Determine depth and distance from transect lookup (prefer TABLE DEPTH
+        # column; fall back to transect interpolation).
+        xp_rounded = round(xp, 4)
+        yp_rounded = round(yp, 4)
+
+        depth_m: float | None = depth_swan
+        distance_m: float | None = None
+
+        # Search transect lookup within tolerance
+        best_dist_deg = float("inf")
+        for (tp_lon, tp_lat), (tp_depth, tp_dist) in transect_lookup.items():
+            dist_deg = math.sqrt((xp_rounded - tp_lon) ** 2 + (yp_rounded - tp_lat) ** 2)
+            if dist_deg < coord_tolerance_deg and dist_deg < best_dist_deg:
+                best_dist_deg = dist_deg
+                if depth_m is None:  # prefer DEPTH column; use lookup only as fallback
+                    depth_m = tp_depth
+                distance_m = tp_dist
+
+        results.append(
+            MarineForecastPoint(
+                time=iso,
+                waveHeight=round(hs, 2),
+                wavePeriod=round(tm01, 1),
+                waveDirection=round(mwd, 1),
+                swellHeight=round(hswell, 2) if hswell is not None else None,
+                depth=round(depth_m, 2) if depth_m is not None else None,
+                breakingFraction=round(qb, 4) if qb is not None else None,
+                breakingDissipation=round(dissurf, 2) if dissurf is not None else None,
+                setup=round(setup_v, 3) if setup_v is not None else None,
+                directionalSpread=round(dspr, 1) if dspr is not None else None,
+                distanceFromShore=round(distance_m, 1) if distance_m is not None else None,
+            )
+        )
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +776,15 @@ class SWANRunner:
         # omp_num_threads: 0 = let OpenMP use all available cores (default).
         # Positive integer = cap SWAN CPU usage to that many threads.
         self._omp_num_threads: int = int(config.get("omp_num_threads", 0))
+
+        # T3.1 — per-spot configs for cross-shore transect (beach_facing_degrees,
+        # bathymetric_profile).  When provided, the inner grid uses CURVE output
+        # instead of POINTS.  None = old POINTS + TABLE behaviour.
+        self._spot_configs: dict[str, dict] = config.get("spot_configs") or {}
+
+        # T3.3 — populated by _parse_output() with per-spot SPECOUT spectral
+        # decomposition results.  Accessed by the caller after run_with_tmpdir().
+        self._spectral_results: dict[str, list[dict]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -997,8 +1202,28 @@ class SWANRunner:
             (run_dir / "BOUND_W.txt").write_text(boundary_text, encoding="ascii")
             (run_dir / "BOUND_S.txt").write_text(boundary_text, encoding="ascii")
 
-        # OUTPUT_POINTS.txt (inner only)
-        if grid_level == "inner":
+        # T3.1 — build per-spot transect data (when spot_configs provided and
+        # this is the inner level).  Used for both CURVE output in build_swan_input
+        # and transect-aware parsing in _parse_output.
+        transect_spot_order: list[str] = []
+        transect_points_map: dict[str, list[dict]] = {}
+
+        if grid_level == "inner" and self._spot_configs:
+            for n, (spot_id, (spot_lon, spot_lat)) in enumerate(self._surf_spots.items(), start=1):
+                cfg = self._spot_configs.get(spot_id)
+                if cfg is None:
+                    continue
+                tr = compute_spot_transect(
+                    spot_lon,
+                    spot_lat,
+                    float(cfg.get("beach_facing_degrees", 0.0)),
+                    cfg.get("bathymetric_profile") or [],
+                )
+                transect_spot_order.append(spot_id)
+                transect_points_map[spot_id] = tr["transect_points"]
+
+        # OUTPUT_POINTS.txt (inner only — only when NOT using CURVE transect)
+        if grid_level == "inner" and not transect_spot_order:
             pts_lines: list[str] = [
                 f"{lon:.6f}   {lat:.6f}"
                 for _sid, (lon, lat) in self._surf_spots.items()
@@ -1009,6 +1234,11 @@ class SWANRunner:
 
         # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
         grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
+
+        # Attach transect metadata so _parse_output can retrieve it.
+        if transect_spot_order:
+            grid_info["transect_spot_order"] = transect_spot_order
+            grid_info["transect_points"] = transect_points_map
 
         # Compute inner_dims for outer NESTOUT command
         inner_dims_for_input: dict[str, Any] | None = None
@@ -1041,6 +1271,7 @@ class SWANRunner:
             has_wlevel=has_wlevel,
             has_current=has_current,
             structures=structures,
+            spot_configs=self._spot_configs if grid_level == "inner" else None,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
@@ -1141,21 +1372,88 @@ class SWANRunner:
     def _parse_output(
         self,
         tmpdir: Path,
-        grid_info: dict[str, Any],  # noqa: ARG002
+        grid_info: dict[str, Any],
     ) -> dict[str, list[MarineForecastPoint]]:
-        """Read OUTPUT_TABLE.txt and convert rows to MarineForecastPoints.
+        """Read SWAN TABLE output and convert rows to MarineForecastPoints.
+
+        T3.1/T3.2: When the inner grid used CURVE transect output, reads per-spot
+        TABLE files (TABLE_1.txt, TABLE_2.txt, …) instead of the legacy
+        OUTPUT_TABLE.txt.  Each file is parsed with _parse_transect_table() which
+        includes depth, QB, DSPR, HSWELL, DISSURF, SETUP fields.
+
+        Also reads SPECOUT files (SPEC_1.txt, …) and decomposes spectra into
+        swell systems; results are stored in self._spectral_results (T3.3).
 
         Args:
             tmpdir: Directory where SWAN wrote its output.
-            grid_info: Grid dimension dict (not used in parsing but available for
-                       future use, e.g. interpolating missing values).
+            grid_info: Grid dimension dict; may include "transect_spot_order" and
+                       "transect_points" keys when CURVE output was used.
 
         Returns:
             dict[spot_id, list[MarineForecastPoint]]
 
         Raises:
-            SWANRunError: OUTPUT_TABLE.txt is missing (SWAN may have aborted early).
+            SWANRunError: No TABLE output found (SWAN may have aborted early).
         """
+        from weewx_clearskies_api.services.swan_spectral import parse_and_decompose  # noqa: PLC0415
+
+        transect_spot_order: list[str] = grid_info.get("transect_spot_order") or []
+        transect_points_map: dict[str, list[dict]] = grid_info.get("transect_points") or {}
+
+        # ---- SPECOUT spectral decomposition (T3.3) ----
+        self._spectral_results = {}
+        for n, spot_id in enumerate(transect_spot_order, start=1):
+            spec_path = tmpdir / f"SPEC_{n}.txt"
+            if spec_path.exists():
+                spectra = parse_and_decompose(spec_path)
+                self._spectral_results[spot_id] = spectra
+                logger.debug(
+                    "SWAN SPECOUT: spot %r → %d timestep(s) decomposed",
+                    spot_id, len(spectra),
+                )
+            else:
+                logger.debug("SWAN SPECOUT: %s not found (spot %r)", spec_path.name, spot_id)
+
+        # ---- TABLE parsing ----
+        if transect_spot_order:
+            # T3.1 path: read per-spot TABLE files (CURVE output)
+            result: dict[str, list[MarineForecastPoint]] = {
+                sid: [] for sid in self._surf_spots
+            }
+            all_found = False
+            for n, spot_id in enumerate(transect_spot_order, start=1):
+                table_path = tmpdir / f"TABLE_{n}.txt"
+                if not table_path.exists():
+                    logger.warning(
+                        "SWAN: per-spot table file %s not found for spot %r",
+                        table_path.name, spot_id,
+                    )
+                    continue
+                all_found = True
+                table_text = table_path.read_text(encoding="utf-8", errors="replace")
+                pts = _parse_transect_table(
+                    table_text,
+                    spot_id,
+                    transect_points_map.get(spot_id) or [],
+                )
+                result[spot_id] = pts
+                logger.info(
+                    "SWAN: spot %r → %d transect points parsed from %s",
+                    spot_id, len(pts), table_path.name,
+                )
+            if not all_found:
+                # Fall through to legacy OUTPUT_TABLE.txt as last resort
+                logger.warning(
+                    "SWAN: no per-spot TABLE files found; falling back to OUTPUT_TABLE.txt"
+                )
+                return self._parse_output_legacy(tmpdir)
+            return result
+
+        # ---- Legacy path: single OUTPUT_TABLE.txt ----
+        return self._parse_output_legacy(tmpdir)
+
+    def _parse_output_legacy(self, tmpdir: Path) -> dict[str, list[MarineForecastPoint]]:
+        """Read the legacy OUTPUT_TABLE.txt (POINTS output, old single-point approach)."""
         table_path = tmpdir / "OUTPUT_TABLE.txt"
         if not table_path.exists():
             errfile_path = tmpdir / "Errfile"
@@ -1169,6 +1467,5 @@ class SWANRunner:
                 stderr=errfile,
                 returncode=None,
             )
-
         table_text = table_path.read_text(encoding="utf-8", errors="replace")
         return _parse_table_output(table_text, self._surf_spots)

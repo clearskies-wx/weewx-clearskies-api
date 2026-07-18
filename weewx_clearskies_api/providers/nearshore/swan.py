@@ -588,6 +588,8 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
 
     return {
         "forecast": last_good.get("forecast", []),
+        # T3.3 — SPECOUT spectral decomposition (list of {time, components} dicts)
+        "spectral": last_good.get("spectral", []),
         "run_time": run_time_str,
         "data_age_seconds": data_age_seconds,
     }
@@ -875,6 +877,23 @@ def run_all_spots(
         loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations
     }
 
+    # T3.1 — build per-spot transect configs for CURVE output.
+    # Converts SurfSpotConfig.beach_facing_degrees and bathymetric_profile into
+    # the plain-dict shape that build_swan_input() + compute_spot_transect() expect.
+    spot_configs_for_runner: dict[str, dict] = {}
+    for loc in surf_locations:
+        spot_cfg = marine_config.surf_spots.get(loc.id)
+        if spot_cfg is None:
+            continue
+        profile = spot_cfg.bathymetric_profile or []
+        spot_configs_for_runner[loc.id] = {
+            "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
+            "bathymetric_profile": [
+                {"distance_m": float(pt.distance_m), "depth_m": float(pt.depth_m)}
+                for pt in profile
+            ],
+        }
+
     swan_cfg = getattr(marine_config, "swan", None)
     omp_num_threads: int = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0
     _cfg_outer_km = getattr(swan_cfg, "outer_grid_resolution_km", None) if swan_cfg else None
@@ -903,6 +922,8 @@ def run_all_spots(
         "output_interval_hr": output_interval_hr,
         "swan_timeout_s": swan_timeout_s,
         "omp_num_threads": omp_num_threads,
+        # T3.1 — cross-shore transect configs (beach_facing_degrees, bathymetric_profile)
+        "spot_configs": spot_configs_for_runner or None,
     }
 
     runner = _SWANRunnerWithCleanup(swan_config)
@@ -929,6 +950,8 @@ def run_all_spots(
             ofs_currents=ofs_currents,
             structures=structures_for_swan,
         )
+        # T3.3 — spectral decomposition results from SPECOUT files
+        spectral_results: dict[str, list] = runner._spectral_results  # noqa: SLF001
     except SWANRunError as exc:
         logger.error(
             "SWAN: SWAN run failed (returncode=%s); "
@@ -946,6 +969,8 @@ def run_all_spots(
             exc_info=True,
         )
         return
+    else:
+        spectral_results = getattr(runner, "_spectral_results", {})
 
     # ------------------------------------------------------------------
     # 5. Successful run: cache per-spot results and clean up tmpdir.
@@ -988,6 +1013,8 @@ def run_all_spots(
 
         payload = {
             "forecast": forecast_dicts,
+            # T3.3 — per-timestep spectral decomposition from SWAN SPECOUT
+            "spectral": spectral_results.get(spot_id, []),
             "run_time": run_time_iso,
             "hrrr_cycle_time": hrrr_cycle_time,
         }
