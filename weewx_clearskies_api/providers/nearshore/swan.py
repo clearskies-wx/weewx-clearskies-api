@@ -98,6 +98,10 @@ _DEFAULT_SWAN_TIMEOUT_S = 900
 # CUDEM 2-D bathymetry grid cache path (persistent across restarts).
 _CUDEM_GRID_PATH = Path("/etc/weewx-clearskies/swan_bathymetry.json")
 
+# Per-spot bidirectional CUDEM profile cache (180-day TTL).
+_PROFILE_CACHE_DIR = Path("/etc/weewx-clearskies/spot_profiles")
+_PROFILE_MAX_AGE_S = 180 * 86400  # 180 days
+
 
 def _load_or_download_cudem_grid(
     bbox: tuple[float, float, float, float],
@@ -883,19 +887,83 @@ def run_all_spots(
     # T3.1 — build per-spot transect configs for CURVE output.
     # Converts SurfSpotConfig.beach_facing_degrees and bathymetric_profile into
     # the plain-dict shape that build_swan_input() + compute_spot_transect() expect.
+    # Also loads or refreshes the bidirectional CUDEM profile (180-day cache) so
+    # compute_spot_transect() can extend the transect from the actual coastline
+    # (~0 m depth) rather than the operator's pin — ensuring the surf zone is
+    # included in the SWAN CURVE output.
     spot_configs_for_runner: dict[str, dict] = {}
+    _PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     for loc in surf_locations:
         spot_cfg = marine_config.surf_spots.get(loc.id)
         if spot_cfg is None:
             continue
         profile = spot_cfg.bathymetric_profile or []
-        spot_configs_for_runner[loc.id] = {
+        cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
             "bathymetric_profile": [
                 {"distance_m": float(pt.distance_m), "depth_m": float(pt.depth_m)}
                 for pt in profile
             ],
         }
+
+        # Load or refresh the bidirectional CUDEM profile for this spot.
+        cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
+        runtime_profile: dict | None = None
+
+        if cache_path.exists():
+            age_s = time.time() - cache_path.stat().st_mtime
+            if age_s < _PROFILE_MAX_AGE_S:
+                try:
+                    runtime_profile = json.loads(cache_path.read_text(encoding="utf-8"))
+                    logger.debug(
+                        "SWAN: loaded bidirectional profile for spot %r from cache "
+                        "(age %.0f days, %d points).",
+                        loc.id,
+                        age_s / 86400,
+                        len((runtime_profile or {}).get("profile", [])),
+                    )
+                except Exception:
+                    logger.warning(
+                        "SWAN: bidirectional profile cache for spot %r is corrupt; "
+                        "re-downloading.",
+                        loc.id,
+                        exc_info=True,
+                    )
+                    runtime_profile = None
+
+        if runtime_profile is None:
+            try:
+                from weewx_clearskies_api.enrichment.bathymetry import (  # noqa: PLC0415
+                    download_bidirectional_profile,
+                )
+
+                runtime_profile = download_bidirectional_profile(
+                    loc.lat,
+                    loc.lon,
+                    float(spot_cfg.beach_facing_degrees),
+                )
+                cache_path.write_text(json.dumps(runtime_profile), encoding="utf-8")
+                logger.info(
+                    "SWAN: downloaded and cached bidirectional CUDEM profile for "
+                    "spot %r (%d points, coastline=%.6f,%.6f).",
+                    loc.id,
+                    len(runtime_profile.get("profile", [])),
+                    runtime_profile.get("coastline_lat", loc.lat),
+                    runtime_profile.get("coastline_lon", loc.lon),
+                )
+            except Exception:
+                logger.warning(
+                    "SWAN: bidirectional profile download failed for spot %r; "
+                    "falling back to wizard-configured profile for this run.",
+                    loc.id,
+                    exc_info=True,
+                )
+                runtime_profile = None
+
+        if runtime_profile is not None:
+            cfg_dict["runtime_profile"] = runtime_profile
+
+        spot_configs_for_runner[loc.id] = cfg_dict
 
     swan_cfg = getattr(marine_config, "swan", None)
     omp_num_threads: int = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0

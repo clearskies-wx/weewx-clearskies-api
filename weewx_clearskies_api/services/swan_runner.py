@@ -1231,11 +1231,28 @@ class SWANRunner:
                 cfg = self._spot_configs.get(spot_id)
                 if cfg is None:
                     continue
+                # Prefer the runtime bidirectional profile (distance_m from
+                # the actual coastline) over the wizard-configured profile.
+                # runtime_profile is a dict with "profile", "coastline_lat",
+                # "coastline_lon"; fall back to bathymetric_profile (list) if
+                # the runtime download did not succeed.
+                _runtime = cfg.get("runtime_profile")
+                if isinstance(_runtime, dict) and "profile" in _runtime:
+                    _profile_list: list[dict] = _runtime["profile"]
+                    _coast_lat: float | None = _runtime.get("coastline_lat")
+                    _coast_lon: float | None = _runtime.get("coastline_lon")
+                else:
+                    _profile_list = cfg.get("bathymetric_profile") or []
+                    _coast_lat = None
+                    _coast_lon = None
+
                 tr = compute_spot_transect(
                     spot_lon,
                     spot_lat,
                     float(cfg.get("beach_facing_degrees", 0.0)),
-                    cfg.get("bathymetric_profile") or [],
+                    _profile_list,
+                    coastline_lat=_coast_lat,
+                    coastline_lon=_coast_lon,
                 )
                 transect_spot_order.append(spot_id)
                 transect_points_map[spot_id] = tr["transect_points"]

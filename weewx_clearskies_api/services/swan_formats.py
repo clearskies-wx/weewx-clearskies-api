@@ -458,6 +458,9 @@ def compute_spot_transect(
     spacing_m: float = 50.0,
     min_points: int = 10,
     max_points: int = 20,
+    *,
+    coastline_lat: float | None = None,
+    coastline_lon: float | None = None,
 ) -> dict[str, Any]:
     """Compute the cross-shore CURVE transect for one surf spot.
 
@@ -469,12 +472,12 @@ def compute_spot_transect(
     for coastal domains of ≤30 km extent.
 
     Args:
-        spot_lon: Longitude of the surf spot (degrees).
-        spot_lat: Latitude of the surf spot (degrees).
+        spot_lon: Longitude of the surf spot pin (degrees).
+        spot_lat: Latitude of the surf spot pin (degrees).
         beach_facing_degrees: Compass bearing (degrees, clockwise from north)
             pointing from shore toward the ocean.
         bathymetric_profile: Ordered list of dicts with keys "distance_m" (metres
-            from shore, increasing offshore) and "depth_m" (positive = wet).
+            from the coastline, increasing offshore) and "depth_m" (positive = wet).
             Need not be sorted; this function sorts by distance_m internally.
             When empty or None, default distances (500 m, 300 m, 50 m) are used
             for deep/spec/shallow respectively.
@@ -484,6 +487,12 @@ def compute_spot_transect(
         spacing_m: Nominal spacing between transect output points (m).
         min_points: Minimum number of CURVE output points (inclusive).
         max_points: Maximum number of CURVE output points (inclusive).
+        coastline_lat: Latitude of the actual shoreline (degrees).  When
+            provided (from ``download_bidirectional_profile``), coordinate
+            offsets are computed FROM this point rather than from the operator's
+            pin, so the CURVE transect starts at the true coastline.
+        coastline_lon: Longitude of the actual shoreline (degrees).  See
+            ``coastline_lat``.
 
     Returns:
         dict with keys:
@@ -494,15 +503,20 @@ def compute_spot_transect(
           transect_points (list[dict]): each dict has keys "lon", "lat",
             "depth_m", "distance_m"; ordered from offshore to nearshore.
     """
+    # Origin for coordinate offsets — use the coastline when known (bidirectional
+    # profile), otherwise fall back to the operator's pin (legacy behaviour).
+    origin_lat = coastline_lat if coastline_lat is not None else spot_lat
+    origin_lon = coastline_lon if coastline_lon is not None else spot_lon
+
     meters_per_lat = 111_000.0
-    meters_per_lon = 111_000.0 * math.cos(math.radians(spot_lat))
+    meters_per_lon = 111_000.0 * math.cos(math.radians(origin_lat))
     bearing_rad = math.radians(beach_facing_degrees)
 
     def _offset(distance_m: float) -> tuple[float, float]:
-        """Return (lon, lat) at *distance_m* in the offshore direction."""
+        """Return (lon, lat) at *distance_m* in the offshore direction from origin."""
         dlon = distance_m * math.sin(bearing_rad) / meters_per_lon
         dlat = distance_m * math.cos(bearing_rad) / meters_per_lat
-        return spot_lon + dlon, spot_lat + dlat
+        return origin_lon + dlon, origin_lat + dlat
 
     # ---- Derive distances from the bathymetric profile ----
     profile = [p for p in (bathymetric_profile or []) if p.get("depth_m") is not None]

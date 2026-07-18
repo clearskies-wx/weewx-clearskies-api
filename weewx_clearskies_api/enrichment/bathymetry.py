@@ -623,6 +623,173 @@ def _download_bathymetric_profile_impl(
 
 
 # ---------------------------------------------------------------------------
+# Bidirectional runtime profile (SWAN bidirectional transect)
+# ---------------------------------------------------------------------------
+
+_BIDIR_PROFILE_STEP_M = 50.0  # interval between profile sample points
+
+
+def download_bidirectional_profile(
+    lat: float,
+    lon: float,
+    bearing_degrees: float,
+    *,
+    target_deep_m: float = 15.0,
+    target_shallow_m: float = 0.5,  # reserved; not used in search
+    step_m: float = 10.0,
+    max_search_m: float = 5000.0,
+) -> dict[str, Any]:
+    """Download a bidirectional CUDEM depth profile for a surf spot at runtime.
+
+    Unlike ``download_bathymetric_profile`` (which goes only offshore from the
+    pin), this function builds a profile that spans from the actual coastline
+    (depth ≈ 0 m) to deep water (~``target_deep_m``).  The operator's pin is
+    treated as a general indicator; the true shoreline is located by sampling
+    SHOREWARD from the pin in ``step_m`` increments until the CUDEM elevation
+    crosses MSL (depth == 0).
+
+    Algorithm:
+      1. **Find the coastline.** Query depth at the pin.  If it is already 0
+         (land/MSL) or has no CUDEM coverage, the pin is treated as the
+         shoreline.  Otherwise, walk shoreward at ``step_m`` intervals until
+         depth == 0 or ``max_search_m`` is exhausted.
+      2. **Find the deep endpoint.** From the coastline, walk offshore at
+         ``step_m`` intervals until depth ≥ ``target_deep_m`` or
+         ``max_search_m`` is exhausted.
+      3. **Sample the profile.** Query CUDEM at ``~50 m`` intervals from the
+         coastline to the deep endpoint, smooth IQR outliers, and return.
+
+    All NCEI ImageServer queries honour the 2 req/s courtesy rate limit via
+    ``_acquire_rate_limit_slot()``.  On any ``ProviderError``, re-raises —
+    the caller is responsible for wrapping in a try/except and falling back
+    to the wizard-configured profile.
+
+    Args:
+        lat: Latitude of the surf spot pin (degrees).
+        lon: Longitude of the surf spot pin (degrees).
+        bearing_degrees: Compass bearing pointing FROM shore TOWARD the ocean
+            (the offshore direction, 0 = north, 90 = east).
+        target_deep_m: Depth threshold for the offshore search endpoint (m).
+        target_shallow_m: Reserved for future profile trimming; not used here.
+        step_m: Step size (m) for the shoreward and offshore search walks.
+        max_search_m: Maximum search distance in each direction (m).
+
+    Returns:
+        dict with keys:
+          ``"coastline_lat"`` (float): latitude of the located shoreline.
+          ``"coastline_lon"`` (float): longitude of the located shoreline.
+          ``"profile"`` (list[dict]): each entry has ``"distance_m"`` (float,
+              from the coastline, increasing offshore) and ``"depth_m"``
+              (float, non-negative, positive = below MSL).  Sorted by
+              ``distance_m`` ascending.
+    """
+    shoreward_bearing = (bearing_degrees + 180.0) % 360.0
+
+    # ---- Step 1: find the coastline ----
+    pin_depth = _query_depths_m([(lat, lon)])[0]
+
+    coastline_lat = lat
+    coastline_lon = lon
+
+    if pin_depth is None or pin_depth == 0.0:
+        # Pin is on land (depth == 0) or outside CUDEM coverage — treat as shore.
+        logger.debug(
+            "Bidirectional profile: pin at lat=%.6f,lon=%.6f depth=%s "
+            "(land/no-coverage); treating pin as coastline.",
+            lat, lon, pin_depth,
+        )
+    else:
+        found_coast = False
+        dist = step_m
+        while dist <= max_search_m:
+            pt_lat, pt_lon = point_along_bearing(lat, lon, shoreward_bearing, dist)
+            depth = _query_depths_m([(pt_lat, pt_lon)])[0]
+            if depth is not None and depth == 0.0:
+                coastline_lat = pt_lat
+                coastline_lon = pt_lon
+                found_coast = True
+                logger.debug(
+                    "Bidirectional profile: coastline at %.0f m shoreward of pin "
+                    "(lat=%.6f, lon=%.6f).",
+                    dist, coastline_lat, coastline_lon,
+                )
+                break
+            dist += step_m
+
+        if not found_coast:
+            logger.warning(
+                "Bidirectional profile: no land (depth==0) found within %.0f m "
+                "shoreward of lat=%.6f,lon=%.6f (shoreward bearing=%.1f°); "
+                "using pin as coastline.",
+                max_search_m, lat, lon, shoreward_bearing,
+            )
+
+    # ---- Step 2: find the deep-water endpoint from the coastline ----
+    deep_end_dist_m = max_search_m
+    found_deep = False
+    dist = step_m
+    while dist <= max_search_m:
+        pt_lat, pt_lon = point_along_bearing(
+            coastline_lat, coastline_lon, bearing_degrees, dist
+        )
+        depth = _query_depths_m([(pt_lat, pt_lon)])[0]
+        if depth is not None and depth >= target_deep_m:
+            deep_end_dist_m = dist
+            found_deep = True
+            logger.debug(
+                "Bidirectional profile: %.1f m depth reached at %.0f m offshore "
+                "of coastline.",
+                target_deep_m, dist,
+            )
+            break
+        dist += step_m
+
+    if not found_deep:
+        logger.warning(
+            "Bidirectional profile: depth %.1f m not reached within %.0f m "
+            "offshore of coastline (lat=%.6f,lon=%.6f); using farthest "
+            "searched point (%.0f m) as the deep endpoint.",
+            target_deep_m, max_search_m,
+            coastline_lat, coastline_lon, deep_end_dist_m,
+        )
+
+    # ---- Step 3: sample the profile at ~50 m intervals ----
+    num_pts = max(2, int(round(deep_end_dist_m / _BIDIR_PROFILE_STEP_M)) + 1)
+    distances_m = _linspace(0.0, deep_end_dist_m, num_pts)
+    profile_pts = [
+        point_along_bearing(coastline_lat, coastline_lon, bearing_degrees, d)
+        for d in distances_m
+    ]
+    raw_depths = _query_depths_m(profile_pts)
+
+    # Drop None readings, smooth outliers.
+    clean_pairs = [
+        (d, z)
+        for d, z in zip(distances_m, raw_depths, strict=True)
+        if z is not None
+    ]
+    clean_pairs.sort(key=lambda p: p[0])
+
+    if clean_pairs:
+        c_dists = [p[0] for p in clean_pairs]
+        c_depths = _smooth_outliers_iqr([p[1] for p in clean_pairs])
+    else:
+        c_dists = []
+        c_depths = []
+
+    profile = [
+        {"distance_m": round(d, 1), "depth_m": round(z, 2)}
+        for d, z in zip(c_dists, c_depths, strict=True)
+    ]
+
+    return {
+        "coastline_lat": round(coastline_lat, 6),
+        "coastline_lon": round(coastline_lon, 6),
+        "profile": profile,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Unified bounding-box download (Marine Remediation T1.2)
 # ---------------------------------------------------------------------------
 
