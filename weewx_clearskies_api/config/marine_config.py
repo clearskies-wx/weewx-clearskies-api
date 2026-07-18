@@ -279,10 +279,10 @@ class StructureConfig:
     bearing_degrees: float
     distance_m: float
     #: Bearing (degrees true) from the structure's nearest point to the surf
-    #: spot. Optional — enables the directional shadow-zone check in
-    #: enrichment/wave_transform.py's _structure_kt_effective() (T7.2).
-    #: Auto-populated by GET /setup/marine/discover-structures; None for
-    #: manually-entered structures unless the operator supplies it.
+    #: spot. Optional — used by the SWAN OBSTACLE shadow-zone geometry to
+    #: orient the OBSTACLE LINE command correctly. Auto-populated by
+    #: GET /setup/marine/discover-structures; None for manually-entered
+    #: structures unless the operator supplies it.
     bearing_to_spot_degrees: float | None
     #: Line geometry for the SWAN OBSTACLE command — list of [lon, lat] pairs.
     #: When empty, the OBSTACLE command is skipped for this structure.

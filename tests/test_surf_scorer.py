@@ -3,9 +3,9 @@ Phase 3 T3.3).
 
 Module under test: weewx_clearskies_api/enrichment/surf_scorer.py
 
-Covers the four weighted scoring components (wave height, wave period, wind
-quality, swell dominance), multi-swell energy superposition, beach angle
-alignment, the directional exposure filter, and the full score_surf() ->
+Covers the three weighted scoring factors (wave height, wave period, wave
+organization), multi-swell energy superposition, beach angle alignment,
+the directional exposure filter, and the full score_surf() ->
 SurfForecast pipeline (locale wiring, output shape, non-empty conditions
 text).
 """
@@ -134,10 +134,6 @@ def test_swell_dominance_no_spectral():
 
 
 def test_multi_swell_primary_dominant():
-    components = [
-        {"height": 6.0, "period": 14.0, "direction": 200.0, "energy": 80.0},
-        {"height": 3.0, "period": 9.0, "direction": 150.0, "energy": 20.0},
-    ]
     # _effective_swell() removed per ADR-096 — replaced by DSPR/cross-swell scoring
     score = surf_scorer._directional_spread_score(10.0)
     assert score == pytest.approx(1.0)  # < 15° = clean, tight spread
@@ -198,8 +194,9 @@ def test_perfect_conditions():
         wave_direction=180.0,  # direct hit on a S-facing beach
         wind_speed=3.0,  # ~6.7 mph, light
         wind_direction=0.0,  # wind FROM the N == offshore for a S-facing beach
-        spectral_components=[{"period": 14.0, "energy": 1.0}],  # pure swell
+        spectral_components=None,
         spot_config=config,
+        multi_swell=[{"period": 14.0, "energy": 0.9, "direction": 180.0, "height": 1.8}],
     )
     assert isinstance(forecast, SurfForecast)
     assert forecast.qualityStars in (4, 5)
@@ -213,15 +210,54 @@ def test_terrible_conditions():
         wave_direction=180.0,  # still a direct hit, isolating the other factors
         wind_speed=12.0,  # ~26.8 mph, strong
         wind_direction=180.0,  # wind FROM the S == onshore for a S-facing beach
-        spectral_components=[{"period": 5.0, "energy": 1.0}],  # pure wind chop
+        spectral_components=None,
         spot_config=config,
+        multi_swell=[
+            {"period": 5.0, "energy": 0.7, "direction": 180.0, "height": 0.2},
+            {"period": 4.0, "energy": 0.3, "direction": 160.0, "height": 0.1},
+        ],  # pure wind chop (all periods < 10s)
     )
     assert isinstance(forecast, SurfForecast)
     assert forecast.qualityStars == 1
 
 
 # ---------------------------------------------------------------------------
-# 17-18. Output shape
+# 17. Additive identity
+# ---------------------------------------------------------------------------
+
+
+def test_additive_identity():
+    """Scoring breakdown fields add up to the score that produces qualityStars.
+
+    API-MANUAL §17 guarantees:
+        total = waveHeight + wavePeriod + waveOrganization
+                + beachAlignment + directionalExposure + timeOfDay
+    and qualityStars = max(1, min(5, round(total / 20))).
+    Verify by reconstructing stars from the breakdown and asserting equality.
+    """
+    config = _make_spot_config(180.0)
+    forecast = score_surf(
+        wave_height=1.6764,
+        wave_period=14.0,
+        wave_direction=180.0,
+        wind_speed=3.0,
+        wind_direction=0.0,
+        spectral_components=None,
+        spot_config=config,
+        multi_swell=[{"period": 14.0, "energy": 0.9, "direction": 180.0, "height": 1.8}],
+    )
+    assert forecast.scoring is not None
+    s = forecast.scoring
+    total = (
+        s.waveHeight + s.wavePeriod + s.waveOrganization
+        + s.beachAlignment + s.directionalExposure + s.timeOfDay
+    )
+    expected_stars = max(1, min(5, round(total / 20)))
+    assert forecast.qualityStars == expected_stars
+
+
+# ---------------------------------------------------------------------------
+# 18-19. Output shape
 # ---------------------------------------------------------------------------
 
 

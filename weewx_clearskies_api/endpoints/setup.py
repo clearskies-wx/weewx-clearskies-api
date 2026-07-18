@@ -2861,9 +2861,8 @@ class MarineDiscoveredStructure(BaseModel):
     distance_m: float
     #: Bearing (degrees true) from the structure's nearest point to the
     #: queried (lat, lon) surf spot — feeds config/marine_config.py's
-    #: StructureConfig.bearing_to_spot_degrees, which enables the
-    #: directional shadow-zone check in enrichment/wave_transform.py's
-    #: _structure_kt_effective() (T7.2).
+    #: StructureConfig.bearing_to_spot_degrees, used by SWAN OBSTACLE
+    #: shadow-zone geometry.
     bearing_to_spot_degrees: float
     #: [[lat, lon], ...] — the way's node coordinates in OSM order.
     geometry: list[list[float]]
