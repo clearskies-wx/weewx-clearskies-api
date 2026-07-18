@@ -417,54 +417,6 @@ def _query_depths_m(points: list[tuple[float, float]]) -> list[float | None]:
 
 
 # ---------------------------------------------------------------------------
-# IQR-based outlier smoothing
-# ---------------------------------------------------------------------------
-
-
-def _smooth_outliers_iqr(depths: list[float]) -> list[float]:
-    """Replace IQR-outlier depth readings with the mean of their neighbors.
-
-    Standard Tukey fence: values outside [Q1 - 1.5*IQR, Q3 + 1.5*IQR] are
-    considered anomalous CUDEM readings (e.g. a single bad pixel) and are
-    smoothed using the average of their immediate neighbors rather than
-    dropped, to preserve point count/spacing.
-    """
-    n = len(depths)
-    if n < 4:
-        return list(depths)
-
-    ordered = sorted(depths)
-
-    def _percentile(data: list[float], pct: float) -> float:
-        k = (len(data) - 1) * pct
-        f = math.floor(k)
-        c = math.ceil(k)
-        if f == c:
-            return data[int(k)]
-        return data[f] + (data[c] - data[f]) * (k - f)
-
-    q1 = _percentile(ordered, 0.25)
-    q3 = _percentile(ordered, 0.75)
-    iqr = q3 - q1
-    lower = q1 - 1.5 * iqr
-    upper = q3 + 1.5 * iqr
-
-    smoothed = list(depths)
-    for i in range(n):
-        if depths[i] < lower or depths[i] > upper:
-            prev_val = depths[i - 1] if i > 0 else depths[i + 1]
-            next_val = depths[i + 1] if i < n - 1 else depths[i - 1]
-            smoothed[i] = (prev_val + next_val) / 2.0
-            logger.warning(
-                "Bathymetry: IQR outlier smoothed at index %d (%.2fm -> %.2fm)",
-                i,
-                depths[i],
-                smoothed[i],
-            )
-    return smoothed
-
-
-# ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
 
@@ -499,8 +451,8 @@ def download_bathymetric_profile(
       4. Adaptively refine: where the depth gradient between adjacent
          points exceeds ``_GRADIENT_REFINEMENT_THRESHOLD``, insert a
          midpoint sample. Up to ``_MAX_REFINEMENT_ITERATIONS`` rounds.
-      5. Smooth outlier readings (IQR method) and return the profile
-         sorted by distance ascending.
+      5. Drop any missing readings and return the profile sorted by
+         distance ascending.
 
     On any provider failure (network error, quota, protocol error), logs a
     WARNING and returns the hardcoded regional fallback profile instead of
@@ -605,15 +557,13 @@ def _download_bathymetric_profile_impl(
         distances_m = [p[0] for p in paired]
         depths_m = [p[1] for p in paired]
 
-    # --- Step 5: smooth outliers, drop any still-missing readings ---
+    # --- Step 5: drop any still-missing readings ---
     clean_pairs = [(d, z) for d, z in zip(distances_m, depths_m, strict=True) if z is not None]
     clean_pairs.sort(key=lambda p: p[0])
-    clean_distances = [p[0] for p in clean_pairs]
-    clean_depths = _smooth_outliers_iqr([p[1] for p in clean_pairs])
 
     return [
         BathymetryPoint({"distance_m": d, "depth_m": z})
-        for d, z in zip(clean_distances, clean_depths, strict=True)
+        for d, z in clean_pairs
     ]
 
 
@@ -652,7 +602,7 @@ def download_bidirectional_profile(
          ``step_m`` intervals until depth ≥ ``target_deep_m`` or
          ``max_search_m`` is exhausted.
       3. **Sample the profile.** Query CUDEM at ``~50 m`` intervals from the
-         coastline to the deep endpoint, smooth IQR outliers, and return.
+         coastline to the deep endpoint and return.
 
     All NCEI ImageServer queries honour the 2 req/s courtesy rate limit via
     ``_acquire_rate_limit_slot()``.  On any ``ProviderError``, re-raises —
@@ -765,16 +715,9 @@ def download_bidirectional_profile(
     ]
     clean_pairs.sort(key=lambda p: p[0])
 
-    if clean_pairs:
-        c_dists = [p[0] for p in clean_pairs]
-        c_depths = _smooth_outliers_iqr([p[1] for p in clean_pairs])
-    else:
-        c_dists = []
-        c_depths = []
-
     profile = [
         {"distance_m": round(d, 1), "depth_m": round(z, 2)}
-        for d, z in zip(c_dists, c_depths, strict=True)
+        for d, z in clean_pairs
     ]
 
     return {

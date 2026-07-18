@@ -1005,7 +1005,7 @@ class SWANRunner:
             grid_info["mxc"], grid_info["myc"],
             self._outer_resolution_m / 1000.0, outer_dir,
         )
-        self._spawn_swan(outer_dir)
+        self._spawn_swan_with_hotstart_retry(outer_dir, "outer")
         self._save_hotstart(outer_dir, "outer")
         logger.info("SWAN outer grid complete")
 
@@ -1059,7 +1059,7 @@ class SWANRunner:
             grid_info["mxc"], grid_info["myc"],
             self._inner_resolution_m, inner_dir,
         )
-        self._spawn_swan(inner_dir)
+        self._spawn_swan_with_hotstart_retry(inner_dir, "inner")
         self._save_hotstart(inner_dir, "inner")
         logger.info("SWAN inner nest complete")
         return self._parse_output(inner_dir, grid_info)
@@ -1103,7 +1103,7 @@ class SWANRunner:
             grid_info["mxc"], grid_info["myc"],
             self._inner_resolution_m,
         )
-        self._spawn_swan(inner_dir)
+        self._spawn_swan_with_hotstart_retry(inner_dir, "inner")
         self._save_hotstart(inner_dir, "inner")
         logger.info("SWAN stationary inner complete")
         return self._parse_output(inner_dir, grid_info)
@@ -1314,6 +1314,40 @@ class SWANRunner:
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
         return grid_info
+
+    def _spawn_swan_with_hotstart_retry(
+        self, run_dir: Path, grid_level: str
+    ) -> None:
+        """Run SWAN, retrying once cold if a hotstart file causes a crash.
+
+        When an operator adds/removes a surf spot, the grid dimensions change
+        and the previous hotstart file becomes incompatible.  Rather than
+        crashing the entire cycle, delete the stale hotstart and re-run cold.
+        """
+        persistent_hot = run_dir.parent / f"{grid_level}_{self._HOTSTART_FILE}"
+        had_hotstart = (run_dir / self._HOTSTART_FILE).exists()
+
+        try:
+            self._spawn_swan(run_dir)
+        except SWANRunError:
+            if not had_hotstart:
+                raise
+            logger.warning(
+                "SWAN %s: crashed with hotstart loaded — deleting stale "
+                "hotstart and retrying cold",
+                grid_level,
+            )
+            persistent_hot.unlink(missing_ok=True)
+            (run_dir / self._HOTSTART_FILE).unlink(missing_ok=True)
+            # Rewrite INPUT without INIT HOTSTART
+            input_path = run_dir / "INPUT"
+            input_text = input_path.read_text(encoding="ascii")
+            input_text = "\n".join(
+                line for line in input_text.splitlines()
+                if "INIT HOTSTART" not in line
+            ) + "\n"
+            input_path.write_text(input_text, encoding="ascii")
+            self._spawn_swan(run_dir)
 
     def _spawn_swan(self, tmpdir: Path) -> None:
         """Run the SWAN executable as a subprocess.
