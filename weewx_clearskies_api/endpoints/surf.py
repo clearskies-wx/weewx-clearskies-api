@@ -169,6 +169,8 @@ def _units_block() -> dict[str, str]:
         "waveHeight": height_symbol,
         "wavePeriod": period_symbol,
         "windSpeed": speed_symbol,
+        # setup is wave setup (m converted to display height unit — same as waveHeight)
+        "setup": height_symbol,
     }
 
 
@@ -516,10 +518,17 @@ def get_surf(location_id: str) -> dict:
                     else 0.0
                 )
                 if _qb >= _prev_qb and _qb >= _next_qb:
+                    _bp_wh = _bp_pt.get("waveHeight")
                     break_points.append({
                         "distanceFromShore": _bp_pt.get("distanceFromShore"),
                         "depth": _bp_pt.get("depth"),
-                        "waveHeight": _bp_pt.get("waveHeight"),
+                        # Convert raw SWAN Hs (meters) to display unit — same
+                        # conversion applied to the other height fields below.
+                        "waveHeight": (
+                            _convert_unit(float(_bp_wh), "meter", wave_height_internal)
+                            if _bp_wh is not None
+                            else None
+                        ),
                     })
                     _break_src_pts.append(_bp_pt)
                     _break_offshore_pts.append(
@@ -674,8 +683,16 @@ def get_surf(location_id: str) -> dict:
         entry["windSource"] = ts_wind_source
 
         # T5.2: DSPR and SETUP from SWAN TABLE at ~10m depth point.
+        # directionalSpread is in degrees (dimensionless — no conversion needed).
+        # setup is wave setup (water level rise due to wave breaking) in meters;
+        # convert to the operator's configured height display unit.
         entry["directionalSpread"] = ref_point.get("directionalSpread")
-        entry["setup"] = ref_point.get("setup")
+        _setup_raw = ref_point.get("setup")
+        entry["setup"] = (
+            _convert_unit(float(_setup_raw), "meter", wave_height_internal)
+            if _setup_raw is not None
+            else None
+        )
 
         # T3.5: multiSwell from SWAN SPECOUT decomposition for this timestep,
         # NOT from NDBC spectral.  Each timestep gets its own spectral decomposition.
