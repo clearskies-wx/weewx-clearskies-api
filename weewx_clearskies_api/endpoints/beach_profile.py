@@ -14,8 +14,9 @@ Logic:
   3. Get transect dict; find the timestep closest to now.
   4. Sort transect points from offshore to shore (distanceFromShore descending).
   5. Detect break points: local maxima of breakingFraction >= 0.25.
-  6. Apply unit conversion to waveHeight and swellHeight (display units).
-     Distance and depth always in meters.
+  6. Apply unit conversion to waveHeight, swellHeight, distanceFromShore,
+     and depth (all converted to the operator's configured display units —
+     foot for US, meter for METRIC/METRICWX).
 
 Auth level: public (no auth — same as the surf endpoint).
 
@@ -92,6 +93,20 @@ def _wave_height_unit() -> tuple[str, str]:
     """Return (internal_unit_name, display_symbol) for wave height."""
     height_default = "foot" if get_target_unit() == "US" else "meter"
     unit = get_group_unit("group_wave_height", height_default)
+    return (unit, _DISPLAY_LABEL.get(unit, unit))
+
+
+def _distance_unit() -> tuple[str, str]:
+    """Return (internal_unit_name, display_symbol) for transect distance and depth.
+
+    Uses group_wave_height's foot/meter distinction — the same meter↔foot
+    conversion appropriate for beach profile distances (0–1000 m from shore)
+    and depths (0–20 m).  SWAN emits both quantities in meters; the API
+    converts them to the operator's configured display unit so the dashboard
+    renders them unit-neutral (ADR-042).
+    """
+    dist_default = "foot" if get_target_unit() == "US" else "meter"
+    unit = get_group_unit("group_wave_height", dist_default)
     return (unit, _DISPLAY_LABEL.get(unit, unit))
 
 
@@ -205,7 +220,7 @@ def get_beach_profile(location_id: str) -> dict:
             else 0.0
         )
         if qb >= prev_qb and qb >= next_qb:
-            # Store raw waveHeight (meters) for now; converted below.
+            # Store raw meter values for now; all three fields are converted below.
             break_points_raw.append(
                 {
                     "distanceFromShore": pt.get("distanceFromShore"),
@@ -214,18 +229,30 @@ def get_beach_profile(location_id: str) -> dict:
                 }
             )
 
-    # --- Unit conversion: waveHeight and swellHeight -> display units ---
-    # Distance and depth remain in meters (physical positions, not display values).
+    # --- Unit conversion: distanceFromShore, depth, waveHeight, swellHeight -> display units ---
+    # All four quantities are emitted by SWAN in meters.  Convert each to the
+    # operator's configured display unit (foot for US, meter for METRIC/METRICWX).
     wave_height_internal, wave_height_symbol = _wave_height_unit()
+    distance_internal, distance_symbol = _distance_unit()
 
     transect_out: list[dict] = []
     for pt in sorted_points:
         wave_height_raw = pt.get("waveHeight")
         swell_height_raw = pt.get("swellHeight")
+        dist_raw = pt.get("distanceFromShore")
+        depth_raw = pt.get("depth")
         transect_out.append(
             {
-                "distanceFromShore": pt.get("distanceFromShore"),
-                "depth": pt.get("depth"),
+                "distanceFromShore": (
+                    _convert_unit(float(dist_raw), "meter", distance_internal)
+                    if dist_raw is not None
+                    else None
+                ),
+                "depth": (
+                    _convert_unit(float(depth_raw), "meter", distance_internal)
+                    if depth_raw is not None
+                    else None
+                ),
                 "waveHeight": (
                     _convert_unit(float(wave_height_raw), "meter", wave_height_internal)
                     if wave_height_raw is not None
@@ -241,11 +268,19 @@ def get_beach_profile(location_id: str) -> dict:
             }
         )
 
-    # Build final break_points list with converted waveHeight.
+    # Build final break_points list with all fields converted to display units.
     break_points: list[dict] = [
         {
-            "distanceFromShore": bp["distanceFromShore"],
-            "depth": bp["depth"],
+            "distanceFromShore": (
+                _convert_unit(float(bp["distanceFromShore"]), "meter", distance_internal)
+                if bp["distanceFromShore"] is not None
+                else None
+            ),
+            "depth": (
+                _convert_unit(float(bp["depth"]), "meter", distance_internal)
+                if bp["depth"] is not None
+                else None
+            ),
             "waveHeight": (
                 _convert_unit(float(bp["_waveHeight_m"]), "meter", wave_height_internal)
                 if bp["_waveHeight_m"] is not None
@@ -263,8 +298,8 @@ def get_beach_profile(location_id: str) -> dict:
             "breakPoints": break_points,
         },
         "units": {
-            "distance": "m",
-            "depth": "m",
+            "distance": distance_symbol,
+            "depth": distance_symbol,
             "waveHeight": wave_height_symbol,
         },
         "stationClock": build_station_clock().model_dump(by_alias=True),
