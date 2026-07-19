@@ -1108,16 +1108,34 @@ def run_all_spots(
     resolved_inner_m: float = float(_cfg_inner_m) if _cfg_inner_m is not None else inner_nest_resolution_m
 
     # ------------------------------------------------------------------
-    # 4. CUDEM 2-D bathymetry grid — downloaded once from NCEI getSamples,
-    #    cached to disk.  Covers the outer_bbox (both grids interpolate
-    #    from the same source grid via cudem_to_swan_bottom).
+    # 4. Domain sizing + per-level bathymetry (3-level nesting, Phase 14).
     # ------------------------------------------------------------------
-    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
+    from weewx_clearskies_api.services.swan_domain import compute_domains
+
+    spot_locations_for_domains = [
+        {
+            "id": loc.id,
+            "lat": loc.lat,
+            "lon": loc.lon,
+            "beach_facing_degrees": float(
+                getattr(marine_config.surf_spots.get(loc.id), "beach_facing_degrees", 0.0)
+            ),
+        }
+        for loc in surf_locations
+    ]
+
+    domains = compute_domains(spot_locations_for_domains)
+    logger.info(
+        "SWAN: 3-level domains computed — L1: %d cells, L2: %d cells, L3: %d clusters (%d total cells)",
+        domains.level1.cell_count,
+        domains.level2.cell_count,
+        len(domains.level3_clusters),
+        domains.total_cells,
+    )
+
+    bathymetry = download_all_bathymetry(domains)
 
     swan_config: dict[str, Any] = {
-        # Nested grid architecture (T7.2 / PROVIDER-MANUAL §14.15):
-        #   outer_bbox = wider HRRR fetch area (continental shelf approach)
-        #   inner_bbox = tight nearshore domain around surf spots
         "outer_bbox": list(outer_bbox),
         "inner_bbox": list(inner_bbox),
         "surf_spots": surf_spots_config,
@@ -1128,7 +1146,6 @@ def run_all_spots(
         "output_interval_hr": output_interval_hr,
         "swan_timeout_s": swan_timeout_s,
         "omp_num_threads": omp_num_threads,
-        # T3.1 — cross-shore transect configs (beach_facing_degrees, runtime_profile)
         "spot_configs": spot_configs_for_runner or None,
     }
 
@@ -1136,47 +1153,40 @@ def run_all_spots(
     run_time = datetime.now(UTC)
 
     logger.info(
-        "SWAN: starting SWAN run for %d spot(s) "
-        "(HRRR cycle=%s, GFS=%s, outer=%s, inner=%s)",
+        "SWAN: starting 3-level SWAN run for %d spot(s) "
+        "(HRRR cycle=%s, GFS=%s)",
         len(surf_spots_config),
         hrrr_cycle_time,
         gfs_wind_field.get("cycle_time") if gfs_wind_field else "unavailable",
-        outer_bbox,
-        inner_bbox,
     )
 
-    tmpdir: Path | None = None
     try:
-        results, tmpdir = runner.run_with_tmpdir(
+        results = runner.run_3level(
+            domains,
+            bathymetry,
             hrrr_wind_field,
             gfs_wind_field,
             ww3_boundary,
-            cudem_bathymetry,
             tide_predictions=tide_predictions,
             ofs_currents=ofs_currents,
             structures=structures_for_swan,
         )
-        # T3.3 — spectral decomposition results from SPECOUT files
-        spectral_results: dict[str, list] = runner._spectral_results  # noqa: SLF001
+        spectral_results: dict[str, list] = getattr(runner, "_spectral_results", {})
     except SWANRunError as exc:
         logger.error(
-            "SWAN: SWAN run failed (returncode=%s); "
-            "last-good cache preserved; tmpdir=%s\nSWAN stderr: %s",
+            "SWAN: 3-level run failed (returncode=%s); "
+            "last-good cache preserved\nSWAN stderr: %s",
             exc.returncode,
-            tmpdir,
             exc.stderr[:2000] if exc.stderr else "(no stderr)",
         )
-        # Do NOT invalidate last-good cache — stale data preferred to nothing.
         return
     except Exception:
         logger.error(
-            "SWAN: unexpected error during SWAN run; "
+            "SWAN: unexpected error during 3-level run; "
             "last-good cache preserved",
             exc_info=True,
         )
         return
-    else:
-        spectral_results = getattr(runner, "_spectral_results", {})
 
     # ------------------------------------------------------------------
     # 5. Successful run: cache per-spot results and clean up tmpdir.
