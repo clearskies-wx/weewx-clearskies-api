@@ -98,6 +98,9 @@ nearshore = [
     # [marine]; listed explicitly here so [nearshore] remains self-documenting
     # when installed without [marine] in a future split scenario.
     "xarray>=2024.1",
+    # shapely: computational geometry for GSFM shelf boundary queries
+    # (nearest-point-on-polyline) used in domain sizing (Phase 13/14).
+    "shapely>=2.0",
     # ---------------------------------------------------------------------------
     # SWAN binary — NOT a pip package; must be installed separately.
     # SWAN 41.45 (Simulating WAves Nearshore, Delft University of Technology)
