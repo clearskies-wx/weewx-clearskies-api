@@ -90,6 +90,23 @@ DB_QUERY_DURATION: Histogram = Histogram(
     ["endpoint"],
 )
 
+# ---------------------------------------------------------------------------
+# SWAN convergence metrics (SWAN-L3-STABILITY-PLAN T4.3)
+# ---------------------------------------------------------------------------
+
+from prometheus_client import Gauge  # noqa: E402
+
+SWAN_CONVERGENCE_FAILURES_TOTAL: Counter = Counter(
+    "swan_convergence_failures_total",
+    "Total SWAN convergence check failures.",
+    ["level", "check"],
+)
+SWAN_LAST_RUN_VALID_FRACTION: Gauge = Gauge(
+    "swan_last_run_valid_fraction",
+    "Most recent valid-point fraction per SWAN level.",
+    ["level"],
+)
+
 
 def metrics_response() -> tuple[bytes, str]:
     """Generate Prometheus exposition format response.

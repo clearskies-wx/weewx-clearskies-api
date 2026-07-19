@@ -33,12 +33,10 @@ Data flow per API-MANUAL §17/§18:
          .target_categories (T6.3) — retained for signature compat only,
          since the scorer no longer scores by category (T6.2; temperature
          is per-species now).
-       - bathymetric_profile: reused from the location's SurfSpotConfig (if
-         the location also has "surf" configured) since FishingSpotConfig
-         itself carries no bathymetric_profile field (config/marine_config.py)
-         — bathymetry is captured once per location via CUDEM, not
-         per-activity. None (-> no habitat features) when the location has
-         no surf spot config.
+       - bathymetric_profile: always None — SurfSpotConfig.bathymetric_profile
+         was removed (SWAN-FIXES-PLAN Phase 7 dead-code removal; runtime
+         CUDEM profiles are not yet wired to this endpoint). habitat_features
+         is always [] until that wire-up is done.
 
 Each provider section is wrapped in its own try/except (graceful
 degradation). Response is a plain dict following the standard envelope
@@ -358,15 +356,18 @@ def get_fishing(location_id: str) -> dict:
         _convert_unit(water_temp_c, "degree_C", "degree_F") if water_temp_c is not None else None
     )
 
-    # --- Bathymetric profile: reused from the location's surf spot config
-    # (see module docstring) ---
+    # --- Bathymetric profile: SurfSpotConfig.bathymetric_profile was removed
+    # (SWAN-FIXES-PLAN Phase 7 dead-code removal).  Runtime CUDEM profiles are
+    # not yet wired to this endpoint, so habitat features are always [].  Log a
+    # WARNING when a surf config exists for this location (profile expected but
+    # unavailable). ---
     bathymetric_profile: list[dict] | None = None
-    surf_config = _marine_config.surf_spots.get(location_id) if _marine_config else None
-    if surf_config is not None and surf_config.bathymetric_profile:
-        bathymetric_profile = [
-            {"distance_m": pt.distance_m, "depth_m": pt.depth_m}
-            for pt in surf_config.bathymetric_profile
-        ]
+    _surf_config_for_location = _marine_config.surf_spots.get(location_id) if _marine_config else None
+    if _surf_config_for_location is not None:
+        logger.warning(
+            "Fishing %s: bathymetric profile unavailable — habitat features will use defaults",
+            location_id,
+        )
     habitat_features = get_habitat_features(bathymetric_profile)
 
     species = fishing_config.species

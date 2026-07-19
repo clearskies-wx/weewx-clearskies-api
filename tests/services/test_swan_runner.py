@@ -759,3 +759,60 @@ class TestBuildSwanInputHotstart:
         assert "INIT HOTSTART" not in content, (
             "INIT HOTSTART should only appear when a previous hotstart file exists"
         )
+
+
+class TestBuildSwanInputPerLevelPhysics:
+    """Verify per-level physics selection (SWAN-L3-STABILITY-PLAN T2.1).
+
+    SETUP removed from all levels (unsupported in parallel OpenMP runs).
+    DIFFRACTION stabilized at L3 only; removed at L1/L2 (sub-grid).
+    NUMERIC alfa=0.01 emitted for L3 stationary only.
+    """
+
+    def _call(self, grid_level: str, stationary: bool = False) -> str:
+        dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M)
+        return build_swan_input(
+            dims=dims,
+            valid_times=["2024-01-01T00:00:00Z"],
+            spots={"spot_a": (-118.10, 33.60)},
+            grid_level=grid_level,
+            stationary=stationary,
+        )
+
+    def test_outer_has_no_setup(self) -> None:
+        content = self._call("outer")
+        assert "\nSETUP\n" not in content and "\nSETUP " not in content
+
+    def test_outer_has_no_diffraction(self) -> None:
+        content = self._call("outer")
+        assert "DIFFRACTION" not in content
+
+    def test_inner_nonstat_has_stabilized_diffraction(self) -> None:
+        content = self._call("inner", stationary=False)
+        assert "DIFFRACTION 1 0.2 27" in content
+
+    def test_inner_nonstat_has_no_setup(self) -> None:
+        content = self._call("inner", stationary=False)
+        assert "\nSETUP\n" not in content and "\nSETUP " not in content
+
+    def test_inner_nonstat_has_no_numeric_alfa(self) -> None:
+        content = self._call("inner", stationary=False)
+        assert "alfa=" not in content
+
+    def test_inner_stat_has_stabilized_diffraction(self) -> None:
+        content = self._call("inner", stationary=True)
+        assert "DIFFRACTION 1 0.2 27" in content
+
+    def test_inner_stat_has_numeric_alfa(self) -> None:
+        content = self._call("inner", stationary=True)
+        assert "alfa=0.01" in content
+
+    def test_inner_stat_has_no_setup(self) -> None:
+        content = self._call("inner", stationary=True)
+        assert "\nSETUP\n" not in content and "\nSETUP " not in content
+
+    def test_table_columns_exclude_setup(self) -> None:
+        content = self._call("inner", stationary=False)
+        for line in content.splitlines():
+            if line.strip().startswith("TABLE") and "HSIGN" in line:
+                assert "SETUP" not in line, f"TABLE line still contains SETUP: {line}"

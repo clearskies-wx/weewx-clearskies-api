@@ -727,7 +727,7 @@ def build_swan_input(
             ``"bathymetric_profile"`` (list of {"distance_m", "depth_m"} dicts).
             When provided for the ``"inner"`` level, the existing POINTS + TABLE
             block is replaced with per-spot CURVE + expanded TABLE (HSIGN HSWELL
-            TM01 DIR DEPTH QB DISSURF SETUP DSPR) + SPECOUT commands (T3.1).
+            TM01 DIR DEPTH QB DISSURF DSPR) + SPECOUT commands (T3.1).
             When None, the existing POINTS + TABLE approach is used unchanged.
 
     Returns:
@@ -761,8 +761,8 @@ def build_swan_input(
     lon_sw = dims["lon_sw"]
     lat_sw = dims["lat_sw"]
 
-    # UTM projection for Cartesian mode (required for SETUP — spherical
-    # coordinates produce incorrect radiation stress gradients).
+    # UTM projection for Cartesian mode (required for DIFFRACTION stabilization
+    # and OBSTACLE coordinate precision — spherical mode not recommended).
     _zone = utm_zone((lon_sw + lon_sw + mxc * dlon) / 2)
     dims["_utm_zone"] = _zone  # stash for output parser
 
@@ -847,17 +847,52 @@ def build_swan_input(
             "",
         ]
 
-    # Source terms (same for both levels)
-    lines += [
+    # Source terms — per-level physics selection (T2.1, SWAN-L3-STABILITY-PLAN).
+    # SETUP removed from all levels: unsupported in parallel (OpenMP) runs
+    # (SWAN User Manual v41.51 p.79) and structurally ill-posed in nested grids
+    # (BOUNDNEST1 carries no setup BC; deepest-point anchor is wrong in a nest).
+    # DIFFRACTION: removed at L1/L2 (sub-grid; can only destabilize); emitted
+    # with smoothing stabilization at L3 only (smnum=27 → εx ≈ 45 m).
+    # See docs/reference/swan-commands-extract.md per-level physics table.
+    if grid_level == "inner":
+        # L3 (10 m surf-zone): stabilized DIFFRACTION.
+        # DIFFRACTION 1 0.2 27: idiffr=1, smpar=0.2 (recommended), smnum=27.
+        diffraction_cmd: str | None = "DIFFRACTION 1 0.2 27"
+    else:
+        # L1 (1 km) and L2 (100 m): DIFFRACTION removed — sub-grid resolution.
+        diffraction_cmd = None
+
+    logger.info(
+        "SWAN %s physics: SETUP=removed (parallel unsupported), DIFFRACTION=%s",
+        grid_level,
+        diffraction_cmd if diffraction_cmd is not None else "removed",
+    )
+
+    _physics: list[str] = [
         "GEN3 WESTHUYSEN",
         "BREAKING CONSTANT 1.0 0.73",
         "FRICTION JON 0.067",
         # T2.4: TRIAD (singular per SWAN user manual) for triad wave-wave
         # interactions in shallow water (Eldeberky 1996 defaults).
-        # SETUP enables wave-induced water level output at nearshore points.
         "TRIAD",
-        "SETUP",
-        "DIFFRACTION",
+    ]
+    if diffraction_cmd is not None:
+        _physics.append(diffraction_cmd)
+
+    # NUMERIC: under-relaxation for stationary L3 only.  Stabilizes DIFFRACTION
+    # in the iterative solver.  "Not meaningful for nonstationary computations"
+    # (SWAN User Manual v41.51 p.87) — do NOT emit for nonstationary runs.
+    if grid_level == "inner" and stationary:
+        _physics.append(
+            "NUMERIC STOPC dabs=0.005 drel=0.01 curvat=0.005 npnts=99.5"
+            " STAT mxitst=50 alfa=0.01"
+        )
+        logger.info(
+            "SWAN %s: NUMERIC alfa=0.01 emitted (stationary L3)", grid_level
+        )
+
+    lines += _physics
+    lines += [
         "",
         # Exception values for no-data / dry points (SWAN user manual §3.5).
         # Without this, SWAN uses an implementation-specific default that is
@@ -936,7 +971,7 @@ def build_swan_input(
         #
         # T3.1 — when spot_configs is provided, replace the single POINTS +
         # TABLE with a per-spot CURVE (cross-shore transect) + expanded TABLE
-        # (HSIGN HSWELL TM01 DIR DEPTH QB DISSURF SETUP DSPR) + SPECOUT at
+        # (HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR) + SPECOUT at
         # the ~10 m transect point.  QUANTITY HSWELL sets the swell frequency
         # cutoff to 0.1 Hz (T > 10 s) before any output commands.
         #
@@ -947,6 +982,10 @@ def build_swan_input(
                 "QUANTITY HSWELL fswell=0.1",
                 "",
             ]
+            logger.info(
+                "SWAN TABLE output columns: %s",
+                "TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR",
+            )
             spot_order: list[str] = []
             for n, (spot_id, (spot_lon, spot_lat)) in enumerate(spots.items(), start=1):
                 cfg = spot_configs.get(spot_id)
@@ -991,7 +1030,7 @@ def build_swan_input(
                     "",
                     (
                         f"TABLE '{curve_name}' HEAD '{table_file}'"
-                        f" TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF SETUP DSPR"
+                        f" TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR"
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                     ),
                     "",
@@ -1003,12 +1042,16 @@ def build_swan_input(
                     "",
                 ]
         else:
+            logger.info(
+                "SWAN TABLE output columns: %s",
+                "TIME XP YP HSIGN TM01 DIR",
+            )
             lines += [
                 "POINTS 'SPOTS' FILE 'OUTPUT_POINTS.txt'",
                 "",
                 (
                     f"TABLE 'SPOTS' HEAD 'OUTPUT_TABLE.txt'"
-                    f" TIME XP YP HSIGN TM01 DIR SETUP"
+                    f" TIME XP YP HSIGN TM01 DIR"
                     + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                 ),
                 "",

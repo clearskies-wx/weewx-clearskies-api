@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -35,6 +36,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from weewx_clearskies_api.metrics import (
+    SWAN_CONVERGENCE_FAILURES_TOTAL,
+    SWAN_LAST_RUN_VALID_FRACTION,
+)
 from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
     build_swan_input,
@@ -828,6 +833,13 @@ class SWANRunner:
         # decomposition results.  Accessed by the caller after run_with_tmpdir().
         self._spectral_results: dict[str, list[dict]] = {}
 
+        # T4.1 — Convergence gate config (SWAN-L3-STABILITY-PLAN Phase 4).
+        # convergence_retry=False (default/current): fail loudly, preserve the
+        #   failed working directory untouched for debugging, no retry, no hotstart
+        #   save, API continues to serve the last-good run.
+        # convergence_retry=True (future): degradation ladder (Phase 4 TODO below).
+        self._convergence_retry: bool = bool(config.get("convergence_retry", False))
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1220,6 +1232,9 @@ class SWANRunner:
             l1_grid["mxc"], l1_grid["myc"], l1_dir,
         )
         self._spawn_swan_with_hotstart_retry(l1_dir, "level1")
+        if not self._check_convergence(l1_dir, "level1"):
+            # Failed workdir preserved untouched; API continues to serve last-good run.
+            return {}
         self._save_hotstart(l1_dir, "level1")
         logger.info("SWAN Level 1 complete")
 
@@ -1305,6 +1320,9 @@ class SWANRunner:
             l2_grid["mxc"], l2_grid["myc"], l2_dir,
         )
         self._spawn_swan_with_hotstart_retry(l2_dir, "level2")
+        if not self._check_convergence(l2_dir, "level2"):
+            # Failed workdir preserved untouched; API continues to serve last-good run.
+            return {}
         self._save_hotstart(l2_dir, "level2")
         logger.info("SWAN Level 2 complete")
 
@@ -1362,15 +1380,22 @@ class SWANRunner:
                 len(cluster.spot_ids), l3_dir,
             )
             self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
-            self._save_hotstart(l3_dir, f"level3_{idx}")
+            if self._check_convergence(l3_dir, f"level3_{idx}"):
+                self._save_hotstart(l3_dir, f"level3_{idx}")
+                cluster_results = self._parse_output(l3_dir, l3_grid)
+                all_results.update(cluster_results)
+                logger.info("SWAN Level 3 cluster %d complete", idx)
+            else:
+                # Failed workdir preserved; hotstart and spot-cache NOT updated.
+                logger.error(
+                    "SWAN L3 cluster %d: skipping hotstart save and cache update "
+                    "(convergence failed, workdir preserved at %s)",
+                    idx, l3_dir,
+                )
 
-            cluster_results = self._parse_output(l3_dir, l3_grid)
-            all_results.update(cluster_results)
-
-            # Restore full spot set for next cluster
+            # Restore full spot set for next cluster (always — even on failure)
             self._surf_spots = saved_surf_spots
             self._spot_configs = saved_spot_configs
-            logger.info("SWAN Level 3 cluster %d complete", idx)
 
         logger.info("SWAN 3-level run complete — %d spots resolved", len(all_results))
         return all_results
@@ -1381,6 +1406,9 @@ class SWANRunner:
         wind_field: dict[str, Any],
         domains: "DomainSizing",
         bathymetry: dict[str, Any],
+        *,
+        tide_predictions: list[dict] | None = None,
+        structures: list[dict] | None = None,
     ) -> dict[str, list["MarineForecastPoint"]]:
         """Stationary Level 3 only — quick update using latest Level 2 NESTOUT.
 
@@ -1393,6 +1421,16 @@ class SWANRunner:
         The boundary file at ``workdir/level2/{_NESTOUT_FILE}`` must exist from
         a previous ``run_3level()`` call.  If missing, returns empty results
         (the cache warmer preserves last-good data per PROVIDER-MANUAL §14.15).
+
+        Args:
+            tide_predictions: Single-element list ``[{"time": iso, "height": m}]``
+                for the compute instant.  When provided, WLEVEL.txt is written so
+                the L3 static INPUT carries the tidal water level.  ``None`` → no
+                WLEVEL (same behaviour as before this fix — explicit degradation).
+            structures: Coastal structures to emit as OBSTACLE commands, in the
+                same format as the full-run path (``{"type": ..., "coordinates":
+                [[lon, lat], ...]}``) or bearing/length/distance entries resolved
+                by the T3.1 fix.  ``None``/empty → no OBSTACLE commands.
         """
         l2_boundary = workdir / "level2" / self._NESTOUT_FILE
         if not l2_boundary.exists():
@@ -1438,6 +1476,8 @@ class SWANRunner:
                 stationary=True,
                 override_bbox=l3_bbox,
                 override_resolution_m=cluster.grid.resolution_m,
+                tide_predictions=tide_predictions,  # T3.2: static WLEVEL at compute time
+                structures=structures,               # T3.2: coastal OBSTACLE commands
             )
 
             logger.info(
@@ -1445,10 +1485,23 @@ class SWANRunner:
                 idx, l3_grid["mxc"], l3_grid["myc"], len(cluster.spot_ids),
             )
             self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
-            self._save_hotstart(l3_dir, f"level3_{idx}")
+            # T4.2: Do NOT save hotstart — stationary quick update must NOT overwrite
+            # the nonstationary chain's persistent hotstart files.  A diverged stationary
+            # run must not contaminate the next full run's warm-start.
+            logger.info(
+                "SWAN L3 stationary: skipping hotstart save (isolation from nonstationary chain)"
+            )
 
-            cluster_results = self._parse_output(l3_dir, l3_grid)
-            all_results.update(cluster_results)
+            if self._check_convergence(l3_dir, f"level3_{idx}"):
+                cluster_results = self._parse_output(l3_dir, l3_grid)
+                all_results.update(cluster_results)
+            else:
+                # Failed workdir preserved; spot-cache NOT updated for this cluster.
+                logger.error(
+                    "SWAN stationary L3[%d]: convergence failed, skipping cache update "
+                    "(workdir preserved at %s)",
+                    idx, l3_dir,
+                )
 
             self._surf_spots = saved_surf_spots
             self._spot_configs = saved_spot_configs
@@ -1799,6 +1852,263 @@ class SWANRunner:
             )
         else:
             logger.warning("SWAN %s: no hotstart file produced", grid_level)
+
+    def _check_convergence(self, run_dir: Path, grid_level: str) -> bool:
+        """Check SWAN run convergence using three independent signals.
+
+        All three metric values are logged at INFO regardless of pass/fail.
+        On failure, an additional ERROR is logged naming the specific check.
+
+        The three checks (per SWAN-L3-STABILITY-PLAN T4.1 / brief §5.5 item 2):
+
+          1. **PRINT scan** — any ``******`` overflow/divergence marker in the
+             SWAN PRINT file, or (stationary only) final accuracy < 99.5%.
+          2. **NaN scan** — ``nan`` occurrences in the hotstart file (text-based;
+             works for ASCII hotstarts; binary hotstarts are caught indirectly by
+             Check 3).
+          3. **Valid-point fraction** — from TABLE output:
+             - Nonstationary: fraction of timesteps where ≥50% of wet transect
+               points have non-exception HSIGN values; threshold 80%.
+             - Stationary: fraction of all points that are non-exception; threshold 50%.
+
+        When ``convergence_retry=True`` (future mode), a degradation ladder fires
+        instead of hard failure.  That path is not implemented here.
+
+        Args:
+            run_dir: SWAN working directory (contains PRINT, TABLE files, hotstart).
+            grid_level: Level identifier for logging (e.g. "level1", "level3_0").
+
+        Returns:
+            ``True`` (PASS) when all checks pass.
+            ``False`` (FAIL) when any check fails; the failed workdir is left
+            untouched so operators can inspect INPUT/PRINT/TABLE/hotstart.
+        """
+        # Detect stationary run: INPUT contains "COMPUTE NONSTAT..." iff nonstationary.
+        is_stationary = True
+        input_path = run_dir / "INPUT"
+        if input_path.exists():
+            try:
+                input_text = input_path.read_text(encoding="ascii", errors="replace")
+                is_stationary = "COMPUTE NONSTAT" not in input_text.upper()
+            except OSError:
+                pass
+
+        # ------------------------------------------------------------------ #
+        # Check 1: PRINT scan — overflow markers and stationary accuracy      #
+        # ------------------------------------------------------------------ #
+        print_path = run_dir / "PRINT"
+        overflow_count = 0
+        accuracy_pct: float | None = None
+
+        if print_path.exists():
+            try:
+                print_text = print_path.read_text(encoding="utf-8", errors="replace")
+                for line in print_text.splitlines():
+                    if "******" in line:
+                        overflow_count += 1
+                    # Track accuracy percentage (last match wins — final iteration).
+                    # SWAN format: "accuracy OK in 99.8 % of wet points"
+                    #              "accuracy in ****** of wet points"  (overflow case)
+                    if "%" in line and re.search(r"accur|wet.?point", line, re.IGNORECASE):
+                        m = re.search(r"(\d+\.?\d*)\s*%", line)
+                        if m:
+                            accuracy_pct = float(m.group(1))
+            except OSError as exc:
+                logger.warning(
+                    "SWAN convergence: cannot read PRINT in %s: %s", run_dir, exc
+                )
+        else:
+            logger.warning(
+                "SWAN convergence: PRINT not found in %s (level=%s)", run_dir, grid_level
+            )
+
+        print_ok = overflow_count == 0
+        # Stationary runs must converge to ≥99.5% of wet points (NUMERIC npnts=99.5).
+        if is_stationary and accuracy_pct is not None and accuracy_pct < 99.5:
+            print_ok = False
+
+        # ------------------------------------------------------------------ #
+        # Check 2: NaN scan — hotstart file                                   #
+        # ------------------------------------------------------------------ #
+        nan_count = 0
+        hotstart_path = run_dir / self._HOTSTART_FILE
+        if hotstart_path.exists():
+            try:
+                hs_bytes = hotstart_path.read_bytes()
+                # Case-insensitive byte-level scan.  Catches ASCII/text hotstarts
+                # (Fortran free-format output, some SWAN versions).  Binary IEEE 754
+                # hotstarts are caught indirectly by Check 3 (exception values in TABLE).
+                nan_count = hs_bytes.lower().count(b"nan")
+            except OSError as exc:
+                logger.warning(
+                    "SWAN convergence: cannot read hotstart in %s: %s", run_dir, exc
+                )
+
+        nan_ok = nan_count == 0
+
+        # ------------------------------------------------------------------ #
+        # Check 3: Valid-point fraction from TABLE output                     #
+        # ------------------------------------------------------------------ #
+        # Collect per-spot TABLE files (TABLE_1.txt, TABLE_2.txt, …) or the
+        # legacy single-file OUTPUT_TABLE.txt.
+        table_files: list[Path] = []
+        n = 1
+        while (run_dir / f"TABLE_{n}.txt").exists():
+            table_files.append(run_dir / f"TABLE_{n}.txt")
+            n += 1
+        if not table_files and (run_dir / "OUTPUT_TABLE.txt").exists():
+            table_files.append(run_dir / "OUTPUT_TABLE.txt")
+
+        valid_fraction: float | None = None
+        fraction_ok = True
+
+        if table_files:
+            # Nonstationary: track per-timestep valid counts.
+            # Stationary: simple total/valid counts across all rows.
+            timestep_counts: dict[str, list[int]] = {}   # time_key → [total, valid]
+            simple_total = 0
+            simple_valid = 0
+
+            for table_path in table_files:
+                try:
+                    text = table_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+
+                col_idx: dict[str, int] = {}
+                header_found = False
+                i_hs: int | None = None
+                i_time: int | None = None
+
+                for raw_line in text.splitlines():
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    if line.startswith("%"):
+                        tokens = line.lstrip("%").split()
+                        if (
+                            not header_found
+                            and tokens
+                            and tokens[0].upper() not in ("RUN:V1", "[DEGR]", "[M]", "[SEC]")
+                            and any(
+                                t.upper() in ("XP", "YP", "HSIG", "HSIGN", "HS", "TM01", "TIME")
+                                for t in tokens
+                            )
+                        ):
+                            col_idx = {tok.upper(): i for i, tok in enumerate(tokens)}
+                            header_found = True
+                            i_hs = col_idx.get("HSIG", col_idx.get("HSIGN", col_idx.get("HS")))
+                            i_time = col_idx.get("TIME")
+                        continue
+                    if not header_found or i_hs is None:
+                        continue
+                    parts = line.split()
+                    if len(parts) <= i_hs:
+                        continue
+                    try:
+                        hs_val = float(parts[i_hs])
+                    except (ValueError, IndexError):
+                        continue
+
+                    is_point_valid = (
+                        not math.isnan(hs_val)
+                        and hs_val > _SWAN_EXCEPTION_VALUE
+                        and hs_val <= _HS_MAX_M
+                    )
+
+                    if is_stationary:
+                        simple_total += 1
+                        if is_point_valid:
+                            simple_valid += 1
+                    else:
+                        time_key = (
+                            parts[i_time]
+                            if i_time is not None and i_time < len(parts)
+                            else "unknown"
+                        )
+                        if time_key not in timestep_counts:
+                            timestep_counts[time_key] = [0, 0]
+                        timestep_counts[time_key][0] += 1
+                        if is_point_valid:
+                            timestep_counts[time_key][1] += 1
+
+            if is_stationary:
+                valid_fraction = simple_valid / max(simple_total, 1)
+                fraction_ok = valid_fraction >= 0.50   # ≥50% of points valid
+            else:
+                if timestep_counts:
+                    n_ok = sum(
+                        1
+                        for counts in timestep_counts.values()
+                        if counts[0] > 0 and counts[1] / counts[0] >= 0.50
+                    )
+                    valid_fraction = n_ok / len(timestep_counts)
+                    fraction_ok = valid_fraction >= 0.80   # ≥80% of timesteps valid
+                # If no timestep data, leave valid_fraction=None → log 100% (best-effort)
+        else:
+            # L1/L2 produce no TABLE output — skip fraction check.
+            logger.debug(
+                "SWAN convergence %s: no TABLE files found — skipping valid-fraction check",
+                grid_level,
+            )
+
+        # ------------------------------------------------------------------ #
+        # Log all metrics at INFO (mandatory regardless of pass/fail)         #
+        # ------------------------------------------------------------------ #
+        logger.info(
+            "SWAN convergence %s: overflow_count=%d, accuracy=%.1f%%, "
+            "nan_count=%d, valid_fraction=%.1f%%",
+            grid_level,
+            overflow_count,
+            accuracy_pct if accuracy_pct is not None else 0.0,
+            nan_count,
+            (valid_fraction * 100.0) if valid_fraction is not None else 100.0,
+        )
+
+        # ------------------------------------------------------------------ #
+        # Evaluate pass/fail and emit ERROR on failure                        #
+        # ------------------------------------------------------------------ #
+        if not print_ok:
+            details = f"overflow_count={overflow_count}" + (
+                f", final_accuracy={accuracy_pct:.1f}%" if accuracy_pct is not None else ""
+            )
+            logger.error(
+                "SWAN convergence FAILED level=%s: check=print_overflow, details=%s",
+                grid_level, details,
+            )
+            SWAN_CONVERGENCE_FAILURES_TOTAL.labels(level=grid_level, check="print_overflow").inc()
+            # TODO: degradation ladder when convergence_retry=True (SWAN-L3-STABILITY-PLAN Phase 4 future)
+            return False
+
+        if not nan_ok:
+            logger.error(
+                "SWAN convergence FAILED level=%s: check=nan_detected, details=nan_count=%d",
+                grid_level, nan_count,
+            )
+            SWAN_CONVERGENCE_FAILURES_TOTAL.labels(level=grid_level, check="nan_detected").inc()
+            # TODO: degradation ladder when convergence_retry=True (SWAN-L3-STABILITY-PLAN Phase 4 future)
+            return False
+
+        if not fraction_ok:
+            logger.error(
+                "SWAN convergence FAILED level=%s: check=low_valid_fraction, "
+                "details=valid_fraction=%.1f%%",
+                grid_level,
+                (valid_fraction * 100.0) if valid_fraction is not None else 0.0,
+            )
+            SWAN_CONVERGENCE_FAILURES_TOTAL.labels(level=grid_level, check="low_valid_fraction").inc()
+            # TODO: degradation ladder when convergence_retry=True (SWAN-L3-STABILITY-PLAN Phase 4 future)
+            return False
+
+        _frac_pct = (valid_fraction * 100.0) if valid_fraction is not None else 100.0
+        SWAN_LAST_RUN_VALID_FRACTION.labels(level=grid_level).set(_frac_pct)
+        logger.info(
+            "SWAN convergence OK level=%s: accuracy=%.1f%%, valid_fraction=%.1f%%, nan_count=0",
+            grid_level,
+            accuracy_pct if accuracy_pct is not None else 100.0,
+            _frac_pct,
+        )
+        return True
 
     def _parse_output(
         self,

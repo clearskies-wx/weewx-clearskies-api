@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -1115,24 +1116,79 @@ def _run_all_spots_locked(
         )
 
     # ------------------------------------------------------------------
-    # 2c. Build coastal structures for OBSTACLE commands (T2.3).
-    #     StructureConfig.coordinates is populated by the wizard Overpass
-    #     discovery endpoint.  Structures without coordinates are skipped —
-    #     they continue to receive post-processing via wave_transform.py
-    #     Supplement 2 until coordinates are available.
+    # 2c. Build coastal structures for OBSTACLE commands (T2.3 / T3.1).
+    #     Three cases per structure:
+    #       a. Explicit coordinates present → use directly.
+    #       b. No coordinates but bearing_degrees + length_m + distance_m
+    #          present → compute two-point line via geodesic projection from
+    #          the spot pin.  Coordinate order is [lon, lat] per point to
+    #          match swan_formats.py OBSTACLE emission (lonlat_to_utm(pt[0],
+    #          pt[1], zone) where pt[0]=lon, pt[1]=lat).
+    #       c. Neither → WARNING log; never skip silently (Finding C, brief §4b).
     # ------------------------------------------------------------------
     obstacle_structures: list[dict] = []
     for loc in surf_locations:
         surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
         if surf_cfg is None:
             continue
+        pin_lat: float = loc.lat
+        pin_lon: float = loc.lon
         for structure in getattr(surf_cfg, "structures", []):
+            s_type = getattr(structure, "type", "unknown")
             coords = getattr(structure, "coordinates", None)
             if coords and isinstance(coords, list) and len(coords) >= 2:
                 obstacle_structures.append({
-                    "type": structure.type,
+                    "type": s_type,
                     "coordinates": coords,
                 })
+                logger.info(
+                    "SWAN structure emitted: type=%s, %d coordinate points (explicit)",
+                    s_type,
+                    len(coords),
+                )
+            else:
+                bearing = getattr(structure, "bearing_degrees", None)
+                length = getattr(structure, "length_m", None)
+                distance = getattr(structure, "distance_m", None)
+                if bearing is not None and length is not None and distance is not None:
+                    # Compute start point: offset pin by distance_m along bearing.
+                    # bearing convention: 0° = North, 90° = East (standard geodesic).
+                    lat_rad = math.radians(pin_lat)
+                    dx_start = float(distance) * math.sin(math.radians(float(bearing)))
+                    dy_start = float(distance) * math.cos(math.radians(float(bearing)))
+                    start_lon = pin_lon + dx_start / (111320.0 * math.cos(lat_rad))
+                    start_lat = pin_lat + dy_start / 110540.0
+                    # Compute end point: extend start by length_m along bearing.
+                    lat_rad_start = math.radians(start_lat)
+                    dx_end = float(length) * math.sin(math.radians(float(bearing)))
+                    dy_end = float(length) * math.cos(math.radians(float(bearing)))
+                    end_lon = start_lon + dx_end / (111320.0 * math.cos(lat_rad_start))
+                    end_lat = start_lat + dy_end / 110540.0
+                    computed_coords = [
+                        [start_lon, start_lat],
+                        [end_lon, end_lat],
+                    ]
+                    obstacle_structures.append({
+                        "type": s_type,
+                        "coordinates": computed_coords,
+                    })
+                    logger.info(
+                        "SWAN structure emitted: type=%s, bearing=%.1f°,"
+                        " length=%.0fm, distance=%.0fm"
+                        " (computed from pin at %.4f, %.4f)",
+                        s_type,
+                        float(bearing),
+                        float(length),
+                        float(distance),
+                        pin_lat,
+                        pin_lon,
+                    )
+                else:
+                    logger.warning(
+                        "SWAN structure SKIPPED: type=%s —"
+                        " missing both coordinates and bearing/length/distance",
+                        s_type,
+                    )
     structures_for_swan: list[dict] | None = obstacle_structures or None
 
     # ------------------------------------------------------------------
@@ -1609,9 +1665,117 @@ def _run_quick_update_locked(
         len(surf_spots_config), len(domains.level3_clusters), hrrr_cycle,
     )
 
+    # ── T3.2: Structures for OBSTACLE commands ───────────────────────────────
+    # Same three-case logic as the full-run assembly (lines 1118-1192):
+    #   a. Explicit coordinates → use directly.
+    #   b. bearing_degrees + length_m + distance_m → compute from pin.
+    #   c. Neither → WARNING log, skip.
+    obstacle_structures: list[dict] = []
+    for loc in surf_locations:
+        surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
+        if surf_cfg is None:
+            continue
+        pin_lat = loc.lat
+        pin_lon = loc.lon
+        for structure in getattr(surf_cfg, "structures", []):
+            s_type = getattr(structure, "type", "unknown")
+            coords = getattr(structure, "coordinates", None)
+            if coords and isinstance(coords, list) and len(coords) >= 2:
+                obstacle_structures.append({
+                    "type": s_type,
+                    "coordinates": coords,
+                })
+            else:
+                bearing = getattr(structure, "bearing_degrees", None)
+                length = getattr(structure, "length_m", None)
+                distance = getattr(structure, "distance_m", None)
+                if bearing is not None and length is not None and distance is not None:
+                    lat_rad = math.radians(pin_lat)
+                    dx_s = float(distance) * math.sin(math.radians(float(bearing)))
+                    dy_s = float(distance) * math.cos(math.radians(float(bearing)))
+                    start_lon = pin_lon + dx_s / (111320.0 * math.cos(lat_rad))
+                    start_lat = pin_lat + dy_s / 110540.0
+                    lat_rad_s = math.radians(start_lat)
+                    dx_e = float(length) * math.sin(math.radians(float(bearing)))
+                    dy_e = float(length) * math.cos(math.radians(float(bearing)))
+                    end_lon = start_lon + dx_e / (111320.0 * math.cos(lat_rad_s))
+                    end_lat = start_lat + dy_e / 110540.0
+                    obstacle_structures.append({
+                        "type": s_type,
+                        "coordinates": [[start_lon, start_lat], [end_lon, end_lat]],
+                    })
+                else:
+                    logger.warning(
+                        "SWAN quick update structure SKIPPED: type=%s —"
+                        " missing both coordinates and bearing/length/distance",
+                        s_type,
+                    )
+    structures_for_runner: list[dict] | None = obstacle_structures or None
+
+    # ── T3.2: Tide prediction for static WLEVEL ──────────────────────────────
+    # Fetch the CO-OPS prediction closest to run_time and pass it as a
+    # single-element list so _write_input_files writes WLEVEL.txt (stationary
+    # INPGRID/READINP, no NONSTAT keywords).  On any failure, proceed without
+    # WLEVEL — same behaviour as before this fix, but now it is explicit.
+    tide_predictions_for_runner: list[dict] | None = None
+    _tide_level: float | None = None
+    _tide_time_str: str = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for loc in surf_locations:
+        coops_ids: list[str] = getattr(loc, "coops_station_ids", [])
+        if not coops_ids:
+            continue
+        try:
+            from weewx_clearskies_api.providers.tides import coops as _coops  # noqa: PLC0415
+
+            coops_result = _coops.fetch(
+                station_id=coops_ids[0],
+                products=("predictions",),
+            )
+            preds = coops_result.get("predictions", [])
+            if preds:
+                run_ts = run_time.timestamp()
+                closest_pred = None
+                min_diff = float("inf")
+                for p in preds:
+                    if p.time and p.height is not None:
+                        try:
+                            p_ts = datetime.fromisoformat(
+                                p.time.replace("Z", "+00:00")
+                            ).astimezone(UTC).timestamp()
+                            diff = abs(p_ts - run_ts)
+                            if diff < min_diff:
+                                min_diff = diff
+                                closest_pred = p
+                        except (ValueError, TypeError):
+                            pass
+                if closest_pred is not None:
+                    _tide_level = float(closest_pred.height)
+                    _tide_time_str = closest_pred.time
+                    tide_predictions_for_runner = [
+                        {"time": _tide_time_str, "height": _tide_level}
+                    ]
+        except Exception:
+            logger.warning(
+                "SWAN L3 quick update: no tide data available — running without WLEVEL",
+                exc_info=True,
+            )
+        break  # Only first station — same tidal regime as full run
+
+    if tide_predictions_for_runner is not None:
+        logger.info(
+            "SWAN L3 quick update: WLEVEL=%.2fm (tide at %s), structures=%d",
+            _tide_level, _tide_time_str, len(obstacle_structures),
+        )
+    # When tide_predictions_for_runner is None due to an exception, the WARNING was
+    # already emitted in the except block above.  No coops_station_ids configured or
+    # empty prediction list → silent (not a fetch failure, just absent config).
+
     try:
         results = runner.run_stationary_level3(
             swan_work, hrrr_wind_field, domains, bathymetry,
+            tide_predictions=tide_predictions_for_runner,
+            structures=structures_for_runner,
         )
     except SWANRunError as exc:
         logger.warning(
