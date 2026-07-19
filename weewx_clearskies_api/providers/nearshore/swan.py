@@ -230,9 +230,72 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
 
     # download_swan_depth_grid expects (lon_sw, lat_sw, lon_ne, lat_ne)
     bbox = (domain.lon_min, domain.lat_min, domain.lon_max, domain.lat_max)
+    center_lat = (domain.lat_min + domain.lat_max) / 2
+    center_lon = (domain.lon_min + domain.lon_max) / 2
 
+    # Priority 1: NCEI regional DEM via OPeNDAP
+    try:
+        from weewx_clearskies_api.services.bathymetry_resolver import (
+            find_best_dem,
+            fetch_opendap_grid,
+            normalize_to_msl,
+        )
+
+        dem = find_best_dem(bbox)
+        if dem is not None:
+            grid = fetch_opendap_grid(
+                dem["filename"], bbox, domain.resolution_m, dem["elevation_var"]
+            )
+            grid["depths"] = normalize_to_msl(
+                grid["depths"], dem["vertical_datum"], center_lat, center_lon
+            )
+            grid["source"] = "ncei_regional"
+            cache_path.write_text(json.dumps(grid), encoding="utf-8")
+            logger.info(
+                "CUDEM L%d: using NCEI %s (%.0fm, %s) via OPeNDAP",
+                level,
+                dem["filename"],
+                dem["resolution_m"],
+                dem["vertical_datum"],
+            )
+            return grid
+    except Exception:
+        logger.warning(
+            "CUDEM L%d: NCEI regional DEM failed, trying next source",
+            level,
+            exc_info=True,
+        )
+
+    # Priority 2: USGS Great Lakes DEM
+    try:
+        from weewx_clearskies_api.services.bathymetry_resolver import (
+            is_great_lake,
+            _ensure_great_lake_dem,
+            fetch_great_lake_grid,
+        )
+
+        lake = is_great_lake(center_lat, center_lon)
+        if lake is not None:
+            dem_path = _ensure_great_lake_dem(lake)
+            if dem_path is not None:
+                grid = fetch_great_lake_grid(dem_path, bbox, domain.resolution_m)
+                grid["source"] = "usgs_great_lakes"
+                cache_path.write_text(json.dumps(grid), encoding="utf-8")
+                logger.info(
+                    "CUDEM L%d: using USGS Great Lakes %s DEM", level, lake
+                )
+                return grid
+    except Exception:
+        logger.warning(
+            "CUDEM L%d: Great Lakes DEM failed, falling back to CRM",
+            level,
+            exc_info=True,
+        )
+
+    # Priority 3: CRM fallback (download_swan_depth_grid)
     try:
         grid = download_swan_depth_grid(bbox, domain.resolution_m)
+        grid["source"] = "crm_fallback"
         cache_path.write_text(json.dumps(grid), encoding="utf-8")
         logger.info(
             "CUDEM L%d grid downloaded and cached to %s (%d x %d)",
