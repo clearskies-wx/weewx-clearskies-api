@@ -69,6 +69,8 @@ from weewx_clearskies_api.providers._common.capability import (
     ProviderCapability,
 )
 from weewx_clearskies_api.services.swan_runner import SWANRunner, SWANRunError
+from weewx_clearskies_api.services.swan_domain import GridDomain, DomainSizing
+from weewx_clearskies_api.enrichment.bathymetry import download_swan_depth_grid
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,11 @@ _CUDEM_GRID_PATH = Path("/etc/weewx-clearskies/swan_bathymetry.json")
 # Per-spot bidirectional CUDEM profile cache (180-day TTL).
 _PROFILE_CACHE_DIR = Path("/etc/weewx-clearskies/spot_profiles")
 _PROFILE_MAX_AGE_S = 180 * 86400  # 180 days
+
+# Per-level CUDEM grid cache paths (Phase 14b).
+_CUDEM_GRID_PATH_L1 = Path("/etc/weewx-clearskies/swan_bathymetry_L1.json")
+_CUDEM_GRID_PATH_L2 = Path("/etc/weewx-clearskies/swan_bathymetry_L2.json")
+_CUDEM_L3_CACHE_DIR = Path("/etc/weewx-clearskies")
 
 
 def _load_or_download_cudem_grid(
@@ -154,6 +161,131 @@ def _load_or_download_cudem_grid(
             exc_info=True,
         )
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Per-level CUDEM bathymetry downloads (Phase 14b — 3-level nesting)
+# ---------------------------------------------------------------------------
+
+
+def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, Any]:
+    """Load a cached per-level CUDEM depth grid, or download from NCEI if absent/stale.
+
+    Cache paths:
+      Level 1 → /etc/weewx-clearskies/swan_bathymetry_L1.json  (1 km grid)
+      Level 2 → /etc/weewx-clearskies/swan_bathymetry_L2.json  (100 m grid)
+      Level 3 → /etc/weewx-clearskies/swan_bathymetry_L3_{hash}.json  (10 m grid)
+
+    The Level 3 hash is an 8-character MD5 of the rounded bbox coordinates so
+    that each surf-zone cluster gets its own stable cache file.
+
+    The 180-day mtime TTL and fallback-to-empty-dict behaviour match
+    ``_load_or_download_cudem_grid()``.  The returned dict format is identical
+    to what ``cudem_to_swan_bottom()`` expects:
+    ``{"lat_first", "lon_first", "lat_last", "lon_last", "ni", "nj", "depths"}``.
+
+    Args:
+        domain: GridDomain from swan_domain.compute_domains() for the target level.
+        level:  1, 2, or 3.
+
+    Returns:
+        Grid dict on success, empty dict on failure (SWAN falls back to 15 m depth).
+    """
+    if level == 3:
+        bbox_key = (
+            f"{domain.lat_min:.4f}_{domain.lat_max:.4f}"
+            f"_{domain.lon_min:.4f}_{domain.lon_max:.4f}"
+        )
+        cluster_hash = hashlib.md5(bbox_key.encode()).hexdigest()[:8]
+        cache_path = _CUDEM_L3_CACHE_DIR / f"swan_bathymetry_L3_{cluster_hash}.json"
+    elif level == 2:
+        cache_path = _CUDEM_GRID_PATH_L2
+    else:
+        # Level 1 (and any unexpected level value — treat as coarse grid)
+        cache_path = _CUDEM_GRID_PATH_L1
+
+    # 180-day TTL check (matches _load_or_download_cudem_grid pattern)
+    if cache_path.exists():
+        age_s = time.time() - os.path.getmtime(str(cache_path))
+        if age_s > _PROFILE_MAX_AGE_S:
+            logger.info(
+                "CUDEM L%d grid cache is %.0f days old — refreshing (path=%s)",
+                level,
+                age_s / 86400,
+                cache_path,
+            )
+        else:
+            try:
+                grid = json.loads(cache_path.read_text(encoding="utf-8"))
+                if grid.get("depths"):
+                    logger.debug("CUDEM L%d grid loaded from %s", level, cache_path)
+                    return grid
+            except Exception:
+                logger.warning(
+                    "CUDEM L%d grid file %s is corrupt; re-downloading",
+                    level,
+                    cache_path,
+                    exc_info=True,
+                )
+
+    # download_swan_depth_grid expects (lon_sw, lat_sw, lon_ne, lat_ne)
+    bbox = (domain.lon_min, domain.lat_min, domain.lon_max, domain.lat_max)
+
+    try:
+        grid = download_swan_depth_grid(bbox, domain.resolution_m)
+        cache_path.write_text(json.dumps(grid), encoding="utf-8")
+        logger.info(
+            "CUDEM L%d grid downloaded and cached to %s (%d x %d)",
+            level,
+            cache_path,
+            grid["ni"],
+            grid["nj"],
+        )
+        return grid
+    except Exception:
+        logger.warning(
+            "CUDEM L%d grid download failed; SWAN will use uniform 15m depth",
+            level,
+            exc_info=True,
+        )
+        return {}
+
+
+def download_all_bathymetry(domains: DomainSizing) -> dict[str, Any]:
+    """Download CUDEM bathymetry for all three grid levels.
+
+    Orchestrates per-level downloads using ``download_bathymetry_for_level()``.
+    Called by the Phase 14c 3-level run function before launching SWAN.
+
+    Args:
+        domains: DomainSizing from swan_domain.compute_domains().
+
+    Returns:
+        dict with three keys:
+          "level1"  — grid dict for the 1 km coarse grid
+          "level2"  — grid dict for the 100 m nearshore grid
+          "level3"  — dict mapping cluster_idx (int) → grid dict for 10 m surf grids
+        Any individual download failure yields an empty dict for that entry;
+        SWAN falls back to uniform 15 m depth for that grid level.
+    """
+    level1_grid = download_bathymetry_for_level(domains.level1, level=1)
+    level2_grid = download_bathymetry_for_level(domains.level2, level=2)
+
+    level3_grids: dict[int, dict[str, Any]] = {}
+    for idx, cluster in enumerate(domains.level3_clusters):
+        if cluster.grid is None:
+            logger.warning(
+                "CUDEM L3 cluster %d has no GridDomain; skipping bathymetry download",
+                idx,
+            )
+            continue
+        level3_grids[idx] = download_bathymetry_for_level(cluster.grid, level=3)
+
+    return {
+        "level1": level1_grid,
+        "level2": level2_grid,
+        "level3": level3_grids,
+    }
 
 
 # ---------------------------------------------------------------------------
