@@ -126,17 +126,19 @@ def compute_domains(
 
     lats = [s["lat"] for s in spot_locations]
     lons = [s["lon"] for s in spot_locations]
+    bearings = [float(s.get("beach_facing_degrees", 270.0)) for s in spot_locations]
 
     # --- Level 1: Coarse grid (1 km) ---
     level1 = _compute_level1(
         lats, lons,
         resolution_m=level1_resolution_m,
         margin_km=level1_margin_km,
+        spot_locations=spot_locations,
     )
 
     # --- Level 2: Nearshore grid (100 m) ---
     level2 = _compute_level2(
-        lats, lons,
+        lats, lons, bearings,
         resolution_m=level2_resolution_m,
         margin_km=level2_margin_km,
         offshore_depth_m=level2_offshore_depth_m,
@@ -144,9 +146,11 @@ def compute_domains(
 
     # --- Level 3: Surf zone grids (10 m) — per cluster ---
     clusters = _cluster_spots(spot_locations, cluster_distance_m)
+    avg_bearing = sum(bearings) / len(bearings)
     for cluster in clusters:
         cluster.grid = _compute_level3_grid(
             cluster,
+            avg_bearing,
             resolution_m=level3_resolution_m,
             lateral_m=level3_lateral_m,
             offshore_depth_m=level3_offshore_depth_m,
@@ -161,6 +165,7 @@ def _compute_level1(
     *,
     resolution_m: float,
     margin_km: float,
+    spot_locations: list[dict] | None = None,
 ) -> GridDomain:
     """Level 1: all spots extent + margin + GSFM shelf distance offshore."""
     center_lat = sum(lats) / len(lats)
@@ -191,13 +196,30 @@ def _compute_level1(
     lon_margin_deg = lateral_km / km_per_deg_lon
     offshore_deg = offshore_km / km_per_deg_lon
 
-    # The offshore direction is generally "away from coast" — approximate as
-    # seaward from the spot centroid. For simplicity, extend in all directions
-    # but bias offshore using the average beach-facing direction.
-    lat_min = min(lats) - lat_margin_deg
-    lat_max = max(lats) + lat_margin_deg
-    lon_min = min(lons) - max(lon_margin_deg, offshore_deg)
-    lon_max = max(lons) + max(lon_margin_deg, offshore_deg)
+    # Extend offshore in the beach-facing direction, lateral perpendicular
+    avg_bearing = sum(
+        float(s.get("beach_facing_degrees", 270.0)) for s in spot_locations
+    ) / len(spot_locations) if spot_locations else 270.0
+    bearing_rad = math.radians(avg_bearing)
+
+    offshore_dlat = offshore_km * math.cos(bearing_rad) / km_per_deg_lat
+    offshore_dlon = offshore_km * math.sin(bearing_rad) / km_per_deg_lon
+    landward_km = 1.0
+    landward_dlat = landward_km * math.cos(bearing_rad + math.pi) / km_per_deg_lat
+    landward_dlon = landward_km * math.sin(bearing_rad + math.pi) / km_per_deg_lon
+
+    offshore_lat = center_lat + offshore_dlat
+    offshore_lon = center_lon + offshore_dlon
+    landward_lat = center_lat + landward_dlat
+    landward_lon = center_lon + landward_dlon
+
+    all_lats = lats + [offshore_lat, landward_lat]
+    all_lons = lons + [offshore_lon, landward_lon]
+
+    lat_min = min(all_lats) - lat_margin_deg
+    lat_max = max(all_lats) + lat_margin_deg
+    lon_min = min(all_lons) - lon_margin_deg
+    lon_max = max(all_lons) + lon_margin_deg
 
     return GridDomain(
         lat_min=lat_min, lat_max=lat_max,
@@ -209,35 +231,59 @@ def _compute_level1(
 def _compute_level2(
     lats: list[float],
     lons: list[float],
+    beach_facing_degrees: list[float],
     *,
     resolution_m: float,
     margin_km: float,
     offshore_depth_m: float,
 ) -> GridDomain:
-    """Level 2: all spots + margin, extending to 30m depth offshore.
+    """Level 2: extends OFFSHORE from spots to 30m depth, with small land margin.
 
-    The 30m depth contour is approximately 3-4 km offshore for SoCal.
-    Without pre-computed bathymetry data, we estimate cross-shore extent
-    using a typical shelf gradient.
+    Uses beach_facing_degrees to determine which direction is offshore.
+    The grid extends 4-6 km in the offshore direction and only 0.5 km
+    on the land side.
     """
     center_lat = sum(lats) / len(lats)
+    center_lon = sum(lons) / len(lons)
 
-    # Estimate cross-shore extent to 30m depth
-    # Typical nearshore gradient: ~1:100 to ~1:200 (SoCal average)
-    # 30m depth at ~1:100 gradient = ~3 km offshore
-    # Use 4 km as conservative estimate + margin
-    cross_shore_km = 4.0 + margin_km
+    # Average beach-facing bearing (offshore direction)
+    avg_bearing = sum(beach_facing_degrees) / len(beach_facing_degrees)
+    bearing_rad = math.radians(avg_bearing)
+
+    # Cross-shore: 6 km offshore (to ~30m depth), 0.5 km landward
+    offshore_km = 6.0
+    landward_km = 0.5
+
+    # Lateral: spots spread + margin each side
+    lateral_km = margin_km
 
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
 
-    lat_margin_deg = margin_km / km_per_deg_lat
-    lon_margin_deg = cross_shore_km / km_per_deg_lon
+    # Compute offshore and landward offsets in lat/lon using bearing
+    offshore_dlat = offshore_km * math.cos(bearing_rad) / km_per_deg_lat
+    offshore_dlon = offshore_km * math.sin(bearing_rad) / km_per_deg_lon
+    landward_dlat = landward_km * math.cos(bearing_rad + math.pi) / km_per_deg_lat
+    landward_dlon = landward_km * math.sin(bearing_rad + math.pi) / km_per_deg_lon
 
-    lat_min = min(lats) - lat_margin_deg
-    lat_max = max(lats) + lat_margin_deg
-    lon_min = min(lons) - lon_margin_deg
-    lon_max = max(lons) + lon_margin_deg
+    # Lateral offsets (perpendicular to bearing)
+    perp_rad = bearing_rad + math.pi / 2
+    lateral_dlat = lateral_km * abs(math.cos(perp_rad)) / km_per_deg_lat
+    lateral_dlon = lateral_km * abs(math.sin(perp_rad)) / km_per_deg_lon
+
+    # Build bbox from spots + directional offsets
+    offshore_lat = center_lat + offshore_dlat
+    offshore_lon = center_lon + offshore_dlon
+    landward_lat = center_lat + landward_dlat
+    landward_lon = center_lon + landward_dlon
+
+    all_lats = lats + [offshore_lat, landward_lat]
+    all_lons = lons + [offshore_lon, landward_lon]
+
+    lat_min = min(all_lats) - lateral_dlat
+    lat_max = max(all_lats) + lateral_dlat
+    lon_min = min(all_lons) - lateral_dlon
+    lon_max = max(all_lons) + lateral_dlon
 
     return GridDomain(
         lat_min=lat_min, lat_max=lat_max,
@@ -304,6 +350,7 @@ def _cluster_spots(
 
 def _compute_level3_grid(
     cluster: SpotCluster,
+    beach_facing_degrees: float,
     *,
     resolution_m: float,
     lateral_m: float,
@@ -311,26 +358,44 @@ def _compute_level3_grid(
 ) -> GridDomain:
     """Compute one Level 3 grid for a spot cluster.
 
-    Extends lateral_m before first pin and after last pin along coast.
-    Cross-shore: ~1 km (shore to ~15m depth).
+    Uses beach_facing_degrees to extend offshore (1 km) from spots
+    with only 100m on the land side. Lateral: 250m each side along coast.
     """
     center_lat = sum(cluster.lats) / len(cluster.lats)
+    center_lon = sum(cluster.lons) / len(cluster.lons)
 
-    # Cross-shore extent: shore to 15m depth ≈ 1 km
-    cross_shore_km = 1.0
+    bearing_rad = math.radians(beach_facing_degrees)
 
-    # Lateral extent: 250m before first pin to 250m after last pin
+    offshore_km = 1.0
+    landward_km = 0.1
+
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
 
-    lateral_deg_lat = lateral_m / 1000 / km_per_deg_lat
-    lateral_deg_lon = lateral_m / 1000 / km_per_deg_lon
-    cross_shore_deg = cross_shore_km / km_per_deg_lon
+    # Offshore and landward offsets using bearing
+    offshore_dlat = offshore_km * math.cos(bearing_rad) / km_per_deg_lat
+    offshore_dlon = offshore_km * math.sin(bearing_rad) / km_per_deg_lon
+    landward_dlat = landward_km * math.cos(bearing_rad + math.pi) / km_per_deg_lat
+    landward_dlon = landward_km * math.sin(bearing_rad + math.pi) / km_per_deg_lon
 
-    lat_min = min(cluster.lats) - lateral_deg_lat
-    lat_max = max(cluster.lats) + lateral_deg_lat
-    lon_min = min(cluster.lons) - cross_shore_deg
-    lon_max = max(cluster.lons) + cross_shore_deg
+    # Lateral offsets (perpendicular to bearing)
+    lateral_km = lateral_m / 1000.0
+    perp_rad = bearing_rad + math.pi / 2
+    lateral_dlat = lateral_km * abs(math.cos(perp_rad)) / km_per_deg_lat
+    lateral_dlon = lateral_km * abs(math.sin(perp_rad)) / km_per_deg_lon
+
+    offshore_lat = center_lat + offshore_dlat
+    offshore_lon = center_lon + offshore_dlon
+    landward_lat = center_lat + landward_dlat
+    landward_lon = center_lon + landward_dlon
+
+    all_lats = cluster.lats + [offshore_lat, landward_lat]
+    all_lons = cluster.lons + [offshore_lon, landward_lon]
+
+    lat_min = min(all_lats) - lateral_dlat
+    lat_max = max(all_lats) + lateral_dlat
+    lon_min = min(all_lons) - lateral_dlon
+    lon_max = max(all_lons) + lateral_dlon
 
     return GridDomain(
         lat_min=lat_min, lat_max=lat_max,
