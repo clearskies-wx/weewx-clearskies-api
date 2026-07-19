@@ -801,8 +801,19 @@ def _is_station_active(station_id: str) -> bool:
     if cached is not None:
         return bool(cached)
 
+    import time as _time
+
+    # Block until rate limiter allows (wizard is waiting — don't fail on quota)
+    for _attempt in range(5):
+        try:
+            _rate_limiter.acquire()
+            break
+        except Exception:
+            _time.sleep(1)
+    else:
+        return True  # Can't get a slot after 5s — include station, don't block wizard
+
     try:
-        _rate_limiter.acquire()
         url = f"{_NDBC_BASE_URL}{_STANDARD_MET_PATH.format(station_id=station_id)}"
         response = _get_http_client().get(url)
         if response.status_code == 404:
@@ -823,9 +834,8 @@ def _is_station_active(station_id: str) -> bool:
                 get_cache().set(cache_key, is_active, ttl_seconds=_STATION_DISCOVERY_CACHE_TTL)
                 return is_active
     except Exception:  # noqa: BLE001
-        logger.debug("NDBC activity probe failed for station %s — assuming active (fail-open)", station_id)
+        logger.debug("NDBC activity probe failed for station %s — assuming active", station_id)
 
-    # Fail-open: if we can't determine status, include the station
     return True
 
 
