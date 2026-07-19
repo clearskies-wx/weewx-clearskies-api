@@ -1194,10 +1194,8 @@ class BackgroundCacheWarmer:
             hrrr_wind = _hrrr.fetch(
                 bbox=self._marine_config.hrrr_bbox, max_forecast_hours=1
             )
-            logger.info("Cache warmer: HRRR wind for quick update (cycle=%s)",
-                        hrrr_wind.get("cycle_time"))
         except Exception:
-            logger.info("Cache warmer: HRRR quick fetch failed; skipping quick update")
+            logger.debug("Cache warmer: HRRR quick fetch failed; skipping quick update")
             return
 
         try:

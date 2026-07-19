@@ -1246,16 +1246,6 @@ class SWANRunner:
                     _coast_lat = None
                     _coast_lon = None
 
-                logger.info(
-                    "SWAN transect debug: spot=%s runtime_profile=%s profile_len=%d coast=%s,%s cfg_keys=%s",
-                    spot_id,
-                    "present" if _runtime else "absent",
-                    len(_profile_list),
-                    _coast_lat,
-                    _coast_lon,
-                    list(cfg.keys()),
-                )
-
                 tr = compute_spot_transect(
                     spot_lon,
                     spot_lat,
