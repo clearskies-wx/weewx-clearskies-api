@@ -33,6 +33,9 @@ Endpoints:
                                             piers, breakwaters, seawalls, groins) via the
                                             OpenStreetMap Overpass API, for surf spot
                                             wave-physics setup (T5.2)
+  POST /setup/marine/bathymetry/upload      — accept operator-supplied GeoTIFF bathymetry
+                                            file; validate, save, return per-level coverage
+                                            (SWAN-FIXES-PLAN Phase 24, T24.1)
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -59,7 +62,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 import configobj
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import create_engine, text
@@ -3578,4 +3581,230 @@ async def marine_compute_estimate(
         total_cells=total_cells,
         total_estimated_seconds=total_seconds,
         cores=cores,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bathymetry upload (Phase 24, T24.1)
+# ---------------------------------------------------------------------------
+
+_VALID_UPLOAD_DATUMS: frozenset[str] = frozenset({
+    "MSL", "MLLW", "NAVD88", "MHW", "MHHW", "LAT", "EGM2008", "Other",
+})
+
+# Only GeoTIFF for v1; NetCDF and ASCII XYZ deferred to a future update.
+_ACCEPTED_BATHY_EXTENSIONS: frozenset[str] = frozenset({".tif", ".tiff"})
+
+_OPERATOR_BATHY_DIR: Path = Path("/etc/weewx-clearskies/operator_bathymetry")
+_OPERATOR_BATHY_TIF: Path = _OPERATOR_BATHY_DIR / "operator.tif"
+_OPERATOR_BATHY_META: Path = _OPERATOR_BATHY_DIR / "operator_meta.json"
+
+# Grid level resolution thresholds in metres.
+# A file whose native resolution is <= the threshold gives "full" coverage for
+# that level; <= 10x the threshold gives "partial"; coarser gives "none".
+_BATHY_LEVEL_THRESHOLDS: dict[int, float] = {
+    1: 1000.0,   # Level 1: ~1 km grid
+    2: 100.0,    # Level 2: ~100 m nearshore
+    3: 10.0,     # Level 3: ~10 m surf zone
+}
+
+
+class _BathyUploadLevelCoverage(BaseModel):
+    """Per-SWAN-level coverage result for the uploaded bathymetry file."""
+
+    level: int
+    coverage: str        # "full" | "partial" | "none"
+    coverage_label: str  # locale-resolved string
+
+
+class BathymetryUploadResponse(BaseModel):
+    """Validation result returned by POST /setup/marine/bathymetry/upload."""
+
+    accepted: bool
+    status_label: str
+    bbox: list[float] | None = None        # [lon_min, lat_min, lon_max, lat_max]
+    resolution_m: float | None = None
+    crs: str | None = None
+    datum: str | None = None
+    datum_applied_label: str | None = None
+    levels: list[_BathyUploadLevelCoverage] = []
+    rejection_reason: str | None = None
+
+
+def _bathy_coverage_for_resolution(res_m: float, threshold_m: float) -> str:
+    """Return coverage tier for *res_m* relative to a level *threshold_m*.
+
+    "full"    — file resolution <= threshold (adequate for this grid level)
+    "partial" — file resolution <= 10× threshold (usable but degraded)
+    "none"    — file is too coarse to be useful at this level
+    """
+    if res_m <= threshold_m:
+        return "full"
+    if res_m <= threshold_m * 10.0:
+        return "partial"
+    return "none"
+
+
+@router.post("/marine/bathymetry/upload", response_model=BathymetryUploadResponse)
+async def marine_bathymetry_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    datum: str = Form(...),
+    manual_offset: float | None = Form(None),
+) -> BathymetryUploadResponse:
+    """Accept an operator-supplied GeoTIFF bathymetry file (T24.1).
+
+    Validates the uploaded GeoTIFF using rasterio, saves it to the operator
+    bathymetry directory alongside a JSON metadata file that records the
+    chosen vertical datum. Returns a validation response with the file bbox,
+    native resolution, and per-level coverage assessment.
+
+    Accepted formats (v1): GeoTIFF (.tif, .tiff).  NetCDF and ASCII XYZ
+    support is planned for a future update.
+
+    Vertical datum options: MSL, MLLW, NAVD88, MHW, MHHW, LAT, EGM2008,
+    Other.  When datum is "Other" a ``manual_offset`` (metres) is required.
+    The datum transform to MSL is applied at SWAN run time (where the bbox
+    centre is known for the VDatum API query), not at upload time.
+    """
+    await require_setup_session(request)
+
+    from weewx_clearskies_api import i18n  # noqa: PLC0415
+
+    # --- Validate datum input ---
+    datum = datum.strip()
+    if datum not in _VALID_UPLOAD_DATUMS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"datum must be one of: {sorted(_VALID_UPLOAD_DATUMS)}. "
+                f"Got: {datum!r}"
+            ),
+        )
+    if datum == "Other" and manual_offset is None:
+        raise HTTPException(
+            status_code=422,
+            detail="manual_offset is required when datum is 'Other'",
+        )
+
+    # --- Validate file extension (v1: GeoTIFF only) ---
+    filename = file.filename or ""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _ACCEPTED_BATHY_EXTENSIONS:
+        return BathymetryUploadResponse(
+            accepted=False,
+            status_label=i18n.t("marine.bathymetry.upload.rejected"),
+            datum=datum,
+            rejection_reason=i18n.t("marine.bathymetry.upload.format_unsupported"),
+        )
+
+    # --- Require rasterio for GeoTIFF validation ---
+    try:
+        import rasterio  # type: ignore[import-untyped]
+        import rasterio.crs  # type: ignore[import-untyped]
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "rasterio is not installed — GeoTIFF validation is unavailable. "
+                "Install rasterio (add to [nearshore] extra) to enable operator "
+                "bathymetry upload."
+            ),
+        )
+
+    # --- Read the uploaded bytes ---
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+
+    # --- Validate the GeoTIFF by opening it in a temp file ---
+    import tempfile  # noqa: PLC0415
+
+    bounds = None
+    crs_str: str | None = None
+    res_m: float | None = None
+    tmp_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+
+        try:
+            with rasterio.open(str(tmp_path)) as src:
+                bounds = src.bounds
+                if src.crs:
+                    crs_str = src.crs.to_string()
+                transform = src.transform
+                pixel_width_deg = abs(float(transform.a))
+                pixel_height_deg = abs(float(transform.e))
+                center_lat = (bounds.bottom + bounds.top) / 2.0
+                cos_lat = abs(math.cos(math.radians(center_lat)))
+                # Approximate ground resolution (metres) — coarser of x/y
+                res_m_x = pixel_width_deg * 111_320.0 * (cos_lat if cos_lat > 1e-6 else 1.0)
+                res_m_y = pixel_height_deg * 111_320.0
+                res_m = max(res_m_x, res_m_y)
+        except Exception as exc:
+            return BathymetryUploadResponse(
+                accepted=False,
+                status_label=i18n.t("marine.bathymetry.upload.rejected"),
+                datum=datum,
+                rejection_reason=f"GeoTIFF validation failed: {str(exc)[:200]}",
+            )
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    # --- Persist to operator directory ---
+    try:
+        _OPERATOR_BATHY_DIR.mkdir(parents=True, exist_ok=True)
+        _OPERATOR_BATHY_TIF.write_bytes(content)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save bathymetry file: {exc}",
+        )
+
+    # --- Persist datum metadata ---
+    meta: dict[str, Any] = {
+        "datum": datum,
+        "manual_offset": manual_offset,
+        "original_filename": filename,
+        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    try:
+        _OPERATOR_BATHY_META.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning(
+            "Failed to write bathymetry metadata to %s — continuing",
+            _OPERATOR_BATHY_META,
+            exc_info=True,
+        )
+
+    # --- Compute per-level coverage from file resolution ---
+    levels: list[_BathyUploadLevelCoverage] = []
+    for level_num, threshold_m in _BATHY_LEVEL_THRESHOLDS.items():
+        coverage = _bathy_coverage_for_resolution(res_m, threshold_m)
+        levels.append(
+            _BathyUploadLevelCoverage(
+                level=level_num,
+                coverage=coverage,
+                coverage_label=i18n.t(f"marine.bathymetry.upload.coverage.{coverage}"),
+            )
+        )
+
+    # --- Build response ---
+    datum_applied_label: str | None = None
+    if datum not in ("MSL", "LMSL"):
+        datum_applied_label = i18n.t("marine.bathymetry.upload.datum_applied")
+
+    return BathymetryUploadResponse(
+        accepted=True,
+        status_label=i18n.t("marine.bathymetry.upload.accepted"),
+        bbox=[bounds.left, bounds.bottom, bounds.right, bounds.top],
+        resolution_m=round(res_m, 2),
+        crs=crs_str,
+        datum=datum,
+        datum_applied_label=datum_applied_label,
+        levels=levels,
     )

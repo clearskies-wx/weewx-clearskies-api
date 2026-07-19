@@ -568,6 +568,22 @@
       },
       "warning": {
         "degraded": "Surf zone features like sandbars and break points may not be resolved with the available bathymetry data."
+      },
+      "upload": {
+        "accepted": "Bathymetry file accepted",
+        "rejected": "Bathymetry file rejected",
+        "format_unsupported": "Unsupported file format. Accepted: GeoTIFF (.tif, .tiff)",
+        "coverage": {
+          "full": "Full coverage for this grid level",
+          "partial": "Partial coverage for this grid level",
+          "none": "No coverage for this grid level"
+        },
+        "resolution_note": {
+          "exceeds": "File resolution exceeds the grid level requirement",
+          "adequate": "File resolution meets the grid level requirement",
+          "insufficient": "File resolution is below the recommended minimum for this grid level"
+        },
+        "datum_applied": "Datum correction will be applied at run time"
       }
     }
   }
