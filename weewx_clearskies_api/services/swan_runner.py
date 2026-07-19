@@ -1,36 +1,24 @@
-"""SWAN nearshore wave model subprocess orchestrator for the SWAN pipeline.
+"""SWAN nearshore wave model subprocess orchestrator.
+
+Two execution modes:
+  - Legacy 2-level: run() — outer grid (~3km) + inner nest (~200m).
+  - 3-level nesting: run_3level() — Level 1 (1km) + Level 2 (100m) + Level 3 (10m).
+
+The 3-level mode (SWAN-FIXES-PLAN Phase 14c) uses physics-based domain sizing
+from swan_domain.py and per-level CUDEM bathymetry. NESTOUT flows:
+  Level 1 → NESTOUT → Level 2 (BOUNDNEST1 + NESTOUT) → Level 3 (BOUNDNEST1).
 
 Responsibilities:
-  1. Blend HRRR (hours 0–48) and GFS (hours 48–72) wind fields into a single
-     72-hour blended wind input (T7.2).
-  2. Execute two sequential SWAN runs per cycle: an outer grid (continental shelf
-     approach) and an inner nest (tight nearshore domain around surf spots) — T7.2.
-  3. Write all SWAN input files (BOTTOM.txt, WIND.txt, BOUND_SPEC.txt, INPUT,
-     OUTPUT_POINTS.txt) into per-level subdirectories of a temporary directory.
-  4. Spawn the SWAN executable as a subprocess for each level, feeding it INPUT
-     on stdin.
-  5. Parse the inner nest's TABLE output file and convert each row to a
-     MarineForecastPoint.
-  6. Return results keyed by surf spot ID.
-
-Key design decisions:
-  - Two sequential SWAN runs per cycle (outer grid + inner nest).  Total grid
-    points ~8,000–16,000; total peak memory ≤300 MB (PROVIDER-MANUAL §14.15).
-  - GFS 3-hourly grids are linearly interpolated to hourly resolution in
-    _stitch_wind() so the blended wind field is uniform 1-hour cadence
-    (PROVIDER-MANUAL §14.16).
-  - Runs SWAN in a temp directory; the directory is NOT cleaned up automatically
-    so that operators can inspect input/output files after failures.
-  - SWAN is invoked as a subprocess (not via Python bindings) per ADR-093.
-  - The return type is dict[str, list[MarineForecastPoint]] keyed by spot_id.
-    This is the approved deviation from the plan's under-specified flat list
-    (confirmed by coordinator 2026-07-16).
+  1. Blend HRRR (hours 0–48) and GFS (hours 48–72) into uniform hourly wind.
+  2. Write per-level SWAN input files (BOTTOM, WIND, boundary, INPUT).
+  3. Spawn SWAN subprocess per level, handle hotstart persistence.
+  4. Parse Level 3 TABLE output into MarineForecastPoints keyed by spot.
 
 References:
-  - PROVIDER-MANUAL.md §14.15 (SWAN+SWAN runner)
+  - PROVIDER-MANUAL.md §14.15 (SWAN runner)
   - PROVIDER-MANUAL.md §14.16 (GFS wind provider)
-  - SWAN-CORRECTIONS-PLAN.md
-  - ADR-093 (SWAN+SWAN nearshore model)
+  - SWAN-FIXES-PLAN.md (Phases 1-16)
+  - ADR-093 (SWAN nearshore model)
 """
 
 from __future__ import annotations
@@ -1179,6 +1167,9 @@ class SWANRunner:
         logger.info("SWAN Level 1 complete")
 
         # --- Level 2: Nearshore grid (100 m) ---
+        # Level 2 must BOTH read L1's boundary AND write NESTOUT for L3.
+        # Strategy: run as "outer" (writes NESTOUT), then patch the INPUT file
+        # to replace BOUNDSPEC SIDE with BOUNDNEST1 (reads L1's output).
         l2_dir = tmpdir / "level2"
         l2_dir.mkdir()
         l2_bbox = (
@@ -1193,16 +1184,65 @@ class SWANRunner:
         else:
             logger.warning("SWAN L2: Level 1 did not produce NESTOUT — running without nesting")
 
+        # Temporarily override self._inner_bbox so the NESTOUT command targets
+        # the union of all Level 3 cluster bboxes (SWAN interpolates to each
+        # Level 3 grid's boundary from this single NESTOUT file).
+        l3_bboxes = [
+            c.grid for c in domains.level3_clusters if c.grid is not None
+        ]
+        if l3_bboxes:
+            l3_union_bbox = (
+                min(g.lon_min for g in l3_bboxes),
+                min(g.lat_min for g in l3_bboxes),
+                max(g.lon_max for g in l3_bboxes),
+                max(g.lat_max for g in l3_bboxes),
+            )
+            # Use the finest resolution among L3 grids for NESTOUT dimensions
+            l3_res = l3_bboxes[0].resolution_m
+        else:
+            l3_union_bbox = l2_bbox
+            l3_res = 10.0
+
+        saved_inner_bbox = self._inner_bbox
+        saved_inner_res = self._inner_resolution_m
+        self._inner_bbox = l3_union_bbox
+        self._inner_resolution_m = l3_res
+
         l2_grid = self._write_input_files(
-            l2_dir, blended_wind, {}, bathymetry.get("level2", {}), "inner",
+            l2_dir, blended_wind, {}, bathymetry.get("level2", {}), "outer",
             tide_predictions=tide_predictions,
             ofs_currents=ofs_currents,
             structures=structures,
             override_bbox=l2_bbox,
             override_resolution_m=domains.level2.resolution_m,
         )
+
+        self._inner_bbox = saved_inner_bbox
+        self._inner_resolution_m = saved_inner_res
+
+        # Patch INPUT: replace BOUNDSPEC SIDE lines with BOUNDNEST1
+        input_path = l2_dir / "INPUT"
+        input_text = input_path.read_text(encoding="ascii")
+        patched_lines = []
+        for line in input_text.splitlines():
+            if line.startswith("BOUNDSPEC SIDE"):
+                continue  # Remove BOUNDSPEC SIDE commands
+            patched_lines.append(line)
+        # Insert BOUNDNEST1 before the first GEN3 line
+        final_lines = []
+        boundnest_inserted = False
+        for line in patched_lines:
+            if line.startswith("GEN3") and not boundnest_inserted:
+                final_lines.append(
+                    f"BOUNDNEST1 NEST '{self._NESTOUT_BOUNDARY_FILE}' CLOSED"
+                )
+                final_lines.append("")
+                boundnest_inserted = True
+            final_lines.append(line)
+        input_path.write_text("\n".join(final_lines) + "\n", encoding="ascii")
+
         logger.info(
-            "SWAN L2: %d×%d cells at 100 m in %s",
+            "SWAN L2: %d×%d cells at 100 m in %s (NESTOUT→L3, BOUNDNEST1←L1)",
             l2_grid["mxc"], l2_grid["myc"], l2_dir,
         )
         self._spawn_swan_with_hotstart_retry(l2_dir, "level2")

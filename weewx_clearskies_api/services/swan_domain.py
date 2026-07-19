@@ -54,7 +54,6 @@ class GridDomain:
     def cell_count(self) -> int:
         return self.ni * self.nj
 
-    @property
     def estimated_runtime_s(self, cores: int = 6) -> float:
         """Estimated full 72h nonstationary run time in seconds."""
         return self.cell_count * (0.05 / (cores / 6))
@@ -176,8 +175,8 @@ def _compute_level1(
             shelf_dist_km,
         )
 
-    # Offshore extent: shelf distance + margin into deep water
-    offshore_km = shelf_dist_km + margin_km + 10.0  # +10km past shelf edge
+    # Offshore extent: shelf distance + 10 km past shelf edge (per research brief §5)
+    offshore_km = shelf_dist_km + 10.0
 
     # Lateral extent: all spots + margin each side
     lat_spread_km = (max(lats) - min(lats)) * 111.0

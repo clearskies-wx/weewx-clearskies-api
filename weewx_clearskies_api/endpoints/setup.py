@@ -2900,7 +2900,14 @@ async def marine_discover_structures(
     if all(v is not None for v in (bbox_south, bbox_west, bbox_north, bbox_east)):
         bbox = (bbox_south, bbox_west, bbox_north, bbox_east)  # type: ignore[arg-type]
 
-    cache_key = _build_structure_discovery_cache_key(lat, lon, radius_m)
+    # Include bbox in cache key when provided so bbox queries don't return
+    # cached radius-based results (audit F4).
+    if bbox is not None:
+        cache_key = _build_structure_discovery_cache_key(
+            lat, lon, radius_m
+        ) + f"_bbox_{bbox[0]:.4f}_{bbox[1]:.4f}_{bbox[2]:.4f}_{bbox[3]:.4f}"
+    else:
+        cache_key = _build_structure_discovery_cache_key(lat, lon, radius_m)
     cached = get_cache().get(cache_key)
     if cached is not None:
         return MarineStructureDiscoveryResponse.model_validate(cached)
