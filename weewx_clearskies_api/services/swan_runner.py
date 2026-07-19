@@ -1139,16 +1139,30 @@ class SWANRunner:
         from weewx_clearskies_api.services.swan_domain import DomainSizing
 
         blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
-        tmpdir = Path(tempfile.mkdtemp(prefix="swan_3level_"))
-        logger.info("SWAN 3-level run starting in %s", tmpdir)
+
+        # Use persistent working dir (not tmpdir) so hotstart files survive between runs
+        workdir = Path("/var/run/weewx-clearskies/swan")
+        workdir.mkdir(parents=True, exist_ok=True)
+        logger.info("SWAN 3-level run starting in %s", workdir)
 
         # --- Level 1: Coarse grid (1 km) ---
-        l1_dir = tmpdir / "level1"
-        l1_dir.mkdir()
+        l1_dir = workdir / "level1"
+        l1_dir.mkdir(exist_ok=True)
         l1_bbox = (
             domains.level1.lon_min, domains.level1.lat_min,
             domains.level1.lon_max, domains.level1.lat_max,
         )
+        l2_bbox = (
+            domains.level2.lon_min, domains.level2.lat_min,
+            domains.level2.lon_max, domains.level2.lat_max,
+        )
+
+        # Level 1's NESTOUT must target Level 2's domain
+        saved_inner_bbox = self._inner_bbox
+        saved_inner_res = self._inner_resolution_m
+        self._inner_bbox = l2_bbox
+        self._inner_resolution_m = domains.level2.resolution_m
+
         l1_grid = self._write_input_files(
             l1_dir, blended_wind, ww3_boundary,
             bathymetry.get("level1", {}), "outer",
@@ -1158,6 +1172,10 @@ class SWANRunner:
             override_bbox=l1_bbox,
             override_resolution_m=domains.level1.resolution_m,
         )
+
+        self._inner_bbox = saved_inner_bbox
+        self._inner_resolution_m = saved_inner_res
+
         logger.info(
             "SWAN L1: %d×%d cells at 1 km in %s",
             l1_grid["mxc"], l1_grid["myc"], l1_dir,
@@ -1170,12 +1188,8 @@ class SWANRunner:
         # Level 2 must BOTH read L1's boundary AND write NESTOUT for L3.
         # Strategy: run as "outer" (writes NESTOUT), then patch the INPUT file
         # to replace BOUNDSPEC SIDE with BOUNDNEST1 (reads L1's output).
-        l2_dir = tmpdir / "level2"
-        l2_dir.mkdir()
-        l2_bbox = (
-            domains.level2.lon_min, domains.level2.lat_min,
-            domains.level2.lon_max, domains.level2.lat_max,
-        )
+        l2_dir = workdir / "level2"
+        l2_dir.mkdir(exist_ok=True)
         # Copy Level 1 NESTOUT into Level 2 working dir
         l1_nest = l1_dir / self._NESTOUT_BOUNDARY_FILE
         l2_nest_in = l2_dir / self._NESTOUT_BOUNDARY_FILE
@@ -1256,8 +1270,8 @@ class SWANRunner:
             if cluster.grid is None:
                 continue
 
-            l3_dir = tmpdir / f"level3_{idx}"
-            l3_dir.mkdir()
+            l3_dir = workdir / f"level3_{idx}"
+            l3_dir.mkdir(exist_ok=True)
             l3_bbox = (
                 cluster.grid.lon_min, cluster.grid.lat_min,
                 cluster.grid.lon_max, cluster.grid.lat_max,
@@ -1272,6 +1286,20 @@ class SWANRunner:
                 logger.warning(
                     "SWAN L3[%d]: Level 2 did not produce NESTOUT — running without nesting", idx
                 )
+
+            # Scope spots to this cluster only — prevent out-of-domain transects
+            saved_surf_spots = self._surf_spots
+            saved_spot_configs = self._spot_configs
+            self._surf_spots = {
+                sid: self._surf_spots[sid]
+                for sid in cluster.spot_ids
+                if sid in self._surf_spots
+            }
+            self._spot_configs = {
+                sid: self._spot_configs[sid]
+                for sid in cluster.spot_ids
+                if sid in self._spot_configs
+            } if self._spot_configs else {}
 
             l3_bathy = bathymetry.get("level3", {}).get(idx, {})
             l3_grid = self._write_input_files(
@@ -1292,6 +1320,10 @@ class SWANRunner:
 
             cluster_results = self._parse_output(l3_dir, l3_grid)
             all_results.update(cluster_results)
+
+            # Restore full spot set for next cluster
+            self._surf_spots = saved_surf_spots
+            self._spot_configs = saved_spot_configs
             logger.info("SWAN Level 3 cluster %d complete", idx)
 
         logger.info("SWAN 3-level run complete — %d spots resolved", len(all_results))
