@@ -574,6 +574,155 @@ def _download_bathymetric_profile_impl(
 _BIDIR_PROFILE_STEP_M = 50.0  # interval between profile sample points
 
 
+def _try_opendap_bidirectional(
+    lat: float,
+    lon: float,
+    bearing_degrees: float,
+    target_deep_m: float,
+    max_search_m: float,
+    step_m: float,
+) -> dict[str, Any] | None:
+    """Try to build a bidirectional profile from OPeNDAP regional DEM data.
+
+    Returns a profile dict on success, None if no regional DEM covers the spot
+    or on any OPeNDAP failure (caller falls back to CRM point queries).
+    """
+    try:
+        from weewx_clearskies_api.services.bathymetry_resolver import (
+            find_best_dem,
+            fetch_opendap_grid,
+            normalize_to_msl,
+        )
+    except ImportError:
+        return None
+
+    # Build a small bbox around the spot covering max_search_m in all directions
+    deg_per_m = 1.0 / 111_320.0
+    margin_deg = max_search_m * deg_per_m * 1.5
+    spot_bbox = (lon - margin_deg, lat - margin_deg, lon + margin_deg, lat + margin_deg)
+
+    dem = find_best_dem(spot_bbox)
+    if dem is None:
+        return None
+
+    try:
+        grid = fetch_opendap_grid(
+            dem["filename"], spot_bbox, step_m, dem["elevation_var"]
+        )
+        grid["depths"] = normalize_to_msl(
+            grid["depths"], dem["vertical_datum"],
+            lat, lon,
+        )
+    except Exception:
+        logger.warning(
+            "OPeNDAP bidirectional profile failed for (%.4f, %.4f); "
+            "falling back to CRM point queries",
+            lat, lon, exc_info=True,
+        )
+        return None
+
+    # Extract 1D profile along the bearing from the 2D grid
+    depths_2d = grid["depths"]
+    nj = grid["nj"]
+    ni = grid["ni"]
+    lat_first = grid["lat_first"]
+    lon_first = grid["lon_first"]
+    lat_last = grid["lat_last"]
+    lon_last = grid["lon_last"]
+
+    if nj < 2 or ni < 2 or not depths_2d:
+        return None
+
+    shoreward_bearing = (bearing_degrees + 180.0) % 360.0
+
+    def _interp_depth(plat: float, plon: float) -> float | None:
+        """Bilinear interpolation from the 2D grid."""
+        fj = (plat - lat_first) / (lat_last - lat_first) * (nj - 1)
+        fi = (plon - lon_first) / (lon_last - lon_first) * (ni - 1)
+        if fj < 0 or fj >= nj - 1 or fi < 0 or fi >= ni - 1:
+            return None
+        j0 = int(fj)
+        i0 = int(fi)
+        dj = fj - j0
+        di = fi - i0
+        v00 = depths_2d[j0][i0]
+        v01 = depths_2d[j0][i0 + 1]
+        v10 = depths_2d[j0 + 1][i0]
+        v11 = depths_2d[j0 + 1][i0 + 1]
+        val = v00 * (1 - dj) * (1 - di) + v01 * (1 - dj) * di + v10 * dj * (1 - di) + v11 * dj * di
+        return float(val)
+
+    # Step 1: find coastline (walk shoreward from pin until depth crosses 0)
+    pin_elev = _interp_depth(lat, lon)
+    coastline_lat = lat
+    coastline_lon = lon
+
+    if pin_elev is None or pin_elev >= 0.0:
+        pass  # pin is on land or outside grid — treat as shore
+    else:
+        dist = step_m
+        while dist <= max_search_m:
+            pt_lat, pt_lon = point_along_bearing(lat, lon, shoreward_bearing, dist)
+            elev = _interp_depth(pt_lat, pt_lon)
+            if elev is not None and elev >= 0.0:
+                coastline_lat = pt_lat
+                coastline_lon = pt_lon
+                break
+            dist += step_m
+
+    # Step 2: find deep endpoint (walk offshore from coastline)
+    deep_end_dist_m = max_search_m
+    dist = step_m
+    while dist <= max_search_m:
+        pt_lat, pt_lon = point_along_bearing(
+            coastline_lat, coastline_lon, bearing_degrees, dist
+        )
+        elev = _interp_depth(pt_lat, pt_lon)
+        if elev is not None and -elev >= target_deep_m:
+            deep_end_dist_m = dist
+            break
+        dist += step_m
+
+    # Step 3: sample at ~50m intervals
+    num_pts = max(2, int(round(deep_end_dist_m / _BIDIR_PROFILE_STEP_M)) + 1)
+    distances_m = _linspace(0.0, deep_end_dist_m, num_pts)
+
+    profile: list[dict[str, float]] = []
+    for d in distances_m:
+        pt_lat, pt_lon = point_along_bearing(
+            coastline_lat, coastline_lon, bearing_degrees, d
+        )
+        elev = _interp_depth(pt_lat, pt_lon)
+        if elev is not None:
+            depth_m = max(0.0, -elev)  # CUDEM convention: neg = ocean
+            profile.append({
+                "distance_m": round(d, 1),
+                "depth_m": round(depth_m, 2),
+            })
+
+    if len(profile) < 2:
+        logger.warning(
+            "OPeNDAP bidirectional profile: only %d valid points; "
+            "falling back to CRM", len(profile),
+        )
+        return None
+
+    unique_depths = len(set(p["depth_m"] for p in profile))
+    logger.info(
+        "OPeNDAP bidirectional profile: %d points, %d unique depths, "
+        "source=%s (%.0fm), coastline=(%.4f, %.4f)",
+        len(profile), unique_depths, dem["filename"],
+        dem["resolution_m"], coastline_lat, coastline_lon,
+    )
+
+    return {
+        "coastline_lat": round(coastline_lat, 6),
+        "coastline_lon": round(coastline_lon, 6),
+        "profile": profile,
+        "source": "ncei_regional",
+    }
+
+
 def download_bidirectional_profile(
     lat: float,
     lon: float,
@@ -629,6 +778,17 @@ def download_bidirectional_profile(
               ``distance_m`` ascending.
     """
     shoreward_bearing = (bearing_degrees + 180.0) % 360.0
+
+    # ---- Try OPeNDAP path first (Phase 20, T20.4) ----
+    # If a regional DEM covers the spot, extract the 1D profile from a 2D
+    # OPeNDAP strip instead of making ~48 individual CRM point queries.
+    opendap_profile = _try_opendap_bidirectional(
+        lat, lon, bearing_degrees, target_deep_m, max_search_m, step_m,
+    )
+    if opendap_profile is not None:
+        return opendap_profile
+
+    # ---- Fallback: CRM single-point queries ----
 
     # ---- Step 1: find the coastline ----
     pin_depth = _query_depths_m([(lat, lon)])[0]
@@ -724,6 +884,7 @@ def download_bidirectional_profile(
         "coastline_lat": round(coastline_lat, 6),
         "coastline_lon": round(coastline_lon, 6),
         "profile": profile,
+        "source": "crm_point_query",
     }
 
 
