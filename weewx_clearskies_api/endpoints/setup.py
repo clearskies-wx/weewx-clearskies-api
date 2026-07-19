@@ -3234,6 +3234,25 @@ class _CoverageNearestStation(BaseModel):
     capabilities: list[str] | None = None
 
 
+class _BathymetryLevelCoverage(BaseModel):
+    """Per-SWAN-level bathymetry coverage detail (T22.1)."""
+
+    level: int
+    source: str  # "ncei_regional" | "usgs_great_lakes" | "crm" | "operator"
+    source_name: str  # Human-readable source name
+    resolution_m: float | None = None
+    quality: str  # "high" | "degraded"
+    quality_label: str  # Human-readable quality label
+
+
+class _BathymetryCoverage(BaseModel):
+    """Bathymetry coverage summary for a location (T22.1)."""
+
+    overall_quality: str  # min quality across L2 and L3
+    levels: list[_BathymetryLevelCoverage]
+    warning: str | None = None  # Present when overall_quality == "degraded"
+
+
 class MarineCoverageResponse(BaseModel):
     """Response for GET /setup/marine/coverage (T3.6, WATER-TEMPERATURE-DATA-SOURCE-BRIEF)."""
 
@@ -3246,6 +3265,7 @@ class MarineCoverageResponse(BaseModel):
     nearest_ndbc_buoy: _CoverageNearestStation | None = None
     nws_marine_zone: str | None = None
     on_premises_sensor: str
+    bathymetry: _BathymetryCoverage | None = None
 
 
 def _coverage_tier_capabilities(tier: str) -> list[str]:
@@ -3362,6 +3382,81 @@ async def marine_coverage(
     except Exception:
         on_premises = "not_configured"
 
+    # --- Bathymetry coverage (T22.1) ---
+    # Locale keys exist in locales/*.json under marine.bathymetry.* for future i18n.
+    # setup.py has no locale key lookup function; plain English strings are used here.
+    bathymetry: _BathymetryCoverage | None = None
+    try:
+        from weewx_clearskies_api.services.bathymetry_resolver import (  # noqa: PLC0415
+            find_best_dem,
+            is_great_lake,
+        )
+
+        _BATHYMETRY_SOURCE_NAMES: dict[str, str] = {
+            "ncei_regional": "NCEI Regional Coastal DEM",
+            "usgs_great_lakes": "USGS Great Lakes DEM",
+            "crm": "NOAA Coastal Relief Model",
+            "operator": "Operator-supplied bathymetry",
+        }
+        _BATHYMETRY_QUALITY_LABELS: dict[str, str] = {
+            "high": "High-resolution bathymetry available",
+            "degraded": "Using lower-resolution bathymetry",
+        }
+        _BATHYMETRY_WARNING_DEGRADED = (
+            "Surf zone features like sandbars and break points may not be resolved "
+            "with the available bathymetry data."
+        )
+
+        # Level 2 (100 m nearshore): ~10 km bbox around the point
+        l2_bbox = (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
+        l2_dem = find_best_dem(l2_bbox)
+        l2_lake = is_great_lake(lat, lon)
+
+        # Level 3 (10 m surf zone): ~2 km bbox around the point
+        l3_bbox = (lon - 0.01, lat - 0.01, lon + 0.01, lat + 0.01)
+        l3_dem = find_best_dem(l3_bbox)
+
+        levels: list[_BathymetryLevelCoverage] = []
+        for level, dem, lake in [(2, l2_dem, l2_lake), (3, l3_dem, None)]:
+            if dem is not None:
+                source = "ncei_regional"
+                resolution = dem["resolution_m"]
+                quality = "high"
+            elif lake is not None:
+                source = "usgs_great_lakes"
+                resolution = 5.0
+                quality = "high"
+            else:
+                source = "crm"
+                resolution = 90.0
+                quality = "degraded"
+
+            levels.append(
+                _BathymetryLevelCoverage(
+                    level=level,
+                    source=source,
+                    source_name=_BATHYMETRY_SOURCE_NAMES[source],
+                    resolution_m=resolution,
+                    quality=quality,
+                    quality_label=_BATHYMETRY_QUALITY_LABELS[quality],
+                )
+            )
+
+        overall_quality = (
+            "degraded" if any(lvl.quality == "degraded" for lvl in levels) else "high"
+        )
+        warning = _BATHYMETRY_WARNING_DEGRADED if overall_quality == "degraded" else None
+
+        bathymetry = _BathymetryCoverage(
+            overall_quality=overall_quality,
+            levels=levels,
+            warning=warning,
+        )
+    except Exception:
+        logger.warning(
+            "Coverage: bathymetry detection failed at (%.4f, %.4f)", lat, lon, exc_info=True
+        )
+
     return MarineCoverageResponse(
         ofs_model=ofs_primary,
         ofs_model_resolution_deg=ofs_resolution,
@@ -3372,6 +3467,7 @@ async def marine_coverage(
         nearest_ndbc_buoy=nearest_ndbc,
         nws_marine_zone=nws_zone,
         on_premises_sensor=on_premises,
+        bathymetry=bathymetry,
     )
 
 

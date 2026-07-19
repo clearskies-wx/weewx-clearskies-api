@@ -233,6 +233,23 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
     center_lat = (domain.lat_min + domain.lat_max) / 2
     center_lon = (domain.lon_min + domain.lon_max) / 2
 
+    # Priority 0: Operator-supplied bathymetry (Phase 24)
+    try:
+        from weewx_clearskies_api.services.bathymetry_resolver import (
+            get_operator_grid,
+        )
+
+        op_grid = get_operator_grid(bbox, domain.resolution_m)
+        if op_grid is not None:
+            cache_path.write_text(json.dumps(op_grid), encoding="utf-8")
+            logger.info(
+                "CUDEM L%d: using operator-supplied bathymetry (%d x %d)",
+                level, op_grid["ni"], op_grid["nj"],
+            )
+            return op_grid
+    except Exception:
+        logger.debug("Operator bathymetry check skipped", exc_info=True)
+
     # Priority 1: NCEI regional DEM via OPeNDAP
     try:
         from weewx_clearskies_api.services.bathymetry_resolver import (

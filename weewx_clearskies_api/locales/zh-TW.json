@@ -551,6 +551,21 @@
       "groundswell": "Groundswell",
       "swell": "Swell",
       "wind_swell": "Wind Swell"
+    },
+    "bathymetry": {
+      "quality": {
+        "high": "High-resolution bathymetry available",
+        "degraded": "Using lower-resolution bathymetry"
+      },
+      "source": {
+        "ncei_regional": "NCEI Regional Coastal DEM",
+        "usgs_great_lakes": "USGS Great Lakes DEM",
+        "crm": "NOAA Coastal Relief Model",
+        "operator": "Operator-supplied bathymetry"
+      },
+      "warning": {
+        "degraded": "Surf zone features like sandbars and break points may not be resolved with the available bathymetry data."
+      }
     }
   }
 }

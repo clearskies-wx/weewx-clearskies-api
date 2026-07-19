@@ -877,3 +877,133 @@ def fetch_great_lake_grid(
         "nj": nj,
         "depths": data.tolist(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Priority 0: Operator-supplied bathymetry (Phase 24, T24.1 + T24.2)
+# ---------------------------------------------------------------------------
+
+_OPERATOR_BATHY_DIR = Path("/etc/weewx-clearskies/operator_bathymetry")
+
+
+def get_operator_grid(
+    bbox: tuple[float, float, float, float],
+    resolution_m: float,
+) -> dict[str, Any] | None:
+    """Load operator-supplied bathymetry for *bbox* if available.
+
+    The operator uploads a GeoTIFF, NetCDF, or ASCII XYZ file via the admin UI.
+    After upload, the file is validated, datum-corrected, and cached as a
+    GeoTIFF at ``/etc/weewx-clearskies/operator_bathymetry/operator.tif``.
+
+    This function is the highest priority in the resolver chain — if operator
+    data exists and covers the requested bbox, it is used unconditionally.
+
+    Args:
+        bbox: ``(lon_min, lat_min, lon_max, lat_max)`` query bbox.
+        resolution_m: Target resolution in metres (for coarsening).
+
+    Returns:
+        Grid dict on success, ``None`` when no operator file exists or the file
+        does not cover the requested bbox.
+    """
+    tif_path = _OPERATOR_BATHY_DIR / "operator.tif"
+    if not tif_path.exists():
+        return None
+
+    if not _RASTERIO_AVAILABLE:
+        logger.warning(
+            "Operator bathymetry file exists at %s but rasterio is not "
+            "installed — cannot read GeoTIFF. Skipping operator data.",
+            tif_path,
+        )
+        return None
+
+    try:
+        grid = _read_geotiff_grid(tif_path, bbox, resolution_m)
+        if grid is not None:
+            grid["source"] = "operator"
+            logger.info(
+                "Using operator-supplied bathymetry (%d x %d, %.0fm)",
+                grid["ni"], grid["nj"], resolution_m,
+            )
+        return grid
+    except Exception:
+        logger.warning(
+            "Failed to read operator bathymetry from %s — skipping",
+            tif_path, exc_info=True,
+        )
+        return None
+
+
+def _read_geotiff_grid(
+    path: Path,
+    bbox: tuple[float, float, float, float],
+    resolution_m: float,
+) -> dict[str, Any] | None:
+    """Read a GeoTIFF file and extract a grid for the requested bbox.
+
+    Uses rasterio windowed read — same approach as ``fetch_great_lake_grid()``.
+    Returns None if the file does not cover the bbox.
+    """
+    import numpy as np
+
+    lon_min, lat_min, lon_max, lat_max = bbox
+
+    with rasterio.open(path) as src:
+        bounds = src.bounds
+        if (lon_min < bounds.left or lon_max > bounds.right
+                or lat_min < bounds.bottom or lat_max > bounds.top):
+            return None
+
+        window = rasterio.windows.from_bounds(
+            lon_min, lat_min, lon_max, lat_max, src.transform
+        )
+        data = src.read(1, window=window).astype(np.float64)
+        nodata = src.nodata
+        win_transform = rasterio.windows.transform(window, src.transform)
+
+    if nodata is not None:
+        data[data == nodata] = -15.0
+
+    nj, ni = data.shape
+    if nj == 0 or ni == 0:
+        return None
+
+    # Flip north-to-south → south-to-north
+    data = np.flipud(data)
+
+    pixel_width = win_transform.a
+    pixel_height = win_transform.e
+    lon_first = win_transform.c
+    lat_north = win_transform.f
+    lon_last = lon_first + ni * pixel_width
+    lat_south = lat_north + nj * pixel_height
+
+    # Optional coarsening
+    native_res_m = abs(pixel_height) * 111_320.0
+    if resolution_m > native_res_m * 1.5 and nj >= 4 and ni >= 4:
+        coarsen_factor = max(1, int(round(resolution_m / native_res_m)))
+        coarsen_factor = min(coarsen_factor, min(nj, ni) // 2)
+        if coarsen_factor > 1:
+            nj_trim = (nj // coarsen_factor) * coarsen_factor
+            ni_trim = (ni // coarsen_factor) * coarsen_factor
+            data = (
+                data[:nj_trim, :ni_trim]
+                .reshape(
+                    nj_trim // coarsen_factor, coarsen_factor,
+                    ni_trim // coarsen_factor, coarsen_factor,
+                )
+                .mean(axis=(1, 3))
+            )
+            nj, ni = data.shape
+
+    return {
+        "lat_first": lat_south,
+        "lon_first": lon_first,
+        "lat_last": lat_north,
+        "lon_last": lon_last,
+        "ni": ni,
+        "nj": nj,
+        "depths": data.tolist(),
+    }
