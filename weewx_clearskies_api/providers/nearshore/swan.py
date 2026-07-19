@@ -93,7 +93,7 @@ _DEFAULT_OUTER_GRID_RESOLUTION_KM = 3.0   # outer (shelf) grid — continental a
 _DEFAULT_GRID_RESOLUTION_M = 200.0         # inner nest resolution — tight nearshore
 _DEFAULT_COMPUTE_DT_MIN = 10
 _DEFAULT_OUTPUT_INTERVAL_HR = 1.0
-_DEFAULT_SWAN_TIMEOUT_S = 1800
+_DEFAULT_SWAN_TIMEOUT_S = 3600
 
 # Bounding-box expansion margins (degrees) used to derive the SWAN domain
 # and HRRR wind bbox from configured surf spot coordinates.
