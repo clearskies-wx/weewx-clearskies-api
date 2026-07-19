@@ -721,6 +721,15 @@ def discover_stations(lat: float, lon: float, radius_km: float) -> list[dict[str
     for station in stations:
         distance_km = _haversine_km(lat, lon, station.lat, station.lng)
         if distance_km <= radius_km:
+            products = _extract_product_names(station.products)
+            if not products:
+                # No products listed in station metadata — station is likely
+                # decommissioned or not yet reporting.  Exclude silently so
+                # the wizard never surfaces a dead station.
+                logger.debug(
+                    "CO-OPS discover: excluding station %s with no products listed", station.id
+                )
+                continue
             results.append(
                 {
                     "id": station.id,
@@ -728,7 +737,7 @@ def discover_stations(lat: float, lon: float, radius_km: float) -> list[dict[str
                     "lat": station.lat,
                     "lon": station.lng,
                     "distance_km": round(distance_km, 2),
-                    "products": _extract_product_names(station.products),
+                    "products": products,
                 }
             )
     results.sort(key=lambda s: s["distance_km"])

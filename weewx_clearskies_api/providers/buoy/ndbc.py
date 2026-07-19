@@ -99,6 +99,7 @@ import json
 import logging
 import math
 import re
+from datetime import UTC, datetime
 
 import defusedxml.ElementTree as ET  # type: ignore[import-untyped]  # noqa: N817
 from pydantic import BaseModel, ConfigDict
@@ -132,6 +133,7 @@ _ACTIVE_STATIONS_URL = f"{_NDBC_BASE_URL}/activestations.xml"
 
 _OBSERVATION_CACHE_TTL = 3600  # 60 min — all three per-station file types (PROVIDER-MANUAL §14.1)
 _STATION_DISCOVERY_CACHE_TTL = 86400  # 24 hr
+_STATION_ACTIVITY_FRESHNESS_DAYS = 30  # max age of most-recent observation to call a station active
 
 _API_VERSION = "0.1.0"
 _USER_AGENT = f"weewx-clearskies-api/{_API_VERSION} (NDBC buoy provider)"
@@ -784,6 +786,48 @@ def _guess_capability(station_type: str, met: bool) -> str:
     return "wave_atmospheric"  # spectral availability undetermined until probed
 
 
+def _is_station_active(station_id: str) -> bool:
+    """Probe the NDBC realtime2 .txt file to verify the station reports current data.
+
+    Returns True only when the most-recent observation timestamp is within
+    _STATION_ACTIVITY_FRESHNESS_DAYS of today.  Any HTTP error (404, 5xx),
+    network failure, or unparseable response returns False — fail-closed for
+    discovery so a decommissioned station is never surfaced to the wizard.
+
+    Result is cached for 24h (_STATION_DISCOVERY_CACHE_TTL) per station so
+    the probe fires at most once per day regardless of how many discover calls
+    are made.
+    """
+    cache_key = _build_cache_key(station_id, "activity_check")
+    cached = get_cache().get(cache_key)
+    if cached is not None:
+        return bool(cached)
+
+    is_active = False
+    try:
+        _rate_limiter.acquire()
+        url = f"{_NDBC_BASE_URL}{_STANDARD_MET_PATH.format(station_id=station_id)}"
+        response = _get_http_client().get(url)
+        lines = _data_lines(response.text)
+        if lines:
+            tokens = lines[0].split()
+            if len(tokens) >= 5:
+                year = int(tokens[0])
+                if year < 100:  # defensive: legacy 2-digit year
+                    year += 2000
+                month = int(tokens[1])
+                day = int(tokens[2])
+                obs_dt = datetime(year, month, day, tzinfo=UTC)
+                age_days = (datetime.now(UTC) - obs_dt).days
+                is_active = age_days <= _STATION_ACTIVITY_FRESHNESS_DAYS
+    except Exception:  # noqa: BLE001
+        # Any error (404, network failure, parse error) → treat as inactive.
+        logger.debug("NDBC activity probe failed for station %s — excluding from discovery", station_id)
+
+    get_cache().set(cache_key, is_active, ttl_seconds=_STATION_DISCOVERY_CACHE_TTL)
+    return is_active
+
+
 def discover_stations(lat: float, lon: float, radius_km: float) -> list[dict[str, object]]:
     """Discover NDBC stations within radius_km of (lat, lon).
 
@@ -849,6 +893,10 @@ def discover_stations(lat: float, lon: float, radius_km: float) -> list[dict[str
             continue  # no atmospheric data at all — not useful for MarineObservation
         distance_km = _haversine_km(lat, lon, station["lat"], station["lon"])
         if distance_km <= radius_km:
+            station_id = str(station["stationId"])
+            if not _is_station_active(station_id):
+                logger.debug("NDBC discover: excluding inactive station %s", station_id)
+                continue
             results.append({**station, "distanceKm": round(distance_km, 2)})
     results.sort(key=lambda s: s["distanceKm"])
     return results
