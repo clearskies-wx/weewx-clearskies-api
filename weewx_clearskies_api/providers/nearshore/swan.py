@@ -387,6 +387,11 @@ _remote_warned_unreachable: bool = False
 #: Lock protecting lazy remote-mode initialisation in run_all_spots().
 _remote_init_lock = threading.Lock()
 
+#: Lock preventing concurrent SWAN runs.  Acquired non-blocking at the
+#: start of run_all_spots() and run_quick_update().  If already held,
+#: the caller skips — a SWAN run is already in progress.
+_swan_run_lock = threading.Lock()
+
 #: Background health check thread (started by configure_remote_mode()).
 _remote_health_thread: threading.Thread | None = None
 
@@ -912,6 +917,39 @@ def run_all_spots(
     if marine_config is None:
         return
 
+    if not _swan_run_lock.acquire(blocking=False):
+        logger.info("SWAN: run already in progress — skipping this trigger")
+        return
+
+    try:
+        _run_all_spots_locked(
+            marine_config,
+            hrrr_wind_field=hrrr_wind_field,
+            gfs_wind_field=gfs_wind_field,
+            swan_binary=swan_binary,
+            outer_grid_resolution_km=outer_grid_resolution_km,
+            inner_nest_resolution_m=inner_nest_resolution_m,
+            compute_dt_min=compute_dt_min,
+            output_interval_hr=output_interval_hr,
+            swan_timeout_s=swan_timeout_s,
+        )
+    finally:
+        _swan_run_lock.release()
+
+
+def _run_all_spots_locked(
+    marine_config: Any,
+    *,
+    hrrr_wind_field: dict | None = None,
+    gfs_wind_field: dict | None = None,
+    swan_binary: str = _DEFAULT_SWAN_BINARY,
+    outer_grid_resolution_km: float = _DEFAULT_OUTER_GRID_RESOLUTION_KM,
+    inner_nest_resolution_m: float = _DEFAULT_GRID_RESOLUTION_M,
+    compute_dt_min: int = _DEFAULT_COMPUTE_DT_MIN,
+    output_interval_hr: float = _DEFAULT_OUTPUT_INTERVAL_HR,
+    swan_timeout_s: int = _DEFAULT_SWAN_TIMEOUT_S,
+) -> None:
+    """Inner implementation of run_all_spots, called while holding _swan_run_lock."""
     # Collect surf locations (locations that have a surf config block).
     surf_spot_ids: set[str] = set(getattr(marine_config, "surf_spots", {}).keys())
     if not surf_spot_ids:
@@ -1442,6 +1480,22 @@ def run_quick_update(
     if _remote_url is not None:
         return
 
+    if not _swan_run_lock.acquire(blocking=False):
+        logger.info("SWAN quick update: full run in progress — skipping")
+        return
+
+    try:
+        _run_quick_update_locked(marine_config, hrrr_wind_field=hrrr_wind_field)
+    finally:
+        _swan_run_lock.release()
+
+
+def _run_quick_update_locked(
+    marine_config: Any,
+    *,
+    hrrr_wind_field: dict | None = None,
+) -> None:
+    """Inner implementation of run_quick_update, called while holding _swan_run_lock."""
     surf_spot_ids = set(getattr(marine_config, "surf_spots", {}).keys())
     if not surf_spot_ids:
         return
