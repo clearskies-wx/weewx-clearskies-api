@@ -2649,8 +2649,32 @@ def _reset_overpass_http_client_for_tests() -> None:
     _overpass_http_client = None
 
 
-def _build_overpass_structure_query(lat: float, lon: float, radius_m: int) -> str:
-    """Build the Overpass QL query for coastal structures around (lat, lon)."""
+def _build_overpass_structure_query(
+    lat: float,
+    lon: float,
+    radius_m: int,
+    *,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> str:
+    """Build the Overpass QL query for coastal structures.
+
+    When *bbox* is provided (south, west, north, east), uses a bbox filter
+    instead of a radius-around filter. The bbox aligns with the Level 3 grid
+    domain computed by swan_domain.py, ensuring structure discovery covers
+    the exact area SWAN will model.
+    """
+    if bbox is not None:
+        south, west, north, east = bbox
+        area_filter = f"{south},{west},{north},{east}"
+        return (
+            "[out:json][timeout:10];\n"
+            "(\n"
+            f'  way["man_made"~"breakwater|groyne|pier"]({area_filter});\n'
+            f'  way["wall"="seawall"]({area_filter});\n'
+            f'  way["man_made"="dyke"]({area_filter});\n'
+            ");\n"
+            "out body geom;"
+        )
     return (
         "[out:json][timeout:10];\n"
         "(\n"
@@ -2844,6 +2868,10 @@ async def marine_discover_structures(
     lat: float = Query(..., ge=-90, le=90, description="Surf spot latitude"),
     lon: float = Query(..., ge=-180, le=180, description="Surf spot longitude"),
     radius_m: int = Query(2000, gt=0, le=20000, description="Search radius in meters"),
+    bbox_south: float | None = Query(None, ge=-90, le=90, description="Bbox south (Level 3 grid)"),
+    bbox_west: float | None = Query(None, ge=-180, le=180, description="Bbox west"),
+    bbox_north: float | None = Query(None, ge=-90, le=90, description="Bbox north"),
+    bbox_east: float | None = Query(None, ge=-180, le=180, description="Bbox east"),
 ) -> MarineStructureDiscoveryResponse:
     """Discover nearby coastal structures (jetties, piers, breakwaters,
     seawalls, groins) via the OpenStreetMap Overpass API (T5.2).
@@ -2852,6 +2880,10 @@ async def marine_discover_structures(
     spot's config/marine_config.py StructureConfig entries, which feed the
     wave_transform coastal-structure transmission/reflection correction
     (API-MANUAL §17 "Supplement 2 — Coastal structure effects").
+
+    When bbox parameters are provided (computed from the Level 3 grid
+    extent by the wizard), uses a bbox Overpass query. Otherwise falls back
+    to radius-based discovery around lat/lon.
 
     Results are cached 24h (structures rarely change) via get_cache() — see
     _build_structure_discovery_cache_key() docstring for the key
@@ -2864,12 +2896,16 @@ async def marine_discover_structures(
     """
     await require_setup_session(request)
 
+    bbox: tuple[float, float, float, float] | None = None
+    if all(v is not None for v in (bbox_south, bbox_west, bbox_north, bbox_east)):
+        bbox = (bbox_south, bbox_west, bbox_north, bbox_east)  # type: ignore[arg-type]
+
     cache_key = _build_structure_discovery_cache_key(lat, lon, radius_m)
     cached = get_cache().get(cache_key)
     if cached is not None:
         return MarineStructureDiscoveryResponse.model_validate(cached)
 
-    query = _build_overpass_structure_query(lat, lon, radius_m)
+    query = _build_overpass_structure_query(lat, lon, radius_m, bbox=bbox)
     client = _get_overpass_http_client()
 
     try:
@@ -3329,4 +3365,114 @@ async def marine_coverage(
         nearest_ndbc_buoy=nearest_ndbc,
         nws_marine_zone=nws_zone,
         on_premises_sensor=on_premises,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compute estimate (Phase 16 — SWAN-FIXES-PLAN)
+# ---------------------------------------------------------------------------
+
+
+class _ComputeEstimateLevel(BaseModel):
+    level: int
+    resolution_m: float
+    cells: int
+    estimated_seconds: float
+
+
+class _ComputeEstimateCluster(BaseModel):
+    spot_ids: list[str]
+    cells: int
+    estimated_seconds: float
+
+
+class ComputeEstimateResponse(BaseModel):
+    levels: list[_ComputeEstimateLevel]
+    clusters: list[_ComputeEstimateCluster]
+    total_cells: int
+    total_estimated_seconds: float
+    cores: int
+
+
+@router.get("/marine/compute-estimate", response_model=ComputeEstimateResponse)
+async def marine_compute_estimate(
+    request: Request,
+    cores: int = Query(6, ge=1, le=128, description="Available CPU cores for SWAN"),
+) -> ComputeEstimateResponse:
+    """Compute runtime estimate for the current spot configuration.
+
+    Uses the domain sizing algorithm to determine grid dimensions for all
+    3 nesting levels, then estimates wall-clock runtime based on empirical
+    per-cell cost (0.05 sec/cell at 6 cores, linear scaling).
+
+    Called by the wizard/admin marine page to show before/after compute cost
+    as the operator adds, removes, or moves surf spots.
+    """
+    await require_setup_session(request)
+
+    from weewx_clearskies_api.services.swan_domain import compute_domains
+
+    settings = get_settings()
+    marine_config = getattr(settings, "marine", None)
+    if marine_config is None:
+        return ComputeEstimateResponse(
+            levels=[], clusters=[], total_cells=0,
+            total_estimated_seconds=0.0, cores=cores,
+        )
+
+    surf_spots = getattr(marine_config, "surf_spots", {})
+    locations = getattr(marine_config, "locations", [])
+    spot_locations = []
+    for loc in locations:
+        if loc.id in surf_spots:
+            cfg = surf_spots[loc.id]
+            spot_locations.append({
+                "id": loc.id,
+                "lat": loc.lat,
+                "lon": loc.lon,
+                "beach_facing_degrees": getattr(cfg, "beach_facing_degrees", 0.0),
+            })
+
+    if not spot_locations:
+        return ComputeEstimateResponse(
+            levels=[], clusters=[], total_cells=0,
+            total_estimated_seconds=0.0, cores=cores,
+        )
+
+    domains = compute_domains(spot_locations)
+    cost_per_cell = 0.05 / (cores / 6)
+
+    levels = [
+        _ComputeEstimateLevel(
+            level=1,
+            resolution_m=domains.level1.resolution_m,
+            cells=domains.level1.cell_count,
+            estimated_seconds=round(domains.level1.cell_count * cost_per_cell, 1),
+        ),
+        _ComputeEstimateLevel(
+            level=2,
+            resolution_m=domains.level2.resolution_m,
+            cells=domains.level2.cell_count,
+            estimated_seconds=round(domains.level2.cell_count * cost_per_cell, 1),
+        ),
+    ]
+
+    clusters = []
+    for cluster in domains.level3_clusters:
+        if cluster.grid:
+            clusters.append(_ComputeEstimateCluster(
+                spot_ids=cluster.spot_ids,
+                cells=cluster.grid.cell_count,
+                estimated_seconds=round(cluster.grid.cell_count * cost_per_cell, 1),
+            ))
+
+    total_cells = domains.total_cells
+    total_seconds = round(total_cells * cost_per_cell, 1)
+
+    return ComputeEstimateResponse(
+        levels=levels,
+        clusters=clusters,
+        total_cells=total_cells,
+        total_estimated_seconds=total_seconds,
+        cores=cores,
     )
