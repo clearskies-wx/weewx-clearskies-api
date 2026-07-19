@@ -789,43 +789,44 @@ def _guess_capability(station_type: str, met: bool) -> str:
 def _is_station_active(station_id: str) -> bool:
     """Probe the NDBC realtime2 .txt file to verify the station reports current data.
 
-    Returns True only when the most-recent observation timestamp is within
-    _STATION_ACTIVITY_FRESHNESS_DAYS of today.  Any HTTP error (404, 5xx),
-    network failure, or unparseable response returns False — fail-closed for
-    discovery so a decommissioned station is never surfaced to the wizard.
+    Returns False only when the data file returns 404 (station genuinely gone)
+    or the most-recent observation is older than _STATION_ACTIVITY_FRESHNESS_DAYS.
+    Returns True (fail-open) on rate limit errors, network failures, or parse
+    errors — these don't indicate a dead station.
 
-    Result is cached for 24h (_STATION_DISCOVERY_CACHE_TTL) per station so
-    the probe fires at most once per day regardless of how many discover calls
-    are made.
+    Result is cached for 24h per station so the probe fires at most once/day.
     """
     cache_key = _build_cache_key(station_id, "activity_check")
     cached = get_cache().get(cache_key)
     if cached is not None:
         return bool(cached)
 
-    is_active = False
     try:
         _rate_limiter.acquire()
         url = f"{_NDBC_BASE_URL}{_STANDARD_MET_PATH.format(station_id=station_id)}"
         response = _get_http_client().get(url)
+        if response.status_code == 404:
+            get_cache().set(cache_key, False, ttl_seconds=_STATION_DISCOVERY_CACHE_TTL)
+            return False
         lines = _data_lines(response.text)
         if lines:
             tokens = lines[0].split()
             if len(tokens) >= 5:
                 year = int(tokens[0])
-                if year < 100:  # defensive: legacy 2-digit year
+                if year < 100:
                     year += 2000
                 month = int(tokens[1])
                 day = int(tokens[2])
                 obs_dt = datetime(year, month, day, tzinfo=UTC)
                 age_days = (datetime.now(UTC) - obs_dt).days
                 is_active = age_days <= _STATION_ACTIVITY_FRESHNESS_DAYS
+                get_cache().set(cache_key, is_active, ttl_seconds=_STATION_DISCOVERY_CACHE_TTL)
+                return is_active
     except Exception:  # noqa: BLE001
-        # Any error (404, network failure, parse error) → treat as inactive.
-        logger.debug("NDBC activity probe failed for station %s — excluding from discovery", station_id)
+        logger.debug("NDBC activity probe failed for station %s — assuming active (fail-open)", station_id)
 
-    get_cache().set(cache_key, is_active, ttl_seconds=_STATION_DISCOVERY_CACHE_TTL)
-    return is_active
+    # Fail-open: if we can't determine status, include the station
+    return True
 
 
 def discover_stations(lat: float, lon: float, radius_km: float) -> list[dict[str, object]]:
