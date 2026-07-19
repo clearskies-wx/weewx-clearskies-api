@@ -1293,17 +1293,7 @@ def run_all_spots(
             len(surf_spots_config),
         )
 
-    # Clean up tmpdir on success — TEMPORARILY DISABLED for T7.5 debugging.
-    # TODO: re-enable after validating SWAN TABLE output format.
-    if tmpdir is not None and tmpdir.exists():
-        logger.info("SWAN: preserving tmpdir for debugging: %s", tmpdir)
-        # try:
-        #     shutil.rmtree(tmpdir)
-        #     logger.debug("SWAN: cleaned up tmpdir %s", tmpdir)
-        # except OSError:
-        #     logger.warning(
-        #         "SWAN: could not remove tmpdir %s", tmpdir, exc_info=True
-        #     )
+    # 3-level path uses persistent workdir — no tmpdir cleanup needed.
 
     elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
     logger.info(
