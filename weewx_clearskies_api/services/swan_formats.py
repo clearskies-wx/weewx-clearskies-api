@@ -616,7 +616,7 @@ def build_swan_input(
     inner_dims: dict[str, Any] | None = None,
     output_interval_hr: float = 1.0,
     compute_dt_min: int = 10,
-    nest_boundary_file: str = "nest_boundary.dat",
+    nest_boundary_file: str = "nest_out.dat",
     hotstart_file: str | None = None,
     stationary: bool = False,
     has_wlevel: bool = False,
@@ -630,14 +630,22 @@ def build_swan_input(
 
     ``"outer"`` — continental shelf approach grid (hrrr_bbox domain).
       - WW3 boundary conditions applied on the west and south sides.
-      - ``NESTOUT`` command written before ``COMPUTE`` to write boundary
-        spectra for the inner nest.  ``inner_dims`` must be supplied.
+      - ``NESTOUT`` command writes boundary spectra to ``nest_boundary_file``
+        for the child level.  ``inner_dims`` must be supplied.
       - No surf spot output points.
 
     ``"inner"`` — tight nearshore grid (swan_domain_bbox domain).
-      - ``NGRID`` command reads outer boundary from ``nest_boundary_file``.
-      - No WW3 BOUNDSPEC (outer boundary replaces it).
+      - ``BOUNDNEST1`` reads boundary spectra from ``nest_boundary_file``.
+      - No WW3 BOUNDSPEC (parent boundary replaces it).
       - ``POINTS`` and ``TABLE`` output commands at all configured surf spots.
+
+    NESTING FILE CONVENTION (SWAN-FIXES-PLAN Bug 1, 2026-07-19):
+      The caller must pass DIFFERENT filenames for ``nest_boundary_file`` when
+      building outer vs. inner INPUT files.  In a 3-level run, Level 2 is built
+      as ``"outer"`` (so NESTOUT writes to this file) and then patched to add
+      ``BOUNDNEST1`` (which reads a DIFFERENT file).  If both commands reference
+      the same file, SWAN overwrites the parent's boundary data during the run,
+      corrupting Level 3's input and producing zero wave energy.
 
     Args:
         dims: Grid dimension dict for THIS level (mxc, myc, dlon, dlat,
@@ -653,7 +661,11 @@ def build_swan_input(
                     command with the inner nest's geographic extent.
         output_interval_hr: Hours between TABLE output rows (inner only).
         compute_dt_min: SWAN internal time step in minutes.
-        nest_boundary_file: Filename for NESTOUT / NGRID boundary data.
+        nest_boundary_file: Filename for the nesting boundary file.  For
+                    ``grid_level == "outer"`` this is the NESTOUT output file;
+                    for ``"inner"`` this is the BOUNDNEST1 input file.  The
+                    caller MUST pass different values for each level to avoid
+                    read/write collision (see SWAN-FIXES-PLAN Bug 1).
         hotstart_file: If set and the file exists in the run directory, add
             ``INIT HOTSTART 'fname'`` and write ``HOTFILE`` after COMPUTE.
         has_wlevel: If True, emit ``INPGRID WLEVEL`` + ``READINP WLEV``

@@ -147,13 +147,31 @@ def compute_domains(
     # --- Level 3: Surf zone grids (10 m) — per cluster ---
     clusters = _cluster_spots(spot_locations, cluster_distance_m)
     avg_bearing = sum(bearings) / len(bearings)
+
+    # Build a lookup of per-spot offshore distances (from profile data).
+    # Each spot may have "offshore_distance_m" = distance from shore to the
+    # 15m depth contour, extracted from the cached bidirectional CUDEM profile.
+    spot_offshore: dict[str, float] = {}
+    for s in spot_locations:
+        d = s.get("offshore_distance_m")
+        if d is not None and d > 0:
+            spot_offshore[s["id"]] = float(d)
+
     for cluster in clusters:
+        # Use the maximum offshore distance from any spot in this cluster.
+        # This ensures the grid reaches the 15m contour for all spots.
+        cluster_distances = [
+            spot_offshore[sid] for sid in cluster.spot_ids if sid in spot_offshore
+        ]
+        cluster_offshore_m = max(cluster_distances) if cluster_distances else None
+
         cluster.grid = _compute_level3_grid(
             cluster,
             avg_bearing,
             resolution_m=level3_resolution_m,
             lateral_m=level3_lateral_m,
             offshore_depth_m=level3_offshore_depth_m,
+            offshore_distance_m=cluster_offshore_m,
         )
 
     return DomainSizing(level1=level1, level2=level2, level3_clusters=clusters)
@@ -355,18 +373,35 @@ def _compute_level3_grid(
     resolution_m: float,
     lateral_m: float,
     offshore_depth_m: float,
+    offshore_distance_m: float | None = None,
 ) -> GridDomain:
     """Compute one Level 3 grid for a spot cluster.
 
-    Uses beach_facing_degrees to extend offshore (1 km) from spots
-    with only 100m on the land side. Lateral: 250m each side along coast.
+    The grid extends from the coastline (100m landward of the pin) to the
+    15m depth contour offshore, using the actual distance from the cached
+    bathymetric profile.  If no profile data is available, falls back to
+    2.5 km (conservative estimate for typical continental shelves).
+
+    The research brief (§5, Level 3) specifies "shore to 15m depth" — NOT
+    a fixed distance.  The ~1 km estimate in the brief was illustrative;
+    actual 15m depth distance varies (e.g., 2.35 km at HB Pier).
+
+    Uses beach_facing_degrees to orient the grid offshore.
+    Lateral: 250m each side along coast.
     """
     center_lat = sum(cluster.lats) / len(cluster.lats)
     center_lon = sum(cluster.lons) / len(cluster.lons)
 
     bearing_rad = math.radians(beach_facing_degrees)
 
-    offshore_km = 1.0
+    if offshore_distance_m is not None and offshore_distance_m > 0:
+        offshore_km = offshore_distance_m / 1000.0 + 0.1  # +100m margin past 15m contour
+    else:
+        offshore_km = 2.5  # fallback when no profile data
+        logger.warning(
+            "Level 3 grid for cluster %s: no profile data, using fallback %.1f km offshore",
+            cluster.spot_ids, offshore_km,
+        )
     landward_km = 0.1
 
     km_per_deg_lat = 111.0

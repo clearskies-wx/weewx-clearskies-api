@@ -1112,8 +1112,9 @@ def run_all_spots(
     # ------------------------------------------------------------------
     from weewx_clearskies_api.services.swan_domain import compute_domains
 
-    spot_locations_for_domains = [
-        {
+    spot_locations_for_domains = []
+    for loc in surf_locations:
+        entry: dict[str, Any] = {
             "id": loc.id,
             "lat": loc.lat,
             "lon": loc.lon,
@@ -1121,8 +1122,16 @@ def run_all_spots(
                 getattr(marine_config.surf_spots.get(loc.id), "beach_facing_degrees", 0.0)
             ),
         }
-        for loc in surf_locations
-    ]
+        # Extract distance to 15m depth from the cached profile so the Level 3
+        # grid extends to the actual 15m contour, not a hardcoded distance.
+        runner_cfg = spot_configs_for_runner.get(loc.id, {})
+        rt_profile = runner_cfg.get("runtime_profile")
+        if isinstance(rt_profile, dict):
+            profile_pts = rt_profile.get("profile", [])
+            if profile_pts:
+                closest = min(profile_pts, key=lambda pt: abs(pt.get("depth_m", 0) - 15.0))
+                entry["offshore_distance_m"] = float(closest.get("distance_m", 0))
+        spot_locations_for_domains.append(entry)
 
     domains = compute_domains(spot_locations_for_domains)
     logger.info(
@@ -1321,15 +1330,19 @@ def run_quick_update(
     *,
     hrrr_wind_field: dict | None = None,
 ) -> None:
-    """Run a stationary SWAN inner-nest-only update with the latest HRRR wind.
+    """Run a stationary SWAN Level 3 update with the latest HRRR wind.
 
-    Produces a single "current snapshot" and merges it into the existing
-    forecast cache (replaces the entry closest to the snapshot time).
-    Reuses the outer grid's nest_boundary.dat from the last full run.
+    Produces a single "current snapshot" per surf spot and merges it into the
+    existing forecast cache (replaces the entry closest to the snapshot time).
+    Reuses the Level 2 NESTOUT boundary file from the last full 3-level run.
+
+    This is the 3-level equivalent of the old ``run_stationary_inner()`` path.
+    It uses the same domain sizing (``compute_domains()``) and per-cluster
+    bathymetry as the full run, but only executes Level 3 (stationary mode).
 
     Skipped when:
       - A full run completed within the last 30 minutes
-      - No previous full run has produced an outer nest_boundary.dat
+      - No previous full run has produced a Level 2 NESTOUT file
       - [nearshore] extra not installed
       - No surf spots configured
     """
@@ -1365,29 +1378,80 @@ def run_quick_update(
     if inner_bbox is None or outer_bbox is None:
         return
 
-    # Wind: use the provided HRRR field (single timestep is enough for stationary)
     if hrrr_wind_field is None:
         return
 
-    # Resolve config
+    # ── 3-level domain sizing (same math as full run, no I/O) ──
+    from weewx_clearskies_api.services.swan_domain import compute_domains
+
+    spot_locations_for_domains = []
+    for loc in surf_locations:
+        entry: dict[str, Any] = {
+            "id": loc.id,
+            "lat": loc.lat,
+            "lon": loc.lon,
+            "beach_facing_degrees": float(
+                getattr(marine_config.surf_spots.get(loc.id), "beach_facing_degrees", 0.0)
+            ),
+        }
+        cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
+        if cache_path.exists():
+            try:
+                profile_data = json.loads(cache_path.read_text(encoding="utf-8"))
+                profile_pts = profile_data.get("profile", [])
+                if profile_pts:
+                    closest = min(profile_pts, key=lambda pt: abs(pt.get("depth_m", 0) - 15.0))
+                    entry["offshore_distance_m"] = float(closest.get("distance_m", 0))
+            except Exception:
+                pass
+        spot_locations_for_domains.append(entry)
+    domains = compute_domains(spot_locations_for_domains)
+
+    # ── Check that Level 2 NESTOUT exists from the last full 3-level run ──
+    # The file is named nest_out.dat (not the old nest_boundary.dat) per the
+    # nesting file convention (SWAN-FIXES-PLAN Bug 1, 2026-07-19).
+    swan_work = Path("/var/run/weewx-clearskies/swan")
+    l2_nestout = swan_work / "level2" / "nest_out.dat"
+    if not l2_nestout.exists():
+        logger.debug(
+            "SWAN quick update: no Level 2 NESTOUT at %s; skipping", l2_nestout,
+        )
+        return
+
+    # ── Per-cluster Level 3 bathymetry (cached from last full run) ──
+    l3_bathymetry: dict[int, dict] = {}
+    for idx, cluster in enumerate(domains.level3_clusters):
+        if cluster.grid is not None:
+            l3_bathymetry[idx] = download_bathymetry_for_level(cluster.grid, level=3)
+    bathymetry = {"level3": l3_bathymetry}
+
+    # ── Build runner and spot configs ──
     swan_cfg = getattr(marine_config, "swan", None)
+    omp_threads = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0
     _cfg_outer_km = getattr(swan_cfg, "outer_grid_resolution_km", None) if swan_cfg else None
     _cfg_inner_m = getattr(swan_cfg, "inner_nest_resolution_m", None) if swan_cfg else None
     resolved_outer_km = float(_cfg_outer_km) if _cfg_outer_km is not None else _DEFAULT_OUTER_GRID_RESOLUTION_KM
     resolved_inner_m = float(_cfg_inner_m) if _cfg_inner_m is not None else _DEFAULT_GRID_RESOLUTION_M
-    omp_threads = getattr(swan_cfg, "omp_num_threads", 0) if swan_cfg else 0
-
-    # Check that outer nest_boundary.dat exists from a previous full run
-    swan_work = Path("/var/run/weewx-clearskies/swan")
-    nest_boundary = swan_work / "outer" / "nest_boundary.dat"
-    if not nest_boundary.exists():
-        logger.debug("SWAN quick update: no nest_boundary.dat from outer grid; skipping")
-        return
-
-    # CUDEM bathymetry (cached on disk from first full run)
-    cudem_bathymetry = _load_or_download_cudem_grid(outer_bbox, resolved_outer_km)
 
     surf_spots_config = {loc.id: {"lon": loc.lon, "lat": loc.lat} for loc in surf_locations}
+
+    # Build per-spot transect configs (same as full run — reuses cached profiles)
+    spot_configs_for_runner: dict[str, dict] = {}
+    for loc in surf_locations:
+        spot_cfg = marine_config.surf_spots.get(loc.id)
+        if spot_cfg is None:
+            continue
+        cfg_dict: dict[str, Any] = {
+            "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
+        }
+        cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
+        if cache_path.exists():
+            try:
+                cfg_dict["runtime_profile"] = json.loads(cache_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        spot_configs_for_runner[loc.id] = cfg_dict
+
     swan_config: dict[str, Any] = {
         "outer_bbox": list(outer_bbox),
         "inner_bbox": list(inner_bbox),
@@ -1397,8 +1461,9 @@ def run_quick_update(
         "inner_nest_resolution_m": resolved_inner_m,
         "compute_dt_min": _DEFAULT_COMPUTE_DT_MIN,
         "output_interval_hr": _DEFAULT_OUTPUT_INTERVAL_HR,
-        "swan_timeout_s": 120,  # stationary should be fast
+        "swan_timeout_s": 120,
         "omp_num_threads": omp_threads,
+        "spot_configs": spot_configs_for_runner or None,
     }
 
     runner = _SWANRunnerWithCleanup(swan_config)
@@ -1406,12 +1471,14 @@ def run_quick_update(
 
     hrrr_cycle = hrrr_wind_field.get("cycle_time", "")
     logger.info(
-        "SWAN quick update: stationary inner nest for %d spot(s) (HRRR cycle=%s)",
-        len(surf_spots_config), hrrr_cycle,
+        "SWAN quick update: stationary Level 3 for %d spot(s) (%d clusters, HRRR cycle=%s)",
+        len(surf_spots_config), len(domains.level3_clusters), hrrr_cycle,
     )
 
     try:
-        results = runner.run_stationary_inner(swan_work, hrrr_wind_field, cudem_bathymetry)
+        results = runner.run_stationary_level3(
+            swan_work, hrrr_wind_field, domains, bathymetry,
+        )
     except SWANRunError as exc:
         logger.warning(
             "SWAN quick update failed: %s\nSWAN stderr: %s",

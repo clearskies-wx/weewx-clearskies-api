@@ -747,7 +747,24 @@ class SWANRunner:
     When gfs_wind_field is None a shortened forecast (HRRR hours only) is produced.
     """
 
-    _NESTOUT_BOUNDARY_FILE = "nest_boundary.dat"
+    # ── SWAN nesting file convention ──
+    # In a 3-level nested run (Level 1 → Level 2 → Level 3), the middle level
+    # must BOTH read boundary spectra from its parent (BOUNDNEST1) AND write
+    # boundary spectra for its child (NESTOUT).  SWAN reads BOUNDNEST1 data
+    # progressively throughout the simulation; if NESTOUT writes to the SAME
+    # file, it corrupts the data BOUNDNEST1 is still reading.
+    #
+    # Convention:
+    #   _NEST_INPUT_FILE  — the file BOUNDNEST1 reads (copied from parent's NESTOUT output)
+    #   _NESTOUT_FILE     — the file NESTOUT writes (new data for the child level)
+    #
+    # The runner copies parent_dir/_NESTOUT_FILE → child_dir/_NEST_INPUT_FILE
+    # so the filenames never collide within a single SWAN working directory.
+    #
+    # See: SWAN User Manual §4.5.5 (BOUNDNEST1), §4.7 (NESTOUT).
+    # See: SWAN-FIXES-PLAN.md Bug 1 (2026-07-19).
+    _NEST_INPUT_FILE = "nest_in.dat"
+    _NESTOUT_FILE = "nest_out.dat"
     _HOTSTART_FILE = "hotstart.dat"
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -969,7 +986,7 @@ class SWANRunner:
         """Run the outer SWAN grid (continental shelf approach domain).
 
         Writes SWAN input files to tmpdir/outer/, spawns SWAN, and produces
-        nest_boundary.dat in tmpdir/outer/ for the inner nest to consume.
+        nest_out.dat in tmpdir/outer/ for the inner nest to consume.
 
         Args:
             tmpdir: Root temporary directory for this SWAN run.
@@ -1008,11 +1025,11 @@ class SWANRunner:
     ) -> dict[str, list[MarineForecastPoint]]:
         """Run the inner nested SWAN grid (tight nearshore domain around surf spots).
 
-        Copies nest_boundary.dat from tmpdir/outer/ into tmpdir/inner/, writes
-        SWAN input files, spawns SWAN, and parses TABLE output at surf spot points.
+        Copies nest_out.dat from tmpdir/outer/ into tmpdir/inner/ as nest_in.dat,
+        writes SWAN input files, spawns SWAN, and parses TABLE output at surf spots.
 
         Args:
-            tmpdir: Root temporary directory (must contain outer/ with nest_boundary.dat).
+            tmpdir: Root temporary directory (must contain outer/ with nest_out.dat).
             blended_wind: Stitched HRRR+GFS wind field.
             cudem_bathymetry: CUDEM depth grid dict.
             tide_predictions: CO-OPS tidal predictions (passed to _write_input_files).
@@ -1025,15 +1042,15 @@ class SWANRunner:
         inner_dir = tmpdir / "inner"
         inner_dir.mkdir(exist_ok=True)
 
-        # Copy nest boundary file from outer run into inner working dir
-        src = tmpdir / "outer" / self._NESTOUT_BOUNDARY_FILE
-        dst = inner_dir / self._NESTOUT_BOUNDARY_FILE
+        # Copy outer NESTOUT output → inner BOUNDNEST1 input (different filenames).
+        src = tmpdir / "outer" / self._NESTOUT_FILE
+        dst = inner_dir / self._NEST_INPUT_FILE
         if src.exists():
             shutil.copy2(str(src), str(dst))
         else:
             logger.warning(
                 "SWAN inner nest: outer grid did not produce %s — inner nest will run without nesting",
-                self._NESTOUT_BOUNDARY_FILE,
+                self._NESTOUT_FILE,
             )
 
         grid_info = self._write_input_files(
@@ -1058,12 +1075,14 @@ class SWANRunner:
         wind_field: dict[str, Any],
         cudem_bathymetry: dict[str, Any],
     ) -> dict[str, list[MarineForecastPoint]]:
-        """Run a stationary SWAN computation on the inner nest only.
+        """Run a stationary SWAN computation on the inner nest only (legacy 2-level).
 
-        Uses the most recent nest_boundary.dat from the last full run
-        (expected at tmpdir/outer/nest_boundary.dat or
-        tmpdir/outer_hotstart.dat context).  Produces a single-timestep
+        Uses the most recent nest_out.dat from the last full run
+        (expected at tmpdir/outer/nest_out.dat).  Produces a single-timestep
         snapshot of the nearshore wave field with the latest wind.
+
+        NOTE: For 3-level runs, use run_stationary_level3() instead — this
+        method uses the old 2-level paths (outer/inner).
 
         Per SWAN manual §4.7: "For small domains (< 100 km), a stationary
         computation is recommended."  Inner nest is ~20km.
@@ -1071,15 +1090,16 @@ class SWANRunner:
         inner_dir = tmpdir / "inner"
         inner_dir.mkdir(exist_ok=True)
 
-        # Reuse nest_boundary.dat from the last full run's outer grid
-        src = tmpdir / "outer" / self._NESTOUT_BOUNDARY_FILE
-        dst = inner_dir / self._NESTOUT_BOUNDARY_FILE
+        # Copy outer NESTOUT output → inner BOUNDNEST1 input (different filenames).
+        src = tmpdir / "outer" / self._NESTOUT_FILE
+        dst = inner_dir / self._NEST_INPUT_FILE
         if src.exists():
             shutil.copy2(str(src), str(dst))
         else:
             logger.warning(
-                "SWAN stationary: no nest_boundary.dat from outer grid — "
-                "running without nesting (quick update may be inaccurate)"
+                "SWAN stationary: no %s from outer grid — "
+                "running without nesting (quick update may be inaccurate)",
+                self._NESTOUT_FILE,
             )
 
         grid_info = self._write_input_files(
@@ -1190,13 +1210,19 @@ class SWANRunner:
         # to replace BOUNDSPEC SIDE with BOUNDNEST1 (reads L1's output).
         l2_dir = workdir / "level2"
         l2_dir.mkdir(exist_ok=True)
-        # Copy Level 1 NESTOUT into Level 2 working dir
-        l1_nest = l1_dir / self._NESTOUT_BOUNDARY_FILE
-        l2_nest_in = l2_dir / self._NESTOUT_BOUNDARY_FILE
+        # Copy L1 NESTOUT output → L2 BOUNDNEST1 input.
+        # CRITICAL: these MUST be different filenames.  Level 2 runs as "outer"
+        # (writes NESTOUT to _NESTOUT_FILE) and is patched to add BOUNDNEST1
+        # (reads _NEST_INPUT_FILE).  If both pointed at the same file, SWAN
+        # would overwrite the L1 boundary data it was still reading, producing
+        # a corrupted boundary file and zero wave energy in Level 3.
+        # See SWAN-FIXES-PLAN.md Bug 1 (2026-07-19).
+        l1_nest = l1_dir / self._NESTOUT_FILE
+        l2_nest_in = l2_dir / self._NEST_INPUT_FILE
         if l1_nest.exists():
             shutil.copy2(str(l1_nest), str(l2_nest_in))
         else:
-            logger.warning("SWAN L2: Level 1 did not produce NESTOUT — running without nesting")
+            logger.warning("SWAN L2: Level 1 did not produce %s — running without nesting", self._NESTOUT_FILE)
 
         # Temporarily override self._inner_bbox so the NESTOUT command targets
         # the union of all Level 3 cluster bboxes (SWAN interpolates to each
@@ -1248,7 +1274,7 @@ class SWANRunner:
         for line in patched_lines:
             if line.startswith("GEN3") and not boundnest_inserted:
                 final_lines.append(
-                    f"BOUNDNEST1 NEST '{self._NESTOUT_BOUNDARY_FILE}' CLOSED"
+                    f"BOUNDNEST1 NEST '{self._NEST_INPUT_FILE}' CLOSED"
                 )
                 final_lines.append("")
                 boundnest_inserted = True
@@ -1277,14 +1303,15 @@ class SWANRunner:
                 cluster.grid.lon_max, cluster.grid.lat_max,
             )
 
-            # Copy Level 2 NESTOUT into Level 3 working dir
-            l2_nest = l2_dir / self._NESTOUT_BOUNDARY_FILE
-            l3_nest_in = l3_dir / self._NESTOUT_BOUNDARY_FILE
+            # Copy L2 NESTOUT output → L3 BOUNDNEST1 input (different filenames).
+            l2_nest = l2_dir / self._NESTOUT_FILE
+            l3_nest_in = l3_dir / self._NEST_INPUT_FILE
             if l2_nest.exists():
                 shutil.copy2(str(l2_nest), str(l3_nest_in))
             else:
                 logger.warning(
-                    "SWAN L3[%d]: Level 2 did not produce NESTOUT — running without nesting", idx
+                    "SWAN L3[%d]: Level 2 did not produce %s — running without nesting",
+                    idx, self._NESTOUT_FILE,
                 )
 
             # Scope spots to this cluster only — prevent out-of-domain transects
@@ -1327,6 +1354,87 @@ class SWANRunner:
             logger.info("SWAN Level 3 cluster %d complete", idx)
 
         logger.info("SWAN 3-level run complete — %d spots resolved", len(all_results))
+        return all_results
+
+    def run_stationary_level3(
+        self,
+        workdir: Path,
+        wind_field: dict[str, Any],
+        domains: "DomainSizing",
+        bathymetry: dict[str, Any],
+    ) -> dict[str, list["MarineForecastPoint"]]:
+        """Stationary Level 3 only — quick update using latest Level 2 NESTOUT.
+
+        Runs a single-timestep snapshot of the surf-zone wave field for each
+        Level 3 cluster, using the most recent Level 2 boundary file from the
+        last full 3-level run.  This is the 3-level equivalent of the old
+        ``run_stationary_inner()`` — same purpose, but uses Level 3 geometry
+        and reads from ``level2/`` instead of ``outer/``.
+
+        The boundary file at ``workdir/level2/{_NESTOUT_FILE}`` must exist from
+        a previous ``run_3level()`` call.  If missing, returns empty results
+        (the cache warmer preserves last-good data per PROVIDER-MANUAL §14.15).
+        """
+        l2_boundary = workdir / "level2" / self._NESTOUT_FILE
+        if not l2_boundary.exists():
+            logger.warning(
+                "SWAN stationary L3: no Level 2 NESTOUT (%s) — "
+                "skipping quick update", self._NESTOUT_FILE,
+            )
+            return {}
+
+        all_results: dict[str, list[MarineForecastPoint]] = {}
+
+        for idx, cluster in enumerate(domains.level3_clusters):
+            if cluster.grid is None:
+                continue
+
+            l3_dir = workdir / f"level3_{idx}"
+            l3_dir.mkdir(exist_ok=True)
+
+            # Copy L2 NESTOUT → L3 BOUNDNEST1 input
+            shutil.copy2(str(l2_boundary), str(l3_dir / self._NEST_INPUT_FILE))
+
+            # Scope to this cluster's spots only
+            saved_surf_spots = self._surf_spots
+            saved_spot_configs = self._spot_configs
+            self._surf_spots = {
+                sid: self._surf_spots[sid]
+                for sid in cluster.spot_ids
+                if sid in self._surf_spots
+            }
+            self._spot_configs = {
+                sid: self._spot_configs[sid]
+                for sid in cluster.spot_ids
+                if sid in self._spot_configs
+            } if self._spot_configs else {}
+
+            l3_bathy = bathymetry.get("level3", {}).get(idx, {})
+            l3_bbox = (
+                cluster.grid.lon_min, cluster.grid.lat_min,
+                cluster.grid.lon_max, cluster.grid.lat_max,
+            )
+            l3_grid = self._write_input_files(
+                l3_dir, wind_field, {}, l3_bathy, "inner",
+                stationary=True,
+                override_bbox=l3_bbox,
+                override_resolution_m=cluster.grid.resolution_m,
+            )
+
+            logger.info(
+                "SWAN stationary L3[%d]: %d×%d cells (%d spots)",
+                idx, l3_grid["mxc"], l3_grid["myc"], len(cluster.spot_ids),
+            )
+            self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
+            self._save_hotstart(l3_dir, f"level3_{idx}")
+
+            cluster_results = self._parse_output(l3_dir, l3_grid)
+            all_results.update(cluster_results)
+
+            self._surf_spots = saved_surf_spots
+            self._spot_configs = saved_spot_configs
+
+        logger.info("SWAN stationary L3 complete — %d spots resolved", len(all_results))
         return all_results
 
     def _write_input_files(
@@ -1529,7 +1637,13 @@ class SWANRunner:
             inner_dims=inner_dims_for_input,
             output_interval_hr=self._output_interval_hr,
             compute_dt_min=self._compute_dt_min,
-            nest_boundary_file=self._NESTOUT_BOUNDARY_FILE,
+            # Outer level writes NESTOUT to _NESTOUT_FILE; inner level reads
+            # BOUNDNEST1 from _NEST_INPUT_FILE.  Different filenames prevent
+            # the read/write collision that zeroed the forecast (Bug 1, 2026-07-19).
+            nest_boundary_file=(
+                self._NESTOUT_FILE if grid_level == "outer"
+                else self._NEST_INPUT_FILE
+            ),
             hotstart_file=hotstart_arg,
             stationary=stationary,
             has_wlevel=has_wlevel,
