@@ -1108,6 +1108,155 @@ class SWANRunner:
         logger.info("SWAN stationary inner complete")
         return self._parse_output(inner_dir, grid_info)
 
+    # ------------------------------------------------------------------
+    # 3-Level Nested Execution (Phase 14c — SWAN-FIXES-PLAN)
+    # ------------------------------------------------------------------
+
+    def run_3level(
+        self,
+        domains: "DomainSizing",
+        bathymetry: dict[str, Any],
+        hrrr_wind_field: dict[str, Any],
+        gfs_wind_field: dict[str, Any] | None,
+        ww3_boundary: dict[str, Any],
+        tide_predictions: list[dict] | None = None,
+        ofs_currents: list[dict] | None = None,
+        structures: list[dict] | None = None,
+    ) -> dict[str, list["MarineForecastPoint"]]:
+        """Execute a 3-level nested SWAN run and return per-spot wave forecasts.
+
+        Levels:
+          1. Coarse (1 km) — propagates WW3 across continental shelf
+          2. Nearshore (100 m) — refraction/shoaling to 30m depth
+          3. Surf zone (10 m) — per cluster, breaking/sandbars to shore
+
+        NESTOUT file flow:
+          Level 1 → nest_l2.dat → Level 2
+          Level 2 → nest_l3_{idx}.dat → Level 3 (per cluster)
+
+        Args:
+            domains: DomainSizing from swan_domain.compute_domains().
+            bathymetry: {"level1": grid, "level2": grid, "level3": {idx: grid}}
+                from download_all_bathymetry().
+            hrrr_wind_field: HRRR wind field (hours 0-48).
+            gfs_wind_field: GFS wind field (hours 48-72), or None.
+            ww3_boundary: WaveWatch III boundary spectra.
+            tide_predictions: CO-OPS tidal predictions (optional).
+            ofs_currents: OFS surface currents (optional).
+            structures: Coastal structures for OBSTACLE (optional).
+
+        Returns:
+            dict[spot_id, list[MarineForecastPoint]]
+        """
+        from weewx_clearskies_api.services.swan_domain import DomainSizing
+
+        blended_wind = self._stitch_wind(hrrr_wind_field, gfs_wind_field)
+        tmpdir = Path(tempfile.mkdtemp(prefix="swan_3level_"))
+        logger.info("SWAN 3-level run starting in %s", tmpdir)
+
+        # --- Level 1: Coarse grid (1 km) ---
+        l1_dir = tmpdir / "level1"
+        l1_dir.mkdir()
+        l1_bbox = (
+            domains.level1.lon_min, domains.level1.lat_min,
+            domains.level1.lon_max, domains.level1.lat_max,
+        )
+        l1_grid = self._write_input_files(
+            l1_dir, blended_wind, ww3_boundary,
+            bathymetry.get("level1", {}), "outer",
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+            override_bbox=l1_bbox,
+            override_resolution_m=domains.level1.resolution_m,
+        )
+        logger.info(
+            "SWAN L1: %d×%d cells at 1 km in %s",
+            l1_grid["mxc"], l1_grid["myc"], l1_dir,
+        )
+        self._spawn_swan_with_hotstart_retry(l1_dir, "level1")
+        self._save_hotstart(l1_dir, "level1")
+        logger.info("SWAN Level 1 complete")
+
+        # --- Level 2: Nearshore grid (100 m) ---
+        l2_dir = tmpdir / "level2"
+        l2_dir.mkdir()
+        l2_bbox = (
+            domains.level2.lon_min, domains.level2.lat_min,
+            domains.level2.lon_max, domains.level2.lat_max,
+        )
+        # Copy Level 1 NESTOUT into Level 2 working dir
+        l1_nest = l1_dir / self._NESTOUT_BOUNDARY_FILE
+        l2_nest_in = l2_dir / self._NESTOUT_BOUNDARY_FILE
+        if l1_nest.exists():
+            shutil.copy2(str(l1_nest), str(l2_nest_in))
+        else:
+            logger.warning("SWAN L2: Level 1 did not produce NESTOUT — running without nesting")
+
+        l2_grid = self._write_input_files(
+            l2_dir, blended_wind, {}, bathymetry.get("level2", {}), "inner",
+            tide_predictions=tide_predictions,
+            ofs_currents=ofs_currents,
+            structures=structures,
+            override_bbox=l2_bbox,
+            override_resolution_m=domains.level2.resolution_m,
+        )
+        logger.info(
+            "SWAN L2: %d×%d cells at 100 m in %s",
+            l2_grid["mxc"], l2_grid["myc"], l2_dir,
+        )
+        self._spawn_swan_with_hotstart_retry(l2_dir, "level2")
+        self._save_hotstart(l2_dir, "level2")
+        logger.info("SWAN Level 2 complete")
+
+        # --- Level 3: Surf zone grids (10 m) — per cluster ---
+        all_results: dict[str, list[MarineForecastPoint]] = {}
+
+        for idx, cluster in enumerate(domains.level3_clusters):
+            if cluster.grid is None:
+                continue
+
+            l3_dir = tmpdir / f"level3_{idx}"
+            l3_dir.mkdir()
+            l3_bbox = (
+                cluster.grid.lon_min, cluster.grid.lat_min,
+                cluster.grid.lon_max, cluster.grid.lat_max,
+            )
+
+            # Copy Level 2 NESTOUT into Level 3 working dir
+            l2_nest = l2_dir / self._NESTOUT_BOUNDARY_FILE
+            l3_nest_in = l3_dir / self._NESTOUT_BOUNDARY_FILE
+            if l2_nest.exists():
+                shutil.copy2(str(l2_nest), str(l3_nest_in))
+            else:
+                logger.warning(
+                    "SWAN L3[%d]: Level 2 did not produce NESTOUT — running without nesting", idx
+                )
+
+            l3_bathy = bathymetry.get("level3", {}).get(idx, {})
+            l3_grid = self._write_input_files(
+                l3_dir, blended_wind, {}, l3_bathy, "inner",
+                tide_predictions=tide_predictions,
+                ofs_currents=ofs_currents,
+                structures=structures,
+                override_bbox=l3_bbox,
+                override_resolution_m=cluster.grid.resolution_m,
+            )
+            logger.info(
+                "SWAN L3[%d]: %d×%d cells at 10 m (%d spots) in %s",
+                idx, l3_grid["mxc"], l3_grid["myc"],
+                len(cluster.spot_ids), l3_dir,
+            )
+            self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
+            self._save_hotstart(l3_dir, f"level3_{idx}")
+
+            cluster_results = self._parse_output(l3_dir, l3_grid)
+            all_results.update(cluster_results)
+            logger.info("SWAN Level 3 cluster %d complete", idx)
+
+        logger.info("SWAN 3-level run complete — %d spots resolved", len(all_results))
+        return all_results
+
     def _write_input_files(
         self,
         run_dir: Path,
@@ -1119,6 +1268,8 @@ class SWANRunner:
         tide_predictions: list[dict] | None = None,
         ofs_currents: list[dict] | None = None,
         structures: list[dict] | None = None,
+        override_bbox: tuple[float, float, float, float] | None = None,
+        override_resolution_m: float | None = None,
     ) -> dict[str, Any]:
         """Write SWAN input files for a given grid level and return grid_info.
 
@@ -1151,7 +1302,10 @@ class SWANRunner:
         Returns:
             grid_info dict with SWAN grid dimensions and valid_times.
         """
-        if grid_level == "outer":
+        if override_bbox is not None and override_resolution_m is not None:
+            bbox = override_bbox
+            resolution_m = override_resolution_m
+        elif grid_level == "outer":
             bbox = self._outer_bbox
             resolution_m = self._outer_resolution_m
         else:
