@@ -23,6 +23,7 @@ dependencies = [
     # per locale, e.g. "22,5" in de-DE vs "22.5" in en-US).
     "babel==2.18.0",
     "fastapi==0.136.1",
+    "python-multipart>=0.0.7",
     "uvicorn[standard]==0.41.0",
     "pydantic==2.11.4",
     "pydantic-settings==2.9.1",
