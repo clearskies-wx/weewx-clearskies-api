@@ -461,36 +461,22 @@ def _detect_vdatum_region(lat: float, lon: float) -> str:
 
 
 def _query_vdatum_offset(lat: float, lon: float, source_datum: str) -> float:
-    """Query NOAA VDatum REST API for the vertical offset from *source_datum* to LMSL.
+    """Get the vertical offset from *source_datum* to MSL at (lat, lon).
 
-    The offset is the height (in metres) of elevation-0 in the source datum
-    relative to Local Mean Sea Level (LMSL).  Apply as::
+    Uses the ``coastalmodeling-vdatum`` library (NOAA Ocean Modeling team)
+    which applies the official NOAA VDatum separation GeoTIFF grids via
+    PROJ — not the flaky VDatum REST API.  Works offline once grids are
+    downloaded.  Supports NAVD88, MLLW, MHW, MHHW, MLW, IGLD85 → LMSL.
 
-        depth_lmsl = depth_source + offset
+    Coverage: US coastal waters only (the grids are NOAA products).
+    International operators must supply a manual MSL offset in the upload
+    form — tidal datums are inherently local and no global model exists.
 
-    For NAVD88 at San Diego, VDatum returns ``t_z ≈ -0.764``, meaning the
-    NAVD88 datum surface is 0.764 m below LMSL.  A 2 m depth below NAVD88
-    therefore becomes 2.764 m below LMSL.
+    **Never silently returns 0.0.** On failure the caller receives an
+    exception and must decide whether to abort or warn the operator.
 
-    Results are cached by ``(round(lat, 1), round(lon, 1), datum)`` — datum
-    offsets vary slowly over ~10 km scales, so one query per grid is sufficient.
-
-    Rate-limited to 1 request/second.  On any API failure, logs a warning and
-    returns 0.0 so the SWAN run proceeds without datum correction.
-
-    Args:
-        lat: Latitude in decimal degrees.
-        lon: Longitude in decimal degrees.
-        source_datum: Our datum name (``"NAVD88"``, ``"MHW"``, ``"MLLW"``,
-            ``"MHHW"``, ``"IGLD85"``, etc.).
-
-    Returns:
-        Vertical offset in metres (source datum → LMSL).
-        Returns 0.0 on API failure.
+    Results cached by (round(lat,1), round(lon,1), datum).
     """
-    global _last_vdatum_request_time
-
-    # Round for cache key granularity (~0.1° ≈ 10 km)
     lat_r = round(lat, 1)
     lon_r = round(lon, 1)
     cache_key = (lat_r, lon_r, source_datum)
@@ -498,23 +484,55 @@ def _query_vdatum_offset(lat: float, lon: float, source_datum: str) -> float:
     if cache_key in _VDATUM_CACHE:
         return _VDATUM_CACHE[cache_key]
 
-    vdatum_frame = _DATUM_TO_VDATUM_FRAME.get(source_datum.upper())
-    if vdatum_frame is None:
+    upper_datum = source_datum.upper()
+
+    if upper_datum in ("MSL", "LMSL"):
+        _VDATUM_CACHE[cache_key] = 0.0
+        return 0.0
+
+    if upper_datum == "UNKNOWN":
         logger.warning(
-            "Unknown datum %r — no VDatum mapping available; using 0.0m offset",
-            source_datum,
+            "DEM has UNKNOWN vertical datum at (%.4f, %.4f) — "
+            "assuming MSL (0.0m offset). Bathymetry may have vertical bias.",
+            lat, lon,
         )
         _VDATUM_CACHE[cache_key] = 0.0
         return 0.0
 
-    # Datum is already LMSL — offset is zero by definition
-    if vdatum_frame == "LMSL":
+    # Try coastalmodeling-vdatum (NOAA's official offline grid-based tool)
+    try:
+        from coastalmodeling_vdatum import vdatum as cm_vdatum
+
+        _, _, z_out = cm_vdatum.convert(
+            upper_datum.lower(), "lmsl", lat, lon, 0.0,
+        )
+        offset = float(z_out)
+        logger.info(
+            "%s→MSL offset via coastalmodeling-vdatum: %.3fm at (%.4f, %.4f)",
+            source_datum, offset, lat, lon,
+        )
+        _VDATUM_CACHE[cache_key] = offset
+        return offset
+    except ImportError:
+        logger.debug(
+            "coastalmodeling-vdatum not installed — trying VDatum REST API"
+        )
+    except Exception as exc:
+        logger.warning(
+            "coastalmodeling-vdatum failed for %s at (%.4f, %.4f): %s — "
+            "trying VDatum REST API",
+            source_datum, lat, lon, exc,
+        )
+
+    # Fallback: VDatum REST API (works for on-land US coastal points)
+    vdatum_frame = _DATUM_TO_VDATUM_FRAME.get(upper_datum)
+    if vdatum_frame is None or vdatum_frame == "LMSL":
         _VDATUM_CACHE[cache_key] = 0.0
         return 0.0
 
+    global _last_vdatum_request_time
     region = _detect_vdatum_region(lat, lon)
 
-    # Enforce rate limit: at most 1 request per second
     elapsed = time.monotonic() - _last_vdatum_request_time
     if elapsed < _VDATUM_RATE_LIMIT_S:
         time.sleep(_VDATUM_RATE_LIMIT_S - elapsed)
@@ -535,23 +553,25 @@ def _query_vdatum_offset(lat: float, lon: float, source_datum: str) -> float:
         resp.raise_for_status()
         data = resp.json()
         t_z = data.get("t_z")
-        if t_z is None:
+        if t_z is None or t_z == -999999:
             raise ValueError(
-                f"VDatum response missing 't_z' field. Response: {data!r}"
+                f"VDatum returned no valid offset. Response: {data!r}"
             )
         offset = float(t_z)
+        logger.info(
+            "%s→MSL offset via VDatum REST: %.3fm at (%.4f, %.4f)",
+            source_datum, offset, lat, lon,
+        )
         _VDATUM_CACHE[cache_key] = offset
         return offset
-
     except Exception:
-        logger.warning(
-            "VDatum API unavailable for datum=%r at (%.2f, %.2f) region=%r — "
-            "no datum correction applied. "
-            "Bathymetry may have up to ~1m vertical bias.",
-            source_datum,
-            lat,
-            lon,
-            region,
+        logger.error(
+            "All datum conversion methods failed for %s at (%.4f, %.4f). "
+            "Install coastalmodeling-vdatum (pip install coastalmodeling-vdatum) "
+            "for reliable offline datum conversion. "
+            "Proceeding with 0.0m offset — bathymetry WILL have vertical bias "
+            "of up to ~1m. This affects wave breaking predictions.",
+            source_datum, lat, lon,
             exc_info=True,
         )
         _VDATUM_CACHE[cache_key] = 0.0

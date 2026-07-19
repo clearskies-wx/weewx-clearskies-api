@@ -101,6 +101,12 @@ nearshore = [
     # shapely: computational geometry for GSFM shelf boundary queries
     # (nearest-point-on-polyline) used in domain sizing (Phase 13/14).
     "shapely>=2.0",
+    # coastalmodeling-vdatum: NOAA Ocean Modeling vertical datum conversion
+    # using official VDatum separation GeoTIFF grids via PROJ.  Converts
+    # between NAVD88/MLLW/MHW/MHHW/IGLD85 and LMSL (local MSL) for
+    # bathymetry datum normalization.  US coastal coverage only — international
+    # operators supply manual MSL offsets.
+    "coastalmodeling-vdatum>=0.1",
     # ---------------------------------------------------------------------------
     # SWAN binary — NOT a pip package; must be installed separately.
     # SWAN 41.45 (Simulating WAves Nearshore, Delft University of Technology)
