@@ -148,14 +148,8 @@ def _parse_table_output(
         dict[spot_id, list[MarineForecastPoint]] — may be empty if no valid rows.
     """
     result: dict[str, list[MarineForecastPoint]] = {sid: [] for sid in spots}
-
-    # T7.5 debug: log first few raw lines to see what SWAN produced
-    raw_lines = table_text.splitlines()
-    logger.warning(
-        "SWAN TABLE raw preview (%d lines total): %s",
-        len(raw_lines),
-        raw_lines[:8],
-    )
+    total_rows_per_spot: dict[str, int] = {sid: 0 for sid in spots}
+    valid_rows_per_spot: dict[str, int] = {sid: 0 for sid in spots}
 
     col_idx: dict[str, int] = {}
     header_found = False
@@ -250,6 +244,27 @@ def _parse_table_output(
         setup_v  = _opt_float(i_setup)
         dspr     = _opt_float(i_dspr)
 
+        # Match (Xp, Yp) to a spot first so we can count per-spot totals.
+        matched_id: str | None = None
+        for spot_id, (spot_lon, spot_lat) in spots.items():
+            if (
+                abs(xp - spot_lon) <= coord_tolerance_deg
+                and abs(yp - spot_lat) <= coord_tolerance_deg
+            ):
+                matched_id = spot_id
+                break
+
+        if matched_id is None:
+            logger.warning(
+                "SWAN output unmatched coord: Xp=%.4f Yp=%.4f (spots=%s, tol=%.4f)",
+                xp, yp,
+                {sid: (slon, slat) for sid, (slon, slat) in spots.items()},
+                coord_tolerance_deg,
+            )
+            continue
+
+        total_rows_per_spot[matched_id] += 1
+
         # Physical validation — log at WARNING temporarily for T7.5 debugging
         if not _is_valid_point(hs, tm01, mwd):
             logger.warning(
@@ -275,24 +290,7 @@ def _parse_table_output(
             logger.warning("SWAN TABLE row has no TIME column — skipping")
             continue
 
-        # Match (Xp, Yp) to a spot
-        matched_id: str | None = None
-        for spot_id, (spot_lon, spot_lat) in spots.items():
-            if (
-                abs(xp - spot_lon) <= coord_tolerance_deg
-                and abs(yp - spot_lat) <= coord_tolerance_deg
-            ):
-                matched_id = spot_id
-                break
-
-        if matched_id is None:
-            logger.warning(
-                "SWAN output unmatched coord: Xp=%.4f Yp=%.4f (spots=%s, tol=%.4f)",
-                xp, yp,
-                {sid: (slon, slat) for sid, (slon, slat) in spots.items()},
-                coord_tolerance_deg,
-            )
-            continue
+        valid_rows_per_spot[matched_id] += 1
 
         result[matched_id].append(
             MarineForecastPoint(
@@ -307,6 +305,15 @@ def _parse_table_output(
                 setup=round(setup_v, 3) if setup_v is not None else None,
                 directionalSpread=round(dspr, 1) if dspr is not None else None,
             )
+        )
+
+    for sid in spots:
+        total = total_rows_per_spot[sid]
+        valid = valid_rows_per_spot[sid]
+        logger.info(
+            "SWAN TABLE spot %s: %d/%d valid points (%.0f%%)",
+            sid, valid, total,
+            100 * valid / max(total, 1),
         )
 
     return result
@@ -363,6 +370,8 @@ def _parse_transect_table(
     col_idx: dict[str, int] = {}
     header_found = False
     results: list[MarineForecastPoint] = []
+    total_rows = 0
+    valid_rows = 0
 
     for raw_line in raw_lines:
         line = raw_line.strip()
@@ -420,6 +429,8 @@ def _parse_transect_table(
         except (ValueError, IndexError):
             continue
 
+        total_rows += 1
+
         def _opt_val(idx: int | None) -> float | None:
             if idx is None or idx >= len(parts):
                 return None
@@ -438,6 +449,8 @@ def _parse_transect_table(
 
         if not _is_valid_point(hs, tm01, mwd):
             continue
+
+        valid_rows += 1
 
         if time_token is None:
             continue
@@ -488,6 +501,12 @@ def _parse_transect_table(
                 distanceFromShore=round(distance_m, 1) if distance_m is not None else None,
             )
         )
+
+    logger.info(
+        "SWAN TABLE spot %s: %d/%d valid points (%.0f%%)",
+        spot_id, valid_rows, total_rows,
+        100 * valid_rows / max(total_rows, 1),
+    )
 
     return results
 

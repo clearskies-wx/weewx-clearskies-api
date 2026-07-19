@@ -25,9 +25,12 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +464,7 @@ def compute_spot_transect(
     *,
     coastline_lat: float | None = None,
     coastline_lon: float | None = None,
+    grid_bbox: tuple[float, float, float, float] | None = None,
 ) -> dict[str, Any]:
     """Compute the cross-shore CURVE transect for one surf spot.
 
@@ -493,6 +497,10 @@ def compute_spot_transect(
             pin, so the CURVE transect starts at the true coastline.
         coastline_lon: Longitude of the actual shoreline (degrees).  See
             ``coastline_lat``.
+        grid_bbox: When provided as ``(lon_min, lat_min, lon_max, lat_max)``,
+            clip the deep-end endpoint to stay within this bounding box.
+            Prevents CURVE points from falling outside the Level 3 SWAN grid
+            (T23.2).
 
     Returns:
         dict with keys:
@@ -536,9 +544,37 @@ def compute_spot_transect(
                 best_d = pt.get("distance_m", fallback)
         return float(best_d)
 
+    # Enforce minimum shallow depth above SWAN DEPMIN (0.05 m) to avoid dry CURVE
+    # points at the nearshore end (SWAN-FIXES-PLAN T23.2; swan-nesting-reference Q3).
+    target_shallow_m = max(target_shallow_m, 0.1)
+
     d_deep = _dist_at_depth(target_deep_m, 500.0)
     d_spec = _dist_at_depth(target_spec_m, 300.0)
     d_shallow = _dist_at_depth(target_shallow_m, 50.0)
+
+    # Clip deep end to grid bbox if provided (T23.2).
+    # Analytically find the largest d_deep such that _offset(d_deep) stays
+    # within (lon_min, lat_min, lon_max, lat_max).
+    if grid_bbox is not None:
+        lon_min, lat_min, lon_max, lat_max = grid_bbox
+        dlon_per_m = math.sin(bearing_rad) / meters_per_lon
+        dlat_per_m = math.cos(bearing_rad) / meters_per_lat
+        d_max = float(d_deep)
+        if dlon_per_m > 1e-10:
+            d_max = min(d_max, (lon_max - origin_lon) / dlon_per_m)
+        elif dlon_per_m < -1e-10:
+            d_max = min(d_max, (lon_min - origin_lon) / dlon_per_m)
+        if dlat_per_m > 1e-10:
+            d_max = min(d_max, (lat_max - origin_lat) / dlat_per_m)
+        elif dlat_per_m < -1e-10:
+            d_max = min(d_max, (lat_min - origin_lat) / dlat_per_m)
+        if d_max < d_deep:
+            logger.warning(
+                "compute_spot_transect: deep end clipped from %.1f m to %.1f m "
+                "to stay within grid bbox %s (spot lon=%.6f lat=%.6f)",
+                d_deep, d_max, grid_bbox, spot_lon, spot_lat,
+            )
+            d_deep = max(d_max, d_shallow + spacing_m)
 
     # Ensure sensible ordering (deep > spec > shallow)
     if d_deep <= d_shallow:
@@ -578,6 +614,13 @@ def compute_spot_transect(
         else:
             # No profile — linearly interpolate depth from assumed values
             depth_at_d = target_deep_m + (target_shallow_m - target_deep_m) * frac
+
+        if depth_at_d <= 0:
+            logger.warning(
+                "compute_spot_transect: point at distance %.1f m has depth %.2f m "
+                "(dry in SWAN) — spot lon=%.6f lat=%.6f",
+                d, depth_at_d, spot_lon, spot_lat,
+            )
 
         lon, lat = _offset(d)
         transect_points.append({
