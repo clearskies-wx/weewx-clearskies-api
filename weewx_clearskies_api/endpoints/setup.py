@@ -3246,6 +3246,13 @@ class _BathymetryLevelCoverage(BaseModel):
     resolution_m: float | None = None
     quality: str  # "high" | "degraded"
     quality_label: str  # Human-readable quality label
+    # T4.2 — Datum warning fields.  datum_warning is True when the source has
+    # an unknown or unverifiable vertical datum (CRM fallback path).
+    # vertical_datum is None when the datum is not known at coverage-check time
+    # (the actual value is determined during the SWAN depth-grid download).
+    # i18n for warning text is deferred; English text is used directly here.
+    vertical_datum: str | None = None
+    datum_warning: bool = False
 
 
 class _BathymetryCoverage(BaseModel):
@@ -3254,6 +3261,8 @@ class _BathymetryCoverage(BaseModel):
     overall_quality: str  # min quality across L2 and L3
     levels: list[_BathymetryLevelCoverage]
     warning: str | None = None  # Present when overall_quality == "degraded"
+    # T4.2 — True when any level has datum_warning=True.
+    datum_warning: bool = False
 
 
 class MarineCoverageResponse(BaseModel):
@@ -3425,14 +3434,21 @@ async def marine_coverage(
                 source = "ncei_regional"
                 resolution = dem["resolution_m"]
                 quality = "high"
+                level_datum_warning = False
             elif lake is not None:
                 source = "usgs_great_lakes"
                 resolution = 5.0
                 quality = "high"
+                level_datum_warning = False
             else:
                 source = "crm"
                 resolution = 90.0
                 quality = "degraded"
+                # T4.2 — CRM has mixed/unknown datums; flag datum uncertainty.
+                # Warning text: "Bathymetry data source has unknown vertical datum.
+                #   Wave model depth calculations may have reduced accuracy."
+                # i18n key (deferred): marine.bathymetry.warning.datum_unknown
+                level_datum_warning = True
 
             levels.append(
                 _BathymetryLevelCoverage(
@@ -3442,6 +3458,7 @@ async def marine_coverage(
                     resolution_m=resolution,
                     quality=quality,
                     quality_label=_BATHYMETRY_QUALITY_LABELS[quality],
+                    datum_warning=level_datum_warning,
                 )
             )
 
@@ -3449,11 +3466,13 @@ async def marine_coverage(
             "degraded" if any(lvl.quality == "degraded" for lvl in levels) else "high"
         )
         warning = _BATHYMETRY_WARNING_DEGRADED if overall_quality == "degraded" else None
+        overall_datum_warning = any(lvl.datum_warning for lvl in levels)
 
         bathymetry = _BathymetryCoverage(
             overall_quality=overall_quality,
             levels=levels,
             warning=warning,
+            datum_warning=overall_datum_warning,
         )
     except Exception:
         logger.warning(
@@ -3588,8 +3607,12 @@ async def marine_compute_estimate(
 # Bathymetry upload (Phase 24, T24.1)
 # ---------------------------------------------------------------------------
 
+# Accepted datums for operator uploads — must match CO-OPS-supported datums so the
+# SWAN pipeline can fetch tide predictions in the same datum (match-at-source, ADR-098).
+# LAT, EGM2008, and "Other with manual offset" are NOT accepted in v1; operators must
+# convert to one of the supported datums before uploading (e.g. via VDatum or QGIS).
 _VALID_UPLOAD_DATUMS: frozenset[str] = frozenset({
-    "MSL", "MLLW", "NAVD88", "MHW", "MHHW", "LAT", "EGM2008", "Other",
+    "NAVD88", "MLLW", "MHW", "MHHW", "MSL",
 })
 
 # Only GeoTIFF for v1; NetCDF and ASCII XYZ deferred to a future update.

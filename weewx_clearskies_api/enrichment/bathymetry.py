@@ -1134,6 +1134,7 @@ def download_swan_depth_grid(
     )
 
     all_values: list[float] = []
+    _seen_datums: set[str] = set()
     for batch_start in range(0, len(all_points), _GETSAMPLES_BATCH_SIZE):
         batch = all_points[batch_start:batch_start + _GETSAMPLES_BATCH_SIZE]
         geometry = _json.dumps({"points": batch})
@@ -1156,6 +1157,9 @@ def download_swan_depth_grid(
                 all_values.append(-15.0)
             else:
                 all_values.append(float(raw))
+            vd = sample.get("VerticalDatum")
+            if vd:
+                _seen_datums.add(str(vd).strip())
 
     depths_2d: list[list[float]] = []
     for j in range(ny):
@@ -1169,6 +1173,18 @@ def download_swan_depth_grid(
         sum(1 for v in all_values if v > 0),
     )
 
+    # T4.1 — Determine vertical datum from CRM response.
+    # CRM getSamples typically does NOT return a VerticalDatum attribute; the
+    # default path (UNKNOWN_CRM + WARNING) is expected in practice.
+    if len(_seen_datums) == 1:
+        vertical_datum: str = next(iter(_seen_datums))
+    else:
+        vertical_datum = "UNKNOWN_CRM"
+        logger.warning(
+            "CRM bathymetry has unknown vertical datum"
+            " — SWAN depth calculations may have up to ~1m vertical bias"
+        )
+
     return {
         "lat_first": lat_sw,
         "lon_first": lon_sw,
@@ -1177,4 +1193,5 @@ def download_swan_depth_grid(
         "ni": nx,
         "nj": ny,
         "depths": depths_2d,
+        "vertical_datum": vertical_datum,
     }
