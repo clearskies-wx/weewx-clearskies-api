@@ -387,23 +387,23 @@ class TestIsValidPoint:
     def test_valid_values_pass(self) -> None:
         assert _is_valid_point(1.5, 12.0, 270.0) is True
 
-    def test_hs_zero_rejected(self) -> None:
-        assert _is_valid_point(0.0, 12.0, 270.0) is False
+    def test_hs_zero_valid(self) -> None:
+        assert _is_valid_point(0.0, 12.0, 270.0) is True
 
-    def test_hs_above_20_rejected(self) -> None:
-        assert _is_valid_point(20.1, 12.0, 270.0) is False
+    def test_hs_above_25_rejected(self) -> None:
+        assert _is_valid_point(25.1, 12.0, 270.0) is False
 
-    def test_hs_exactly_20_accepted(self) -> None:
-        assert _is_valid_point(20.0, 12.0, 270.0) is True
+    def test_hs_exactly_25_accepted(self) -> None:
+        assert _is_valid_point(25.0, 12.0, 270.0) is True
 
-    def test_tm01_below_1_rejected(self) -> None:
-        assert _is_valid_point(1.5, 0.9, 270.0) is False
+    def test_tm01_sub_1s_valid(self) -> None:
+        assert _is_valid_point(1.5, 0.5, 270.0) is True
 
     def test_tm01_exactly_1_accepted(self) -> None:
         assert _is_valid_point(1.5, 1.0, 270.0) is True
 
-    def test_tm01_above_30_rejected(self) -> None:
-        assert _is_valid_point(1.5, 30.1, 270.0) is False
+    def test_tm01_above_35_rejected(self) -> None:
+        assert _is_valid_point(1.5, 35.1, 270.0) is False
 
     def test_nan_hs_rejected(self) -> None:
         assert _is_valid_point(float("nan"), 12.0, 270.0) is False
@@ -473,15 +473,15 @@ class TestParseTableOutput:
         result = _parse_table_output(text, _TEST_SPOTS)
         assert all(len(pts) == 0 for pts in result.values())
 
-    def test_hs_too_high_rejected(self) -> None:
-        text = _make_table_text([{"xp": -118.10, "yp": 33.60, "hs": 25.0, "tm": 12.0, "dir": 270.0}])
+    def test_hs_above_25_rejected(self) -> None:
+        text = _make_table_text([{"xp": -118.10, "yp": 33.60, "hs": 25.1, "tm": 12.0, "dir": 270.0}])
         result = _parse_table_output(text, _TEST_SPOTS)
         assert len(result["spot_a"]) == 0
 
-    def test_tm01_too_low_rejected(self) -> None:
+    def test_tm01_sub_1s_valid(self) -> None:
         text = _make_table_text([{"xp": -118.10, "yp": 33.60, "hs": 1.5, "tm": 0.5, "dir": 270.0}])
         result = _parse_table_output(text, _TEST_SPOTS)
-        assert len(result["spot_a"]) == 0
+        assert len(result["spot_a"]) == 1
 
     def test_time_iso_conversion(self) -> None:
         text = _make_table_text([{
