@@ -586,6 +586,15 @@ def normalize_to_msl(
 ) -> list[list[float]]:
     """Apply a vertical datum correction so all depths are relative to MSL.
 
+    .. note::
+        **Not called in the primary code path (ADR-098).**
+        Datum matching is done at source — the SWAN pipeline requests CO-OPS
+        tide predictions in the DEM's native datum so that BOTTOM and WLEVEL
+        share a datum without any local conversion.  This function is preserved
+        for future edge-case datums that CO-OPS does not support (e.g.
+        international datums), but is not invoked by
+        ``download_bathymetry_for_level()`` or ``download_swan_depth_grid()``.
+
     SWAN expects depth relative to Mean Sea Level.  Regional DEMs use varying
     datums (NAVD88, MHW, MLLW, MHHW) whose offsets from MSL vary spatially by
     up to ~1 m.  A single VDatum query at the grid centre is accurate enough —

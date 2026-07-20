@@ -1483,6 +1483,7 @@ class TidePrediction(BaseModel):
     time: str  # UTC ISO-8601 with Z
     height: float  # group_water_level; relative to datum
     type: str | None = None  # "high" | "low" | None for interpolated points
+    datum: str = "MLLW"  # vertical datum, e.g. "MLLW", "NAVD88" (ADR-098)
 
 
 class WaterLevel(BaseModel):

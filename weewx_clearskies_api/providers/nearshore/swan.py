@@ -1281,10 +1281,51 @@ def _run_all_spots_locked(
         ww3_boundary = {"forecast": [], "grid": "unavailable", "model_run": ""}
 
     # ------------------------------------------------------------------
-    # 2b. CO-OPS tide predictions for SWAN WLEVEL input (T2.1).
-    #     Fetches harmonic tidal predictions for the nearest CO-OPS station.
-    #     On failure: tide_predictions = None → SWAN runs at static MSL.
+    # 2b. CO-OPS tide predictions for SWAN WLEVEL input (ADR-098, T3.4).
+    #     Fetches harmonic tidal predictions in the DEM's native datum so that
+    #     BOTTOM and WLEVEL share a vertical datum (SWAN manual requirement).
+    #
+    #     Datum source: persistent per-level bathymetry cache files written by
+    #     download_bathymetry_for_level() after T3.1 deployment.  Read here
+    #     (before the bathymetry download below) to avoid restructuring the
+    #     function.  On first run after T3.1 deployment the cache files may
+    #     lack vertical_datum — a WARNING is logged and MLLW is used for that
+    #     one run; all subsequent runs use the correct DEM-native datum.
+    #
+    #     On CO-OPS error for the requested datum: ERROR log, tide_predictions
+    #     set to None → SWAN runs without WLEVEL.  Do NOT fall back to MLLW
+    #     silently (ADR-098 §no-silent-fallbacks).
     # ------------------------------------------------------------------
+
+    # Read DEM datum from persistent bathymetry cache files (L2 preferred, L1 fallback).
+    _dem_datum_for_tides: str = "MLLW"
+    _dem_datum_source: str = "fallback-MLLW"
+    for _bathy_cache_path, _bathy_level_label in (
+        (_CUDEM_GRID_PATH_L2, "L2"),
+        (_CUDEM_GRID_PATH_L1, "L1"),
+    ):
+        if _bathy_cache_path.exists():
+            try:
+                _cached_bathy = json.loads(_bathy_cache_path.read_text(encoding="utf-8"))
+                _vd = _cached_bathy.get("vertical_datum")
+                if _vd:
+                    _dem_datum_for_tides = _vd
+                    _dem_datum_source = f"{_bathy_level_label} ({_bathy_cache_path.name})"
+                    break
+            except Exception:
+                logger.debug(
+                    "SWAN: could not read vertical_datum from %s",
+                    _bathy_cache_path,
+                    exc_info=True,
+                )
+
+    if _dem_datum_source == "fallback-MLLW":
+        logger.warning(
+            "SWAN: no vertical_datum in bathymetry cache files — "
+            "CO-OPS predictions will use MLLW (datum match unconfirmed). "
+            "This resolves automatically after the first bathymetry download."
+        )
+
     tide_predictions: list[dict] | None = None
     for loc in surf_locations:
         coops_ids: list[str] = getattr(loc, "coops_station_ids", [])
@@ -1295,30 +1336,34 @@ def _run_all_spots_locked(
                 coops_result = _coops.fetch(
                     station_id=coops_ids[0],
                     products=("predictions",),
+                    datum=_dem_datum_for_tides,
                 )
                 preds = coops_result.get("predictions", [])
                 if preds:
-                    # Convert TidePrediction objects to plain dicts for runner
+                    # Convert TidePrediction objects to plain dicts for runner.
                     tide_predictions = [
                         {"time": p.time, "height": p.height}
                         for p in preds
                         if p.time and p.height is not None
                     ]
                     logger.info(
-                        "SWAN: fetched %d CO-OPS tide predictions "
-                        "from station %s for WLEVEL input",
+                        "SWAN: CO-OPS tide predictions fetched in datum=%s "
+                        "(matching DEM %s): %d predictions from station %s",
+                        _dem_datum_for_tides,
+                        _dem_datum_source,
                         len(tide_predictions),
                         coops_ids[0],
                     )
                     break
             except Exception:
-                logger.warning(
-                    "SWAN: CO-OPS tide predictions unavailable "
-                    "(station %s); SWAN will run at static MSL",
+                logger.error(
+                    "CO-OPS does not support datum=%s for station %s "
+                    "— SWAN WLEVEL will be omitted (unmatched datums risk depth errors).",
+                    _dem_datum_for_tides,
                     coops_ids[0],
                     exc_info=True,
                 )
-                break  # Don't try remaining stations if first fails — same tidal regime
+                break  # Don't try remaining stations — same tidal regime
 
     # OFS gridded surface currents (T2.2).  Fetched as full 2-D U/V arrays
     # via ofs.fetch_surface_currents().  On any failure, falls back to None
@@ -2021,11 +2066,54 @@ def _run_quick_update_locked(
                     )
     structures_for_runner: list[dict] | None = obstacle_structures or None
 
-    # ── T3.2: Tide prediction for static WLEVEL ──────────────────────────────
-    # Fetch the CO-OPS prediction closest to run_time and pass it as a
-    # single-element list so _write_input_files writes WLEVEL.txt (stationary
-    # INPGRID/READINP, no NONSTAT keywords).  On any failure, proceed without
-    # WLEVEL — same behaviour as before this fix, but now it is explicit.
+    # ── Datum-aware tide prediction for static WLEVEL (ADR-098, T3.4) ─────────
+    # Fetch the CO-OPS prediction closest to run_time in the DEM's native datum
+    # so that BOTTOM and WLEVEL share a vertical datum (SWAN manual requirement).
+    # Read vertical_datum from the L3 bathymetry already loaded above; fall back
+    # to the persistent L2/L1 cache files if L3 datum is unavailable.
+    #
+    # On CO-OPS error for the requested datum: ERROR log, tide_predictions_for_runner
+    # set to None → SWAN runs without WLEVEL.  No silent MLLW fallback (ADR-098).
+
+    # Resolve DEM datum: L3 bathymetry (already loaded) → L2 cache file → L1 → MLLW.
+    _qu_dem_datum: str = "MLLW"
+    _qu_datum_source: str = "fallback-MLLW"
+
+    # Check the L3 grids loaded above.
+    if l3_bathymetry:
+        _first_l3_qu = next(iter(l3_bathymetry.values()), {})
+        _vd_qu = _first_l3_qu.get("vertical_datum")
+        if _vd_qu:
+            _qu_dem_datum = _vd_qu
+            _qu_datum_source = "L3 bathymetry cache"
+
+    # Fall back to L2/L1 persistent cache files if L3 datum is unavailable.
+    if _qu_datum_source == "fallback-MLLW":
+        for _qu_bathy_path, _qu_level_label in (
+            (_CUDEM_GRID_PATH_L2, "L2"),
+            (_CUDEM_GRID_PATH_L1, "L1"),
+        ):
+            if _qu_bathy_path.exists():
+                try:
+                    _qu_cached = json.loads(_qu_bathy_path.read_text(encoding="utf-8"))
+                    _vd_qu2 = _qu_cached.get("vertical_datum")
+                    if _vd_qu2:
+                        _qu_dem_datum = _vd_qu2
+                        _qu_datum_source = f"{_qu_level_label} ({_qu_bathy_path.name})"
+                        break
+                except Exception:
+                    logger.debug(
+                        "SWAN quick update: could not read vertical_datum from %s",
+                        _qu_bathy_path,
+                        exc_info=True,
+                    )
+
+    if _qu_datum_source == "fallback-MLLW":
+        logger.warning(
+            "SWAN quick update: no vertical_datum in bathymetry cache — "
+            "CO-OPS predictions will use MLLW (datum match unconfirmed)"
+        )
+
     tide_predictions_for_runner: list[dict] | None = None
     _tide_level: float | None = None
     _tide_time_str: str = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2040,6 +2128,7 @@ def _run_quick_update_locked(
             coops_result = _coops.fetch(
                 station_id=coops_ids[0],
                 products=("predictions",),
+                datum=_qu_dem_datum,
             )
             preds = coops_result.get("predictions", [])
             if preds:
@@ -2065,18 +2154,21 @@ def _run_quick_update_locked(
                         {"time": _tide_time_str, "height": _tide_level}
                     ]
         except Exception:
-            logger.warning(
-                "SWAN L3 quick update: no tide data available — running without WLEVEL",
+            logger.error(
+                "CO-OPS does not support datum=%s for station %s "
+                "— SWAN quick update WLEVEL will be omitted (unmatched datums risk depth errors).",
+                _qu_dem_datum,
+                coops_ids[0],
                 exc_info=True,
             )
         break  # Only first station — same tidal regime as full run
 
     if tide_predictions_for_runner is not None:
         logger.info(
-            "SWAN L3 quick update: WLEVEL=%.2fm (tide at %s), structures=%d",
-            _tide_level, _tide_time_str, len(obstacle_structures),
+            "SWAN L3 quick update: WLEVEL=%.2fm (tide at %s, datum=%s from %s), structures=%d",
+            _tide_level, _tide_time_str, _qu_dem_datum, _qu_datum_source, len(obstacle_structures),
         )
-    # When tide_predictions_for_runner is None due to an exception, the WARNING was
+    # When tide_predictions_for_runner is None due to an exception, the ERROR was
     # already emitted in the except block above.  No coops_station_ids configured or
     # empty prediction list → silent (not a fetch failure, just absent config).
 

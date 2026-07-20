@@ -471,8 +471,20 @@ def _request_product(station_id: str, product: str, extra_params: dict[str, str]
 # ---------------------------------------------------------------------------
 
 
-def _fetch_predictions(station_id: str) -> list[TidePrediction]:
-    cache_key = _build_cache_key(station_id, "predictions")
+def _fetch_predictions(station_id: str, datum: str = "MLLW") -> list[TidePrediction]:
+    """Fetch tidal predictions for a station in the specified vertical datum.
+
+    Args:
+        station_id: CO-OPS station identifier.
+        datum: Vertical datum for predictions (e.g. ``"MLLW"``, ``"NAVD88"``).
+            Defaults to ``"MLLW"`` (US chart standard, used for public display).
+            Pass the DEM's native datum for SWAN WLEVEL input (ADR-098).
+
+    The datum is included in the cache key so predictions in different datums
+    are cached separately (ADR-098 requires one MLLW fetch for display and one
+    DEM-native fetch for SWAN, both may be active in the same API process).
+    """
+    cache_key = _build_cache_key(station_id, f"predictions_{datum}")
     cached = get_cache().get(cache_key)
     if cached is not None:
         return [TidePrediction.model_validate(d) for d in cached]
@@ -481,7 +493,7 @@ def _fetch_predictions(station_id: str) -> list[TidePrediction]:
         station_id,
         "predictions",
         {
-            "datum": "MLLW",
+            "datum": datum,
             "begin_date": _today_yyyymmdd(),
             "range": "72",
         },
@@ -498,6 +510,9 @@ def _fetch_predictions(station_id: str) -> list[TidePrediction]:
                 domain=DOMAIN,
             ) from exc
         predictions = _classify_tide_predictions(wire.predictions)
+        # Stamp each prediction with the requested datum (ADR-098 § datum metadata).
+        for p in predictions:
+            p.datum = datum
 
     get_cache().set(
         cache_key,
@@ -593,6 +608,7 @@ def fetch(
     *,
     station_id: str,
     products: tuple[str, ...] = _DEFAULT_PRODUCTS,
+    datum: str = "MLLW",
 ) -> dict[str, Any]:
     """Fetch CO-OPS tide predictions and water level observations.
 
@@ -600,6 +616,14 @@ def fetch(
         station_id: CO-OPS station identifier (e.g. `"8443970"`).
         products: Which products to fetch. Subset of
             `("predictions", "water_level", "water_temperature")`.
+        datum: Vertical datum for tide predictions (e.g. ``"MLLW"``,
+            ``"NAVD88"``, ``"MSL"``, ``"MHW"``, ``"MHHW"``).  Defaults to
+            ``"MLLW"`` (US chart standard). Pass the bathymetry DEM's native
+            datum when fetching predictions for SWAN WLEVEL input so that
+            BOTTOM and WLEVEL share a vertical datum (ADR-098).  Water-level
+            observations and water temperature are always fetched in MLLW
+            regardless of this parameter (they are observational, not
+            harmonic, and are only used for public display).
 
     Returns:
         dict with:
@@ -613,7 +637,7 @@ def fetch(
         TransientNetworkError: Network/DNS failure or 5xx after retries.
         ProviderProtocolError: Response validation failed, or CO-OPS returned
             a logical error other than the documented no-data condition
-            (e.g. an invalid station id).
+            (e.g. an invalid station id or an unsupported datum).
     """
     result: dict[str, Any] = {
         "station_id": station_id,
@@ -623,7 +647,7 @@ def fetch(
     }
 
     if "predictions" in products:
-        result["predictions"] = _fetch_predictions(station_id)
+        result["predictions"] = _fetch_predictions(station_id, datum=datum)
     if "water_level" in products:
         result["water_levels"] = _fetch_water_level(station_id)
     if "water_temperature" in products:

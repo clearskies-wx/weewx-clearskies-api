@@ -595,7 +595,8 @@ def _write_wlevel_txt(
     """Build WLEVEL.txt content for SWAN READINP WLEV (IDLA=3, FREE format).
 
     One block per wind timestep.  Each block is (myc+1) rows × (mxc+1) columns,
-    all cells set to the same tidal elevation (meters, positive up from MSL).
+    all cells set to the same tidal elevation (meters, positive up from the
+    DEM's native datum (must match BOTTOM)).
     Tides are treated as spatially uniform across the domain — valid for the
     ~30km inner nest where the tidal gradient is negligible compared to the
     forecast uncertainty.
