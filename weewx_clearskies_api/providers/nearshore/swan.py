@@ -1320,14 +1320,21 @@ def _run_all_spots_locked(
                 )
 
     if _dem_datum_source == "fallback-MLLW":
-        logger.warning(
+        logger.error(
             "SWAN: no vertical_datum in bathymetry cache files — "
-            "CO-OPS predictions will use MLLW (datum match unconfirmed). "
-            "This resolves automatically after the first bathymetry download."
+            "cannot confirm datum match. Skipping WLEVEL for this run "
+            "(ADR-098: no silent datum fallbacks). Resolves after "
+            "the next full bathymetry download."
         )
+        _dem_datum_for_tides = ""
 
     tide_predictions: list[dict] | None = None
+    _skip_tide_fetch = not _dem_datum_for_tides
+    if _skip_tide_fetch:
+        logger.info("SWAN: skipping CO-OPS tide fetch — datum unknown (first run)")
     for loc in surf_locations:
+        if _skip_tide_fetch:
+            break
         coops_ids: list[str] = getattr(loc, "coops_station_ids", [])
         if coops_ids:
             try:
@@ -2108,17 +2115,22 @@ def _run_quick_update_locked(
                         exc_info=True,
                     )
 
+    _qu_skip_tide = False
     if _qu_datum_source == "fallback-MLLW":
-        logger.warning(
+        logger.error(
             "SWAN quick update: no vertical_datum in bathymetry cache — "
-            "CO-OPS predictions will use MLLW (datum match unconfirmed)"
+            "cannot confirm datum match. Skipping WLEVEL for this run "
+            "(ADR-098: no silent datum fallbacks)."
         )
+        _qu_skip_tide = True
 
     tide_predictions_for_runner: list[dict] | None = None
     _tide_level: float | None = None
     _tide_time_str: str = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for loc in surf_locations:
+        if _qu_skip_tide:
+            break
         coops_ids: list[str] = getattr(loc, "coops_station_ids", [])
         if not coops_ids:
             continue
