@@ -591,7 +591,6 @@ def _try_opendap_bidirectional(
         from weewx_clearskies_api.services.bathymetry_resolver import (
             find_best_dem,
             fetch_opendap_grid,
-            normalize_to_msl,
         )
     except ImportError:
         return None
@@ -609,10 +608,7 @@ def _try_opendap_bidirectional(
         grid = fetch_opendap_grid(
             dem["filename"], spot_bbox, step_m, dem["elevation_var"]
         )
-        grid["depths"] = normalize_to_msl(
-            grid["depths"], dem["vertical_datum"],
-            lat, lon,
-        )
+        grid["vertical_datum"] = dem["vertical_datum"]
     except Exception:
         logger.warning(
             "OPeNDAP bidirectional profile failed for (%.4f, %.4f); "

@@ -228,8 +228,22 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
             try:
                 grid = json.loads(cache_path.read_text(encoding="utf-8"))
                 if grid.get("depths"):
-                    logger.debug("CUDEM L%d grid loaded from %s", level, cache_path)
-                    return grid
+                    if "vertical_datum" not in grid:
+                        logger.info(
+                            "CUDEM L%d: cached bathymetry lacks vertical_datum"
+                            " — treating as stale, re-downloading (path=%s)",
+                            level,
+                            cache_path,
+                        )
+                        cache_path.unlink(missing_ok=True)
+                    else:
+                        logger.info(
+                            "CUDEM L%d: cached bathymetry datum=%s source=%s",
+                            level,
+                            grid.get("vertical_datum", "UNKNOWN"),
+                            grid.get("source", "unknown"),
+                        )
+                        return grid
             except Exception:
                 logger.warning(
                     "CUDEM L%d grid file %s is corrupt; re-downloading",
@@ -251,6 +265,12 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
 
         op_grid = get_operator_grid(bbox, domain.resolution_m)
         if op_grid is not None:
+            if "vertical_datum" not in op_grid:
+                logger.warning(
+                    "CUDEM L%d: operator bathymetry grid is missing"
+                    " 'vertical_datum' — datum unknown",
+                    level,
+                )
             cache_path.write_text(json.dumps(op_grid), encoding="utf-8")
             logger.info(
                 "CUDEM L%d: using operator-supplied bathymetry (%d x %d)",
@@ -265,27 +285,31 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
         from weewx_clearskies_api.services.bathymetry_resolver import (
             find_best_dem,
             fetch_opendap_grid,
-            normalize_to_msl,
         )
 
         dem = find_best_dem(bbox)
         if dem is not None:
-            grid = fetch_opendap_grid(
-                dem["filename"], bbox, domain.resolution_m, dem["elevation_var"]
-            )
-            grid["depths"] = normalize_to_msl(
-                grid["depths"], dem["vertical_datum"], center_lat, center_lon
-            )
-            grid["source"] = "ncei_regional"
-            cache_path.write_text(json.dumps(grid), encoding="utf-8")
-            logger.info(
-                "CUDEM L%d: using NCEI %s (%.0fm, %s) via OPeNDAP",
-                level,
-                dem["filename"],
-                dem["resolution_m"],
-                dem["vertical_datum"],
-            )
-            return grid
+            if dem.get("vertical_datum") == "UNKNOWN":
+                logger.error(
+                    "Cannot use DEM %s: vertical datum is UNKNOWN."
+                    " Resolve in ncei_regional_dem_index.json.",
+                    dem["filename"],
+                )
+            else:
+                grid = fetch_opendap_grid(
+                    dem["filename"], bbox, domain.resolution_m, dem["elevation_var"]
+                )
+                grid["vertical_datum"] = dem["vertical_datum"]
+                grid["source"] = "ncei_regional"
+                cache_path.write_text(json.dumps(grid), encoding="utf-8")
+                logger.info(
+                    "CUDEM L%d: using NCEI %s (%.0fm, %s) via OPeNDAP",
+                    level,
+                    dem["filename"],
+                    dem["resolution_m"],
+                    dem["vertical_datum"],
+                )
+                return grid
     except Exception:
         logger.warning(
             "CUDEM L%d: NCEI regional DEM failed, trying next source",
@@ -306,6 +330,7 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
             dem_path = _ensure_great_lake_dem(lake)
             if dem_path is not None:
                 grid = fetch_great_lake_grid(dem_path, bbox, domain.resolution_m)
+                grid["vertical_datum"] = "NAVD88"
                 grid["source"] = "usgs_great_lakes"
                 cache_path.write_text(json.dumps(grid), encoding="utf-8")
                 logger.info(
@@ -322,6 +347,7 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
     # Priority 3: CRM fallback (download_swan_depth_grid)
     try:
         grid = download_swan_depth_grid(bbox, domain.resolution_m)
+        grid["vertical_datum"] = "UNKNOWN_CRM"
         grid["source"] = "crm_fallback"
         cache_path.write_text(json.dumps(grid), encoding="utf-8")
         logger.info(
