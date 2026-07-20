@@ -3673,9 +3673,8 @@ async def marine_bathymetry_upload(
     request: Request,
     file: UploadFile = File(...),
     datum: str = Form(...),
-    manual_offset: float | None = Form(None),
 ) -> BathymetryUploadResponse:
-    """Accept an operator-supplied GeoTIFF bathymetry file (T24.1).
+    """Accept an operator-supplied GeoTIFF bathymetry file (T24.1, ADR-098).
 
     Validates the uploaded GeoTIFF using rasterio, saves it to the operator
     bathymetry directory alongside a JSON metadata file that records the
@@ -3685,29 +3684,30 @@ async def marine_bathymetry_upload(
     Accepted formats (v1): GeoTIFF (.tif, .tiff).  NetCDF and ASCII XYZ
     support is planned for a future update.
 
-    Vertical datum options: MSL, MLLW, NAVD88, MHW, MHHW, LAT, EGM2008,
-    Other.  When datum is "Other" a ``manual_offset`` (metres) is required.
-    The datum transform to MSL is applied at SWAN run time (where the bbox
-    centre is known for the VDatum API query), not at upload time.
+    Accepted datums: NAVD88, MLLW, MHW, MHHW, MSL.  These are the datums
+    supported by CO-OPS tidal predictions so the SWAN pipeline can fetch
+    water level data in the same datum as the bathymetry (match-at-source,
+    ADR-098).  If the operator's data is in a different datum (LAT, EGM2008,
+    etc.), they must convert it before uploading using VDatum or QGIS.
+    No local datum conversion is performed at upload or at SWAN run time.
     """
     await require_setup_session(request)
 
     from weewx_clearskies_api import i18n  # noqa: PLC0415
 
     # --- Validate datum input ---
+    # Accepted datums must match CO-OPS-supported values so the SWAN pipeline can
+    # request tide predictions in the same datum (match-at-source, ADR-098).
     datum = datum.strip()
     if datum not in _VALID_UPLOAD_DATUMS:
         raise HTTPException(
             status_code=422,
             detail=(
                 f"datum must be one of: {sorted(_VALID_UPLOAD_DATUMS)}. "
-                f"Got: {datum!r}"
+                f"Got: {datum!r}. "
+                f"If your data uses a different datum (LAT, EGM2008, etc.), "
+                f"convert it to a supported datum before uploading."
             ),
-        )
-    if datum == "Other" and manual_offset is None:
-        raise HTTPException(
-            status_code=422,
-            detail="manual_offset is required when datum is 'Other'",
         )
 
     # --- Validate file extension (v1: GeoTIFF only) ---
@@ -3789,9 +3789,10 @@ async def marine_bathymetry_upload(
         )
 
     # --- Persist datum metadata ---
+    # Key is "vertical_datum" (ADR-098). The SWAN pipeline reads this to determine
+    # which datum to request from CO-OPS (match-at-source strategy).
     meta: dict[str, Any] = {
-        "datum": datum,
-        "manual_offset": manual_offset,
+        "vertical_datum": datum,
         "original_filename": filename,
         "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -3803,6 +3804,13 @@ async def marine_bathymetry_upload(
             _OPERATOR_BATHY_META,
             exc_info=True,
         )
+
+    logger.info(
+        "Operator bathymetry uploaded: datum=%s, resolution=%.1fm, bbox=(%s)",
+        datum,
+        res_m,
+        ", ".join(f"{v:.4f}" for v in [bounds.left, bounds.bottom, bounds.right, bounds.top]),
+    )
 
     # --- Compute per-level coverage from file resolution ---
     levels: list[_BathyUploadLevelCoverage] = []
@@ -3817,10 +3825,9 @@ async def marine_bathymetry_upload(
         )
 
     # --- Build response ---
-    datum_applied_label: str | None = None
-    if datum not in ("MSL", "LMSL"):
-        datum_applied_label = i18n.t("marine.bathymetry.upload.datum_applied")
-
+    # No datum conversion is applied (ADR-098: match-at-source strategy).
+    # datum_applied_label is omitted — the SWAN pipeline fetches CO-OPS predictions
+    # in the operator-specified datum at run time; no local conversion happens here.
     return BathymetryUploadResponse(
         accepted=True,
         status_label=i18n.t("marine.bathymetry.upload.accepted"),
@@ -3828,6 +3835,5 @@ async def marine_bathymetry_upload(
         resolution_m=round(res_m, 2),
         crs=crs_str,
         datum=datum,
-        datum_applied_label=datum_applied_label,
         levels=levels,
     )

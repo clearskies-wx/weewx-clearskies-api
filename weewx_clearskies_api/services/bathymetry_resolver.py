@@ -913,6 +913,25 @@ def fetch_great_lake_grid(
 # ---------------------------------------------------------------------------
 
 _OPERATOR_BATHY_DIR = Path("/etc/weewx-clearskies/operator_bathymetry")
+_OPERATOR_BATHY_META = _OPERATOR_BATHY_DIR / "operator_meta.json"
+
+
+def _load_operator_meta() -> dict[str, Any]:
+    """Load operator bathymetry metadata from operator_meta.json.
+
+    Returns an empty dict if the file does not exist or cannot be parsed.
+    """
+    if not _OPERATOR_BATHY_META.exists():
+        return {}
+    try:
+        return json.loads(_OPERATOR_BATHY_META.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning(
+            "Failed to parse operator bathymetry metadata from %s",
+            _OPERATOR_BATHY_META,
+            exc_info=True,
+        )
+        return {}
 
 
 def get_operator_grid(
@@ -921,19 +940,25 @@ def get_operator_grid(
 ) -> dict[str, Any] | None:
     """Load operator-supplied bathymetry for *bbox* if available.
 
-    The operator uploads a GeoTIFF, NetCDF, or ASCII XYZ file via the admin UI.
-    After upload, the file is validated, datum-corrected, and cached as a
-    GeoTIFF at ``/etc/weewx-clearskies/operator_bathymetry/operator.tif``.
+    The operator uploads a GeoTIFF via the admin UI (POST /setup/marine/
+    bathymetry/upload).  The file is validated and saved to
+    ``/etc/weewx-clearskies/operator_bathymetry/operator.tif`` alongside a
+    JSON metadata file (``operator_meta.json``) that records the vertical datum.
 
     This function is the highest priority in the resolver chain — if operator
     data exists and covers the requested bbox, it is used unconditionally.
+
+    The returned grid dict includes a ``"vertical_datum"`` key so the SWAN
+    pipeline can fetch CO-OPS tide predictions in the matching datum
+    (match-at-source strategy, ADR-098).
 
     Args:
         bbox: ``(lon_min, lat_min, lon_max, lat_max)`` query bbox.
         resolution_m: Target resolution in metres (for coarsening).
 
     Returns:
-        Grid dict on success, ``None`` when no operator file exists or the file
+        Grid dict on success (includes ``"vertical_datum"`` and ``"source":
+        "operator"``), or ``None`` when no operator file exists or the file
         does not cover the requested bbox.
     """
     tif_path = _OPERATOR_BATHY_DIR / "operator.tif"
@@ -948,13 +973,20 @@ def get_operator_grid(
         )
         return None
 
+    # Load the datum from operator_meta.json.
+    # "vertical_datum" is the canonical key (ADR-098 / T5.1).
+    # Fall back to the legacy "datum" key for files written before ADR-098.
+    meta = _load_operator_meta()
+    vertical_datum: str = meta.get("vertical_datum") or meta.get("datum") or "UNKNOWN"
+
     try:
         grid = _read_geotiff_grid(tif_path, bbox, resolution_m)
         if grid is not None:
             grid["source"] = "operator"
+            grid["vertical_datum"] = vertical_datum
             logger.info(
-                "Using operator-supplied bathymetry (%d x %d, %.0fm)",
-                grid["ni"], grid["nj"], resolution_m,
+                "Using operator-supplied bathymetry (%d x %d, %.0fm, datum=%s)",
+                grid["ni"], grid["nj"], resolution_m, vertical_datum,
             )
         return grid
     except Exception:
