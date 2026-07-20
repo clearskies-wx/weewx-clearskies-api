@@ -629,6 +629,32 @@ def _write_wlevel_txt(
     return "\n".join(lines) + "\n"
 
 
+def _write_wlevel_grid_txt(grids: list[list[list[float]]]) -> str:
+    """Build WLEVEL.txt from pre-computed 2D grids (one per timestep).
+
+    Used when setup_profile is provided — each cell receives tide + setup(x, y)
+    instead of a uniform tide value.  Writes in SWAN IDLA=3 convention:
+    south-to-north rows (j=0 = southernmost), west-to-east columns (i=0 = westernmost),
+    one row per file line.
+
+    Args:
+        grids: List of 2D grids indexed grids[timestep][j][i].  j=0 is the
+               southernmost row; i=0 is the westernmost column.  Each value is
+               the total water level at that grid point (m, positive up from datum).
+
+    Returns:
+        String content of WLEVEL.txt ready to write to disk.
+        Returns empty string if the list is empty.
+    """
+    if not grids:
+        return ""
+    lines: list[str] = []
+    for grid in grids:
+        for row in grid:
+            lines.append(" ".join(f"{v:.4f}" for v in row))
+    return "\n".join(lines) + "\n"
+
+
 def _write_current_txt(
     ofs_currents: list[dict],
     wind_times_iso: list[str],
@@ -1161,6 +1187,7 @@ class SWANRunner:
         tide_predictions: list[dict] | None = None,
         ofs_currents: list[dict] | None = None,
         structures: list[dict] | None = None,
+        setup_profiles_by_spot: dict[str, list[dict]] | None = None,
     ) -> dict[str, list["MarineForecastPoint"]]:
         """Execute a 3-level nested SWAN run and return per-spot wave forecasts.
 
@@ -1183,6 +1210,10 @@ class SWANRunner:
             tide_predictions: CO-OPS tidal predictions (optional).
             ofs_currents: OFS surface currents (optional).
             structures: Coastal structures for OBSTACLE (optional).
+            setup_profiles_by_spot: Wave-setup profiles keyed by spot_id, from
+                wave_setup.compute_setup_profile().  When provided, L3 WLEVEL grids
+                contain tide + analytic setup (Stage 2).  None or missing spot →
+                uniform tide fallback (Stage 1, same as previous behaviour).
 
         Returns:
             dict[spot_id, list[MarineForecastPoint]]
@@ -1365,6 +1396,22 @@ class SWANRunner:
                 if sid in self._spot_configs
             } if self._spot_configs else {}
 
+            # T7.2: Determine setup profile and beach bearing for this cluster.
+            # Use the first spot in the cluster as representative.  Setup is
+            # spatially similar across the ~500m cluster footprint.
+            # Note: _spot_configs is already scoped to this cluster's spot_ids above.
+            _cluster_setup_profile: list[dict] | None = None
+            _cluster_bearing: float | None = None
+            if setup_profiles_by_spot and cluster.spot_ids:
+                _rep_spot = cluster.spot_ids[0]
+                _prof = setup_profiles_by_spot.get(_rep_spot)
+                if _prof:
+                    _cluster_setup_profile = _prof
+                    _spot_cfg = (self._spot_configs or {}).get(_rep_spot, {})
+                    _bearing_val = _spot_cfg.get("beach_facing_degrees")
+                    if _bearing_val is not None:
+                        _cluster_bearing = float(_bearing_val)
+
             l3_bathy = bathymetry.get("level3", {}).get(idx, {})
             l3_grid = self._write_input_files(
                 l3_dir, blended_wind, {}, l3_bathy, "inner",
@@ -1373,11 +1420,15 @@ class SWANRunner:
                 structures=structures,
                 override_bbox=l3_bbox,
                 override_resolution_m=cluster.grid.resolution_m,
+                setup_profile=_cluster_setup_profile,
+                beach_bearing=_cluster_bearing,
             )
             logger.info(
-                "SWAN L3[%d]: %d×%d cells at 10 m (%d spots) in %s",
+                "SWAN L3[%d]: %d×%d cells at 10 m (%d spots) in %s"
+                " (WLEVEL: %s)",
                 idx, l3_grid["mxc"], l3_grid["myc"],
                 len(cluster.spot_ids), l3_dir,
+                "tide+setup" if _cluster_setup_profile else "tide-only",
             )
             self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
             if self._check_convergence(l3_dir, f"level3_{idx}"):
@@ -1409,6 +1460,7 @@ class SWANRunner:
         *,
         tide_predictions: list[dict] | None = None,
         structures: list[dict] | None = None,
+        setup_profiles_by_spot: dict[str, list[dict]] | None = None,
     ) -> dict[str, list["MarineForecastPoint"]]:
         """Stationary Level 3 only — quick update using latest Level 2 NESTOUT.
 
@@ -1431,6 +1483,9 @@ class SWANRunner:
                 same format as the full-run path (``{"type": ..., "coordinates":
                 [[lon, lat], ...]}``) or bearing/length/distance entries resolved
                 by the T3.1 fix.  ``None``/empty → no OBSTACLE commands.
+            setup_profiles_by_spot: Wave-setup profiles keyed by spot_id (T7.2).
+                When provided, L3 WLEVEL includes tide + analytic setup per grid cell.
+                ``None`` or missing spot → uniform tide (Stage 1 fallback).
         """
         l2_boundary = workdir / "level2" / self._NESTOUT_FILE
         if not l2_boundary.exists():
@@ -1471,6 +1526,20 @@ class SWANRunner:
                 cluster.grid.lon_min, cluster.grid.lat_min,
                 cluster.grid.lon_max, cluster.grid.lat_max,
             )
+
+            # T7.2: Determine setup profile and beach bearing for this cluster.
+            _stat_setup_profile: list[dict] | None = None
+            _stat_bearing: float | None = None
+            if setup_profiles_by_spot and cluster.spot_ids:
+                _rep_spot = cluster.spot_ids[0]
+                _prof = setup_profiles_by_spot.get(_rep_spot)
+                if _prof:
+                    _stat_setup_profile = _prof
+                    _spot_cfg = (self._spot_configs or {}).get(_rep_spot, {})
+                    _bearing_val = _spot_cfg.get("beach_facing_degrees")
+                    if _bearing_val is not None:
+                        _stat_bearing = float(_bearing_val)
+
             l3_grid = self._write_input_files(
                 l3_dir, wind_field, {}, l3_bathy, "inner",
                 stationary=True,
@@ -1478,11 +1547,14 @@ class SWANRunner:
                 override_resolution_m=cluster.grid.resolution_m,
                 tide_predictions=tide_predictions,  # T3.2: static WLEVEL at compute time
                 structures=structures,               # T3.2: coastal OBSTACLE commands
+                setup_profile=_stat_setup_profile,   # T7.2: analytic setup (Stage 2)
+                beach_bearing=_stat_bearing,          # T7.2: offshore direction
             )
 
             logger.info(
-                "SWAN stationary L3[%d]: %d×%d cells (%d spots)",
+                "SWAN stationary L3[%d]: %d×%d cells (%d spots, WLEVEL: %s)",
                 idx, l3_grid["mxc"], l3_grid["myc"], len(cluster.spot_ids),
+                "tide+setup" if _stat_setup_profile else "tide-only",
             )
             self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
             # T4.2: Do NOT save hotstart — stationary quick update must NOT overwrite
@@ -1522,6 +1594,8 @@ class SWANRunner:
         structures: list[dict] | None = None,
         override_bbox: tuple[float, float, float, float] | None = None,
         override_resolution_m: float | None = None,
+        setup_profile: list[dict] | None = None,
+        beach_bearing: float | None = None,
     ) -> dict[str, Any]:
         """Write SWAN input files for a given grid level and return grid_info.
 
@@ -1550,6 +1624,15 @@ class SWANRunner:
                 When provided, CURRENT.txt is written.  None → no CURRENT.
             structures: Coastal structures for OBSTACLE commands passed to
                 build_swan_input.  None/empty → no OBSTACLE commands.
+            setup_profile: Wave-setup profile from wave_setup.compute_setup_profile()
+                — list of {"distance_m": float, "setup_m": float} ordered shore to
+                offshore.  When provided together with tide_predictions and
+                beach_bearing, each WLEVEL grid cell receives tide + setup(cross-shore
+                distance) instead of a uniform tide value.  None → uniform tide.
+            beach_bearing: Offshore direction in compass degrees (0=N, 90=E, …).
+                Used to compute cross-shore distance for each grid cell when building
+                the spatially-varying WLEVEL grid.  Required when setup_profile is set;
+                ignored otherwise.
 
         Returns:
             grid_info dict with SWAN grid dimensions and valid_times.
@@ -1573,23 +1656,98 @@ class SWANRunner:
         (run_dir / "WIND.txt").write_text(wind_text, encoding="ascii")
 
         # WLEVEL.txt — time-varying water level from CO-OPS tidal predictions (T2.1).
-        # One block per wind timestep: (myc+1) rows × (mxc+1) columns, uniform value
-        # across the domain (tides vary slowly over the ~30km inner nest domain).
+        # Stage 1 (setup_profile absent): uniform tide per timestep — valid for L1/L2
+        # where spatial tide gradients are negligible.
+        # Stage 2 (setup_profile + beach_bearing present): each cell receives
+        # tide + setup(cross-shore distance) — spatially varying WLEVEL for L3.
+        # See SWAN-L3-STABILITY-PLAN §T7.2 and wave_setup.py for physics.
         has_wlevel = False
         if tide_predictions:
-            wlevel_text = _write_wlevel_txt(
-                tide_predictions,
-                wind_dims["valid_times"],
-                wind_dims["mxc"],
-                wind_dims["myc"],
+            use_setup = (
+                setup_profile is not None
+                and beach_bearing is not None
+                and len(setup_profile) > 0
             )
-            if wlevel_text:
-                (run_dir / "WLEVEL.txt").write_text(wlevel_text, encoding="ascii")
-                has_wlevel = True
-                logger.debug(
-                    "SWAN %s: wrote WLEVEL.txt (%d chars) from %d tide predictions",
-                    grid_level, len(wlevel_text), len(tide_predictions),
+
+            if use_setup:
+                # Stage 2: compose tide + analytic setup for each grid point.
+                from weewx_clearskies_api.services.wave_setup import (  # noqa: PLC0415
+                    build_wlevel_with_setup,
                 )
+
+                heights = _interp_tide_to_wind_times(
+                    tide_predictions, wind_dims["valid_times"]
+                )
+                mxc = wind_dims["mxc"]
+                myc = wind_dims["myc"]
+                dlon = wind_dims["dlon"]
+                dlat = wind_dims["dlat"]
+                lat_sw = wind_dims["lat_sw"]
+                mid_lat = lat_sw + dlat * myc / 2.0
+                metres_per_deg_lat = 111_000.0
+                metres_per_deg_lon = 111_000.0 * math.cos(math.radians(mid_lat))
+                wl_grid_dims = {
+                    "mxc": mxc,
+                    "myc": myc,
+                    "dx": dlon * metres_per_deg_lon,
+                    "dy": dlat * metres_per_deg_lat,
+                }
+
+                wlevel_grids: list[list[list[float]]] = [
+                    build_wlevel_with_setup(h, setup_profile, wl_grid_dims, beach_bearing)
+                    for h in heights
+                ]
+                wlevel_text = _write_wlevel_grid_txt(wlevel_grids)
+
+                if wlevel_text:
+                    (run_dir / "WLEVEL.txt").write_text(wlevel_text, encoding="ascii")
+                    has_wlevel = True
+
+                    # Find break-point distance and estimate Hb for logging.
+                    # setup_profile is ordered shore→offshore; scan from offshore
+                    # end to find the last non-zero setup value (= break point).
+                    _dist_break = 0.0
+                    _hb_est = 0.0
+                    _gamma = 0.73
+                    for _p in reversed(setup_profile):
+                        if abs(_p["setup_m"]) > 1e-6:
+                            _dist_break = float(_p["distance_m"])
+                            # setdown at break: eta_b = -(1/16)*gamma^2*d_break
+                            # => d_break = -16*eta_b/gamma^2
+                            _eta_b = float(_p["setup_m"])
+                            _d_break_est = max(0.0, -_eta_b * 16.0 / (_gamma ** 2))
+                            _hb_est = _gamma * _d_break_est
+                            break
+
+                    _eta_shore = float(setup_profile[0]["setup_m"]) if setup_profile else 0.0
+                    # Log once per WLEVEL write (representative first-timestep values)
+                    _tide0 = heights[0] if heights else 0.0
+                    logger.info(
+                        "SWAN L3 WLEVEL: tide=%.2fm + setup=%.3fm"
+                        " (Hb=%.2fm at %.0fm from shore)",
+                        _tide0, _eta_shore, _hb_est, _dist_break,
+                    )
+                    logger.debug(
+                        "SWAN %s: wrote WLEVEL.txt (%d chars, %d timesteps,"
+                        " setup-aware grid %dx%d)",
+                        grid_level, len(wlevel_text), len(heights), mxc, myc,
+                    )
+
+            else:
+                # Stage 1: uniform tide per timestep (L1, L2, and L3 first run)
+                wlevel_text = _write_wlevel_txt(
+                    tide_predictions,
+                    wind_dims["valid_times"],
+                    wind_dims["mxc"],
+                    wind_dims["myc"],
+                )
+                if wlevel_text:
+                    (run_dir / "WLEVEL.txt").write_text(wlevel_text, encoding="ascii")
+                    has_wlevel = True
+                    logger.debug(
+                        "SWAN %s: wrote WLEVEL.txt (%d chars) from %d tide predictions",
+                        grid_level, len(wlevel_text), len(tide_predictions),
+                    )
 
         # CURRENT.txt — time-varying surface currents from OFS (T2.2).
         # One block per timestep: U grid (myc+1)×(mxc+1) then V grid same dims.

@@ -111,6 +111,15 @@ _CUDEM_GRID_PATH_L1 = Path("/etc/weewx-clearskies/swan_bathymetry_L1.json")
 _CUDEM_GRID_PATH_L2 = Path("/etc/weewx-clearskies/swan_bathymetry_L2.json")
 _CUDEM_L3_CACHE_DIR = Path("/etc/weewx-clearskies")
 
+# On-disk SWAN forecast cache — persists the parsed wave forecast across API
+# restarts so the surf endpoint serves data immediately (T8.1, Phase 8).
+_FORECAST_CACHE_PATH = Path("/var/run/weewx-clearskies/swan/forecast_cache.json")
+_FORECAST_CACHE_MAX_AGE_S: float = 12 * 3600  # 12 hours
+
+#: Set to True after the first attempt to load the on-disk forecast cache.
+#: Prevents a redundant disk read on every fetch() call after startup.
+_disk_cache_loaded: bool = False
+
 
 def _load_or_download_cudem_grid(
     bbox: tuple[float, float, float, float],
@@ -499,6 +508,198 @@ def _build_run_marker_key(hrrr_cycle_time: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# On-disk SWAN forecast cache — persist across API restarts (T8.1, Phase 8)
+# ---------------------------------------------------------------------------
+
+
+def _persist_forecast_cache_to_disk(spots_data: dict[str, dict]) -> None:
+    """Write the full SWAN forecast cache to disk atomically.
+
+    Uses write-to-temp + os.replace() so a crash during the write never
+    leaves a corrupt partial file at _FORECAST_CACHE_PATH.
+
+    Called after every successful full SWAN run (spots_cached > 0).
+
+    Args:
+        spots_data: Mapping of spot_id -> forecast payload dict (same
+                    structure as what cache.set() stores for each spot).
+    """
+    if not spots_data:
+        return
+
+    cache_dir = _FORECAST_CACHE_PATH.parent
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.warning(
+            "SWAN: cannot create forecast cache directory %s",
+            cache_dir,
+            exc_info=True,
+        )
+        return
+
+    data = {
+        "saved_at": datetime.now(UTC).isoformat(),
+        "spots": spots_data,
+    }
+
+    tmp_path = _FORECAST_CACHE_PATH.with_suffix(".tmp")
+    try:
+        serialized = json.dumps(data)
+        tmp_path.write_text(serialized, encoding="utf-8")
+        os.replace(tmp_path, _FORECAST_CACHE_PATH)
+        size_mb = len(serialized.encode("utf-8")) / (1024 * 1024)
+        logger.info(
+            "SWAN: forecast cache persisted to disk (%d spots, %.1f MB)",
+            len(spots_data),
+            size_mb,
+        )
+    except Exception:
+        logger.warning(
+            "SWAN: failed to persist forecast cache to disk",
+            exc_info=True,
+        )
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _update_forecast_cache_on_disk(updated_spots: dict[str, dict]) -> None:
+    """Merge spot updates into the on-disk forecast cache atomically.
+
+    Used by the quick update path to update individual spot entries without
+    rewriting the entire cache file from scratch.
+
+    Reads the existing disk file, merges updated_spots, then writes back
+    with the same temp+rename atomic pattern.  If the disk file is missing
+    or corrupt, writes only the updated spots.
+
+    Args:
+        updated_spots: Mapping of spot_id -> updated forecast payload dict.
+    """
+    if not updated_spots:
+        return
+
+    # Read existing disk cache (best-effort — proceed on error with partial data)
+    existing_spots: dict[str, dict] = {}
+    saved_at_str: str | None = None
+    if _FORECAST_CACHE_PATH.exists():
+        try:
+            raw = _FORECAST_CACHE_PATH.read_text(encoding="utf-8")
+            existing_data = json.loads(raw)
+            existing_spots = existing_data.get("spots", {})
+            saved_at_str = existing_data.get("saved_at")
+        except Exception:
+            pass  # Start fresh from only the updated spots
+
+    existing_spots.update(updated_spots)
+
+    cache_dir = _FORECAST_CACHE_PATH.parent
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        logger.warning(
+            "SWAN: cannot create forecast cache directory %s",
+            cache_dir,
+            exc_info=True,
+        )
+        return
+
+    data = {
+        "saved_at": saved_at_str or datetime.now(UTC).isoformat(),
+        "spots": existing_spots,
+    }
+
+    tmp_path = _FORECAST_CACHE_PATH.with_suffix(".tmp")
+    try:
+        serialized = json.dumps(data)
+        tmp_path.write_text(serialized, encoding="utf-8")
+        os.replace(tmp_path, _FORECAST_CACHE_PATH)
+        size_mb = len(serialized.encode("utf-8")) / (1024 * 1024)
+        logger.info(
+            "SWAN: forecast cache persisted to disk (%d spots, %.1f MB)",
+            len(existing_spots),
+            size_mb,
+        )
+    except Exception:
+        logger.warning(
+            "SWAN: failed to update on-disk forecast cache",
+            exc_info=True,
+        )
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _load_forecast_cache_from_disk() -> None:
+    """Load the SWAN forecast cache from disk into the in-memory cache.
+
+    Called once on the first fetch() call after API startup.  Populates the
+    in-memory cache so the surf endpoint serves forecast data immediately
+    after a restart, before the next full SWAN run completes (~40 min).
+
+    Behaviour:
+    - Sets _disk_cache_loaded = True unconditionally (so this only runs once).
+    - Logs WARNING and returns early if the file is missing, corrupt, or older
+      than 12 hours (stale data after a long offline period is worse than
+      showing "no forecast").
+    - On success, logs INFO and calls cache.set() for every cached spot.
+    """
+    global _disk_cache_loaded  # noqa: PLW0603
+    _disk_cache_loaded = True
+
+    if not _FORECAST_CACHE_PATH.exists():
+        logger.warning("SWAN: no usable on-disk forecast cache — starting cold")
+        return
+
+    try:
+        raw = _FORECAST_CACHE_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception:
+        logger.warning(
+            "SWAN: no usable on-disk forecast cache — starting cold",
+            exc_info=True,
+        )
+        return
+
+    saved_at_str: str | None = data.get("saved_at")
+    if not saved_at_str:
+        logger.warning("SWAN: no usable on-disk forecast cache — starting cold")
+        return
+
+    try:
+        saved_at = datetime.fromisoformat(saved_at_str)
+        age_s = (datetime.now(UTC) - saved_at).total_seconds()
+    except (ValueError, TypeError):
+        logger.warning("SWAN: no usable on-disk forecast cache — starting cold")
+        return
+
+    if age_s > _FORECAST_CACHE_MAX_AGE_S:
+        logger.warning(
+            "SWAN: on-disk forecast cache stale (saved %s, >12h) — ignoring",
+            saved_at_str,
+        )
+        return
+
+    spots: dict = data.get("spots", {})
+    if not spots:
+        logger.warning("SWAN: no usable on-disk forecast cache — starting cold")
+        return
+
+    cache = get_cache()
+    for spot_id, payload in spots.items():
+        cache.set(_build_last_good_key(spot_id), payload, _LAST_GOOD_TTL_SECONDS)
+
+    logger.info(
+        "SWAN: restored forecast cache from disk (saved %s, %d spots)",
+        saved_at_str,
+        len(spots),
+    )
+
+
+# ---------------------------------------------------------------------------
 # _SWANRunnerWithCleanup — subclass exposing tmpdir for caller lifecycle
 # ---------------------------------------------------------------------------
 
@@ -792,6 +993,13 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
           ``"data_age_seconds"`` — int, seconds elapsed since the run completed
         Or None if no SWAN data has been cached for this spot yet.
     """
+    # On the first call after startup, attempt to warm the in-memory cache
+    # from the on-disk forecast cache (T8.1).  _disk_cache_loaded is set to
+    # True inside _load_forecast_cache_from_disk() so subsequent calls skip.
+    global _disk_cache_loaded  # noqa: PLW0602 — read only; setter is in loader
+    if not _disk_cache_loaded:
+        _load_forecast_cache_from_disk()
+
     last_good = get_cache().get(_build_last_good_key(spot_id))
     if last_good is None:
         if _remote_url:
@@ -1335,12 +1543,83 @@ def _run_all_spots_locked(
     runner = _SWANRunnerWithCleanup(swan_config)
     run_time = datetime.now(UTC)
 
+    # ------------------------------------------------------------------
+    # T7.2: Compute analytic wave-setup profiles for L3 WLEVEL injection.
+    # Uses the previous run's cached offshore Hs (from the L3 transect data)
+    # to estimate the surf-zone setup via radiation-stress balance.
+    # First run (no previous cache) → zero setup, uniform tide (Stage 1).
+    # ------------------------------------------------------------------
+    setup_profiles_by_spot: dict[str, list[dict]] = {}
+    try:
+        from weewx_clearskies_api.services.wave_setup import (  # noqa: PLC0415
+            compute_setup_profile,
+        )
+
+        for spot_id, cfg in spot_configs_for_runner.items():
+            profile_data = cfg.get("runtime_profile") or {}
+            profile_pts = profile_data.get("profile", [])
+            if not profile_pts:
+                logger.debug(
+                    "SWAN setup T7.2: spot %r has no profile — skipping setup",
+                    spot_id,
+                )
+                continue
+
+            # Get previous run's offshore Hs from the last-good cache.
+            # The transect is ordered offshore→nearshore; [0] = offshore-most point.
+            prev_cache = fetch(spot_id)
+            hs_offshore: float = 0.0
+            tm01: float = 8.0  # default mean period
+            if prev_cache is not None:
+                transect = prev_cache.get("transect", {})
+                if transect:
+                    first_ts_data = next(iter(transect.values()), [])
+                    if first_ts_data:
+                        offshore_pt = first_ts_data[0]
+                        _hs = offshore_pt.get("waveHeight")
+                        if _hs is not None:
+                            hs_offshore = float(_hs)
+
+                # Also look for wavePeriod from forecast for tm01 estimate
+                prev_forecast = prev_cache.get("forecast", [])
+                if prev_forecast:
+                    _tm01 = prev_forecast[0].get("wavePeriod")
+                    if _tm01 is not None:
+                        tm01 = float(_tm01)
+
+            if hs_offshore < 0.1:
+                logger.info(
+                    "SWAN setup T7.2: spot %r — Hs=%.2fm (no previous run or"
+                    " flat conditions); using tide-only WLEVEL",
+                    spot_id, hs_offshore,
+                )
+                continue
+
+            setup_prof = compute_setup_profile(hs_offshore, tm01, profile_pts)
+            if setup_prof:
+                setup_profiles_by_spot[spot_id] = setup_prof
+                logger.info(
+                    "SWAN setup T7.2: spot %r — Hs_offshore=%.2fm, "
+                    "eta_shore=%.3fm (Stage 2 WLEVEL active)",
+                    spot_id, hs_offshore,
+                    setup_prof[0]["setup_m"] if setup_prof else 0.0,
+                )
+
+    except Exception:
+        logger.warning(
+            "SWAN setup T7.2: setup profile computation failed; "
+            "falling back to tide-only WLEVEL for all spots",
+            exc_info=True,
+        )
+        setup_profiles_by_spot = {}
+
     logger.info(
         "SWAN: starting 3-level SWAN run for %d spot(s) "
-        "(HRRR cycle=%s, GFS=%s)",
+        "(HRRR cycle=%s, GFS=%s, setup_spots=%d)",
         len(surf_spots_config),
         hrrr_cycle_time,
         gfs_wind_field.get("cycle_time") if gfs_wind_field else "unavailable",
+        len(setup_profiles_by_spot),
     )
 
     try:
@@ -1353,6 +1632,7 @@ def _run_all_spots_locked(
             tide_predictions=tide_predictions,
             ofs_currents=ofs_currents,
             structures=structures_for_swan,
+            setup_profiles_by_spot=setup_profiles_by_spot or None,
         )
         spectral_results: dict[str, list] = getattr(runner, "_spectral_results", {})
     except SWANRunError as exc:
@@ -1386,6 +1666,7 @@ def _run_all_spots_locked(
         hrrr_cycle_dt = None
 
     spots_cached = 0
+    disk_payloads: dict[str, dict] = {}  # T8.1 — accumulate for disk persistence
     for spot_id, forecast_points in results.items():
         if not forecast_points:
             logger.warning(
@@ -1459,6 +1740,7 @@ def _run_all_spots_locked(
             _LAST_GOOD_TTL_SECONDS,
         )
         spots_cached += 1
+        disk_payloads[spot_id] = payload  # T8.1 — include in disk persistence
 
     # Store the run marker so duplicate runs for this HRRR cycle are skipped.
     # Only store when at least one spot produced valid data — otherwise a
@@ -1469,6 +1751,7 @@ def _run_all_spots_locked(
         global _last_full_run_monotonic  # noqa: PLW0603
         import time as _time
         _last_full_run_monotonic = _time.monotonic()
+        _persist_forecast_cache_to_disk(disk_payloads)  # T8.1 — persist to disk
     else:
         logger.warning(
             "SWAN: SWAN exited cleanly but 0/%d spot(s) produced valid "
@@ -1771,11 +2054,56 @@ def _run_quick_update_locked(
     # already emitted in the except block above.  No coops_station_ids configured or
     # empty prediction list → silent (not a fetch failure, just absent config).
 
+    # ── T7.2: Compute analytic wave-setup profiles for quick update WLEVEL ──
+    # Same logic as the full run: uses cached offshore Hs from the previous run.
+    # On first run (no cache) or flat conditions → zero setup (tide-only).
+    quick_setup_profiles: dict[str, list[dict]] = {}
+    try:
+        from weewx_clearskies_api.services.wave_setup import (  # noqa: PLC0415
+            compute_setup_profile,
+        )
+
+        for spot_id, cfg in spot_configs_for_runner.items():
+            profile_data = cfg.get("runtime_profile") or {}
+            profile_pts = profile_data.get("profile", [])
+            if not profile_pts:
+                continue
+
+            prev_cache = fetch(spot_id)
+            hs_offshore_q: float = 0.0
+            tm01_q: float = 8.0
+            if prev_cache is not None:
+                transect = prev_cache.get("transect", {})
+                if transect:
+                    first_ts = next(iter(transect.values()), [])
+                    if first_ts:
+                        _hs = first_ts[0].get("waveHeight")
+                        if _hs is not None:
+                            hs_offshore_q = float(_hs)
+                prev_fc = prev_cache.get("forecast", [])
+                if prev_fc:
+                    _tm01 = prev_fc[0].get("wavePeriod")
+                    if _tm01 is not None:
+                        tm01_q = float(_tm01)
+
+            if hs_offshore_q >= 0.1:
+                setup_prof_q = compute_setup_profile(hs_offshore_q, tm01_q, profile_pts)
+                if setup_prof_q:
+                    quick_setup_profiles[spot_id] = setup_prof_q
+
+    except Exception:
+        logger.warning(
+            "SWAN quick update T7.2: setup profile failed; using tide-only WLEVEL",
+            exc_info=True,
+        )
+        quick_setup_profiles = {}
+
     try:
         results = runner.run_stationary_level3(
             swan_work, hrrr_wind_field, domains, bathymetry,
             tide_predictions=tide_predictions_for_runner,
             structures=structures_for_runner,
+            setup_profiles_by_spot=quick_setup_profiles or None,
         )
     except SWANRunError as exc:
         logger.warning(
@@ -1791,6 +2119,7 @@ def _run_quick_update_locked(
     run_time_iso = run_time.strftime("%Y-%m-%dT%H:%M:%SZ")
     cache = get_cache()
     spots_updated = 0
+    updated_spot_data: dict[str, dict] = {}  # T8.1 — accumulate for disk persistence
 
     for spot_id, forecast_points in results.items():
         if not forecast_points:
@@ -1832,6 +2161,12 @@ def _run_quick_update_locked(
         last_good["run_time"] = run_time_iso
         cache.set(_build_last_good_key(spot_id), last_good, _LAST_GOOD_TTL_SECONDS)
         spots_updated += 1
+        updated_spot_data[spot_id] = last_good  # T8.1 — include in disk persistence
+
+    # T8.1 — persist quick update results to the on-disk cache so a restart
+    # after a quick update still serves the most recent snapshot.
+    if updated_spot_data:
+        _update_forecast_cache_on_disk(updated_spot_data)
 
     elapsed_s = int((datetime.now(UTC) - run_time).total_seconds())
     logger.info(
