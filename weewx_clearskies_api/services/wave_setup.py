@@ -235,8 +235,6 @@ def build_wlevel_with_setup(
             every cell receives ``tide_value`` with no setup added.
         grid_dims: Mapping with keys:
 
-            * ``x_sw`` — UTM easting of SW corner (m).
-            * ``y_sw`` — UTM northing of SW corner (m).
             * ``mxc`` — mesh count in x (number of cells; columns = mxc+1).
             * ``myc`` — mesh count in y (number of cells; rows    = myc+1).
             * ``dx``  — mesh size in x direction (m).
