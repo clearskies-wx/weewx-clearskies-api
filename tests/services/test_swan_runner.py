@@ -818,3 +818,76 @@ class TestBuildSwanInputPerLevelPhysics:
         for line in content.splitlines():
             if line.strip().startswith("TABLE") and "HSIGN" in line:
                 assert "SETUP" not in line, f"TABLE line still contains SETUP: {line}"
+
+
+class TestBuildSwanInputWlevel:
+    """Verify WLEVEL INPGRID/READINP syntax matches swan-commands-extract.md.
+
+    The INPGRID WLEVEL command must use the exact syntax documented in
+    docs/reference/swan-commands-extract.md. These tests verify the generated
+    INPUT contains syntactically correct WLEVEL commands for both nonstationary
+    (full run) and stationary (quick update) modes.
+    """
+
+    def _call(self, stationary: bool = False) -> str:
+        dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M)
+        return build_swan_input(
+            dims=dims,
+            valid_times=["2024-01-01T00:00:00Z", "2024-01-01T06:00:00Z"],
+            spots={"spot_a": (-118.10, 33.60)},
+            grid_level="inner",
+            stationary=stationary,
+            has_wlevel=True,
+        )
+
+    def test_nonstat_wlevel_inpgrid_present(self) -> None:
+        content = self._call(stationary=False)
+        assert "INPGRID WLEVEL REG" in content
+
+    def test_nonstat_wlevel_has_nonstat_keyword(self) -> None:
+        content = self._call(stationary=False)
+        for line in content.splitlines():
+            if "INPGRID WLEVEL" in line:
+                assert "NONSTAT" in line, f"Nonstationary WLEVEL missing NONSTAT: {line}"
+                break
+        else:
+            raise AssertionError("No INPGRID WLEVEL line found")
+
+    def test_stat_wlevel_no_nonstat_keyword(self) -> None:
+        content = self._call(stationary=True)
+        for line in content.splitlines():
+            if "INPGRID WLEVEL" in line:
+                assert "NONSTAT" not in line, f"Stationary WLEVEL has NONSTAT: {line}"
+                break
+        else:
+            raise AssertionError("No INPGRID WLEVEL line found")
+
+    def test_readinp_wlev_present(self) -> None:
+        content = self._call(stationary=False)
+        assert "READINP WLEV" in content
+
+    def test_readinp_wlev_syntax(self) -> None:
+        """Verify READINP WLEV matches the proven pattern from swan-commands-extract.md."""
+        content = self._call(stationary=False)
+        for line in content.splitlines():
+            if "READINP WLEV" in line:
+                assert "1." in line, f"READINP WLEV missing fac=1.: {line}"
+                assert "'WLEVEL.txt'" in line, f"READINP WLEV wrong filename: {line}"
+                assert "3" in line, f"READINP WLEV missing idla=3: {line}"
+                assert "FREE" in line, f"READINP WLEV missing FREE: {line}"
+                break
+        else:
+            raise AssertionError("No READINP WLEV line found")
+
+    def test_no_wlevel_when_flag_false(self) -> None:
+        dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M)
+        content = build_swan_input(
+            dims=dims,
+            valid_times=["2024-01-01T00:00:00Z"],
+            spots={"spot_a": (-118.10, 33.60)},
+            grid_level="inner",
+            stationary=False,
+            has_wlevel=False,
+        )
+        assert "INPGRID WLEVEL" not in content
+        assert "READINP WLEV" not in content
