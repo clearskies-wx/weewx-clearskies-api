@@ -2089,19 +2089,18 @@ class SWANRunner:
             # TODO: degradation ladder when convergence_retry=True (SWAN-L3-STABILITY-PLAN Phase 4 future)
             return False
 
+        _frac_pct = (valid_fraction * 100.0) if valid_fraction is not None else 0.0
+        SWAN_LAST_RUN_VALID_FRACTION.labels(level=grid_level).set(_frac_pct)
+
         if not fraction_ok:
             logger.error(
                 "SWAN convergence FAILED level=%s: check=low_valid_fraction, "
                 "details=valid_fraction=%.1f%%",
-                grid_level,
-                (valid_fraction * 100.0) if valid_fraction is not None else 0.0,
+                grid_level, _frac_pct,
             )
             SWAN_CONVERGENCE_FAILURES_TOTAL.labels(level=grid_level, check="low_valid_fraction").inc()
             # TODO: degradation ladder when convergence_retry=True (SWAN-L3-STABILITY-PLAN Phase 4 future)
             return False
-
-        _frac_pct = (valid_fraction * 100.0) if valid_fraction is not None else 100.0
-        SWAN_LAST_RUN_VALID_FRACTION.labels(level=grid_level).set(_frac_pct)
         logger.info(
             "SWAN convergence OK level=%s: accuracy=%.1f%%, valid_fraction=%.1f%%, nan_count=0",
             grid_level,

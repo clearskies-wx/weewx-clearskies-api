@@ -771,12 +771,14 @@ class TestBuildSwanInputPerLevelPhysics:
 
     def _call(self, grid_level: str, stationary: bool = False) -> str:
         dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M)
+        inner_dims = _compute_swan_grid_dims(_DOMAIN_BBOX, _RESOLUTION_M) if grid_level == "outer" else None
         return build_swan_input(
             dims=dims,
             valid_times=["2024-01-01T00:00:00Z"],
             spots={"spot_a": (-118.10, 33.60)},
             grid_level=grid_level,
             stationary=stationary,
+            inner_dims=inner_dims,
         )
 
     def test_outer_has_no_setup(self) -> None:
