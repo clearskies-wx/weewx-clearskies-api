@@ -56,6 +56,52 @@ DATUM_PATTERNS: list[tuple[str, str]] = [
     ("_mllw_", "MLLW"),
 ]
 
+# Fallback lookup for DEMs whose .das metadata doesn't expose a vertical datum.
+# Determined by querying NCEI XML metadata endpoints (EPSG:5866 = MLLW) and
+# NCEI island DEM program conventions (MSL for non-US islands).
+# ADR-098: all DEMs must have a known datum for match-at-source to work.
+DATUM_FALLBACK: dict[str, str] = {
+    # US coast tsunami-inundation DEMs (MLLW, EPSG:5866) — verified via
+    # https://www.ncei.noaa.gov/metadata/geoportal/rest/metadata/item/
+    # gov.noaa.ngdc.mgg.dem:{id}/xml
+    "bar_harbor_N036_2018.nc": "MLLW",
+    "barataria_bay_G200_2018.nc": "MLLW",
+    "biscayne_bay_S200_2018.nc": "MLLW",
+    "casco_bay_N100_2018.nc": "MLLW",
+    "charleston_harbor_S080_2017.nc": "MLLW",
+    "charlotte_harbor_G050_2018.nc": "MLLW",
+    "choctawhatchee_bay_G120_2018.nc": "MLLW",
+    "corpus_christi_bay_G310_2018.nc": "MLLW",
+    "galveston_bay_G260_2018.nc": "MLLW",
+    "indian_river_S190_2018.nc": "MLLW",
+    "monterey_bay_P080_2018.nc": "MLLW",
+    "ossabaw_sound_S130_2018.nc": "MLLW",
+    "pensacola_bay_G130_2018.nc": "MLLW",
+    "perdido_bay_G140_2018.nc": "MLLW",
+    "san_diego_bay_P020_2017.nc": "MLLW",
+    "san_pedro_bay_P050_2018.nc": "MLLW",
+    "santa_monica_bay_P060_2018.nc": "MLLW",
+    "sarasota_bay_G060_2017.nc": "MLLW",
+    "southern_florida_F010_2018.nc": "MLLW",
+    "tampa_bay_G070_2017.nc": "MLLW",
+    "tomales_bay_P110_2018.nc": "MLLW",
+    # Island DEMs (MSL) — NCEI island DEM convention for non-US territories
+    "easter_island_3_isl_2016.nc": "MSL",
+    "galapagos_1_isl_2016.nc": "MSL",
+    "galapagos_3_isl_2016.nc": "MSL",
+    "grenada_1_isl_2017.nc": "MSL",
+    "lesser_antilles_3_isl_2018.nc": "MSL",
+    "marquesas_islands_3_isl_2017.nc": "MSL",
+    "niue_3_isl_2016.nc": "MSL",
+    "rarotonga_1_isl_2016.nc": "MSL",
+    "society_islands_3_isl_2016.nc": "MSL",
+    "society_islands_leeward_1_isl_2016.nc": "MSL",
+    "society_islands_windward_1_isl_2016.nc": "MSL",
+    # Special cases
+    "mariana_trench_6_msl_2012.nc": "MSL",
+    "san_juan_19_prvd02_2015.nc": "PRVD02",
+}
+
 
 def _parse_resolution_from_filename(filename: str) -> float | None:
     lower = filename.lower()
@@ -207,7 +253,7 @@ async def _fetch_das(
             vertical_datum = vert_crs
 
     if vertical_datum is None:
-        vertical_datum = "UNKNOWN"
+        vertical_datum = DATUM_FALLBACK.get(filename, "UNKNOWN")
 
     return {
         "filename": filename,

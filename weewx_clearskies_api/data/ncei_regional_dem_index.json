@@ -165,7 +165,7 @@
       "lon_max": -67.74995370092049,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -176,7 +176,7 @@
       "lon_max": -89.75995370370369,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -231,7 +231,7 @@
       "lon_max": -80.120787101115,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -264,7 +264,7 @@
       "lon_max": -69.8374537037037,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -341,7 +341,7 @@
       "lon_max": -79.72995371378501,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -352,7 +352,7 @@
       "lon_max": -81.99981484079827,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -407,7 +407,7 @@
       "lon_max": -86.06995443375,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -528,7 +528,7 @@
       "lon_max": -97.049953721905,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -616,7 +616,7 @@
       "lon_max": -107.499583348135,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -715,7 +715,7 @@
       "lon_max": -87.20013884792999,
       "resolution_arcsec": 1.0,
       "resolution_m_approx": 30.9,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -726,7 +726,7 @@
       "lon_max": -83.809583370815,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -748,7 +748,7 @@
       "lon_max": -94.25000002099999,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -781,7 +781,7 @@
       "lon_max": -61.00013887849,
       "resolution_arcsec": 1.0,
       "resolution_m_approx": 30.9,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -847,7 +847,7 @@
       "lon_max": -80.57995371210501,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1034,7 +1034,7 @@
       "lon_max": -58.00000000024,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1045,7 +1045,7 @@
       "lon_max": 149.99916668866496,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1056,7 +1056,7 @@
       "lon_max": -136.89958354935,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1177,7 +1177,7 @@
       "lon_max": -121.779953721625,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1287,7 +1287,7 @@
       "lon_max": -169.19958334793498,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "z"
     },
     {
@@ -1364,7 +1364,7 @@
       "lon_max": -80.99523149141503,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1463,7 +1463,7 @@
       "lon_max": -86.86995372554499,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1474,7 +1474,7 @@
       "lon_max": -87.33995371488068,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1694,7 +1694,7 @@
       "lon_max": -159.07999998928,
       "resolution_arcsec": 1.0,
       "resolution_m_approx": 30.9,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1727,7 +1727,7 @@
       "lon_max": -117.096435206,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1760,7 +1760,7 @@
       "lon_max": -65.909986616,
       "resolution_arcsec": 0.1111,
       "resolution_m_approx": 3.4,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "PRVD02",
       "elevation_var": "Band1"
     },
     {
@@ -1771,7 +1771,7 @@
       "lon_max": -118.06995370373302,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1826,7 +1826,7 @@
       "lon_max": -118.37995370372568,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1837,7 +1837,7 @@
       "lon_max": -82.4346759532,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -1903,7 +1903,7 @@
       "lon_max": -147.449583355735,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1914,7 +1914,7 @@
       "lon_max": -150.75013887928998,
       "resolution_arcsec": 1.0,
       "resolution_m_approx": 30.9,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1925,7 +1925,7 @@
       "lon_max": -148.85013887889,
       "resolution_arcsec": 1.0,
       "resolution_m_approx": 30.9,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MSL",
       "elevation_var": "Band1"
     },
     {
@@ -1980,7 +1980,7 @@
       "lon_max": -80.009953770885,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "z"
     },
     {
@@ -2046,7 +2046,7 @@
       "lon_max": -82.3833796584,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
@@ -2068,7 +2068,7 @@
       "lon_max": -122.820601865,
       "resolution_arcsec": 3.0,
       "resolution_m_approx": 92.6,
-      "vertical_datum": "UNKNOWN",
+      "vertical_datum": "MLLW",
       "elevation_var": "Band1"
     },
     {
