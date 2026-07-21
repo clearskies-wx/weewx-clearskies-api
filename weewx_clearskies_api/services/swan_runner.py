@@ -23,6 +23,7 @@ References:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
@@ -48,6 +49,66 @@ from weewx_clearskies_api.services.swan_formats import (
     hrrr_to_swan_wind,
     ww3_to_swan_boundary,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_15m_point(
+    spot_lon: float,
+    spot_lat: float,
+    beach_facing_degrees: float,
+    bathymetric_profile: Any = None,
+    fallback_km: float = 2.5,
+) -> tuple[float, float]:
+    """Return the (lon, lat) of the ~15 m depth reference point offshore.
+
+    Used by T3.3 to locate the deep-water reference SPECOUT point for each
+    surf spot.  Checks the cached bathymetric profile first; falls back to
+    projecting ``fallback_km`` offshore along ``beach_facing_degrees``.
+
+    Args:
+        spot_lon: Representative longitude of the surf spot.
+        spot_lat: Representative latitude of the surf spot.
+        beach_facing_degrees: Compass bearing (0=N, 90=E) from shore toward
+            the open ocean.
+        bathymetric_profile: Optional profile data.  Accepted shapes:
+            - list of dicts with ``distance_m`` and ``depth_m`` keys (the
+              standard CUDEM profile format stored in _spot_configs).
+            - dict with a ``"profile"`` key whose value is the list above.
+        fallback_km: Distance to project offshore when no profile is available
+            or the profile does not reach 15 m depth (default 2.5 km).
+
+    Returns:
+        (lon, lat) of the ~15 m depth point.
+    """
+    bearing_rad = math.radians(beach_facing_degrees)
+    km_per_deg_lat = 111.0
+    km_per_deg_lon = 111.0 * math.cos(math.radians(spot_lat))
+
+    # Resolve profile data to a list of {distance_m, depth_m} dicts.
+    profile_data: list[dict] | None = None
+    if isinstance(bathymetric_profile, dict):
+        profile_data = bathymetric_profile.get("profile")
+    elif isinstance(bathymetric_profile, list):
+        profile_data = bathymetric_profile
+
+    if profile_data:
+        for point in sorted(profile_data, key=lambda p: float(p.get("distance_m", 0))):
+            if float(point.get("depth_m", 0)) >= 15.0:
+                dist_km = float(point["distance_m"]) / 1000.0
+                return (
+                    spot_lon + dist_km * math.sin(bearing_rad) / km_per_deg_lon,
+                    spot_lat + dist_km * math.cos(bearing_rad) / km_per_deg_lat,
+                )
+
+    # Fallback: 2.5 km offshore along beach_facing_degrees
+    return (
+        spot_lon + fallback_km * math.sin(bearing_rad) / km_per_deg_lon,
+        spot_lat + fallback_km * math.cos(bearing_rad) / km_per_deg_lat,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1347,6 +1408,65 @@ class SWANRunner:
             final_lines.append(line)
         input_path.write_text("\n".join(final_lines) + "\n", encoding="ascii")
 
+        # T3.3 — Insert deep-water reference SPECOUT (DWR) commands for each
+        # surf spot into the L2 INPUT file.  Each SPECOUT is placed at the
+        # ~15 m depth point along the spot's beach_facing_degrees bearing.
+        # Parse COMPUTE line for OUTPUT timing (nonstationary runs only).
+        if self._surf_spots:
+            from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
+            l2_input_text = input_path.read_text(encoding="ascii")
+            _dwr_tbeg: str | None = None
+            _dwr_is_nonstat = False
+            for _line in l2_input_text.splitlines():
+                stripped = _line.strip()
+                if stripped.startswith("COMPUTE NONSTATIONARY"):
+                    _parts = stripped.split()
+                    if len(_parts) >= 3:
+                        _dwr_tbeg = _parts[2]
+                    _dwr_is_nonstat = True
+                    break
+            _output_dt_min = int(self._output_interval_hr * 60)
+            _l2_utm_zone = l2_grid.get("_utm_zone")
+
+            _dwr_lines: list[str] = []
+            for _n, (_sid, (_slon, _slat)) in enumerate(
+                self._surf_spots.items(), start=1
+            ):
+                _dwr_name = f"DWR{_n}"  # max 8 chars; supports up to DWR9999
+                _spec_file = f"SPEC_DWR_{_n}.txt"
+                _cfg = (self._spot_configs or {}).get(_sid, {})
+                _bfacing = float(_cfg.get("beach_facing_degrees", 270.0))
+                _profile = _cfg.get("bathymetric_profile") or _cfg.get("runtime_profile")
+                _p_lon, _p_lat = _compute_15m_point(
+                    _slon, _slat, _bfacing, _profile
+                )
+                _sx, _sy = lonlat_to_utm(_p_lon, _p_lat, _l2_utm_zone)
+                _dwr_lines.append(f"POINTS '{_dwr_name}' {_sx:.2f} {_sy:.2f}")
+                _specout = f"SPECOUT '{_dwr_name}' SPEC2D ABS '{_spec_file}'"
+                if _dwr_is_nonstat and _dwr_tbeg:
+                    _specout += f" OUTPUT {_dwr_tbeg} {_output_dt_min} MIN"
+                _dwr_lines.append(_specout)
+                _dwr_lines.append("")
+
+            _dwr_block = "\n".join(_dwr_lines)
+            # Insert before the first COMPUTE line (must follow NESTOUT)
+            _patched = re.sub(
+                r"(\nCOMPUTE\b)",
+                "\n" + _dwr_block + r"\1",
+                l2_input_text,
+                count=1,
+            )
+            if _patched != l2_input_text:
+                input_path.write_text(_patched, encoding="ascii")
+                logger.debug(
+                    "SWAN L2: inserted %d DWR SPECOUT command(s) before COMPUTE",
+                    len(self._surf_spots),
+                )
+            else:
+                logger.warning(
+                    "SWAN L2: DWR SPECOUT insertion failed — COMPUTE line not found in INPUT"
+                )
+
         logger.info(
             "SWAN L2: %d×%d cells at 100 m in %s (NESTOUT→L3, BOUNDNEST1←L1)",
             l2_grid["mxc"], l2_grid["myc"], l2_dir,
@@ -1356,6 +1476,47 @@ class SWANRunner:
             # Failed workdir preserved untouched; API continues to serve last-good run.
             return {}
         self._save_hotstart(l2_dir, "level2")
+
+        # T3.3 — Parse L2 DWR SPECOUT files and populate self._spectral_results
+        # as the baseline for all spots.  L3 runs will override per-cluster spots
+        # with L3 handoff SPECOUT data; spots that skip L3 keep the DWR entry.
+        if self._surf_spots:
+            from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
+                parse_and_decompose,
+                parse_specout_file,
+            )
+            for _n, _sid in enumerate(self._surf_spots.keys(), start=1):
+                _dwr_path = l2_dir / f"SPEC_DWR_{_n}.txt"
+                if _dwr_path.exists():
+                    _dwr_text = _dwr_path.read_text(encoding="utf-8", errors="replace")
+                    _raw_spectra = parse_specout_file(_dwr_text)
+                    _decomposed = parse_and_decompose(_dwr_path)
+                    _decomp_by_t = {
+                        e.get("time", ""): e.get("components", [])
+                        for e in _decomposed
+                    }
+                    _entries: list[dict] = [
+                        {
+                            "time": _sp.get("time", ""),
+                            "freqs_hz": _sp.get("freqs_hz", []),
+                            "dirs_deg": _sp.get("dirs_deg", []),
+                            "energy": _sp.get("energy", []),
+                            "components": _decomp_by_t.get(_sp.get("time", ""), []),
+                        }
+                        for _sp in _raw_spectra
+                    ]
+                    if _entries:
+                        self._spectral_results[_sid] = _entries
+                        logger.debug(
+                            "SWAN DWR SPECOUT: spot %r → %d timestep(s) from L2",
+                            _sid, len(_entries),
+                        )
+                else:
+                    logger.debug(
+                        "SWAN DWR SPECOUT: %s not found for spot %r",
+                        _dwr_path.name, _sid,
+                    )
+
         logger.info("SWAN Level 2 complete")
 
         # --- Level 3: Surf zone grids (10 m) — per cluster ---
@@ -1365,12 +1526,74 @@ class SWANRunner:
             if cluster.grid is None:
                 continue
 
+            # T3.1 — Skip L3 for this cluster when all spots have l3_enabled="off",
+            # or all spots have l3_enabled="auto" and no structures are present.
+            # "on" beats everything; "auto"+structures → run L3; anything else → skip.
+            _spot_cfgs_full = self._spot_configs or {}
+            _l3_flags = [
+                _spot_cfgs_full.get(sid, {}).get("l3_enabled", "auto")
+                for sid in cluster.spot_ids
+            ]
+            _l3_any_on = any(f == "on" for f in _l3_flags)
+            _l3_all_off = all(f == "off" for f in _l3_flags)
+            _has_structures = bool(structures)
+            _l3_run_cluster = _l3_any_on or (not _l3_all_off and _has_structures)
+            if not _l3_run_cluster:
+                logger.info(
+                    "SWAN L3[%d]: skipping cluster %s "
+                    "(l3_enabled=off or auto with no structures; DWR serves as handoff)",
+                    idx, cluster.spot_ids,
+                )
+                continue
+
+            # T3.2 — Smart-size the L3 bbox from structure positions + shadow zone
+            # when structures with coordinate data are present.  Overrides the
+            # pin-cluster bbox produced by compute_domains() at setup time.
+            if structures and cluster.grid is not None:
+                from weewx_clearskies_api.services.swan_domain import smart_size_l3_grid  # noqa: PLC0415
+                _rep_spot_id = cluster.spot_ids[0] if cluster.spot_ids else None
+                _sizing_bearing = float(
+                    _spot_cfgs_full.get(_rep_spot_id, {}).get("beach_facing_degrees", 270.0)
+                    if _rep_spot_id else 270.0
+                )
+                _smart_grid = smart_size_l3_grid(
+                    cluster, _sizing_bearing, structures,
+                    resolution_m=cluster.grid.resolution_m,
+                )
+                if _smart_grid is not None:
+                    cluster.grid = _smart_grid
+                    logger.debug(
+                        "SWAN L3[%d]: structure-based smart sizing applied for cluster %s",
+                        idx, cluster.spot_ids,
+                    )
+
             l3_dir = workdir / f"level3_{idx}"
             l3_dir.mkdir(exist_ok=True)
             l3_bbox = (
                 cluster.grid.lon_min, cluster.grid.lat_min,
                 cluster.grid.lon_max, cluster.grid.lat_max,
             )
+
+            # T3.4 — Hotstart invalidation on L3 grid resize.
+            # Compare the current bbox hash against the stored hash from the
+            # previous run.  On mismatch, delete the stale hotstart so SWAN
+            # starts cold (no risk of hotstart/grid dimension mismatch crash).
+            _bbox_key = (
+                f"{l3_bbox[0]:.6f},{l3_bbox[1]:.6f},"
+                f"{l3_bbox[2]:.6f},{l3_bbox[3]:.6f}"
+            )
+            _bbox_hash = hashlib.md5(_bbox_key.encode()).hexdigest()[:8]
+            _bbox_hash_file = workdir / f"level3_{idx}_bbox_hash.txt"
+            if _bbox_hash_file.exists():
+                _stored_hash = _bbox_hash_file.read_text(encoding="ascii").strip()
+                if _stored_hash != _bbox_hash:
+                    _hs_to_delete = workdir / f"level3_{idx}_{self._HOTSTART_FILE}"
+                    if _hs_to_delete.exists():
+                        _hs_to_delete.unlink()
+                    logger.info(
+                        "L3 grid resized for cluster %d — cold start required, hotstart invalidated",
+                        idx,
+                    )
 
             # Copy L2 NESTOUT output → L3 BOUNDNEST1 input (different filenames).
             l2_nest = l2_dir / self._NESTOUT_FILE
@@ -1434,6 +1657,9 @@ class SWANRunner:
             self._spawn_swan_with_hotstart_retry(l3_dir, f"level3_{idx}")
             if self._check_convergence(l3_dir, f"level3_{idx}"):
                 self._save_hotstart(l3_dir, f"level3_{idx}")
+                # T3.4 — Persist bbox hash after successful L3 run so the next
+                # cycle can detect grid resizes and invalidate the hotstart.
+                _bbox_hash_file.write_text(_bbox_hash, encoding="ascii")
                 cluster_results = self._parse_output(l3_dir, l3_grid)
                 all_results.update(cluster_results)
                 logger.info("SWAN Level 3 cluster %d complete", idx)
@@ -2294,21 +2520,52 @@ class SWANRunner:
         Raises:
             SWANRunError: No TABLE output found (SWAN may have aborted early).
         """
-        from weewx_clearskies_api.services.swan_spectral import parse_and_decompose  # noqa: PLC0415
+        from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
+            parse_and_decompose,
+            parse_specout_file,
+        )
 
         transect_spot_order: list[str] = grid_info.get("transect_spot_order") or []
         transect_points_map: dict[str, list[dict]] = grid_info.get("transect_points") or {}
 
         # ---- SPECOUT spectral decomposition (T3.3) ----
-        self._spectral_results = {}
+        # NOTE: Do NOT reset self._spectral_results here.  run_3level() populates
+        # it with L2 DWR baseline entries after the L2 run; each L3 cluster call
+        # to _parse_output() then overrides per-spot entries with L3 handoff data.
+        # Resetting here would erase the DWR baseline for already-processed spots
+        # and, for multi-cluster runs, erase previous clusters' results.
         for n, spot_id in enumerate(transect_spot_order, start=1):
             spec_path = tmpdir / f"SPEC_{n}.txt"
             if spec_path.exists():
-                spectra = parse_and_decompose(spec_path)
-                self._spectral_results[spot_id] = spectra
+                # Decomposed components (for swell display / multiSwell)
+                decomposed = parse_and_decompose(spec_path)
+                # Raw 2-D spectrum (freqs_hz/dirs_deg/energy) for 1D pipeline
+                raw_spec_text = spec_path.read_text(encoding="utf-8", errors="replace")
+                raw_spectra = parse_specout_file(raw_spec_text)
+                raw_by_time = {r.get("time", ""): r for r in raw_spectra}
+                # Merge raw fields into each decomposed entry so callers see a
+                # single unified dict per timestep (surf.py T3.3 comment).
+                merged_entries: list[dict] = [
+                    {
+                        "time": entry.get("time", ""),
+                        "components": entry.get("components", []),
+                        "freqs_hz": raw_by_time.get(entry.get("time", ""), {}).get(
+                            "freqs_hz", []
+                        ),
+                        "dirs_deg": raw_by_time.get(entry.get("time", ""), {}).get(
+                            "dirs_deg", []
+                        ),
+                        "energy": raw_by_time.get(entry.get("time", ""), {}).get(
+                            "energy", []
+                        ),
+                    }
+                    for entry in decomposed
+                ]
+                # Override DWR baseline with L3 handoff data for this spot
+                self._spectral_results[spot_id] = merged_entries
                 logger.debug(
-                    "SWAN SPECOUT: spot %r → %d timestep(s) decomposed",
-                    spot_id, len(spectra),
+                    "SWAN SPECOUT: spot %r → %d timestep(s) (L3 handoff, raw+decomposed merged)",
+                    spot_id, len(merged_entries),
                 )
             else:
                 logger.debug("SWAN SPECOUT: %s not found (spot %r)", spec_path.name, spot_id)
