@@ -80,6 +80,7 @@ _VALID_STRUCTURE_TYPES: frozenset[str] = frozenset(
 _VALID_STRUCTURE_MATERIALS: frozenset[str] = frozenset(
     {"impermeable", "semi_permeable", "permeable"}
 )
+_VALID_L3_ENABLED: frozenset[str] = frozenset({"auto", "on", "off"})
 _COMPASS_DIRECTIONS: tuple[str, ...] = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 
 
@@ -413,6 +414,13 @@ class SurfSpotConfig:
     #: ``"face"`` (default) — trough-to-crest face height (Western scale).
     #: ``"hawaiian"`` — back-of-wave scale (= face × 0.5).
     surf_height_display: str
+    # T3.1 — L3 optional per location (SURF-1D-IMPLEMENTATION-PLAN Phase 3).
+    #: Controls whether a surf zone (10 m) Level 3 SWAN grid runs for this spot.
+    #: ``"auto"`` (default) — L3 enabled automatically when Overpass structure
+    #:   discovery finds structures; skipped otherwise.
+    #: ``"on"`` — force L3 on regardless of structures.
+    #: ``"off"`` — force L3 off (L2 DWR SPECOUT used as handoff boundary).
+    l3_enabled: str
 
     # Computed (derived at load time, NOT stored in api.conf)
     _beach_facing_degrees: float
@@ -465,6 +473,8 @@ class SurfSpotConfig:
 
         raw_structures = _as_dict(section.get("structures", {}))
         self.structures = [StructureConfig(_as_dict(v)) for v in raw_structures.values()]
+        # T3.1 — L3 optional per location
+        self.l3_enabled = str(section.get("l3_enabled", "auto")).strip().lower()
         # Note: if api.conf still has a [[[[bathymetric_profile]]]] subsection,
         # ConfigObj loads it into the section dict but we intentionally do not
         # read it here — runtime CUDEM profiles are cached at
@@ -554,6 +564,11 @@ class SurfSpotConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf] surf_height_display "
                 f"{self.surf_height_display!r} not in {sorted(_VALID_SURF_HEIGHT_DISPLAYS)}"
+            )
+        if self.l3_enabled not in _VALID_L3_ENABLED:
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf] l3_enabled "
+                f"{self.l3_enabled!r} must be one of {sorted(_VALID_L3_ENABLED)}"
             )
         for structure in self.structures:
             structure.validate(location_id)

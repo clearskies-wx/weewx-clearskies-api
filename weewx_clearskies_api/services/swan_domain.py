@@ -103,6 +103,8 @@ def compute_domains(
     level2_offshore_depth_m: float = 30.0,
     level3_offshore_depth_m: float = 15.0,
     cluster_distance_m: float = 500.0,
+    structures: list[dict] | None = None,
+    spot_l3_configs: dict[str, str] | None = None,
 ) -> DomainSizing:
     """Compute 3-level nested grid domains from spot locations.
 
@@ -117,6 +119,12 @@ def compute_domains(
         level2_offshore_depth_m: Offshore boundary depth for Level 2 (default 30m).
         level3_offshore_depth_m: Offshore boundary depth for Level 3 (default 15m).
         cluster_distance_m: Max pin-to-pin distance for spot clustering (default 500m).
+        structures: Optional list of coastal structure dicts (from Overpass/wizard
+            discovery).  When provided, L3 grids with structure coordinates use
+            structure-based smart sizing (T3.2) instead of pin-cluster sizing.
+        spot_l3_configs: Optional mapping of spot_id → l3_enabled value ("auto",
+            "on", "off").  When provided, clusters where all spots have
+            l3_enabled="off" receive ``grid=None`` (L3 skipped).
 
     Returns:
         DomainSizing with all three grid levels computed.
@@ -158,6 +166,17 @@ def compute_domains(
             spot_offshore[s["id"]] = float(d)
 
     for cluster in clusters:
+        # T3.1 — skip L3 if all spots in this cluster have l3_enabled="off"
+        if spot_l3_configs is not None:
+            flags = [spot_l3_configs.get(sid, "auto") for sid in cluster.spot_ids]
+            if all(f == "off" for f in flags):
+                cluster.grid = None
+                logger.info(
+                    "L3 skipped for cluster %s: all spots have l3_enabled=off",
+                    cluster.spot_ids,
+                )
+                continue
+
         # Use the maximum offshore distance from any spot in this cluster.
         # This ensures the grid reaches the 15m contour for all spots.
         cluster_distances = [
@@ -172,6 +191,7 @@ def compute_domains(
             lateral_m=level3_lateral_m,
             offshore_depth_m=level3_offshore_depth_m,
             offshore_distance_m=cluster_offshore_m,
+            structures=structures,
         )
 
     return DomainSizing(level1=level1, level2=level2, level3_clusters=clusters)
@@ -366,6 +386,154 @@ def _cluster_spots(
     return clusters
 
 
+def smart_size_l3_grid(
+    cluster: SpotCluster,
+    beach_facing_degrees: float,
+    structures: list[dict],
+    *,
+    resolution_m: float = 10.0,
+    pad_m: float = 100.0,
+) -> GridDomain | None:
+    """Compute a structure-based Level 3 grid for a cluster.
+
+    When coastal structures (jetty, pier, breakwater, etc.) are present near
+    the cluster, sizes the L3 bbox from structure positions + shadow zone
+    rather than the pin cluster centre.
+
+    Shadow zone extent (PROVIDER-MANUAL §14.15 Amendment):
+      shadow_length = structure_length + 2 × structure_length = 3 × max_length
+      Direction: shoreward (opposite beach_facing_degrees) — waves propagate
+      toward shore; the shadow extends behind the structure toward shore.
+
+    Args:
+        cluster: Spot cluster with lat/lon pin positions.
+        beach_facing_degrees: Bearing from shore toward the open ocean (0=N,
+            90=E, 180=S, 270=W).  The shoreward direction is bearing+180.
+        structures: List of structure dicts with optional ``"coordinates"``
+            key (list of [lon, lat] pairs) from Overpass/wizard discovery.
+        resolution_m: L3 grid resolution (default 10 m).
+        pad_m: Padding added to all sides of the computed bbox (default 100 m).
+
+    Returns:
+        GridDomain sized to the structure shadow zone, or None if no structure
+        has usable coordinate data (caller should fall back to pin-cluster sizing).
+    """
+    # Collect all structure coordinate points (lon, lat)
+    all_lons: list[float] = []
+    all_lats: list[float] = []
+    for struct in structures:
+        for coord in struct.get("coordinates", []):
+            if len(coord) >= 2:
+                all_lons.append(float(coord[0]))
+                all_lats.append(float(coord[1]))
+
+    if not all_lons:
+        return None  # no coordinate data — caller falls back to pin sizing
+
+    center_lat = sum(cluster.lats) / len(cluster.lats)
+    center_lon = sum(cluster.lons) / len(cluster.lons)
+
+    km_per_deg_lat = 111.0
+    km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
+
+    # Bearing toward ocean
+    bearing_rad = math.radians(beach_facing_degrees)
+    # Bearing toward shore (shoreward direction)
+    shoreward_rad = math.radians(beach_facing_degrees + 180.0)
+
+    # Project each structure coordinate onto the beach_facing_degrees axis to
+    # find the offshore (max) and shoreward (min) extents.
+    def _proj_offshore(lat: float, lon: float) -> float:
+        """Signed projection onto beach-facing (offshore) axis, in km."""
+        return (
+            lat * km_per_deg_lat * math.cos(bearing_rad)
+            + lon * km_per_deg_lon * math.sin(bearing_rad)
+        )
+
+    projections = [_proj_offshore(lat, lon) for lat, lon in zip(all_lats, all_lons)]
+    proj_max = max(projections)  # most offshore point
+    proj_min = min(projections)  # most shoreward point
+
+    # Project onto perpendicular axis for lateral extent
+    perp_rad = bearing_rad + math.pi / 2
+
+    def _proj_lateral(lat: float, lon: float) -> float:
+        return (
+            lat * km_per_deg_lat * math.cos(perp_rad)
+            + lon * km_per_deg_lon * math.sin(perp_rad)
+        )
+
+    lat_projs = [_proj_lateral(lat, lon) for lat, lon in zip(all_lats, all_lons)]
+    lat_proj_min = min(lat_projs)
+    lat_proj_max = max(lat_projs)
+
+    # Estimate maximum structure length: haversine between most-separated coords.
+    # Fast approximation — use bbox diagonal in km.
+    struct_lat_span_km = (max(all_lats) - min(all_lats)) * km_per_deg_lat
+    struct_lon_span_km = (max(all_lons) - min(all_lons)) * km_per_deg_lon
+    max_struct_length_km = math.sqrt(struct_lat_span_km ** 2 + struct_lon_span_km ** 2)
+    if max_struct_length_km < 0.010:
+        # Structure too small to estimate from bbox — use minimum 20m
+        max_struct_length_km = 0.020
+
+    # Shadow zone: 3× structure length in the shoreward direction
+    shadow_km = 3.0 * max_struct_length_km
+    pad_km = pad_m / 1000.0
+
+    # Reference point for converting projections back to lat/lon.
+    # Pick a point on the offshore axis at proj_max + pad.
+    offshore_total_km = (proj_max - _proj_offshore(center_lat, center_lon)) + pad_km
+    shoreward_total_km = (
+        _proj_offshore(center_lat, center_lon) - proj_min + shadow_km + pad_km
+    )
+    lateral_plus_km = (lat_proj_max - _proj_lateral(center_lat, center_lon)) + pad_km
+    lateral_minus_km = (
+        _proj_lateral(center_lat, center_lon) - lat_proj_min + pad_km
+    )
+
+    # Build the four corner offsets from the cluster centre
+    offshore_dlat = offshore_total_km * math.cos(bearing_rad) / km_per_deg_lat
+    offshore_dlon = offshore_total_km * math.sin(bearing_rad) / km_per_deg_lon
+    shoreward_dlat = shoreward_total_km * math.cos(shoreward_rad) / km_per_deg_lat
+    shoreward_dlon = shoreward_total_km * math.sin(shoreward_rad) / km_per_deg_lon
+    lateral_p_dlat = lateral_plus_km * math.cos(perp_rad) / km_per_deg_lat
+    lateral_p_dlon = lateral_plus_km * math.sin(perp_rad) / km_per_deg_lon
+    lateral_m_dlat = lateral_minus_km * math.cos(perp_rad + math.pi) / km_per_deg_lat
+    lateral_m_dlon = lateral_minus_km * math.sin(perp_rad + math.pi) / km_per_deg_lon
+
+    corner_lats = [
+        center_lat + offshore_dlat + lateral_p_dlat,
+        center_lat + offshore_dlat + lateral_m_dlat,
+        center_lat + shoreward_dlat + lateral_p_dlat,
+        center_lat + shoreward_dlat + lateral_m_dlat,
+    ]
+    corner_lons = [
+        center_lon + offshore_dlon + lateral_p_dlon,
+        center_lon + offshore_dlon + lateral_m_dlon,
+        center_lon + shoreward_dlon + lateral_p_dlon,
+        center_lon + shoreward_dlon + lateral_m_dlon,
+    ]
+
+    logger.info(
+        "L3 smart sizing for cluster %s: struct %.0f m, shadow %.0f m → "
+        "bbox [%.5f,%.5f – %.5f,%.5f]",
+        cluster.spot_ids,
+        max_struct_length_km * 1000,
+        shadow_km * 1000,
+        min(corner_lats), min(corner_lons),
+        max(corner_lats), max(corner_lons),
+    )
+
+    return GridDomain(
+        lat_min=min(corner_lats),
+        lat_max=max(corner_lats),
+        lon_min=min(corner_lons),
+        lon_max=max(corner_lons),
+        resolution_m=resolution_m,
+        level=3,
+    )
+
+
 def _compute_level3_grid(
     cluster: SpotCluster,
     beach_facing_degrees: float,
@@ -374,6 +542,7 @@ def _compute_level3_grid(
     lateral_m: float,
     offshore_depth_m: float,
     offshore_distance_m: float | None = None,
+    structures: list[dict] | None = None,
 ) -> GridDomain:
     """Compute one Level 3 grid for a spot cluster.
 
@@ -389,6 +558,19 @@ def _compute_level3_grid(
     Uses beach_facing_degrees to orient the grid offshore.
     Lateral: 250m each side along coast.
     """
+    # T3.2 — when structures with coordinates are provided, delegate to
+    # structure-based smart sizing (shadow zone extent).
+    if structures:
+        smart = smart_size_l3_grid(
+            cluster,
+            beach_facing_degrees,
+            structures,
+            resolution_m=resolution_m,
+            pad_m=100.0,
+        )
+        if smart is not None:
+            return smart
+
     center_lat = sum(cluster.lats) / len(cluster.lats)
     center_lon = sum(cluster.lons) / len(cluster.lons)
 
