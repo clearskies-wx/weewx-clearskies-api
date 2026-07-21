@@ -818,8 +818,16 @@ def get_surf(location_id: str) -> dict:
                 }
                 for c in ts_spectral
             ]
+            # A2-F2 (SURF-23): swellHeight = dominant deep-water SPECOUT partition height.
+            # The dominant partition is the one with the highest Hs in ts_spectral.
+            # This overrides the nearshore HSWELL value set above from ref_point, which
+            # is SWAN TABLE output at ~10 m depth and reflects nearshore shoaling —
+            # not the deep-water swell height the display card expects.
+            _dominant_hs_m = max((c.get("height", 0.0) for c in ts_spectral), default=0.0)
+            entry["swellHeight"] = _convert_unit(_dominant_hs_m, "meter", wave_height_internal)
         else:
             entry["multiSwell"] = None  # SPECOUT not available for this timestep
+            # ts_spectral absent: retain the nearshore HSWELL value set above.
 
         # T4.4/T4.5: Apply 1D pipeline results.
         # On success (degraded=False): override breaking heights with physics-based
@@ -829,7 +837,10 @@ def get_surf(location_id: str) -> dict:
         # so the consumer knows spectral decomposition was not available.
         # Total failure (degraded=True, face_height == 0) or no pipeline result:
         # keep existing SWAN CURVE-based values and mark degraded.
-        # swellHeight is always from deep-water SPECOUT — never overridden.
+        # swellHeight was overridden from deep-water SPECOUT dominant partition
+        # when ts_spectral was available (multiSwell block above); it is NOT
+        # overridden here.  When SPECOUT is unavailable, the nearshore HSWELL
+        # value from ref_point is preserved as-is.
         _1d_face_m = (
             _pipeline_result.best_peak_face_height_m
             if _pipeline_result is not None
@@ -859,6 +870,7 @@ def get_surf(location_id: str) -> dict:
             )
             entry["peelAngle"] = _pipeline_result.peel_angle_deg
             entry["peelClassification"] = _pipeline_result.peel_classification
+            entry["peelDirection"] = _pipeline_result.peel_direction
             entry["transectCount"] = _pipeline_result.transect_count
             entry["openTransectCount"] = _pipeline_result.open_transect_count
             # T4.5: preserve degraded flag — True when bulk fallback was used.
@@ -869,6 +881,7 @@ def get_surf(location_id: str) -> dict:
             entry["spotAverageFaceHeight"] = None
             entry["peelAngle"] = None
             entry["peelClassification"] = None
+            entry["peelDirection"] = None
             entry["transectCount"] = len(_spot_transects) if _spot_transects else 0
             entry["openTransectCount"] = 0
             entry["degraded"] = True

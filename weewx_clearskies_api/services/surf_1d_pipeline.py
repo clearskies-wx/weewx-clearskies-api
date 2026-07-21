@@ -193,8 +193,17 @@ class PipelineResult:
     break points for the dominant partition."""
 
     peel_classification: str | None
-    """One of 'closeout', 'fast', 'good', 'mellow' per Walker (1974) thresholds.
+    """Peel quality with direction suffix.
+    Quality component: 'closeout', 'fast', 'good', 'mellow' (Walker 1974).
+    Direction suffix: '_right', '_left', '_a_frame' appended for non-closeout waves.
+    Examples: 'fast_right', 'good_left', 'mellow_a_frame', 'closeout'.
     None when peel_angle_deg is None."""
+
+    peel_direction: str | None
+    """Peel direction from the surfer's perspective (facing the ocean).
+    'right', 'left', 'a_frame' (symmetric), or None when direction cannot be
+    determined (fewer than 2 open transects with break points, or degenerate
+    geometry).  Always None for 'closeout' — closeouts do not peel."""
 
     transect_count: int
     """Total number of transects in the array (open + structure-affected)."""
@@ -320,8 +329,8 @@ def _compute_peel_angle(
     all_transects: list[TransectInfo],
     partitions: list[dict[str, Any]],
     beach_facing: float,
-) -> tuple[float | None, str | None]:
-    """Compute peel angle from break-point spatial variation across open transects.
+) -> tuple[float | None, str | None, str | None]:
+    """Compute peel angle and direction from break-point spatial variation across open transects.
 
     Method (SURF-ZONE-MODEL-BRIEF §5.8):
       1. Use the dominant partition (highest Hs) as the reference swell system.
@@ -332,11 +341,15 @@ def _compute_peel_angle(
       3. Compute the wave crest angle from shore = angle between wave travel
          direction and shore-normal.
       4. peel_angle = |wave_crest_angle - mean_break_line_angle|.
+      5. Peel direction from regression slope of break_distance vs signed
+         along-shore position (positive = surfer's right, negative = left).
+         |slope| < 0.05 → a_frame (break line nearly parallel to shore).
 
-    Returns (peel_angle_deg, peel_classification) or (None, None).
+    Returns (peel_angle_deg, peel_classification_with_suffix, peel_direction)
+    or (None, None, None).
     """
     if len(open_transect_results) < 2:
-        return None, None
+        return None, None, None
 
     # Dominant partition: first in the list (sorted by descending Hs).
     dominant_p_idx = 0
@@ -358,7 +371,7 @@ def _compute_peel_angle(
             break_pts.append((t_idx, pbr.break_points[0].distance_m))
 
     if len(break_pts) < 2:
-        return None, None
+        return None, None, None
 
     # Compute break-line angles from adjacent pairs.
     break_line_angles: list[float] = []
@@ -375,27 +388,88 @@ def _compute_peel_angle(
         break_line_angles.append(math.degrees(math.atan2(delta_x, delta_y)))
 
     if not break_line_angles:
-        return None, None
+        return None, None, None
 
     mean_break_line_angle = sum(break_line_angles) / len(break_line_angles)
     peel_angle = abs(wave_crest_angle - mean_break_line_angle)
     peel_angle = min(peel_angle, 90.0)  # physical upper bound
 
-    classification = _classify_peel(peel_angle)
+    base_class = _classify_peel(peel_angle)
+
+    # ------------------------------------------------------------------
+    # Peel direction: regression of break_distance vs signed along-shore
+    # position in the surfer's "right" direction.
+    #
+    # "Right" direction from surfer facing the ocean (facing beach_facing):
+    #   right_compass = (beach_facing + 90°) mod 360°.
+    # Compass → cartesian: east = sin(θ), north = cos(θ).
+    # Positive slope → break farther offshore to the right → right peel.
+    # Negative slope → break farther offshore to the left → left peel.
+    # |slope| < 0.05 → break line nearly parallel to shore → a_frame.
+    # ------------------------------------------------------------------
+    right_dir_rad = math.radians((beach_facing + 90.0) % 360.0)
+    right_east = math.sin(right_dir_rad)
+    right_north = math.cos(right_dir_rad)
+
+    ref_t_idx = break_pts[0][0]
+    ref_t = all_transects[ref_t_idx]
+    signed_positions: list[float] = []
+    for t_idx, _ in break_pts:
+        t = all_transects[t_idx]
+        dlat_m = (t.origin_lat - ref_t.origin_lat) * _M_PER_DEG_LAT
+        mid_lat = (t.origin_lat + ref_t.origin_lat) / 2.0
+        dlon_m = (
+            (t.origin_lon - ref_t.origin_lon)
+            * _M_PER_DEG_LAT
+            * math.cos(math.radians(mid_lat))
+        )
+        signed_positions.append(dlon_m * right_east + dlat_m * right_north)
+
+    break_distances = [bp[1] for bp in break_pts]
+    n_pts = len(signed_positions)
+    mean_pos = sum(signed_positions) / n_pts
+    mean_bd = sum(break_distances) / n_pts
+    num = sum(
+        (p - mean_pos) * (d - mean_bd)
+        for p, d in zip(signed_positions, break_distances)
+    )
+    den = sum((p - mean_pos) ** 2 for p in signed_positions)
+
+    peel_direction: str | None = None
+    if den > 1.0:  # require at least 1 m of positional spread
+        slope = num / den
+        if abs(slope) < 0.05:
+            peel_direction = "a_frame"
+        elif slope > 0:
+            peel_direction = "right"
+        else:
+            peel_direction = "left"
+
+    # Build classification string with direction suffix.
+    # Closeout waves do not peel directionally — no suffix.
+    if base_class == "closeout":
+        classification = "closeout"
+    elif peel_direction == "a_frame":
+        classification = f"{base_class}_a_frame"
+    elif peel_direction is not None:
+        classification = f"{base_class}_{peel_direction}"
+    else:
+        classification = base_class
 
     logger.debug(
         "_compute_peel_angle: dominant partition dir=%.1f°, beach_facing=%.1f°, "
         "wave_crest_angle=%.1f°, mean_break_line=%.1f°, "
-        "peel=%.1f° (%s), from %d adjacent pairs",
+        "peel=%.1f° (%s, dir=%s), from %d adjacent pairs",
         dominant_dir,
         beach_facing,
         wave_crest_angle,
         mean_break_line_angle,
         peel_angle,
         classification,
+        peel_direction or "n/a",
         len(break_line_angles),
     )
-    return peel_angle, classification
+    return peel_angle, classification, peel_direction
 
 
 def _match_partitions(
@@ -647,6 +721,7 @@ def _degraded_result(
         spot_average_face_height_m=0.0,
         peel_angle_deg=None,
         peel_classification=None,
+        peel_direction=None,
         transect_count=transect_count,
         open_transect_count=0,
         per_transect=[],
@@ -968,7 +1043,7 @@ def run_pipeline(
     # ------------------------------------------------------------------
     # Step 7: Peel angle
     # ------------------------------------------------------------------
-    peel_angle, peel_class = _compute_peel_angle(
+    peel_angle, peel_class, peel_dir = _compute_peel_angle(
         open_transect_results, transects, partitions, beach_facing
     )
 
@@ -1002,6 +1077,7 @@ def run_pipeline(
         spot_average_face_height_m=spot_avg_face_height,
         peel_angle_deg=peel_angle,
         peel_classification=peel_class,
+        peel_direction=peel_dir,
         transect_count=n_transects,
         open_transect_count=open_transect_count,
         per_transect=[tr for tr in per_transect_results if tr is not None],
