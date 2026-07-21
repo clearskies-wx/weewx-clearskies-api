@@ -70,6 +70,8 @@ from weewx_clearskies_api.enrichment.surf_scorer import score_surf
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
+from weewx_clearskies_api.services.surf_1d_pipeline import run_pipeline as _run_surf_pipeline
+from weewx_clearskies_api.services.swan_formats import compute_spot_transects as _compute_spot_transects
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
@@ -514,6 +516,38 @@ def get_surf(location_id: str) -> dict:
     if _bath_profile and _bath_profile[0] is not None:
         _fallback_depth_m = _bath_profile[0].depth_m
 
+    # T4.4: Compute surf spot transects once (static geometry — same for all timesteps).
+    # Used by the per-partition 1D pipeline (run_pipeline) to model wave transformation
+    # independently on each cross-shore transect.  Degrades gracefully on failure.
+    _spot_transects: list = []
+    try:
+        _spot_transects = _compute_spot_transects(
+            segment_start_lat=spot_config.segment_start_lat,
+            segment_start_lon=spot_config.segment_start_lon,
+            segment_end_lat=spot_config.segment_end_lat,
+            segment_end_lon=spot_config.segment_end_lon,
+            transect_spacing_m=spot_config.transect_spacing_m,
+            beach_facing_degrees=spot_config.beach_facing_degrees,
+            structures=spot_config.structures or None,
+        )
+    except Exception:
+        logger.warning(
+            "surf endpoint: compute_spot_transects failed for %s — "
+            "1D pipeline will degrade for all timesteps",
+            location_id,
+            exc_info=True,
+        )
+
+    # T4.4: Build full-entry SPECOUT lookup by timestep for the handoff pipeline.
+    # Each value is the complete _spec_entry dict (time + components today; future
+    # SWAN runner updates will add freqs_hz/dirs_deg/energy, which run_pipeline
+    # uses automatically without changes here).
+    _handoff_specout_by_time: dict[str, dict] = {}
+    for _hs_entry in swan_spectral:
+        _hs_t = _hs_entry.get("time", "")
+        if _hs_t:
+            _handoff_specout_by_time[_hs_t] = _hs_entry
+
     # --- Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast timestep") ---
     forecast_entries: list[dict] = []
     for ts_idx, valid_time in enumerate(_ordered_times):
@@ -632,11 +666,14 @@ def get_surf(location_id: str) -> dict:
         # T3.4: K-G/Caldwell applied at ~10m depth (ref_point depth) instead of
         # the old pin-drop depth.  At 10m, SWAN has handled refraction but not
         # final shoaling-to-breaking, so K-G applies ~60–80% amplification.
+        # T4.3: depth_m replaces output_depth_m; source="deep_water" is explicit
+        # (deep-water/offshore Hs → full K-G/Caldwell formula, no double-counting).
         face_height_m = _breaker_height.hsig_to_face_height(
             corrected_hsig,
             wave_period_pt,
-            output_depth_m=output_depth_m,
+            depth_m=output_depth_m,
             formula=spot_config.breaker_formula,
+            source="deep_water",
         )
 
         # Step 4: Hawaiian scale → breakingHawaiianHeight
@@ -677,6 +714,32 @@ def get_surf(location_id: str) -> dict:
         # Pre-fetched here so it can be passed to score_surf() before the
         # entry dict is built.
         ts_spectral = _spectral_by_time.get(valid_time)
+
+        # T4.4: Run the per-partition 1D swell transformation pipeline.
+        # Called once per timestep; handles all partitions × all transects internally.
+        # Degrades gracefully when:
+        #   - raw SPECOUT (freqs_hz/dirs_deg/energy) is not yet in the cache
+        #     (current state — future SWAN runner update adds it; no changes needed here)
+        #   - transects have no bathymetric profiles (until CUDEM load at SWAN runtime)
+        # Tide level is 0.0: CO-OPS predictions are fetched after this loop.
+        # A degraded result triggers the existing SWAN CURVE-based fallback path.
+        _ts_handoff_specout = _handoff_specout_by_time.get(valid_time) or {}
+        _pipeline_result = None
+        if _spot_transects:
+            try:
+                _pipeline_result = _run_surf_pipeline(
+                    specout_data=_ts_handoff_specout,
+                    transects=_spot_transects,
+                    tide_level=0.0,
+                    beach_facing=spot_config.beach_facing_degrees,
+                )
+            except Exception:
+                logger.warning(
+                    "surf endpoint: 1D pipeline raised for %s @ %s — degrading to SWAN CURVE",
+                    location_id,
+                    valid_time,
+                    exc_info=True,
+                )
 
         # Step 6: score surf using breakingFaceHeight (ADR-094)
         # T3.5: spectral_components=None — NDBC spectral data is NOT passed to
@@ -750,6 +813,47 @@ def get_surf(location_id: str) -> dict:
             ]
         else:
             entry["multiSwell"] = None  # SPECOUT not available for this timestep
+
+        # T4.4: Apply 1D pipeline results.
+        # On success: override breakingFaceHeight and waveHeightAtBreak with
+        # physics-based values; add new pipeline-specific response fields.
+        # On degraded/failure: keep existing SWAN CURVE-based values and mark degraded.
+        # swellHeight is always from deep-water SPECOUT (set above) — never overridden.
+        if _pipeline_result is not None and not _pipeline_result.degraded:
+            _best_face_m = _pipeline_result.best_peak_face_height_m
+            _avg_face_m = _pipeline_result.spot_average_face_height_m
+            # Override with pipeline-computed breaking heights.
+            entry["breakingFaceHeight"] = _convert_unit(
+                _best_face_m, "meter", wave_height_internal
+            )
+            # waveHeightAtBreak: Hs at the best break point.
+            # In the pipeline, face_height = 1.27 × Hs_break (H1/10 Rayleigh factor,
+            # source="break_point"), so Hs_break = face_height / 1.27.
+            _hs_at_best_break_m = _best_face_m / 1.27 if _best_face_m > 0.0 else 0.0
+            entry["waveHeightAtBreak"] = _convert_unit(
+                _hs_at_best_break_m, "meter", wave_height_internal
+            )
+            # New pipeline-specific fields.
+            entry["bestPeakFaceHeight"] = _convert_unit(
+                _best_face_m, "meter", wave_height_internal
+            )
+            entry["spotAverageFaceHeight"] = _convert_unit(
+                _avg_face_m, "meter", wave_height_internal
+            )
+            entry["peelAngle"] = _pipeline_result.peel_angle_deg
+            entry["peelClassification"] = _pipeline_result.peel_classification
+            entry["transectCount"] = _pipeline_result.transect_count
+            entry["openTransectCount"] = _pipeline_result.open_transect_count
+            entry["degraded"] = False
+        else:
+            # Degraded: existing SWAN CURVE-based height fields unchanged.
+            entry["bestPeakFaceHeight"] = None
+            entry["spotAverageFaceHeight"] = None
+            entry["peelAngle"] = None
+            entry["peelClassification"] = None
+            entry["transectCount"] = len(_spot_transects) if _spot_transects else 0
+            entry["openTransectCount"] = 0
+            entry["degraded"] = True
 
         forecast_entries.append(entry)
 
