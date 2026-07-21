@@ -315,7 +315,7 @@ def decompose_spectrum(
     freqs_hz: list[float],
     dirs_deg: list[float],
     energy: list[list[float]],
-    min_peak_energy_fraction: float = 0.05,
+    min_peak_energy_fraction: float = 0.005,
     max_components: int = 5,
 ) -> list[dict[str, Any]]:
     """Decompose a 2-D SWAN directional spectrum into swell systems.
@@ -328,7 +328,7 @@ def decompose_spectrum(
         dirs_deg: Direction axis (degrees nautical), len nd.
         energy:   E[i_freq][i_dir] in m²/Hz/deg, shape (nf, nd).
         min_peak_energy_fraction: A peak is discarded if its integrated energy
-            (m0) is less than this fraction of the total m0.  Default 0.05 = 5%.
+            (m0) is less than this fraction of the total m0.  Default 0.005 = 0.5%.
         max_components: Maximum number of swell systems to return.
 
     Returns:
@@ -411,24 +411,24 @@ def decompose_spectrum(
     peaks = peaks[:max_components * 3]  # pre-filter to limit work
 
     # ---- For each peak, integrate energy in a neighbourhood ----
-    # Neighbourhood: ±2 bins in frequency, ±30° in direction.
+    # Neighbourhood: ±4 bins in frequency and direction (≈±40° for 10°/bin grids).
+    # No greedy cell exclusion — each peak integrates over its full neighbourhood
+    # independently so secondary swell systems are not masked by the dominant peak.
     components: list[dict[str, Any]] = []
-    used_cells: set[tuple[int, int]] = set()
 
     for _, pi, pj in peaks:
         if len(components) >= max_components:
             break
 
-        # Collect cells in neighbourhood not already claimed
-        f_lo = max(0, pi - 2)
-        f_hi = min(nf - 1, pi + 2)
+        # Integration window: ±4 bins in frequency and direction
+        f_lo = max(0, pi - 4)
+        f_hi = min(nf - 1, pi + 4)
 
         nbr_cells: list[tuple[int, int]] = []
         for ii in range(f_lo, f_hi + 1):
-            for jj_offset in range(-2, 3):
+            for jj_offset in range(-4, 5):
                 jj = (pj + jj_offset) % nd
-                if (ii, jj) not in used_cells:
-                    nbr_cells.append((ii, jj))
+                nbr_cells.append((ii, jj))
 
         if not nbr_cells:
             continue
@@ -467,9 +467,6 @@ def decompose_spectrum(
 
         peak_period = 1.0 / weighted_f
         peak_hs = 4.0 * math.sqrt(max(0.0, m0))
-
-        # Mark cells as used
-        used_cells.update(nbr_cells)
 
         # Frequency range for this partition
         f_values_in_nbr = sorted(set(freqs_hz[ii] for ii, _ in nbr_cells))

@@ -23,18 +23,27 @@ in the marine location config:
       fall back to Komar-Gaughan (the paper states "unrealistic for wave
       periods less than ~10 seconds").
 
-Pipeline position (T2.6):
+Pipeline position (T2.6 / T4.3):
 
   SWAN Hsig (raw)
     → wave_transform.apply_supplements() → corrected Hsig
-    → hsig_to_face_height(corrected_hsig, Tp, depth, formula)
+    → 1D cross-shore model (surf_1d_model.py) → break-point Hs
+    → hsig_to_face_height(break_point_hs, Tp, formula=…, source="break_point")
     → breakingFaceHeight
     → hawaiian_height(face_height)
     → breakingHawaiianHeight
 
+Legacy path (no 1D model, deep-water Hs fed directly):
+    → hsig_to_face_height(offshore_hsig, Tp, formula=…, source="deep_water")
+
 The supplements always run BEFORE this module. No double-counting: the
 supplements correct the physical Hsig at the output point; this module
-converts that corrected Hsig to the display-convention height surfers use.
+converts that corrected Hs to the display-convention height surfers use.
+When the 1D model provides the break-point Hs, use source="break_point"
+(Rayleigh H1/10 only). For direct offshore Hs inputs, use source="deep_water"
+(full K-G or Caldwell formula). The ad-hoc linear depth correction that
+previously existed in this module has been removed (T4.3 — no physical basis;
+superseded by the 1D model which explicitly tracks the complete shoaling path).
 """
 
 from __future__ import annotations
@@ -52,11 +61,6 @@ _G: float = 9.81
 #: Below this period, Komar-Gaughan is always used regardless of formula setting.
 #: Source: Caldwell & Aucan (2007) — "unrealistic for wave periods less than ~10s".
 CALDWELL_MIN_PERIOD_S: float = 10.0
-
-#: Depth threshold below which the SWAN output is considered "shallow" and the
-#: Komar-Gaughan amplification is reduced proportionally to avoid double-counting
-#: the shoaling that SWAN already computed internally.
-SHALLOW_DEPTH_THRESHOLD_M: float = 15.0
 
 #: Clamp bounds: breaking face height must be between 1× and 3× Hsig.
 #: Lower: waves do not shrink during final shoaling.
@@ -89,9 +93,11 @@ def _komar_gaughan_full(hsig_m: float, period_s: float) -> float:
 
     Hb = 0.39 × g^(1/5) × (Tp × Hsig²)^(2/5)
 
-    Predicts the full deepwater-to-breaking transformation. When the SWAN
-    output point is in shallow water, this over-estimates because SWAN has
-    already computed part of the shoaling — caller applies depth correction.
+    Predicts the full deepwater-to-breaking transformation. Input must be a
+    true deep-water or far-offshore Hs value. If the input Hs has already
+    been partially or fully shoaled (e.g., by a 1D cross-shore model at
+    the break point), use source="break_point" in hsig_to_face_height()
+    instead — applying this formula on shoaled Hs double-counts shoaling.
 
     Source: Komar & Gaughan (1973) ASCE Coastal Engineering Conference.
     Empirically fitted to three laboratory datasets and one field dataset.
@@ -136,39 +142,82 @@ def _caldwell_h1_10(hsig_m: float, period_s: float) -> float:
 def hsig_to_face_height(
     hsig_m: float,
     period_s: float,
-    output_depth_m: float | None = None,
+    depth_m: float | None = None,
     formula: str = "komar_gaughan",
+    source: str = "deep_water",
 ) -> float:
-    """Convert post-supplement Hsig to breaking wave face height (trough-to-crest).
+    """Convert Hsig to breaking wave face height (trough-to-crest).
+
+    Two operational modes are selected via the ``source`` parameter:
+
+    **source="deep_water"** (default — legacy path)
+        Input Hs is a deep-water or far-offshore significant wave height.
+        The full Komar-Gaughan (1973) or Caldwell & Aucan (2007) formula
+        converts deepwater Hs to breaking face height, accounting for the
+        complete shoaling-to-breaking path. Use when feeding offshore Hs
+        directly, without a 1D cross-shore model.
+
+    **source="break_point"** (1D model path)
+        Input Hs is the wave height at the actual break point, already
+        fully shoaled by the 1D cross-shore model. Applying K-G here would
+        double-count the shoaling the 1D model already computed. Instead,
+        only the Rayleigh H1/10 statistical conversion is applied:
+        face_height = 1.27 × Hs.
+
+        The 1.27 factor (H1/10 / H1/3) converts the statistical significant
+        wave height Hs (= H1/3) to the average height of the highest 10%
+        of breaking waves — the set waves surfers observe at the break.
+        Source: Rayleigh distribution for narrow-banded sea states
+        (Coastal Wiki, "Statistical description of wave parameters").
+
+    The earlier ad-hoc linear depth correction (lerp between full K-G and
+    no-amplification based on output-point depth) has been removed. That
+    correction had no physical basis and was superseded by the 1D model,
+    which explicitly tracks the complete shoaling path. When the 1D model
+    provides the break-point Hs, use ``source="break_point"``; when feeding
+    deep-water Hs directly, use ``source="deep_water"`` (full K-G, no
+    depth correction). There is no intermediate case.
 
     Args:
-        hsig_m: Post-supplement significant wave height in meters. Must be
-            the corrected Hsig output from wave_transform.apply_supplements(),
-            not raw SWAN Hsig. Must be ≥ 0.
-        period_s: Peak wave period in seconds. Must be > 0.
-        output_depth_m: Water depth at the SWAN output point (meters, positive
-            = water depth). When < SHALLOW_DEPTH_THRESHOLD_M (15m), the
-            Komar-Gaughan amplification is proportionally reduced to avoid
-            double-counting shoaling that SWAN already computed internally.
-            None = assume deepwater (full Komar-Gaughan amplification applies).
-        formula: Breaker formula to use. One of:
+        hsig_m: Significant wave height in meters. Must be ≥ 0.
+            For ``source="deep_water"``: offshore Hs (post-supplement).
+            For ``source="break_point"``: Hs at the break from the 1D model.
+        period_s: Peak wave period in seconds. Must be > 0. Used only for
+            the ``source="deep_water"`` path (K-G and Caldwell are both
+            period-dependent).
+        depth_m: Water depth in meters. Not used in either current path;
+            retained in the signature for forward compatibility.
+        formula: Breaker formula. One of:
             ``"komar_gaughan"`` (default) — Komar & Gaughan (1973), general
             purpose, all periods and coastlines.
-            ``"caldwell"`` — Caldwell & Aucan (2007), empirical H1/10 predictor
-            for steep volcanic island coasts. Auto-falls to ``"komar_gaughan"``
-            when period_s < CALDWELL_MIN_PERIOD_S (10s).
+            ``"caldwell"`` — Caldwell & Aucan (2007), empirical H1/10
+            predictor for steep volcanic island coasts. Auto-falls to
+            ``"komar_gaughan"`` when period_s < CALDWELL_MIN_PERIOD_S (10s).
+            Ignored when ``source="break_point"`` — only the H1/10 factor
+            applies regardless of formula.
+        source: Input Hs provenance. One of:
+            ``"deep_water"`` (default) — offshore Hs; apply full K-G or
+            Caldwell formula.
+            ``"break_point"`` — break-point Hs from the 1D model; apply
+            the Rayleigh H1/10 factor only (1.27 × Hs). No additional
+            shoaling amplification.
 
     Returns:
         Breaking face height in meters (trough-to-crest). Always in the range
         [hsig_m, 3 × hsig_m]. Returns 0.0 when hsig_m ≤ 0 or period_s ≤ 0.
 
     Raises:
-        ValueError: ``formula`` is not a recognised value.
+        ValueError: ``formula`` or ``source`` is not a recognised value.
     """
     if formula not in ("komar_gaughan", "caldwell"):
         raise ValueError(
             f"hsig_to_face_height: unknown formula {formula!r}. "
             "Expected 'komar_gaughan' or 'caldwell'."
+        )
+    if source not in ("deep_water", "break_point"):
+        raise ValueError(
+            f"hsig_to_face_height: unknown source {source!r}. "
+            "Expected 'deep_water' or 'break_point'."
         )
 
     if hsig_m <= 0.0 or period_s <= 0.0:
@@ -178,36 +227,27 @@ def hsig_to_face_height(
     # Select and compute the raw breaking height
     # ---------------------------------------------------------------------------
 
-    use_komar_gaughan = formula == "komar_gaughan" or period_s < CALDWELL_MIN_PERIOD_S
-
-    if use_komar_gaughan:
-        # Full deepwater-to-breaking amplification from Komar-Gaughan.
-        hb_full = _komar_gaughan_full(hsig_m, period_s)
-
-        if output_depth_m is not None and output_depth_m < SHALLOW_DEPTH_THRESHOLD_M:
-            # SWAN output is in the nearshore — SWAN has already computed part of
-            # the shoaling-to-breaking path. Scale down the amplification ratio
-            # proportionally based on how shallow the output point is.
-            #
-            # At 15m depth (threshold): shallow_fraction = 0 → full K-G ratio.
-            # At  0m depth (shoreline): shallow_fraction = 1 → ratio = 1.0 (no amp).
-            # At 10m depth (typical):  shallow_fraction ≈ 0.33 → ~67% of K-G ratio.
-            #
-            # This lerp approach is adapted from the research brief §4 depth-aware
-            # correction (T2.6 WAVE-BREAKING-CONVERSION-BRIEF.md §5).
-            kg_ratio = hb_full / hsig_m
-            shallow_fraction = max(0.0, min(1.0, 1.0 - output_depth_m / SHALLOW_DEPTH_THRESHOLD_M))
-            reduced_ratio = 1.0 + (kg_ratio - 1.0) * (1.0 - shallow_fraction)
-            face_height = hsig_m * reduced_ratio
-        else:
-            # Deepwater output point — full Komar-Gaughan amplification.
-            face_height = hb_full
+    if source == "break_point":
+        # The 1D model has already fully shoaled the wave to the break point.
+        # Applying K-G here would double-count shoaling (K-G is a deepwater-to-
+        # breaking formula — its amplification factor IS the shoaling path).
+        # Apply only the Rayleigh H1/10 statistical conversion: the average of
+        # the highest 10% of breaking waves (set waves) observed at the break.
+        face_height = hsig_m * _RAYLEIGH_H1_10_FACTOR
     else:
-        # Caldwell (2007): valid for Tp ≥ 10s only (crossover handled above).
-        # Depth correction not applied to Caldwell — it's an empirical surface
-        # fit to the full buoy-to-shore path rather than a theoretical shoaling
-        # formula. Applying a depth correction would produce unphysical results.
-        face_height = _caldwell_h1_10(hsig_m, period_s)
+        # source == "deep_water": full deepwater-to-breaking formula.
+        # No depth correction is applied — if the input Hs has been partially
+        # shoaled by intermediate processing, use source="break_point" instead.
+        use_komar_gaughan = formula == "komar_gaughan" or period_s < CALDWELL_MIN_PERIOD_S
+
+        if use_komar_gaughan:
+            # Full deepwater-to-breaking amplification from Komar-Gaughan.
+            face_height = _komar_gaughan_full(hsig_m, period_s)
+        else:
+            # Caldwell (2007): valid for Tp ≥ 10s only (crossover handled above).
+            # Empirical surface fit to the full buoy-to-shore path — no depth
+            # correction is meaningful for an empirical regression.
+            face_height = _caldwell_h1_10(hsig_m, period_s)
 
     # ---------------------------------------------------------------------------
     # Clamp: face height must be ≥ Hsig (waves do not shrink during final
