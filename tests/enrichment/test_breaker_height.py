@@ -1,24 +1,14 @@
-"""Unit tests for enrichment/breaker_height.py (T2.6).
+"""Unit tests for enrichment/breaker_height.py.
 
 Covers:
 - Komar-Gaughan formula: formula-correct numerical expectations
 - Caldwell formula: H1/10 prediction for Tp >= 10s
 - Caldwell auto-crossover: Tp < 10s falls to Komar-Gaughan
-- Depth-aware correction: shallow output points reduce amplification
+- Break-point source: Rayleigh H1/10 factor only (1.27x Hs)
 - Clamp bounds: output in [Hsig, 3 x Hsig]
 - Hawaiian height conversion: exactly face_height x 0.5
 - Period monotonicity: same Hsig, longer period -> taller face height
-- Edge cases: zero/negative inputs, unknown formula
-
-NOTE — brief §3 table discrepancy (discovered 2026-07-17):
-The brief's §3 "Worked examples" table shows values (e.g., 0.64m for Hsig=0.6m,
-Tp=8s) that are inconsistent with the stated Komar-Gaughan formula applied as
-deepwater K-G. The formula Hb = 0.39 * g^(1/5) * (Tp * Hsig^2)^(2/5) gives
-Hb=0.940m (1.57x) for that case, not 0.64m (1.06x). The brief's table values
-match K-G only when a strong depth correction is applied at very shallow SWAN
-output depths (~1-2m). Tests below verify the formula's mathematical correctness
-rather than the brief's table, which appears to be internally inconsistent.
-The discrepancy was reported to the lead (2026-07-17) for clarification.
+- Edge cases: zero/negative inputs, unknown formula/source
 """
 
 from __future__ import annotations
@@ -30,7 +20,6 @@ import pytest
 from weewx_clearskies_api.enrichment.breaker_height import (
     CALDWELL_MIN_PERIOD_S,
     HAWAIIAN_SCALE_FACTOR,
-    SHALLOW_DEPTH_THRESHOLD_M,
     hawaiian_height,
     hsig_to_face_height,
 )
@@ -63,7 +52,7 @@ def test_komar_gaughan_formula_constants():
     G = 9.81
     hsig, tp = 1.0, 10.0
     expected = 0.39 * (G ** 0.2) * ((tp * hsig ** 2) ** 0.4)
-    result = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
+    result = hsig_to_face_height(hsig, tp, depth_m=None, formula="komar_gaughan")
     assert result == pytest.approx(expected, rel=1e-9), (
         f"K-G deepwater: expected {expected:.4f}m, got {result:.4f}m"
     )
@@ -74,7 +63,7 @@ def test_komar_gaughan_deepwater_amplification_increases_with_period():
     hsig = 1.0
     ratios = []
     for tp in [6, 8, 10, 12, 14, 16, 18]:
-        result = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
+        result = hsig_to_face_height(hsig, tp, depth_m=None, formula="komar_gaughan")
         ratios.append(result / hsig)
     for i in range(len(ratios) - 1):
         assert ratios[i] < ratios[i + 1], (
@@ -92,7 +81,7 @@ def test_komar_gaughan_deepwater_amplification_decreases_with_hsig():
     tp = 14.0
     prev_ratio = math.inf
     for hsig in [0.3, 0.6, 1.0, 1.5, 2.0, 3.0]:
-        result = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
+        result = hsig_to_face_height(hsig, tp, depth_m=None, formula="komar_gaughan")
         ratio = result / hsig
         assert ratio < prev_ratio, (
             f"K-G ratio at Hsig={hsig}m ({ratio:.3f}) should decrease vs prior ({prev_ratio:.3f})"
@@ -113,7 +102,7 @@ def test_komar_gaughan_deepwater_known_values():
     ]
     for hsig, tp in cases:
         expected = 0.39 * (G ** 0.2) * ((tp * hsig ** 2) ** 0.4)
-        result = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
+        result = hsig_to_face_height(hsig, tp, depth_m=None, formula="komar_gaughan")
         assert result == pytest.approx(expected, rel=1e-9), (
             f"Hsig={hsig}, Tp={tp}: expected {expected:.4f}, got {result:.4f}"
         )
@@ -244,92 +233,52 @@ def test_caldwell_crossover_multiple_periods():
 
 
 # ---------------------------------------------------------------------------
-# Depth-aware correction (Komar-Gaughan)
+# Break-point source: Rayleigh H1/10 factor only (source="break_point")
 # ---------------------------------------------------------------------------
 
 
-def test_depth_correction_reduces_amplification():
-    """Shallow output depth reduces face height vs. deep water."""
+def test_break_point_source_applies_h1_10_factor():
+    """source="break_point" returns exactly 1.27 x Hs."""
+    hsig = 1.5
+    result = hsig_to_face_height(hsig, 14.0, source="break_point")
+    assert result == pytest.approx(hsig * 1.27, rel=1e-9)
+
+
+def test_break_point_source_ignores_formula():
+    """source="break_point" produces the same result regardless of formula."""
     hsig = 1.2
-    tp = 14.0
-    deep = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
-    shallow = hsig_to_face_height(hsig, tp, output_depth_m=10.0, formula="komar_gaughan")
-    assert shallow <= deep, (
-        f"Shallow output ({shallow:.4f}) should be <= deep water ({deep:.4f})"
-    )
+    r_kg = hsig_to_face_height(hsig, 14.0, formula="komar_gaughan", source="break_point")
+    r_cw = hsig_to_face_height(hsig, 14.0, formula="caldwell", source="break_point")
+    assert r_kg == pytest.approx(r_cw, rel=1e-9)
 
 
-def test_depth_correction_at_threshold_equals_deepwater():
-    """At output_depth_m=SHALLOW_DEPTH_THRESHOLD_M, result equals deepwater."""
+def test_break_point_source_differs_from_deep_water():
+    """source="break_point" gives a different (lower) result than deep_water for same inputs."""
     hsig = 1.0
     tp = 14.0
-    deep = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
-    at_threshold = hsig_to_face_height(
-        hsig, tp, output_depth_m=SHALLOW_DEPTH_THRESHOLD_M, formula="komar_gaughan"
-    )
-    # At exactly threshold: shallow_fraction = 1 - 15/15 = 0 -> same as deep
-    assert at_threshold == pytest.approx(deep, rel=1e-9)
-
-
-def test_depth_correction_at_zero_gives_hsig():
-    """At output_depth_m=0 (shoreline), face height equals Hsig (no amplification)."""
-    hsig = 1.0
-    tp = 14.0
-    result = hsig_to_face_height(hsig, tp, output_depth_m=0.0, formula="komar_gaughan")
-    # At depth=0: shallow_fraction = 1.0 -> reduced_ratio = 1.0 -> face = Hsig
-    assert result == pytest.approx(hsig, rel=1e-9)
-
-
-def test_depth_correction_above_threshold_treated_as_deepwater():
-    """output_depth_m > SHALLOW_DEPTH_THRESHOLD_M is treated as deepwater (no reduction)."""
-    hsig = 1.2
-    tp = 14.0
-    deep = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
-    deep_explicit = hsig_to_face_height(hsig, tp, output_depth_m=20.0, formula="komar_gaughan")
-    assert deep == pytest.approx(deep_explicit, rel=1e-9)
-
-
-def test_depth_correction_10m_between_hsig_and_deepwater():
-    """At 10m output depth, amplification is partial (between Hsig and full K-G)."""
-    hsig = 1.2
-    tp = 14.0
-    deep = hsig_to_face_height(hsig, tp, output_depth_m=None, formula="komar_gaughan")
-    at_10m = hsig_to_face_height(hsig, tp, output_depth_m=10.0, formula="komar_gaughan")
-    assert hsig < at_10m < deep, (
-        f"10m result {at_10m:.4f} should be between Hsig {hsig} and deep {deep:.4f}"
+    bp = hsig_to_face_height(hsig, tp, source="break_point")
+    dw = hsig_to_face_height(hsig, tp, source="deep_water")
+    assert bp < dw, (
+        f"break_point ({bp:.4f}) should be < deep_water ({dw:.4f}) for same Hs"
     )
 
 
-def test_depth_correction_monotonic_with_depth():
-    """Shallower output depth -> smaller face height (less remaining shoaling)."""
-    hsig = 1.2
-    tp = 14.0
-    depths = [14.0, 12.0, 10.0, 8.0, 5.0, 2.0, 0.0]
-    heights = [
-        hsig_to_face_height(hsig, tp, output_depth_m=d, formula="komar_gaughan")
-        for d in depths
-    ]
-    for i in range(len(heights) - 1):
-        assert heights[i] >= heights[i + 1], (
-            f"Face height should decrease as depth decreases: "
-            f"depth={depths[i]}m ({heights[i]:.4f}) should be >= "
-            f"depth={depths[i+1]}m ({heights[i+1]:.4f})"
-        )
+def test_break_point_source_zero_hsig():
+    """source="break_point" returns 0.0 for zero Hs."""
+    assert hsig_to_face_height(0.0, 12.0, source="break_point") == 0.0
 
 
-def test_depth_correction_formula_at_10m():
-    """Verify depth correction formula values at depth=10m."""
-    hsig = 1.2
-    tp = 14.0
-    G = 9.81
-    hb_full = 0.39 * (G ** 0.2) * ((tp * hsig ** 2) ** 0.4)
-    kg_ratio = hb_full / hsig
-    # shallow_fraction = 1 - 10/15 = 1/3
-    # remaining = 1 - 1/3 = 2/3
-    reduced_ratio = 1.0 + (kg_ratio - 1.0) * (2.0 / 3.0)
-    expected = hsig * reduced_ratio
-    result = hsig_to_face_height(hsig, tp, output_depth_m=10.0, formula="komar_gaughan")
-    assert result == pytest.approx(expected, rel=1e-9)
+def test_break_point_source_clamped():
+    """source="break_point" result is clamped within [Hs, 3*Hs]."""
+    hsig = 2.0
+    result = hsig_to_face_height(hsig, 14.0, source="break_point")
+    assert hsig <= result <= hsig * 3.0
+
+
+def test_unknown_source_raises():
+    """Unknown source string raises ValueError."""
+    with pytest.raises(ValueError, match="unknown source"):
+        hsig_to_face_height(1.0, 12.0, source="nearshore")
 
 
 # ---------------------------------------------------------------------------
