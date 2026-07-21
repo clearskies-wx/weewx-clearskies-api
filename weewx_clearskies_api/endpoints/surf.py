@@ -732,6 +732,13 @@ def get_surf(location_id: str) -> dict:
                     transects=_spot_transects,
                     tide_level=0.0,
                     beach_facing=spot_config.beach_facing_degrees,
+                    # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
+                    bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
+                    bulk_tp=wave_period_pt if wave_period_pt else None,
+                    bulk_dir=wave_direction_pt if wave_direction_pt else None,
+                    # T4.5b: canonical partitions from deep-water SPECOUT
+                    # so per_partition_breaks uses indices the swell card knows.
+                    canonical_partitions=ts_spectral or None,
                 )
             except Exception:
                 logger.warning(
@@ -814,26 +821,36 @@ def get_surf(location_id: str) -> dict:
         else:
             entry["multiSwell"] = None  # SPECOUT not available for this timestep
 
-        # T4.4: Apply 1D pipeline results.
-        # On success: override breakingFaceHeight and waveHeightAtBreak with
-        # physics-based values; add new pipeline-specific response fields.
-        # On degraded/failure: keep existing SWAN CURVE-based values and mark degraded.
-        # swellHeight is always from deep-water SPECOUT (set above) — never overridden.
-        if _pipeline_result is not None and not _pipeline_result.degraded:
-            _best_face_m = _pipeline_result.best_peak_face_height_m
+        # T4.4/T4.5: Apply 1D pipeline results.
+        # On success (degraded=False): override breaking heights with physics-based
+        # values; add pipeline-specific response fields.
+        # T4.5 bulk-fallback (degraded=True, face_height > 0): apply 1D results
+        # (more accurate than SWAN CURVE) but preserve degraded=True in the response
+        # so the consumer knows spectral decomposition was not available.
+        # Total failure (degraded=True, face_height == 0) or no pipeline result:
+        # keep existing SWAN CURVE-based values and mark degraded.
+        # swellHeight is always from deep-water SPECOUT — never overridden.
+        _1d_face_m = (
+            _pipeline_result.best_peak_face_height_m
+            if _pipeline_result is not None
+            else 0.0
+        )
+        _apply_1d = _pipeline_result is not None and _1d_face_m > 0.0
+        if _apply_1d:
+            _best_face_m = _1d_face_m
             _avg_face_m = _pipeline_result.spot_average_face_height_m
             # Override with pipeline-computed breaking heights.
             entry["breakingFaceHeight"] = _convert_unit(
                 _best_face_m, "meter", wave_height_internal
             )
             # waveHeightAtBreak: Hs at the best break point.
-            # In the pipeline, face_height = 1.27 × Hs_break (H1/10 Rayleigh factor,
-            # source="break_point"), so Hs_break = face_height / 1.27.
-            _hs_at_best_break_m = _best_face_m / 1.27 if _best_face_m > 0.0 else 0.0
+            # face_height = 1.27 × Hs_break (H1/10 Rayleigh factor, source="break_point"),
+            # so Hs_break = face_height / 1.27.
+            _hs_at_best_break_m = _best_face_m / 1.27
             entry["waveHeightAtBreak"] = _convert_unit(
                 _hs_at_best_break_m, "meter", wave_height_internal
             )
-            # New pipeline-specific fields.
+            # Pipeline-specific fields.
             entry["bestPeakFaceHeight"] = _convert_unit(
                 _best_face_m, "meter", wave_height_internal
             )
@@ -844,9 +861,10 @@ def get_surf(location_id: str) -> dict:
             entry["peelClassification"] = _pipeline_result.peel_classification
             entry["transectCount"] = _pipeline_result.transect_count
             entry["openTransectCount"] = _pipeline_result.open_transect_count
-            entry["degraded"] = False
+            # T4.5: preserve degraded flag — True when bulk fallback was used.
+            entry["degraded"] = _pipeline_result.degraded
         else:
-            # Degraded: existing SWAN CURVE-based height fields unchanged.
+            # Total failure or no pipeline result: keep SWAN CURVE-based values.
             entry["bestPeakFaceHeight"] = None
             entry["spotAverageFaceHeight"] = None
             entry["peelAngle"] = None

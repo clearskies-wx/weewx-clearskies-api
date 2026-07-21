@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -397,9 +398,78 @@ def _compute_peel_angle(
     return peel_angle, classification
 
 
+def _match_partitions(
+    canonical_partitions: list[dict[str, Any]],
+    handoff_partitions: list[dict[str, Any]],
+) -> list[int | None]:
+    """Match handoff partitions to canonical partition indices (T4.5b).
+
+    For each handoff partition, finds the best-matching canonical partition
+    by nearest (period, direction).  Match criteria: period within ±2 s AND
+    direction within ±20°.  The 0°/360° wraparound is handled correctly
+    (e.g., 5° and 355° are 10° apart, not 350° apart).
+
+    The canonical list comes from the deep-water SPECOUT decomposition (L2,
+    ~15 m depth) and is the reference set used by the swell display card.
+    The handoff list comes from the L3 SPECOUT (nearshore handoff point) used
+    by the 1D model; structure effects or shoaling at L3 can produce a
+    different partition structure.
+
+    Args:
+        canonical_partitions: Partitions from the deep-water SPECOUT.
+            Each dict must have ``"period"`` (s) and ``"direction"`` (deg).
+        handoff_partitions: Partitions from the handoff SPECOUT (L3).
+
+    Returns:
+        List of length ``len(handoff_partitions)``.  Each element is the
+        index into *canonical_partitions* of the best match, or ``None``
+        when no canonical partition satisfies both the ±2 s period AND ±20°
+        direction criteria.
+    """
+    _PERIOD_TOL_S: float = 2.0
+    _DIR_TOL_DEG: float = 20.0
+
+    result: list[int | None] = []
+
+    for h_part in handoff_partitions:
+        h_period = float(h_part.get("period", 0.0))
+        h_dir = float(h_part.get("direction", 0.0))
+
+        best_idx: int | None = None
+        best_score: float = float("inf")
+
+        for c_idx, c_part in enumerate(canonical_partitions):
+            c_period = float(c_part.get("period", 0.0))
+            c_dir = float(c_part.get("direction", 0.0))
+
+            dp = abs(h_period - c_period)
+            # Smallest arc between two compass bearings (handles 0°/360° wrap).
+            dd = abs((h_dir - c_dir + 180.0) % 360.0 - 180.0)
+
+            if dp <= _PERIOD_TOL_S and dd <= _DIR_TOL_DEG:
+                # Normalised combined score — both tolerances count equally.
+                score = (dp / _PERIOD_TOL_S) + (dd / _DIR_TOL_DEG)
+                if score < best_score:
+                    best_score = score
+                    best_idx = c_idx
+
+        result.append(best_idx)
+
+    logger.debug(
+        "_match_partitions: %d handoff → %d canonical; matched=%d, unmatched=%d",
+        len(handoff_partitions),
+        len(canonical_partitions),
+        sum(1 for m in result if m is not None),
+        sum(1 for m in result if m is None),
+    )
+    return result
+
+
 def _aggregate_partition_breaks(
     open_transect_results: list[tuple[int, TransectResult]],
-    partitions: list[dict[str, Any]],
+    handoff_partitions: list[dict[str, Any]],
+    canonical_mapping: list[int | None] | None = None,
+    canonical_partitions: list[dict[str, Any]] | None = None,
 ) -> list[PartitionBreakInfo]:
     """Aggregate per-partition break statistics across open transects.
 
@@ -407,54 +477,161 @@ def _aggregate_partition_breaks(
     and breaker types from all open transects that produced a break point for
     that partition.
 
+    T4.5b: When *canonical_partitions* and *canonical_mapping* are supplied,
+    results are indexed by **canonical** partition index so the swell display
+    card can connect each partition to its breaking behaviour.  Handoff
+    partitions that do not match any canonical partition are collected into an
+    ``partition_index=-1`` "other" entry (appended at the end of the list).
+    When no canonical data is available, handoff partition indices are used
+    directly (backward-compatible behaviour).
+
+    Args:
+        open_transect_results: (transect_idx, TransectResult) pairs for open
+            (non-structure-affected) transects that succeeded.
+        handoff_partitions: Swell partitions from the handoff SPECOUT
+            decomposition (same order as ``TransectResult.per_partition``).
+        canonical_mapping: Output of ``_match_partitions()``.  Length must
+            equal ``len(handoff_partitions)``.  ``None`` disables T4.5b logic.
+        canonical_partitions: Partitions from the deep-water SPECOUT.
+            ``None`` disables T4.5b logic.
+
     Returns:
-        One PartitionBreakInfo per swell partition (same order as *partitions*).
+        One :class:`PartitionBreakInfo` per output partition.
+        - With canonical data: N_canonical entries + optional "other" entry.
+        - Without canonical data: one entry per handoff partition.
     """
-    results: list[PartitionBreakInfo] = []
-
-    for p_idx, partition in enumerate(partitions):
-        distances: list[float] = []
-        face_heights: list[float] = []
-        break_depths: list[float] = []
-        breaker_types: list[str] = []
-
+    # ---- Collect raw stats per handoff partition index ----
+    def _collect(p_idx: int) -> tuple[list[float], list[float], list[float], list[str]]:
+        dists: list[float] = []
+        faces: list[float] = []
+        bdepths: list[float] = []
+        btypes: list[str] = []
         for _, tr in open_transect_results:
             pbr = tr.per_partition[p_idx] if p_idx < len(tr.per_partition) else None
             if pbr is None or not pbr.break_points:
                 continue
-            primary_bp = pbr.break_points[0]
-            distances.append(primary_bp.distance_m)
-            face_heights.append(pbr.face_height_m)
-            break_depths.append(primary_bp.depth_m)
-            breaker_types.append(primary_bp.breaker_type)
+            bp = pbr.break_points[0]
+            dists.append(bp.distance_m)
+            faces.append(pbr.face_height_m)
+            bdepths.append(bp.depth_m)
+            btypes.append(bp.breaker_type)
+        return dists, faces, bdepths, btypes
 
-        if distances:
-            mean_dist = sum(distances) / len(distances)
-            mean_face = sum(face_heights) / len(face_heights)
-            peak_face = max(face_heights)
-            mean_depth = sum(break_depths) / len(break_depths)
-            # Most common breaker type.
-            from collections import Counter
-            dominant_type = Counter(breaker_types).most_common(1)[0][0]
-        else:
-            mean_dist = None
-            mean_face = None
-            peak_face = None
-            mean_depth = None
-            dominant_type = None
+    def _summarize(
+        dists: list[float],
+        faces: list[float],
+        bdepths: list[float],
+        btypes: list[str],
+    ) -> tuple[float | None, float | None, float | None, float | None, str | None]:
+        if not dists:
+            return None, None, None, None, None
+        return (
+            sum(dists) / len(dists),
+            sum(faces) / len(faces),
+            max(faces),
+            sum(bdepths) / len(bdepths),
+            Counter(btypes).most_common(1)[0][0],
+        )
 
-        results.append(PartitionBreakInfo(
-            partition_index=p_idx,
-            period_s=partition["period"],
-            direction_deg=partition["direction"],
-            height_m=partition["height"],
-            classification=partition["classification"],
-            mean_break_distance_m=mean_dist,
-            mean_face_height_m=mean_face,
-            peak_face_height_m=peak_face,
-            mean_break_depth_m=mean_depth,
-            dominant_breaker_type=dominant_type,
-        ))
+    results: list[PartitionBreakInfo] = []
+
+    if canonical_partitions is not None and canonical_mapping is not None:
+        # ---- T4.5b: aggregate by canonical partition index ----
+        # Accumulate stats from matched handoff partitions into their canonical bucket.
+        # Unmatched handoff partitions land in bucket key=-1 ("other").
+        accum: dict[int, tuple[list[float], list[float], list[float], list[str]]] = {}
+
+        for h_idx in range(len(handoff_partitions)):
+            c_idx = canonical_mapping[h_idx] if h_idx < len(canonical_mapping) else None
+            key = c_idx if c_idx is not None else -1
+
+            dists, faces, bdepths, btypes = _collect(h_idx)
+            if not dists:
+                # No break data for this handoff partition — nothing to accumulate.
+                continue
+
+            if key not in accum:
+                accum[key] = ([], [], [], [])
+            ad, af, ab, at_ = accum[key]
+            ad.extend(dists)
+            af.extend(faces)
+            ab.extend(bdepths)
+            at_.extend(btypes)
+
+        # Build one PartitionBreakInfo per canonical partition.
+        for c_idx, c_part in enumerate(canonical_partitions):
+            ad, af, ab, at_ = accum.get(c_idx, ([], [], [], []))
+            mean_dist, mean_face, peak_face, mean_depth, dom_type = _summarize(
+                ad, af, ab, at_
+            )
+            results.append(PartitionBreakInfo(
+                partition_index=c_idx,
+                period_s=float(c_part.get("period", 0.0)),
+                direction_deg=float(c_part.get("direction", 0.0)),
+                height_m=float(c_part.get("height", 0.0)),
+                classification=c_part.get("classification", "swell"),
+                mean_break_distance_m=mean_dist,
+                mean_face_height_m=mean_face,
+                peak_face_height_m=peak_face,
+                mean_break_depth_m=mean_depth,
+                dominant_breaker_type=dom_type,
+            ))
+
+        # Append "other" entry for unmatched handoff partitions (if any had breaks).
+        if -1 in accum:
+            ad, af, ab, at_ = accum[-1]
+            mean_dist, mean_face, peak_face, mean_depth, dom_type = _summarize(
+                ad, af, ab, at_
+            )
+            if mean_dist is not None:
+                # Use the first unmatched handoff partition for the metadata fields.
+                first_unmatched = next(
+                    (
+                        handoff_partitions[h_idx]
+                        for h_idx in range(len(handoff_partitions))
+                        if h_idx < len(canonical_mapping)
+                        and canonical_mapping[h_idx] is None
+                    ),
+                    handoff_partitions[0],
+                )
+                n_unmatched = sum(1 for m in canonical_mapping if m is None)
+                logger.debug(
+                    "_aggregate_partition_breaks: %d handoff partition(s) unmatched "
+                    "to any canonical partition — aggregated as 'other' (index=-1)",
+                    n_unmatched,
+                )
+                results.append(PartitionBreakInfo(
+                    partition_index=-1,  # "other" — no canonical match
+                    period_s=float(first_unmatched.get("period", 0.0)),
+                    direction_deg=float(first_unmatched.get("direction", 0.0)),
+                    height_m=float(first_unmatched.get("height", 0.0)),
+                    classification=first_unmatched.get("classification", "swell"),
+                    mean_break_distance_m=mean_dist,
+                    mean_face_height_m=mean_face,
+                    peak_face_height_m=peak_face,
+                    mean_break_depth_m=mean_depth,
+                    dominant_breaker_type=dom_type,
+                ))
+
+    else:
+        # ---- Backward-compatible: use handoff partition indices directly ----
+        for p_idx, partition in enumerate(handoff_partitions):
+            dists, faces, bdepths, btypes = _collect(p_idx)
+            mean_dist, mean_face, peak_face, mean_depth, dom_type = _summarize(
+                dists, faces, bdepths, btypes
+            )
+            results.append(PartitionBreakInfo(
+                partition_index=p_idx,
+                period_s=float(partition.get("period", 0.0)),
+                direction_deg=float(partition.get("direction", 0.0)),
+                height_m=float(partition.get("height", 0.0)),
+                classification=partition.get("classification", "swell"),
+                mean_break_distance_m=mean_dist,
+                mean_face_height_m=mean_face,
+                peak_face_height_m=peak_face,
+                mean_break_depth_m=mean_depth,
+                dominant_breaker_type=dom_type,
+            ))
 
     return results
 
@@ -484,11 +661,15 @@ def _degraded_result(
 
 
 def run_pipeline(
-    specout_data: dict[str, Any],
+    specout_data: dict[str, Any] | None,
     transects: list[TransectInfo],
     tide_level: float,
     beach_facing: float,
     gamma: float = 0.73,
+    bulk_hs: float | None = None,
+    bulk_tp: float | None = None,
+    bulk_dir: float | None = None,
+    canonical_partitions: list[dict[str, Any]] | None = None,
 ) -> PipelineResult:
     """Run the per-partition multi-transect 1D swell transformation pipeline.
 
@@ -514,6 +695,7 @@ def run_pipeline(
             This is the HANDOFF SPECOUT (from L3 when available, L2 otherwise).
             The DEEP-WATER SPECOUT for the swell display card is consumed
             separately upstream (T3.3 / T4.2 step a).
+            ``None`` or an empty dict triggers T4.5 bulk-fallback behaviour.
         transects: List of TransectInfo objects from compute_spot_transects().
             The ``bathymetric_profile`` field must be populated (done at SWAN
             runtime per T3.3) — transects with empty profiles are skipped.
@@ -523,38 +705,94 @@ def run_pipeline(
             true north).  Waves arrive FROM this direction.  Used for Snell's
             law refraction and peel angle computation.
         gamma: Depth-limited breaking parameter (default 0.73, matching SWAN).
+        bulk_hs: T4.5 — fallback significant wave height (m) from SWAN TABLE.
+            Used only when *specout_data* is None/empty/missing required keys.
+        bulk_tp: T4.5 — fallback peak period (s) from SWAN TABLE.
+        bulk_dir: T4.5 — fallback wave direction (degrees) from SWAN TABLE.
+        canonical_partitions: T4.5b — partitions from the deep-water (L2)
+            SPECOUT decomposition that the swell display card uses.  When
+            provided, ``per_partition_breaks`` in the result uses canonical
+            partition indices so the card can connect each partition to its
+            breaking behaviour.  ``None`` disables canonical-index logic and
+            falls back to handoff partition indices.
 
     Returns:
         PipelineResult with headline metrics and full per-transect output.
         Returns a degraded result (degraded=True) when:
-          - SPECOUT decomposition finds zero partitions
+          - SPECOUT decomposition finds zero partitions AND no bulk fallback
+            values are provided
           - All transects have empty bathymetric profiles
           - The 1D model fails on every transect
+        Returns degraded=True (but with valid 1D face-height results) when:
+          - SPECOUT unavailable and bulk Hs/Tp/Dir are used as single partition
     """
     n_transects = len(transects)
 
     # ------------------------------------------------------------------
     # Step 1: Decompose spectrum into swell partitions
+    # T4.5: Handle None / empty / missing-key specout_data gracefully.
     # ------------------------------------------------------------------
+    if specout_data is None:
+        specout_data = {}
+
     partitions = decompose_spectrum(
         freqs_hz=specout_data.get("freqs_hz", []),
         dirs_deg=specout_data.get("dirs_deg", []),
         energy=specout_data.get("energy", []),
     )
 
+    # T4.5: track whether we degraded due to missing SPECOUT.
+    _specout_degraded: bool = False
+
     if not partitions:
-        return _degraded_result(n_transects, "spectral decomposition returned no partitions")
+        # T4.5: SPECOUT unavailable or un-parseable — fall back to a single
+        # bulk partition synthesised from SWAN TABLE bulk parameters if available.
+        if bulk_hs is not None and bulk_tp is not None and bulk_dir is not None:
+            _bulk_class = (
+                "groundswell" if bulk_tp >= 12.5
+                else "swell" if bulk_tp >= 10.0
+                else "wind_swell"
+            )
+            logger.warning(
+                "run_pipeline: SPECOUT unavailable or empty — falling back to "
+                "single bulk partition (Hs=%.2f m, Tp=%.1f s, Dir=%.0f°); "
+                "result will be marked degraded=True",
+                bulk_hs,
+                bulk_tp,
+                bulk_dir,
+            )
+            partitions = [{
+                "height": bulk_hs,
+                "period": bulk_tp,
+                "direction": bulk_dir,
+                "energy": 0.0,
+                "frequencyRange": [0.0, 0.0],
+                "classification": _bulk_class,
+            }]
+            _specout_degraded = True
+        else:
+            return _degraded_result(
+                n_transects,
+                "spectral decomposition returned no partitions",
+            )
 
     n_partitions = len(partitions)
     logger.info(
         "run_pipeline: %d transects, %d spectral partitions, "
-        "tide=%.2f m, beach_facing=%.1f°, gamma=%.2f",
+        "tide=%.2f m, beach_facing=%.1f°, gamma=%.2f%s",
         n_transects,
         n_partitions,
         tide_level,
         beach_facing,
         gamma,
+        " [bulk-fallback]" if _specout_degraded else "",
     )
+
+    # T4.5b: Match handoff partitions to canonical partition indices.
+    # canonical_mapping[h_idx] = c_idx | None (None = no canonical match).
+    canonical_mapping: list[int | None] | None = None
+    if canonical_partitions is not None and partitions and not _specout_degraded:
+        canonical_mapping = _match_partitions(canonical_partitions, partitions)
 
     # ------------------------------------------------------------------
     # Step 2: Run 1D model for each partition × each transect
@@ -736,8 +974,14 @@ def run_pipeline(
 
     # ------------------------------------------------------------------
     # Per-partition aggregation across open transects
+    # T4.5b: pass canonical mapping so results use canonical indices.
     # ------------------------------------------------------------------
-    per_partition_breaks = _aggregate_partition_breaks(open_transect_results, partitions)
+    per_partition_breaks = _aggregate_partition_breaks(
+        open_transect_results,
+        partitions,
+        canonical_mapping=canonical_mapping,
+        canonical_partitions=canonical_partitions if canonical_mapping is not None else None,
+    )
 
     # Log summary.
     logger.info(
@@ -762,5 +1006,8 @@ def run_pipeline(
         open_transect_count=open_transect_count,
         per_transect=[tr for tr in per_transect_results if tr is not None],
         per_partition_breaks=per_partition_breaks,
-        degraded=False,
+        # T4.5: degraded=True when SPECOUT was unavailable and bulk fallback was used.
+        # Remaining pathways (partial transect failure, all-transect failure) are
+        # handled by _degraded_result() and the failed_count warning above.
+        degraded=_specout_degraded,
     )
