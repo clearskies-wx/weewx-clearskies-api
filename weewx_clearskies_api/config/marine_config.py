@@ -28,7 +28,17 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
           # nws_srf_wfo = SGX
 
           [[[[surf]]]]
-            beach_facing_degrees = 135
+            # Measurement zone — operator draws a shoreline segment (T2.1,
+            # SURF-1D-IMPLEMENTATION-PLAN Phase 2).  The segment defines the
+            # surfable stretch of beach; transects are generated perpendicular
+            # to it at transect_spacing_m intervals.  beach_facing_degrees is
+            # computed as the bearing perpendicular to the segment line —
+            # NOT stored in api.conf.
+            segment_start_lat = 34.0262
+            segment_start_lon = -118.0010
+            segment_end_lat = 34.0265
+            segment_end_lon = -118.0040
+            transect_spacing_m = 10.0
             bottom_type = sand
             topographic_feature = straight_beach
             directional_exposure = N:false, NE:false, E:true, SE:true,
@@ -46,6 +56,7 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import configobj
@@ -315,10 +326,79 @@ class StructureConfig:
             )
 
 
-class SurfSpotConfig:
-    """``[[surf]]`` sub-block settings for a marine location."""
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return the haversine great-circle distance in metres between two WGS84 points.
 
-    beach_facing_degrees: float
+    Accurate to within ~0.5% for distances < 1000 km, which is more than
+    sufficient for shoreline segments of 100-500 m.
+    """
+    r = 6_371_000.0  # Earth mean radius in metres
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _segment_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Return the initial forward bearing (degrees true, 0-360) from point 1 to point 2.
+
+    Uses the standard great-circle bearing formula.
+    """
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    x = math.sin(dlambda) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    bearing = math.degrees(math.atan2(x, y))
+    return bearing % 360.0
+
+
+def _perpendicular_bearing(bearing: float) -> float:
+    """Return the seaward-facing bearing perpendicular to a shoreline segment.
+
+    For a segment running roughly along the shore (e.g. N-S), the two
+    perpendicular directions are E (seaward) and W (inland).  We take
+    the perpendicular by rotating +90 degrees clockwise; the surf endpoint
+    uses beach_facing_degrees only for directional exposure comparisons,
+    so either perpendicular direction gives a consistent result.  The actual
+    wave approach geometry is determined by the OBSTACLE shadow algorithm in
+    the handoff algorithm (T2.3), not by this value alone.
+    """
+    return (bearing + 90.0) % 360.0
+
+
+class SurfSpotConfig:
+    """``[[surf]]`` sub-block settings for a marine location.
+
+    The measurement zone is defined by a shoreline segment
+    (``segment_start_lat/lon`` to ``segment_end_lat/lon``) rather than a
+    single pin.  This replaces the old ``spot_lat``, ``spot_lon``, and
+    stored ``beach_facing_degrees`` fields (T2.1, SURF-1D-IMPLEMENTATION-PLAN
+    Phase 2).
+
+    Stored in api.conf (operator-configurable):
+      segment_start_lat, segment_start_lon — start endpoint of the shore segment
+      segment_end_lat, segment_end_lon     — end endpoint of the shore segment
+      transect_spacing_m (default 10.0)    — spacing between parallel transects
+
+    Computed at load time (read-only, NOT written to api.conf):
+      beach_facing_degrees — bearing perpendicular to the segment line
+      segment_length_m     — haversine distance between segment endpoints (metres)
+      transect_count       — int(segment_length_m / transect_spacing_m) + 1
+      primary_transect_index — index of the midpoint transect (transect_count // 2);
+                               used by the existing surf endpoint as the single
+                               representative transect until Phase 4 rewires to
+                               full multi-transect output (T2.6 pipeline bridge).
+    """
+
+    # Stored (read from api.conf)
+    segment_start_lat: float
+    segment_start_lon: float
+    segment_end_lat: float
+    segment_end_lon: float
+    transect_spacing_m: float
     bottom_type: str
     beach_slope: float | None
     structures: list[StructureConfig]
@@ -334,8 +414,45 @@ class SurfSpotConfig:
     #: ``"hawaiian"`` — back-of-wave scale (= face × 0.5).
     surf_height_display: str
 
+    # Computed (derived at load time, NOT stored in api.conf)
+    _beach_facing_degrees: float
+    _segment_length_m: float
+    _transect_count: int
+    _primary_transect_index: int
+
     def __init__(self, section: dict[str, Any]) -> None:
-        self.beach_facing_degrees = float(section.get("beach_facing_degrees", 0.0))
+        # --- Segment endpoints (required) ---
+        self.segment_start_lat = float(section.get("segment_start_lat", 0.0))
+        self.segment_start_lon = float(section.get("segment_start_lon", 0.0))
+        self.segment_end_lat = float(section.get("segment_end_lat", 0.0))
+        self.segment_end_lon = float(section.get("segment_end_lon", 0.0))
+        # Transect spacing — operator-configurable, default 10m
+        raw_spacing = section.get("transect_spacing_m")
+        if raw_spacing is not None and str(raw_spacing).strip():
+            self.transect_spacing_m = float(raw_spacing)
+        else:
+            self.transect_spacing_m = 10.0
+
+        # --- Derive computed fields from segment geometry ---
+        bearing = _segment_bearing(
+            self.segment_start_lat, self.segment_start_lon,
+            self.segment_end_lat, self.segment_end_lon,
+        )
+        self._beach_facing_degrees = _perpendicular_bearing(bearing)
+        self._segment_length_m = _haversine_m(
+            self.segment_start_lat, self.segment_start_lon,
+            self.segment_end_lat, self.segment_end_lon,
+        )
+        # transect_count: one transect at start + one every spacing_m along segment
+        if self.transect_spacing_m > 0:
+            self._transect_count = int(self._segment_length_m / self.transect_spacing_m) + 1
+        else:
+            self._transect_count = 1
+        # Pipeline continuity bridge (T2.6): midpoint transect index used by the
+        # existing surf endpoint until Phase 4 rewires to full multi-transect pipeline.
+        self._primary_transect_index = self._transect_count // 2
+
+        # --- Other surf config fields ---
         self.bottom_type = str(section.get("bottom_type", "")).strip()
         self.beach_slope = _opt_float(section, "beach_slope")
         self.topographic_feature = str(section.get("topographic_feature", "")).strip()
@@ -353,8 +470,70 @@ class SurfSpotConfig:
         # read it here — runtime CUDEM profiles are cached at
         # /etc/weewx-clearskies/spot_profiles/ and loaded on-demand by SWAN.
 
+    # --- Computed properties (read-only) ---
+
+    @property
+    def beach_facing_degrees(self) -> float:
+        """Bearing (degrees true, 0-360) perpendicular to the shoreline segment.
+
+        Computed from the segment geometry at load time.  Not stored in
+        api.conf — always derived from segment_start/end lat/lon.
+        """
+        return self._beach_facing_degrees
+
+    @property
+    def segment_length_m(self) -> float:
+        """Haversine great-circle length of the shoreline segment in metres."""
+        return self._segment_length_m
+
+    @property
+    def transect_count(self) -> int:
+        """Number of cross-shore transects generated across the segment.
+
+        Computed as ``int(segment_length_m / transect_spacing_m) + 1``.
+        Minimum 1 transect even for a degenerate zero-length segment.
+        """
+        return self._transect_count
+
+    @property
+    def primary_transect_index(self) -> int:
+        """Index of the primary (representative) transect within the transect array.
+
+        Defaults to the midpoint index (``transect_count // 2``).  Used by the
+        existing surf endpoint as a single representative transect during the
+        Phase 2-3 bridge period, before Phase 4 rewires to full multi-transect
+        output.  Structure-aware selection (excluding pier-shadowed transects)
+        is implemented in T2.3 once the obstacle intersection results are
+        available at config load time.
+        """
+        return self._primary_transect_index
+
     def validate(self, location_id: str) -> None:
         """Raise ValueError naming the field + location on bad values."""
+        # Validate segment coordinates
+        for field, value in (
+            ("segment_start_lat", self.segment_start_lat),
+            ("segment_end_lat", self.segment_end_lat),
+        ):
+            if not (-90 <= value <= 90):
+                raise ValueError(
+                    f"[marine.locations.{location_id}.surf] {field} "
+                    f"{value!r} out of range [-90, 90]"
+                )
+        for field, value in (
+            ("segment_start_lon", self.segment_start_lon),
+            ("segment_end_lon", self.segment_end_lon),
+        ):
+            if not (-180 <= value <= 180):
+                raise ValueError(
+                    f"[marine.locations.{location_id}.surf] {field} "
+                    f"{value!r} out of range [-180, 180]"
+                )
+        if self.transect_spacing_m <= 0:
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf] transect_spacing_m "
+                f"{self.transect_spacing_m!r} must be > 0"
+            )
         if self.bottom_type not in _VALID_BOTTOM_TYPES:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf] bottom_type "
@@ -364,11 +543,6 @@ class SurfSpotConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf] topographic_feature "
                 f"{self.topographic_feature!r} not in {sorted(_VALID_TOPOGRAPHIC_FEATURES)}"
-            )
-        if not (0 <= self.beach_facing_degrees < 360):
-            raise ValueError(
-                f"[marine.locations.{location_id}.surf] beach_facing_degrees "
-                f"{self.beach_facing_degrees!r} out of range [0, 360)"
             )
         # T2.6 — validate new breaker pipeline config
         if self.breaker_formula not in _VALID_BREAKER_FORMULAS:

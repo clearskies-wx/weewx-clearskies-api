@@ -442,11 +442,32 @@ class MarineStructureApplyConfig(BaseModel):
 
 class MarineSurfSpotApplyConfig(BaseModel):
     """``[[[[surf]]]]`` sub-block for one marine location (PROVIDER-MANUAL §14,
-    OPERATIONS-MANUAL.md "Marine location configuration")."""
+    OPERATIONS-MANUAL.md "Marine location configuration").
+
+    T2.1 (SURF-1D-IMPLEMENTATION-PLAN Phase 2): The old single-pin fields
+    (``beach_facing_degrees``, ``spot_lat``, ``spot_lon``) are replaced by a
+    shoreline segment.  ``beach_facing_degrees`` is now computed from the
+    segment geometry at config load time — it is NOT accepted in the apply
+    payload and NOT written to api.conf.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    beach_facing_degrees: float = Field(ge=0, lt=360)
+    # --- Shoreline segment (T2.1) ---
+    #: Latitude of the segment start endpoint (degrees WGS84).
+    segment_start_lat: float = Field(ge=-90, le=90)
+    #: Longitude of the segment start endpoint (degrees WGS84).
+    segment_start_lon: float = Field(ge=-180, le=180)
+    #: Latitude of the segment end endpoint (degrees WGS84).
+    segment_end_lat: float = Field(ge=-90, le=90)
+    #: Longitude of the segment end endpoint (degrees WGS84).
+    segment_end_lon: float = Field(ge=-180, le=180)
+    #: Spacing between parallel cross-shore transects (metres).
+    #: Default 10m matches L3 grid resolution so each transect aligns with a
+    #: SWAN grid node (SURF-ZONE-MODEL-BRIEF §2.2.4).
+    transect_spacing_m: float = Field(default=10.0, gt=0)
+
+    # --- Other surf config fields ---
     bottom_type: str
     topographic_feature: str
     directional_exposure: dict[str, bool] | None = None
@@ -1038,7 +1059,13 @@ def _build_marine_conf_section(
         if loc.surf is not None:
             surf = loc.surf
             surf_section: dict[str, Any] = {
-                "beach_facing_degrees": str(surf.beach_facing_degrees),
+                # Shoreline segment (T2.1) — beach_facing_degrees is computed
+                # at load time from segment geometry, NOT written to api.conf.
+                "segment_start_lat": str(surf.segment_start_lat),
+                "segment_start_lon": str(surf.segment_start_lon),
+                "segment_end_lat": str(surf.segment_end_lat),
+                "segment_end_lon": str(surf.segment_end_lon),
+                "transect_spacing_m": str(surf.transect_spacing_m),
                 "bottom_type": surf.bottom_type,
                 "topographic_feature": surf.topographic_feature,
                 # Breaker height pipeline config (T2.6 / T4.4).
