@@ -907,7 +907,7 @@ def build_swan_input(
     # dict has 'type' (pier/breakwater/jetty/seawall/groin) and 'coordinates'
     # (list of [lon, lat] pairs defining the OBSTACLE LINE).
     _OBSTACLE_PARAMS: dict[str, str] = {
-        "pier":       "TRANSM 0.8",
+        "pier":       "TRANSM 0.95",
         "breakwater": "DAM DANGremond 2.0 0.5 10.0",
         "jetty":      "DAM GODA 3.0 0.4 0.8",
         "seawall":    "REFL 0.5",
