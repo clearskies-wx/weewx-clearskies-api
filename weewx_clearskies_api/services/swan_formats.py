@@ -27,8 +27,16 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
+
+# ---------------------------------------------------------------------------
+# Local imports — placed after stdlib to avoid polluting the module header.
+# Neither of these modules imports from swan_formats, so no circular risk.
+# ---------------------------------------------------------------------------
+from weewx_clearskies_api.config.marine_config import StructureConfig
+from weewx_clearskies_api.services.transect_handoff import compute_handoff_depths
 
 logger = logging.getLogger(__name__)
 
@@ -446,7 +454,297 @@ def cudem_to_swan_bottom(
 
 
 # ---------------------------------------------------------------------------
-# Cross-shore transect helper (T3.1)
+# Multi-transect output types (T2.2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TransectInfo:
+    """Obstacle-aware cross-shore transect descriptor for one surf spot transect.
+
+    Instances are produced by ``compute_spot_transects()`` during surf spot
+    setup (wizard), before any SWAN run.  The ``bathymetric_profile`` field
+    is intentionally left empty here — it is populated at SWAN runtime once
+    the CUDEM profile along the transect has been sampled (Phase 3 / T3.3).
+
+    Attributes
+    ----------
+    index:
+        Zero-based position within the transect array (0 = start of segment).
+    origin_lat, origin_lon:
+        WGS-84 coordinates of the transect's shore-side origin — the point
+        on the operator-drawn shoreline segment from which the transect
+        extends seaward.
+    bearing_deg:
+        Compass bearing (degrees, clockwise from north) pointing seaward —
+        the direction the transect travels from shore to the handoff depth.
+        v1: perpendicular to the shoreline segment (= beach_facing_degrees).
+        v2 future: isobath-normal bearing from smoothed CUDEM gradient.
+    handoff_depth_m:
+        CUDEM depth (metres, positive = below MSL) at which the 1D surf
+        model receives its boundary condition from SWAN.  Determined by
+        ``compute_handoff_depths()`` (T2.3).  Clamped to [5 m, 15 m].
+    is_structure_affected:
+        True when one or more OBSTACLE structures cast a geometric shadow on
+        this transect for at least one of the three tested wave approach
+        angles (beach_facing ± 30°).  Structure-affected transects are
+        excluded from headline surf metrics (best peak, spot average) but
+        are included in the quasi-2D heat map.
+    shadowing_structures:
+        Human-readable labels of every structure that shadows this transect,
+        in the form ``"{type}({length_m:.0f}m)"``.  Empty when
+        ``is_structure_affected`` is False.
+    bathymetric_profile:
+        CUDEM depth profile along the transect: list of dicts with keys
+        ``"distance_m"`` (metres from shore, increasing seaward) and
+        ``"depth_m"`` (positive = below MSL).  Populated later at SWAN
+        runtime — empty at the end of T2.2.
+    """
+
+    index: int
+    origin_lat: float
+    origin_lon: float
+    bearing_deg: float
+    handoff_depth_m: float
+    is_structure_affected: bool
+    shadowing_structures: list[str] = field(default_factory=list)
+    # Populated at SWAN runtime (Phase 3 / T3.3), not during setup.
+    bathymetric_profile: list[dict[str, float]] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Multi-transect generation (T2.2)
+# ---------------------------------------------------------------------------
+
+#: Approximate metres per degree of latitude (flat-earth, good for coastal domains).
+_M_PER_DEG_LAT_FORMATS: float = 111_320.0
+
+
+def compute_spot_transects(
+    segment_start_lat: float,
+    segment_start_lon: float,
+    segment_end_lat: float,
+    segment_end_lon: float,
+    transect_spacing_m: float,
+    beach_facing_degrees: float,
+    structures: list[StructureConfig] | None = None,
+    bathymetry_profile_fn: Callable[[float, float], float | None] | None = None,
+    *,
+    use_isobath_orientation: bool = False,
+) -> list[TransectInfo]:
+    """Generate N obstacle-aware cross-shore transects along a shoreline segment.
+
+    Implements the multi-transect architecture from SURF-ZONE-MODEL-BRIEF
+    §2.2 (measurement zone definition, §2.2.2) and §2.2.3 (obstacle-aware
+    transect filtering).  Called during surf spot setup (wizard) as part of
+    Phase 2 (T2.2), before any SWAN run.
+
+    The shoreline segment (drawn by the operator on the wizard map) defines
+    WHERE transects originate.  Each transect extends seaward from its origin
+    perpendicular to the segment (v1), or perpendicular to the local isobath
+    (v2, when ``use_isobath_orientation=True`` and bathymetry is available).
+
+    Obstacle classification uses the geometric shadow algorithm from T2.3
+    (``compute_handoff_depths()``): one computation serves both handoff depth
+    and obstacle intersection, per SURF-ZONE-MODEL-BRIEF §2.2.3 and §2.3.4.
+
+    Parameters
+    ----------
+    segment_start_lat, segment_start_lon:
+        WGS-84 coordinates of the operator-drawn segment's start endpoint.
+    segment_end_lat, segment_end_lon:
+        WGS-84 coordinates of the segment's end endpoint.
+    transect_spacing_m:
+        Distance between adjacent transect origins along the segment
+        (metres).  Must be > 0.  Typical: 10 m (default in SurfSpotConfig).
+    beach_facing_degrees:
+        Compass bearing (degrees, clockwise from north) pointing from shore
+        toward the ocean — the seaward direction.  For v1 this is also the
+        transect bearing; computed from the segment geometry by SurfSpotConfig.
+    structures:
+        ``StructureConfig`` objects from the marine config.  When None or
+        empty, all transects are classified as ``open`` and handoff depths
+        default to 10 m.
+    bathymetry_profile_fn:
+        ``Callable[[lat: float, lon: float], depth_m: float | None]``.
+        Returns CUDEM depth (metres, positive = below MSL) at a geographic
+        point, or None when outside CUDEM coverage.  Queried at structure
+        endpoint coordinates to determine seaward tip depth (Step 1 of the
+        handoff algorithm).  When None, a constant-None function is used,
+        which clamps all structure-shadowed transects to the minimum handoff
+        depth (5 m) — acceptable for setup-time operation before CUDEM data
+        is available.
+    use_isobath_orientation:
+        v2 future enhancement flag.  When True, each transect bearing is
+        derived from the smoothed CUDEM depth gradient at the transect
+        origin, making transects perpendicular to the local isobath rather
+        than the segment line.  Currently raises a log warning and falls
+        back to the segment-perpendicular bearing (v1 behaviour).
+
+    Returns
+    -------
+    list[TransectInfo]
+        One entry per transect, in segment order (index 0 = start of segment,
+        index N-1 = end of segment).  ``bathymetric_profile`` is empty on all
+        returned instances — populated later at SWAN runtime.
+
+    Raises
+    ------
+    ValueError
+        ``transect_spacing_m`` is not positive.
+
+    Notes
+    -----
+    Minimum open transect warning: per SURF-ZONE-MODEL-BRIEF §2.2.3, when
+    more than 50% of transects are structure-affected the operator should
+    shift the measurement zone.  A WARNING is logged but no exception raised.
+
+    Compute cost: O(N × S) where N = transect count, S = structure count.
+    At 30 transects and 3 structures: < 1 ms.
+    """
+    if transect_spacing_m <= 0.0:
+        raise ValueError(
+            f"compute_spot_transects: transect_spacing_m must be > 0, "
+            f"got {transect_spacing_m}"
+        )
+
+    if use_isobath_orientation:
+        # v2 placeholder: isobath orientation needs CUDEM gradient at setup time.
+        logger.info(
+            "compute_spot_transects: use_isobath_orientation=True requires "
+            "CUDEM bathymetry at setup time — falling back to "
+            "segment-perpendicular bearing (v1)."
+        )
+
+    # ------------------------------------------------------------------ #
+    # Segment geometry (flat-earth approximation, valid for ≤ 10 km).     #
+    # ------------------------------------------------------------------ #
+    ref_lat = (segment_start_lat + segment_end_lat) / 2.0
+    m_per_lat = _M_PER_DEG_LAT_FORMATS
+    m_per_lon = m_per_lat * math.cos(math.radians(ref_lat))
+
+    dlat_m = (segment_end_lat - segment_start_lat) * m_per_lat
+    dlon_m = (
+        (segment_end_lon - segment_start_lon) * m_per_lon
+        if m_per_lon > 0.0
+        else 0.0
+    )
+    seg_length_m = math.sqrt(dlat_m ** 2 + dlon_m ** 2)
+
+    # Segment bearing in radians: atan2(east_m, north_m) → compass-compatible.
+    # math.atan2(0, 0) = 0.0 for degenerate (zero-length) segments — safe.
+    seg_bearing_rad = math.atan2(dlon_m, dlat_m)
+
+    # ------------------------------------------------------------------ #
+    # Transect count.                                                       #
+    # ------------------------------------------------------------------ #
+    if seg_length_m < 1.0:
+        # Degenerate (zero-length) segment → single transect at start point.
+        n_transects = 1
+        logger.debug(
+            "compute_spot_transects: segment length %.3f m < 1 m — "
+            "generating 1 transect at start point (%.6f, %.6f).",
+            seg_length_m,
+            segment_start_lat,
+            segment_start_lon,
+        )
+    else:
+        n_transects = int(seg_length_m / transect_spacing_m) + 1
+
+    # ------------------------------------------------------------------ #
+    # Transect origins along the segment.                                   #
+    # ------------------------------------------------------------------ #
+    transect_origins: list[tuple[float, float]] = []
+    for i in range(n_transects):
+        d = float(i) * transect_spacing_m
+        d = min(d, seg_length_m)  # clamp so last transect doesn't overshoot
+        dlat = math.cos(seg_bearing_rad) * d / m_per_lat
+        dlon = (
+            math.sin(seg_bearing_rad) * d / m_per_lon
+            if m_per_lon > 0.0
+            else 0.0
+        )
+        transect_origins.append((
+            segment_start_lat + dlat,
+            segment_start_lon + dlon,
+        ))
+
+    # ------------------------------------------------------------------ #
+    # Transect bearing (seaward direction).                                 #
+    # v1: all transects point in the beach_facing_degrees direction,        #
+    #     which is perpendicular to the segment line.                       #
+    # v2 future: per-transect isobath-normal bearing.                       #
+    # ------------------------------------------------------------------ #
+    transect_bearing = beach_facing_degrees
+    transect_bearings = [transect_bearing] * n_transects
+
+    # ------------------------------------------------------------------ #
+    # Obstacle intersection and handoff depths via T2.3.                    #
+    # ------------------------------------------------------------------ #
+    resolved_structures: list[StructureConfig] = (
+        structures if structures is not None else []
+    )
+    bathy_fn: Callable[[float, float], float | None] = (
+        bathymetry_profile_fn
+        if bathymetry_profile_fn is not None
+        else lambda _lat, _lon: None
+    )
+
+    handoff_results = compute_handoff_depths(
+        transect_origins=transect_origins,
+        transect_bearings=transect_bearings,
+        structures=resolved_structures,
+        beach_facing_degrees=beach_facing_degrees,
+        bathymetry_profile_fn=bathy_fn,
+    )
+
+    # ------------------------------------------------------------------ #
+    # Build TransectInfo list.                                              #
+    # ------------------------------------------------------------------ #
+    result: list[TransectInfo] = []
+    for i, ((t_lat, t_lon), ho) in enumerate(zip(transect_origins, handoff_results)):
+        result.append(TransectInfo(
+            index=i,
+            origin_lat=t_lat,
+            origin_lon=t_lon,
+            bearing_deg=transect_bearing,
+            handoff_depth_m=ho.handoff_depth_m,
+            is_structure_affected=ho.is_shadowed,
+            shadowing_structures=list(ho.shadowing_structures),
+            # bathymetric_profile: populated later at SWAN runtime (T3.3).
+        ))
+
+    # ------------------------------------------------------------------ #
+    # Minimum open transect warning (SURF-ZONE-MODEL-BRIEF §2.2.3).        #
+    # ------------------------------------------------------------------ #
+    n_affected = sum(1 for t in result if t.is_structure_affected)
+    if n_affected > 0 and n_affected > len(result) / 2:
+        logger.warning(
+            "compute_spot_transects: %d/%d transects (%d%%) are "
+            "structure-affected (>50%% threshold). "
+            "Consider shifting the measurement zone segment "
+            "(SURF-ZONE-MODEL-BRIEF §2.2.3).",
+            n_affected,
+            len(result),
+            int(100 * n_affected / max(len(result), 1)),
+        )
+
+    logger.info(
+        "compute_spot_transects: generated %d transects "
+        "(%.1f m spacing along %.1f m segment), "
+        "beach_facing=%.1f° — %d structure-affected, %d open.",
+        n_transects,
+        transect_spacing_m,
+        seg_length_m,
+        beach_facing_degrees,
+        n_affected,
+        len(result) - n_affected,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Cross-shore transect helper (T3.1 / T2.6 pipeline bridge)
 # ---------------------------------------------------------------------------
 
 
@@ -465,6 +763,11 @@ def compute_spot_transect(
     coastline_lat: float | None = None,
     coastline_lon: float | None = None,
     grid_bbox: tuple[float, float, float, float] | None = None,
+    # T2.6 pipeline bridge — obstacle-awareness params (optional, backward-compat).
+    # When *structures* is provided, compute_spot_transects() is called internally
+    # to enrich the returned dict with handoff depth and obstacle flags.
+    structures: list[StructureConfig] | None = None,
+    bathymetry_profile_fn: Callable[[float, float], float | None] | None = None,
 ) -> dict[str, Any]:
     """Compute the cross-shore CURVE transect for one surf spot.
 
@@ -501,6 +804,16 @@ def compute_spot_transect(
             clip the deep-end endpoint to stay within this bounding box.
             Prevents CURVE points from falling outside the Level 3 SWAN grid
             (T23.2).
+        structures: Optional list of ``StructureConfig`` objects (T2.6 pipeline
+            bridge).  When provided, this function delegates to
+            ``compute_spot_transects()`` internally to obtain handoff depth and
+            obstacle flags for the primary (single-point) transect, which are
+            added to the returned dict as ``"handoff_depth_m"``,
+            ``"is_structure_affected"``, and ``"shadowing_structures"``.
+            Callers that omit *structures* see no change in behaviour.
+        bathymetry_profile_fn: Optional CUDEM lookup callable (T2.6 bridge).
+            Used alongside *structures* to compute structure seaward tip depths.
+            Ignored when *structures* is None.
 
     Returns:
         dict with keys:
@@ -510,6 +823,15 @@ def compute_spot_transect(
           n_intervals (int): number of CURVE intervals (total points = n_intervals + 1).
           transect_points (list[dict]): each dict has keys "lon", "lat",
             "depth_m", "distance_m"; ordered from offshore to nearshore.
+          handoff_depth_m (float, T2.6): only present when *structures* provided.
+          is_structure_affected (bool, T2.6): only present when *structures* provided.
+          shadowing_structures (list[str], T2.6): only present when *structures* provided.
+
+    Notes:
+        T2.6 Pipeline Continuity Bridge: this function is retained for callers
+        that have not yet migrated to ``compute_spot_transects()`` (used by
+        ``build_swan_input()`` during the Phase 2-3 bridge period).  Phase 4
+        rewires the surf endpoint to call ``compute_spot_transects()`` directly.
     """
     # Origin for coordinate offsets — use the coastline when known (bidirectional
     # profile), otherwise fall back to the operator's pin (legacy behaviour).
@@ -634,7 +956,7 @@ def compute_spot_transect(
     end_lon, end_lat = _offset(d_shallow)
     specout_lon, specout_lat = _offset(d_spec)
 
-    return {
+    result: dict[str, Any] = {
         "start_lon": round(start_lon, 6),
         "start_lat": round(start_lat, 6),
         "end_lon": round(end_lon, 6),
@@ -644,6 +966,40 @@ def compute_spot_transect(
         "n_intervals": n_intervals,
         "transect_points": transect_points,
     }
+
+    # T2.6 pipeline bridge: enrich result with obstacle-awareness from
+    # compute_spot_transects() when structures are provided.  Uses a
+    # degenerate single-point segment (start == end == origin) to generate
+    # exactly one TransectInfo whose shadow/handoff result applies to this
+    # pin-based transect.
+    if structures is not None:
+        _origin_lat = coastline_lat if coastline_lat is not None else spot_lat
+        _origin_lon = coastline_lon if coastline_lon is not None else spot_lon
+        try:
+            _multi = compute_spot_transects(
+                segment_start_lat=_origin_lat,
+                segment_start_lon=_origin_lon,
+                segment_end_lat=_origin_lat,   # degenerate → 1 transect
+                segment_end_lon=_origin_lon,
+                transect_spacing_m=1.0,         # irrelevant for single-point
+                beach_facing_degrees=beach_facing_degrees,
+                structures=structures,
+                bathymetry_profile_fn=bathymetry_profile_fn,
+            )
+            if _multi:
+                _primary = _multi[0]
+                result["handoff_depth_m"] = _primary.handoff_depth_m
+                result["is_structure_affected"] = _primary.is_structure_affected
+                result["shadowing_structures"] = _primary.shadowing_structures
+        except Exception:
+            logger.exception(
+                "compute_spot_transect: T2.6 bridge failed; "
+                "obstacle info unavailable for spot (%.6f, %.6f).",
+                spot_lat,
+                spot_lon,
+            )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
