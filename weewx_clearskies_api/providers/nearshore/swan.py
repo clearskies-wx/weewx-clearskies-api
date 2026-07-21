@@ -1499,6 +1499,7 @@ def _run_all_spots_locked(
             continue
         cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
+            "l3_enabled": spot_cfg.l3_enabled,
         }
 
         # Load or refresh the bidirectional CUDEM profile for this spot.
@@ -1994,6 +1995,7 @@ def _run_quick_update_locked(
             continue
         cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
+            "l3_enabled": spot_cfg.l3_enabled,
         }
         cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
         if cache_path.exists():

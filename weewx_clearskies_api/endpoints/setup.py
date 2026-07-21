@@ -485,6 +485,10 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: "face" (default) — trough-to-crest face height (Western scale).
     #: "hawaiian" — back-of-wave scale (≈ face × 0.5, traditional Hawaii/Australia).
     surf_height_display: str = "face"
+    #: Operator override for L3 (fine) nested grid in SWAN.
+    #: "auto" (default) — enable L3 only when structures are present.
+    #: "on" — always enable L3.  "off" — never enable L3.
+    l3_enabled: str = "auto"
 
     @field_validator("bottom_type")
     @classmethod
@@ -528,6 +532,14 @@ class MarineSurfSpotApplyConfig(BaseModel):
             raise ValueError(
                 f"surf_height_display {v!r} not in {sorted(_VALID_SURF_HEIGHT_DISPLAYS)}"
             )
+        return v
+
+    @field_validator("l3_enabled")
+    @classmethod
+    def _validate_l3_enabled(cls, v: str) -> str:
+        from weewx_clearskies_api.config.marine_config import _VALID_L3_ENABLED
+        if v not in _VALID_L3_ENABLED:
+            raise ValueError(f"l3_enabled {v!r} not in {sorted(_VALID_L3_ENABLED)}")
         return v
 
 
@@ -1071,6 +1083,8 @@ def _build_marine_conf_section(
                 # Breaker height pipeline config (T2.6 / T4.4).
                 "breaker_formula": surf.breaker_formula,
                 "surf_height_display": surf.surf_height_display,
+                # L3 nested grid override (F2 audit remediation).
+                "l3_enabled": surf.l3_enabled,
             }
             if surf.directional_exposure:
                 surf_section["directional_exposure"] = [
