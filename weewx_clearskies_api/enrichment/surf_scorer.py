@@ -481,11 +481,13 @@ def _format_range(low: float, high: float, locale: str) -> str:
 
 def _compose_conditions_text(
     *,
-    height_ft: float,
+    height_display: float,
+    height_unit_label: str,
     period_s: float,
     direction_deg: float,
     wind_label: str,
-    wind_speed_mph: float | None,
+    wind_speed_display: float | None,
+    wind_unit_label: str,
     swell_score: float,
     locale: str,
 ) -> str:
@@ -493,28 +495,28 @@ def _compose_conditions_text(
 
     Example (en): "3-4 ft at 12 seconds from the SSW. Offshore winds
     5-10 mph. Clean conditions with long-period swell."
-    Sentence templates resolve through i18n.t() (``surf.conditions.*``
-    keys, API-MANUAL.md §17 "Marine i18n", T4.4) and are filled in with
-    ``str.format()``; numbers through i18n.format_number(). *wind_label*
-    is the already-resolved (i18n.t()) wind quality label. The compass
-    abbreviation itself (N/NE/E/...) is not locale-resolved — these are
-    the same terse letters used cross-locale in marine/aviation notation.
+
+    Uses the operator's configured units for height and wind speed
+    (SURF-10 fix). ``height_display`` and ``wind_speed_display`` are
+    already converted to the operator's display units by the caller.
     """
     compass = _nearest_compass(direction_deg)
-    height_low = max(0.0, height_ft - 1.0)
-    height_high = height_ft + 1.0
+    height_low = max(0.0, height_display - 1.0)
+    height_high = height_display + 1.0
     wave_part = i18n.t("surf.conditions.wave_summary", locale).format(
         range=_format_range(height_low, height_high, locale),
+        unit=height_unit_label,
         period=i18n.format_number(period_s, 0, locale),
         compass=compass,
     )
 
-    if wind_speed_mph is not None:
-        wind_low = max(0.0, wind_speed_mph - 2.5)
-        wind_high = wind_speed_mph + 2.5
+    if wind_speed_display is not None:
+        wind_low = max(0.0, wind_speed_display - 2.5)
+        wind_high = wind_speed_display + 2.5
         wind_part = i18n.t("surf.conditions.wind_with_speed", locale).format(
             wind_label=wind_label,
             range=_format_range(wind_low, wind_high, locale),
+            unit=wind_unit_label,
         )
     else:
         wind_part = i18n.t("surf.conditions.wind_no_speed", locale).format(
@@ -566,6 +568,10 @@ def score_surf(
     wind_source: str = "station",
     directional_spread: float | None = None,
     multi_swell: list[dict[str, Any]] | None = None,
+    height_unit: str = "foot",
+    height_unit_label: str = "ft",
+    wind_unit: str = "mile_per_hour",
+    wind_unit_label: str = "mph",
 ) -> SurfForecast:
     """Score surf quality and produce a SurfForecast model instance.
 
@@ -679,17 +685,19 @@ def score_surf(
     quality_label = i18n.t(f"surf.quality.{stars}", loc)
     wind_quality_label = i18n.t(f"surf.wind_quality.{wind_label_key}", loc)
 
-    height_ft = convert(wave_height, "meter", "foot") or 0.0
-    wind_speed_mph = (
-        convert(wind_speed, "meter_per_second", "mile_per_hour") if wind_speed is not None else None
+    height_display = convert(wave_height, "meter", height_unit) or 0.0
+    wind_speed_display = (
+        convert(wind_speed, "meter_per_second", wind_unit) if wind_speed is not None else None
     )
 
     conditions_text = _compose_conditions_text(
-        height_ft=height_ft,
+        height_display=height_display,
+        height_unit_label=height_unit_label,
         period_s=wave_period,
         direction_deg=wave_direction,
         wind_label=wind_quality_label,
-        wind_speed_mph=wind_speed_mph,
+        wind_speed_display=wind_speed_display,
+        wind_unit_label=wind_unit_label,
         swell_score=swell_dom_score,
         locale=loc,
     )

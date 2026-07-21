@@ -571,8 +571,8 @@
       "glassy": "Glassy"
     },
     "conditions": {
-      "wave_summary": "{range} ft at {period} seconds from the {compass}.",
-      "wind_with_speed": "{wind_label} winds {range} mph.",
+      "wave_summary": "{range} {unit} at {period} seconds from the {compass}.",
+      "wind_with_speed": "{wind_label} winds {range} {unit}.",
       "wind_no_speed": "{wind_label} winds.",
       "swell_clean": "Clean conditions with long-period swell.",
       "swell_mixed": "Mixed swell conditions.",

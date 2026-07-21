@@ -322,7 +322,8 @@ def get_surf(location_id: str) -> dict:
             detail=f"No surf spot configuration for location {location_id!r}",
         )
 
-    wave_height_internal, _ = _wave_height_unit()
+    wave_height_internal, height_symbol = _wave_height_unit()
+    _wind_internal, _wind_symbol = _ocean_speed_unit()
 
     # --- SWAN: sole nearshore wave source (ADR-093, API-MANUAL §17) ---
     # Fallback: current cache → last-good cache (any age) → empty list.
@@ -699,6 +700,10 @@ def get_surf(location_id: str) -> dict:
             wind_source=ts_wind_source,
             directional_spread=ref_point.get("directionalSpread"),  # T4.1: SWAN DSPR at ~10m
             multi_swell=ts_spectral,  # T4.1: SWAN SPECOUT for organization sub-factors
+            height_unit=wave_height_internal,  # SURF-10: operator's configured height unit
+            height_unit_label=height_symbol,   # SURF-10: e.g. "ft" or "m"
+            wind_unit=_wind_internal,          # SURF-10: operator's configured wind unit
+            wind_unit_label=_wind_symbol,      # SURF-10: e.g. "mph" or "kn"
         )
 
         entry = surf_forecast.model_dump()
