@@ -144,8 +144,8 @@ def _battjes_janssen(
     Dtot = alpha_bj * Qb * _RHO * _G * (Hmax / np.sqrt(2.0)) ** 2 / (4.0 * T)
 
     E = 0.125 * _RHO * _G * Hs**2
-    dEdx = -Dtot
-    E_new = E + dEdx * dx / np.maximum(Cg, 0.01)
+    # abs(dx): distances may be descending (offshore-first); dissipation is always positive
+    E_new = E - Dtot * np.abs(dx) / np.maximum(Cg, 0.01)
     E_new = np.maximum(E_new, 0.0)
     return np.sqrt(8.0 * E_new / (_RHO * _G))
 
