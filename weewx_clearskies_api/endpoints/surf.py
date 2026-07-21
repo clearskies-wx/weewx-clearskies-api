@@ -69,7 +69,7 @@ from weewx_clearskies_api.enrichment import wave_transform
 from weewx_clearskies_api.enrichment.surf_scorer import score_surf
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
-from weewx_clearskies_api.services.station import build_station_clock
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
@@ -472,6 +472,37 @@ def get_surf(location_id: str) -> dict:
         if _spec_t:
             _spectral_by_time[_spec_t] = _spec_entry.get("components", [])
 
+    # --- Almanac: sunrise/sunset and station TZ for time-of-day scoring (SURF-2 fix) ---
+    # Computed once per request (sunrise changes < 3 min/day, well within the
+    # ±1 h dawn window).  Failures degrade gracefully: time-of-day adjustments
+    # default to 0 for all timesteps when the almanac or station info is absent.
+    _sunrise_utc: str | None = None
+    _sunset_utc: str | None = None
+    _station_tz: str | None = None
+    try:
+        from weewx_clearskies_api.services.almanac import (  # noqa: PLC0415
+            compute_almanac as _compute_almanac,
+        )
+
+        _stn_info = get_station_info()
+        _station_tz = _stn_info.timezone or None
+        _today = datetime.now(tz=UTC).date()
+        _almanac_day = _compute_almanac(
+            _today,
+            location.lat,
+            location.lon,
+            0.0,  # surf beaches are at sea level
+            station_tz=_station_tz or "UTC",
+        )
+        _sunrise_utc = _almanac_day.sun.rise
+        _sunset_utc = _almanac_day.sun.set
+    except Exception:
+        logger.debug(
+            "surf endpoint: almanac lookup failed for time-of-day scoring (%s)",
+            location_id,
+            exc_info=True,
+        )
+
     # Fallback output depth from bathymetric profile (used when no depth info
     # from SWAN TABLE DEPTH column — old single-point mode).
     # bathymetric_profile was removed from SurfSpotConfig when the wizard-time
@@ -662,6 +693,9 @@ def get_surf(location_id: str) -> dict:
             spectral_components=None,  # deprecated — NDBC not used in scoring
             spot_config=spot_config,
             time_utc=valid_time,
+            sunrise_utc=_sunrise_utc,  # SURF-2: dawn bonus wiring
+            sunset_utc=_sunset_utc,    # SURF-2: reserved for future dusk handling
+            station_tz=_station_tz,    # SURF-2: afternoon penalty local-time conversion
             wind_source=ts_wind_source,
             directional_spread=ref_point.get("directionalSpread"),  # T4.1: SWAN DSPR at ~10m
             multi_swell=ts_spectral,  # T4.1: SWAN SPECOUT for organization sub-factors

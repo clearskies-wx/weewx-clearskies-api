@@ -53,6 +53,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
@@ -438,15 +439,22 @@ def _time_of_day_adjustment(
     time_utc: str | None,
     sunrise_utc: str | None,
     sunset_utc: str | None,  # noqa: ARG001 - reserved for future dusk handling
+    station_tz: str | None = None,
 ) -> float:
-    """Optional time-of-day adjustment; 1.0 (no-op) when time data is unavailable.
+    """Optional time-of-day adjustment; 1.0 (no-op) when inputs are unavailable.
 
-    Dawn detection compares two UTC timestamps directly (no timezone needed).
-    Afternoon (2-5pm local) detection is skipped: this function only receives
-    UTC timestamps, and converting to station-local hour would require a UTC
-    offset that is not part of this function's inputs. Per the brief this
-    adjustment is optional, so afternoon defaults to the neutral multiplier
-    rather than guessing a timezone.
+    Dawn bonus (``_DAWN_MULTIPLIER = 1.1``): applied when ``time_utc`` falls
+    within ``_DAWN_WINDOW_HOURS`` (±1 h) of ``sunrise_utc``.  Dawn detection
+    compares two UTC timestamps directly — no timezone conversion needed.
+
+    Afternoon penalty (``_AFTERNOON_MULTIPLIER = 0.9``): applied when local
+    time falls between ``_AFTERNOON_START_HOUR`` (14:00) and
+    ``_AFTERNOON_END_HOUR`` (17:00) exclusive.  Requires ``station_tz`` — an
+    IANA timezone identifier (e.g. ``"America/Los_Angeles"``).  Skipped
+    gracefully when ``station_tz`` is ``None`` or unrecognised.
+
+    Returns ``_TIME_MULTIPLIER_DEFAULT`` (1.0) when ``time_utc`` is absent or
+    unparseable, or when neither condition is met.
     """
     now = _parse_iso(time_utc)
     if now is None:
@@ -455,6 +463,14 @@ def _time_of_day_adjustment(
     sunrise = _parse_iso(sunrise_utc)
     if sunrise is not None and abs(now - sunrise) <= timedelta(hours=_DAWN_WINDOW_HOURS):
         return _DAWN_MULTIPLIER
+
+    if station_tz is not None:
+        try:
+            local_now = now.astimezone(ZoneInfo(station_tz))
+            if _AFTERNOON_START_HOUR <= local_now.hour < _AFTERNOON_END_HOUR:
+                return _AFTERNOON_MULTIPLIER
+        except ZoneInfoNotFoundError:
+            pass
 
     return _TIME_MULTIPLIER_DEFAULT
 
@@ -545,6 +561,7 @@ def score_surf(
     time_utc: str | None = None,
     sunrise_utc: str | None = None,
     sunset_utc: str | None = None,
+    station_tz: str | None = None,
     locale: str | None = None,
     wind_source: str = "station",
     directional_spread: float | None = None,
@@ -572,6 +589,11 @@ def score_surf(
         time_utc: ISO-8601 UTC; for the optional time-of-day adjustment.
         sunrise_utc: ISO-8601 UTC; for dawn detection.
         sunset_utc: ISO-8601 UTC; reserved for dusk detection.
+        station_tz: IANA timezone identifier (e.g. ``"America/Los_Angeles"``);
+            used to convert ``time_utc`` to station-local time for the
+            afternoon penalty (14:00–17:00 local).  When ``None``, the
+            afternoon penalty is skipped; dawn detection still works
+            using UTC timestamps only.
         locale: BCP-47 locale code. When None, resolves to
             i18n.get_active_locale() (API-MANUAL.md §17 "Marine i18n").
         wind_source: metadata field indicating the wind data source for this
@@ -636,7 +658,7 @@ def score_surf(
     directional_exposure_delta = post_dir - post_beach
 
     # Time-of-day adjustment (T4.2): positive at dawn, negative in afternoon.
-    time_mult = _time_of_day_adjustment(time_utc, sunrise_utc, sunset_utc)
+    time_mult = _time_of_day_adjustment(time_utc, sunrise_utc, sunset_utc, station_tz)
     post_time_float = post_dir * time_mult
     total_score = round(post_time_float)
     time_of_day_delta = total_score - post_dir
