@@ -28,25 +28,29 @@ shared building block consumed by four call sites:
   discovery. See PROVIDER-MANUAL §14.4 for the updated wire format.
 
 Algorithm (PROVIDER-MANUAL §14.8):
-  1. GET /points/{lat},{lon}                      -> cwa (WFO office ID, e.g. "ILM")
+  1. GET /points/{lat},{lon}                      -> primary cwa (WFO office ID)
+  1b. Probe 8 compass points at max(radius*2, 50) mi -> discover adjacent CWAs
+     (handles WFO boundary stations, e.g. Huntington Beach CA at SGX/LOX border
+     where the land CWA differs from the adjacent marine zone's CWA)
   2. GET /zones?type=coastal                       -> full coastal zone list,
-     filtered client-side by the `cwa` property (see "CWA filtering" below)
+     filtered client-side by ANY discovered CWA (see "CWA filtering" below)
   3. GET /zones/coastal/{zoneId} per candidate zone -> polygon geometry
   4. haversine(lat, lon, nearest vertex) per zone
   5. Zones within `radius_miles`, sorted by distance ascending
 
-CWA filtering (lead call, this round):
+CWA filtering:
   The NWS `/zones` endpoint's `area` query parameter only accepts
   AreaCode values (states / marine areas, e.g. "NC", "AM") — NOT WFO/CWA
   codes.  `GET /zones?type=coastal&area=ILM` returns HTTP 400 (verified live
   against api.weather.gov).  There is no server-side CWA filter for `/zones`.
-  Per the lead's explicit fallback instruction, this module fetches the full
-  `type=coastal` zone list (~570 zones as of this writing, no pagination
-  encountered in practice — see "Pagination" below) and filters client-side
-  on each zone's `properties.cwa` array, which reliably contains the WFO
-  office ID (e.g. `["ILM"]`) per a live fixture capture of
-  `/zones/coastal/AMZ250`.  The full list is cached for 24h so this is a
-  one-time cost per cache window, not a per-discovery cost.
+  This module fetches the full `type=coastal` zone list (~570 zones as of this
+  writing, no pagination encountered in practice — see "Pagination" below) and
+  filters client-side on each zone's `properties.cwa` array against ALL
+  discovered CWAs (station's own + adjacent WFOs from compass-point probes).
+  The multi-CWA approach handles stations near WFO boundaries where the land
+  CWA (e.g. SGX for Huntington Beach) differs from the marine zone's CWA
+  (LOX for PZZ655). The full list is cached for 24h so this is a one-time
+  cost per cache window, not a per-discovery cost.
 
 Pagination:
   A live, unbounded `GET /zones?type=coastal` request returned all ~570
@@ -335,6 +339,26 @@ def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float
     return _EARTH_RADIUS_MILES * c
 
 
+def _destination_point(
+    lat: float, lon: float, bearing_deg: float, distance_miles: float
+) -> tuple[float, float]:
+    """Great-circle destination point given start, bearing, and distance."""
+    lat_r = math.radians(lat)
+    lon_r = math.radians(lon)
+    brng_r = math.radians(bearing_deg)
+    d_r = distance_miles / _EARTH_RADIUS_MILES
+
+    lat2 = math.asin(
+        math.sin(lat_r) * math.cos(d_r)
+        + math.cos(lat_r) * math.sin(d_r) * math.cos(brng_r)
+    )
+    lon2 = lon_r + math.atan2(
+        math.sin(brng_r) * math.sin(d_r) * math.cos(lat_r),
+        math.cos(d_r) - math.sin(lat_r) * math.sin(lat2),
+    )
+    return math.degrees(lat2), math.degrees(lon2)
+
+
 def _iter_coordinate_pairs(node: Any) -> Iterator[tuple[float, float]]:
     """Yield (lon, lat) leaf pairs from an arbitrarily-nested GeoJSON coordinates
     array (handles Polygon and MultiPolygon geometry without distinguishing
@@ -600,6 +624,67 @@ def get_wfo_for_zone(zone_id: str, *, user_agent_contact: str | None = None) -> 
 
 
 # ---------------------------------------------------------------------------
+# Adjacent-CWA discovery (WFO boundary handling)
+# ---------------------------------------------------------------------------
+
+_CWA_PROBE_BEARINGS = range(0, 360, 45)  # 8 compass directions
+
+
+def _discover_nearby_cwas(
+    lat: float,
+    lon: float,
+    radius_miles: float,
+    primary_cwa: str,
+    *,
+    user_agent_contact: str | None = None,
+) -> set[str]:
+    """Discover the station's CWA and any adjacent CWAs within probe radius.
+
+    Marine zones are assigned to a WFO that may differ from the WFO covering
+    the adjacent land. Stations near WFO boundaries (e.g. Huntington Beach CA
+    at the SGX/LOX border) would miss marine zones from the neighboring WFO
+    if only the station's own CWA were searched. This function probes 8 compass
+    points at a wide radius to discover all relevant CWAs.
+
+    Probe radius is max(radius_miles * 2, 50) miles — wide enough to reliably
+    cross WFO boundaries. Ocean/non-US probe points return 404 and are skipped.
+    All /points calls are cached 24h, so the cost is minimal.
+    """
+    cwas = {primary_cwa}
+    probe_dist = max(radius_miles * 2.0, 50.0)
+
+    for bearing in _CWA_PROBE_BEARINGS:
+        probe_lat, probe_lon = _destination_point(lat, lon, bearing, probe_dist)
+        try:
+            nearby_cwa = get_cwa(
+                probe_lat, probe_lon,
+                user_agent_contact=user_agent_contact,
+            )
+            if nearby_cwa not in cwas:
+                logger.debug(
+                    "Discovered adjacent CWA %s at bearing %d° (%.1f mi "
+                    "from station).",
+                    nearby_cwa, bearing, probe_dist,
+                )
+                cwas.add(nearby_cwa)
+        except GeographicallyUnsupported:
+            continue
+        except ProviderError:
+            logger.debug(
+                "CWA probe at bearing %d° failed; skipping.", bearing,
+            )
+            continue
+
+    if len(cwas) > 1:
+        logger.info(
+            "Marine zone discovery using %d CWAs: %s (station CWA: %s).",
+            len(cwas), ", ".join(sorted(cwas)), primary_cwa,
+        )
+
+    return cwas
+
+
+# ---------------------------------------------------------------------------
 # Public entrypoint (PROVIDER-MANUAL §14.8)
 # ---------------------------------------------------------------------------
 
@@ -614,12 +699,16 @@ def discover_marine_zones(
     """Discover NWS coastal marine zones within radius of given coordinates.
 
     Algorithm (PROVIDER-MANUAL §14.8):
-      1. GET /points/{lat},{lon} -> cwa
+      1. GET /points/{lat},{lon} -> primary CWA
+      1b. Probe 8 compass points at max(radius*2, 50) mi -> adjacent CWAs
       2. GET /zones?type=coastal -> coastal zone list, filtered client-side
-         by cwa (see module docstring "CWA filtering")
+         by ANY discovered CWA (see module docstring "CWA filtering")
       3. GET /zones/coastal/{zoneId} per candidate -> polygon geometry
       4. haversine(lat, lon, nearest vertex) per zone
       5. Zones within radius_miles, sorted by distance ascending
+
+    The multi-CWA probe (step 1b) handles WFO boundary stations where the
+    land CWA differs from the adjacent marine zone's CWA.
 
     Returns an empty list for inland points (no CWA — /points 404) and for
     coastal points with no zones within radius_miles.
@@ -629,7 +718,7 @@ def discover_marine_zones(
     "Error handling").
     """
     try:
-        cwa = get_cwa(lat, lon, user_agent_contact=user_agent_contact)
+        primary_cwa = get_cwa(lat, lon, user_agent_contact=user_agent_contact)
     except GeographicallyUnsupported:
         logger.info(
             "No NWS CWA for lat=%s,lon=%s (outside NWS coverage); "
@@ -639,11 +728,19 @@ def discover_marine_zones(
         )
         return []
 
+    cwas = _discover_nearby_cwas(
+        lat, lon, radius_miles, primary_cwa,
+        user_agent_contact=user_agent_contact,
+    )
+
     user_agent = _build_user_agent(user_agent_contact)
     client = _get_http_client(user_agent)
 
     zone_list = _fetch_coastal_zone_list(client)
-    candidates = [z for z in zone_list if cwa in z.get("cwa", [])]
+    candidates = [
+        z for z in zone_list
+        if any(c in z.get("cwa", []) for c in cwas)
+    ]
 
     results: list[MarineZone] = []
     for candidate in candidates:
