@@ -713,6 +713,7 @@ def _to_canonical(record: _AerisAlertRecord) -> AlertRecord:
         event=record.details.name or "",
         effective=effective or "",
         expires=expires,
+        ends=expires,  # Aeris has no separate event-end field; expiresISO is the event end
         senderName=sender_name,
         areaDesc=area_desc,
         category=record.details.cat,   # real wire uses 'cat', not 'category' (§4.3 amended)

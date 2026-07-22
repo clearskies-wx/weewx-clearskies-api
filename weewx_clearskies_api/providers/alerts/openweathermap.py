@@ -384,6 +384,7 @@ def _owm_alert_to_canonical(entry: _OWMAlertEntry) -> AlertRecord:
         event=entry.event,
         effective=effective,
         expires=expires,
+        ends=expires,  # OWM has no separate event-end field; end epoch is the event end
         senderName=entry.sender_name or None,
         areaDesc=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)
         category=None,        # PARTIAL-DOMAIN — OWM does not provide (canonical §4.3)

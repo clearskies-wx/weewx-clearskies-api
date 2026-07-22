@@ -1127,7 +1127,8 @@ class AlertRecord(BaseModel):
     certainty: str | None = None
     event: str
     effective: str  # UTC ISO-8601 with Z
-    expires: str | None = None  # UTC ISO-8601 with Z
+    expires: str | None = None  # UTC ISO-8601 with Z — CAP message expiry
+    ends: str | None = None     # UTC ISO-8601 with Z — expected event end time
     senderName: str | None = None
     areaDesc: str | None = None
     category: str | None = None
