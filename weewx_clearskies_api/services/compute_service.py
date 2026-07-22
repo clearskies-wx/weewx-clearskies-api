@@ -267,6 +267,7 @@ class SurfBeatResponse(BaseModel):
 app = FastAPI(
     title="Clear Skies Compute Service",
     version="1.0.0",
+    openapi_url=None,
     docs_url=None,
     redoc_url=None,
 )
@@ -515,7 +516,10 @@ def compute_surfbeat(
 # ---------------------------------------------------------------------------
 
 
-def _ensure_compute_tls(cert_dir: Path) -> tuple[Path, Path]:
+def _ensure_compute_tls(
+    cert_dir: Path,
+    hostnames: list[str] | None = None,
+) -> tuple[Path, Path]:
     """Return (cert_path, key_path), generating a self-signed Ed25519 cert if needed.
 
     Checks for cert.pem and key.pem in *cert_dir*.  When both exist they are
@@ -525,6 +529,9 @@ def _ensure_compute_tls(cert_dir: Path) -> tuple[Path, Path]:
 
     Args:
         cert_dir: Directory in which to find or create cert.pem and key.pem.
+        hostnames: Additional hostnames and/or IP addresses to include in the
+            cert's Subject Alternative Names.  Each entry is parsed as an IP
+            (v4 or v6) first; if that fails, it is added as a DNS name.
 
     Returns:
         Tuple of (cert_path, key_path) as Path objects.
@@ -549,13 +556,17 @@ def _ensure_compute_tls(cert_dir: Path) -> tuple[Path, Path]:
         [x509.NameAttribute(NameOID.COMMON_NAME, "clearskies-compute")]
     )
     now = datetime.datetime.now(datetime.timezone.utc)
-    san = x509.SubjectAlternativeName(
-        [
-            x509.DNSName("localhost"),
-            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-            x509.IPAddress(ipaddress.IPv6Address("::1")),
-        ]
-    )
+    san_entries: list[x509.GeneralName] = [
+        x509.DNSName("localhost"),
+        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+        x509.IPAddress(ipaddress.IPv6Address("::1")),
+    ]
+    for name in hostnames or []:
+        try:
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(name)))
+        except ValueError:
+            san_entries.append(x509.DNSName(name))
+    san = x509.SubjectAlternativeName(san_entries)
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -612,6 +623,15 @@ if __name__ == "__main__":
         default=_DEFAULT_CERT_DIR,
         help=f"Directory for TLS cert.pem / key.pem (default: {_DEFAULT_CERT_DIR})",
     )
+    parser.add_argument(
+        "--hostname",
+        action="append",
+        default=[],
+        help=(
+            "Additional hostname or IP for the TLS cert SAN "
+            "(repeatable, e.g. --hostname librewxr.example.com --hostname 192.168.7.22)"
+        ),
+    )
     args = parser.parse_args()
 
     # Step 1: Validate SURF_COMPUTE_SECRET before anything else.
@@ -635,7 +655,9 @@ if __name__ == "__main__":
 
     # Step 4: Generate TLS cert if needed.
     _cert_dir = Path(args.cert_dir)
-    _cert_path, _key_path = _ensure_compute_tls(_cert_dir)
+    _cert_path, _key_path = _ensure_compute_tls(
+        _cert_dir, hostnames=args.hostname or None
+    )
 
     # Step 5: Log cert fingerprint so the operator can pin it on the weewx client.
     _fingerprint = compute_fingerprint(_cert_path)

@@ -654,8 +654,6 @@ def get_surf(location_id: str) -> dict:
     # the most recent result inside the per-timestep loop below (no interpolation —
     # design decision per SURF-MODEL-FIX-PLAN §T2.2).
     #
-    # SWAN binary path: TODO — read from config when compute-offloading config is
-    # added (Phase 3). For now uses the well-known installation path.
     _SURFBEAT_SWAN_BINARY = "/usr/local/bin/swan"
 
     _surfbeat_by_hour: dict[int, SurfBeatResult | None] = {}
