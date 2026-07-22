@@ -922,6 +922,8 @@ class CurrentConfigResponse(BaseModel):
     column_units: dict[str, str] | None = None
     openaq_api_key: str | None = None
     marine: dict[str, Any] | None = None
+    surf_compute_host: str | None = None
+    surf_compute_verify_tls: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -2223,6 +2225,16 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         if isinstance(marine_section, dict) and marine_section:
             marine_config = dict(marine_section)
 
+    compute_host = None
+    compute_verify_tls = None
+    if api_cfg is not None:
+        providers_section = api_cfg.get("providers", {})
+        if isinstance(providers_section, dict):
+            raw_host = str(providers_section.get("surf_compute_host", "")).strip()
+            compute_host = raw_host or None
+            raw_verify = str(providers_section.get("surf_compute_verify_tls", "true")).strip().lower()
+            compute_verify_tls = raw_verify != "false"
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -2235,6 +2247,8 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         column_units=col_units,
         openaq_api_key=openaq_key,
         marine=marine_config,
+        surf_compute_host=compute_host,
+        surf_compute_verify_tls=compute_verify_tls,
     )
 
 
