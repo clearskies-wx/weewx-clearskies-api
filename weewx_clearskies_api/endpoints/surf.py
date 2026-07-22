@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -71,6 +72,11 @@ from weewx_clearskies_api.enrichment.surf_scorer import score_surf
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
+from weewx_clearskies_api.services.compute_client import (
+    ComputeServiceError,
+    remote_surfbeat as _remote_surfbeat,
+    remote_swelltrack as _remote_swelltrack,
+)
 from weewx_clearskies_api.services.surf_1d_pipeline import run_pipeline as _run_surf_pipeline
 from weewx_clearskies_api.services.surfbeat_runner import (
     SurfBeatResult,
@@ -404,6 +410,15 @@ def get_surf(location_id: str) -> dict:
     wave_height_internal, height_symbol = _wave_height_unit()
     _wind_internal, _wind_symbol = _ocean_speed_unit()
 
+    # --- Compute offloading config (T3.2) ---
+    # When surf_compute_host is set, SwellTrack and SurfBeat computations are
+    # POSTed to the remote compute service.  Falls back to in-process on error.
+    _compute_host: str | None = _marine_config.surf_compute_host if _marine_config else None
+    _compute_secret: str = os.environ.get("SURF_COMPUTE_SECRET", "") if _compute_host else ""
+    _compute_verify_tls: bool = (
+        _marine_config.surf_compute_verify_tls if _marine_config else True
+    )
+
     # --- SWAN: sole nearshore wave source (ADR-093, API-MANUAL §17) ---
     # Fallback: current cache → last-good cache (any age) → empty list.
     # Never falls to WaveWatch III for surf data.
@@ -699,15 +714,46 @@ def get_surf(location_id: str) -> dict:
                     continue
 
                 try:
-                    _sb_result = run_surfbeat_strip(
-                        spot_id=location_id,
-                        profile=_sb_bathy,
-                        hs=float(_sb_hs_raw),
-                        tp=float(_sb_tp_raw),
-                        direction=float(_sb_dir_raw),
-                        cfjon=spot_config.friction_coefficient,
-                        swan_binary=_SURFBEAT_SWAN_BINARY,
-                    )
+                    if _compute_host:
+                        try:
+                            _sb_result = _remote_surfbeat(
+                                _compute_host,
+                                _compute_secret,
+                                _compute_verify_tls,
+                                spot_id=location_id,
+                                profile=_sb_bathy,
+                                hs=float(_sb_hs_raw),
+                                tp=float(_sb_tp_raw),
+                                direction=float(_sb_dir_raw),
+                                cfjon=spot_config.friction_coefficient,
+                            )
+                        except ComputeServiceError:
+                            logger.warning(
+                                "surf endpoint: compute service unavailable for SurfBeat"
+                                " (%s hr=%d) — falling back to in-process",
+                                location_id,
+                                _sb_hr,
+                                exc_info=True,
+                            )
+                            _sb_result = run_surfbeat_strip(
+                                spot_id=location_id,
+                                profile=_sb_bathy,
+                                hs=float(_sb_hs_raw),
+                                tp=float(_sb_tp_raw),
+                                direction=float(_sb_dir_raw),
+                                cfjon=spot_config.friction_coefficient,
+                                swan_binary=_SURFBEAT_SWAN_BINARY,
+                            )
+                    else:
+                        _sb_result = run_surfbeat_strip(
+                            spot_id=location_id,
+                            profile=_sb_bathy,
+                            hs=float(_sb_hs_raw),
+                            tp=float(_sb_tp_raw),
+                            direction=float(_sb_dir_raw),
+                            cfjon=spot_config.friction_coefficient,
+                            swan_binary=_SURFBEAT_SWAN_BINARY,
+                        )
                     _surfbeat_by_hour[_sb_hr] = _sb_result
                     logger.debug(
                         "surf endpoint: SurfBeat hr=%d Hs_ig=%.4f m set_timing=%s min",
@@ -920,22 +966,67 @@ def get_surf(location_id: str) -> dict:
         # A degraded result triggers the existing SWAN CURVE-based fallback path.
         _ts_handoff_specout = _handoff_specout_by_time.get(valid_time) or {}
         _pipeline_result = None
+        _swelltrack_compute_fallback = False
         if _spot_transects:
             try:
-                _pipeline_result = _run_surf_pipeline(
-                    specout_data=_ts_handoff_specout,
-                    transects=_spot_transects,
-                    tide_level=0.0,
-                    beach_facing=spot_config.beach_facing_degrees,
-                    cfjon=spot_config.friction_coefficient,
-                    # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
-                    bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
-                    bulk_tp=wave_period_pt if wave_period_pt else None,
-                    bulk_dir=wave_direction_pt if wave_direction_pt else None,
-                    # T4.5b: canonical partitions from deep-water SPECOUT
-                    # so per_partition_breaks uses indices the swell card knows.
-                    canonical_partitions=ts_spectral or None,
-                )
+                if _compute_host:
+                    try:
+                        _pipeline_result = _remote_swelltrack(
+                            _compute_host,
+                            _compute_secret,
+                            _compute_verify_tls,
+                            specout_data=_ts_handoff_specout,
+                            transects=_spot_transects,
+                            tide_level=0.0,
+                            beach_facing=spot_config.beach_facing_degrees,
+                            gamma=0.73,
+                            cfjon=spot_config.friction_coefficient,
+                            # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
+                            bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
+                            bulk_tp=wave_period_pt if wave_period_pt else None,
+                            bulk_dir=wave_direction_pt if wave_direction_pt else None,
+                            # T4.5b: canonical partitions from deep-water SPECOUT
+                            # so per_partition_breaks uses indices the swell card knows.
+                            canonical_partitions=ts_spectral or None,
+                        )
+                    except ComputeServiceError:
+                        logger.warning(
+                            "surf endpoint: compute service unavailable for SwellTrack"
+                            " (%s @ %s) — falling back to in-process",
+                            location_id,
+                            valid_time,
+                            exc_info=True,
+                        )
+                        _swelltrack_compute_fallback = True
+                        _pipeline_result = _run_surf_pipeline(
+                            specout_data=_ts_handoff_specout,
+                            transects=_spot_transects,
+                            tide_level=0.0,
+                            beach_facing=spot_config.beach_facing_degrees,
+                            cfjon=spot_config.friction_coefficient,
+                            # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
+                            bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
+                            bulk_tp=wave_period_pt if wave_period_pt else None,
+                            bulk_dir=wave_direction_pt if wave_direction_pt else None,
+                            # T4.5b: canonical partitions from deep-water SPECOUT
+                            # so per_partition_breaks uses indices the swell card knows.
+                            canonical_partitions=ts_spectral or None,
+                        )
+                else:
+                    _pipeline_result = _run_surf_pipeline(
+                        specout_data=_ts_handoff_specout,
+                        transects=_spot_transects,
+                        tide_level=0.0,
+                        beach_facing=spot_config.beach_facing_degrees,
+                        cfjon=spot_config.friction_coefficient,
+                        # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
+                        bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
+                        bulk_tp=wave_period_pt if wave_period_pt else None,
+                        bulk_dir=wave_direction_pt if wave_direction_pt else None,
+                        # T4.5b: canonical partitions from deep-water SPECOUT
+                        # so per_partition_breaks uses indices the swell card knows.
+                        canonical_partitions=ts_spectral or None,
+                    )
             except Exception:
                 logger.warning(
                     "surf endpoint: 1D pipeline raised for %s @ %s — degrading to SWAN CURVE",
@@ -1070,7 +1161,9 @@ def get_surf(location_id: str) -> dict:
             entry["transectCount"] = _pipeline_result.transect_count
             entry["openTransectCount"] = _pipeline_result.open_transect_count
             # T4.5: preserve degraded flag — True when bulk fallback was used.
-            entry["degraded"] = _pipeline_result.degraded
+            # T3.2: also True when SwellTrack was offloaded but compute service
+            # was unreachable and we fell back to in-process execution.
+            entry["degraded"] = _pipeline_result.degraded or _swelltrack_compute_fallback
         else:
             # Total failure or no pipeline result: keep SWAN CURVE-based values.
             entry["bestPeakFaceHeight"] = None
