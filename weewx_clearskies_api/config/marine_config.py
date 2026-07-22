@@ -421,6 +421,9 @@ class SurfSpotConfig:
     #: ``"on"`` — force L3 on regardless of structures.
     #: ``"off"`` — force L3 off (L2 DWR SPECOUT used as handoff boundary).
     l3_enabled: str
+    friction_coefficient: float
+    surfbeat_enabled: bool
+    surfbeat_cadence_hours: int
 
     # Computed (derived at load time, NOT stored in api.conf)
     _beach_facing_degrees: float
@@ -475,6 +478,23 @@ class SurfSpotConfig:
         self.structures = [StructureConfig(_as_dict(v)) for v in raw_structures.values()]
         # T3.1 — L3 optional per location
         self.l3_enabled = str(section.get("l3_enabled", "auto")).strip().lower()
+        # SwellTrack friction coefficient (cfjon). Default 0.038 (swell).
+        raw_friction = section.get("friction_coefficient")
+        if raw_friction is not None and str(raw_friction).strip():
+            self.friction_coefficient = float(raw_friction)
+        else:
+            self.friction_coefficient = 0.038
+        # SurfBeat strip — IG energy for set/lull timing
+        raw_sb = section.get("surfbeat_enabled")
+        if raw_sb is not None:
+            self.surfbeat_enabled = str(raw_sb).strip().lower() in ("true", "1", "yes")
+        else:
+            self.surfbeat_enabled = True
+        raw_cadence = section.get("surfbeat_cadence_hours")
+        if raw_cadence is not None and str(raw_cadence).strip():
+            self.surfbeat_cadence_hours = int(raw_cadence)
+        else:
+            self.surfbeat_cadence_hours = 3
         # Note: if api.conf still has a [[[[bathymetric_profile]]]] subsection,
         # ConfigObj loads it into the section dict but we intentionally do not
         # read it here — runtime CUDEM profiles are cached at

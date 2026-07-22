@@ -741,6 +741,7 @@ def run_pipeline(
     tide_level: float,
     beach_facing: float,
     gamma: float = 0.73,
+    cfjon: float = 0.038,
     bulk_hs: float | None = None,
     bulk_tp: float | None = None,
     bulk_dir: float | None = None,
@@ -895,11 +896,12 @@ def run_pipeline(
                     tide_level=tide_level,
                     gamma=gamma,
                     beach_facing=beach_facing,
+                    cfjon=cfjon,
                 )
                 transect_run_results.append(result)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "run_pipeline: 1D model failed for partition %d (%.1fs %.0f°) "
+                    "run_pipeline: SwellTrack failed for partition %d (%.1fs %.0f°) "
                     "transect %d — %s",
                     p_idx,
                     tp_p,
@@ -997,11 +999,11 @@ def run_pipeline(
     # Check for total failure.
     successful = [r for r in per_transect_results if r is not None]
     if not successful:
-        return _degraded_result(n_transects, "1D model failed on all transects")
+        return _degraded_result(n_transects, "SwellTrack failed on all transects")
 
     if failed_count > 0:
         logger.warning(
-            "run_pipeline: %d/%d transect(s) failed the 1D model — "
+            "run_pipeline: %d/%d transect(s) failed SwellTrack — "
             "excluded from aggregation",
             failed_count,
             n_transects,

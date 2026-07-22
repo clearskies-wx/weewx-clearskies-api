@@ -1,11 +1,10 @@
-"""Analytical 1D cross-shore wave transformation model.
+"""SwellTrack — cross-shore wave transformation model.
 
 Transforms wave parameters from a nearshore handoff point to shore along
 a bathymetric transect.  Implements linear wave theory shoaling, Snell's
-law refraction, Battjes-Janssen (1978) breaking dissipation, and the
-Svendsen (1984) roller model for post-breaking energy transfer.
-
-Physics reference: SURF-ZONE-MODEL-BRIEF §3 Option A.
+law refraction, Battjes-Janssen (1978) breaking dissipation, the
+Svendsen (1984) roller model for post-breaking energy transfer, and
+JONSWAP bottom friction (Hasselmann et al. 1973).
 """
 
 from __future__ import annotations
@@ -22,6 +21,8 @@ from scipy.special import ellipj, ellipk  # type: ignore[import-untyped]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+MODEL_NAME = "SwellTrack"
 
 _G = 9.81  # gravitational acceleration (m/s²)
 _RHO = 1025.0  # seawater density (kg/m³)
@@ -122,6 +123,33 @@ def _snell_refraction(
     return theta, Kr
 
 
+def _bottom_friction(
+    Hs: np.ndarray,
+    d: np.ndarray,
+    dx: np.ndarray,
+    Cg: np.ndarray,
+    T: float,
+    L: np.ndarray,
+    cfjon: float,
+) -> np.ndarray:
+    """JONSWAP bottom friction dissipation (Hasselmann et al. 1973).
+
+    Since D_bf is proportional to E, the energy balance is linear in E
+    and the friction attenuation is exponential:
+        Hs(x) = Hs_shoaled(x) × exp(-½ × ∫ α(x') dx')
+    where α(x) = cfjon × ω² / (g × Cg(x) × sinh²(kd(x)))
+
+    This integral accumulates along the propagation path.
+    """
+    k = 2.0 * np.pi / L
+    kd = np.clip(k * d, 1e-6, 50.0)
+    omega = 2.0 * np.pi / T
+
+    alpha_fric = cfjon * omega**2 / (_G * np.maximum(Cg, 0.01) * np.sinh(kd) ** 2)
+    cumulative = np.cumsum(alpha_fric * np.abs(dx))
+    return Hs * np.exp(-0.5 * cumulative)
+
+
 def _battjes_janssen(
     Hs: np.ndarray,
     d: np.ndarray,
@@ -144,7 +172,6 @@ def _battjes_janssen(
     Dtot = alpha_bj * Qb * _RHO * _G * (Hmax / np.sqrt(2.0)) ** 2 / (4.0 * T)
 
     E = 0.125 * _RHO * _G * Hs**2
-    # abs(dx): distances may be descending (offshore-first); dissipation is always positive
     E_new = E - Dtot * np.abs(dx) / np.maximum(Cg, 0.01)
     E_new = np.maximum(E_new, 0.0)
     return np.sqrt(8.0 * E_new / (_RHO * _G))
@@ -393,6 +420,7 @@ def run_1d_analytical(
     tide_level: float = 0.0,
     gamma: float = 0.73,
     beach_facing: float = 180.0,
+    cfjon: float | None = None,
 ) -> Analytical1DResult:
     """Run the analytical 1D cross-shore wave transformation.
 
@@ -406,6 +434,9 @@ def run_1d_analytical(
         tide_level: tide offset in metres (added to depth)
         gamma: breaking parameter (default 0.73, matching SWAN)
         beach_facing: shore-normal direction in degrees true north
+        cfjon: JONSWAP bottom-friction coefficient (m²/s³). None = no friction
+            (frictionless, original behavior). Use 0.038 for swell, 0.067
+            for wind seas (Zijlema et al. 2012).
     """
     t0 = time.perf_counter()
 
@@ -438,6 +469,10 @@ def run_1d_analytical(
 
     # Spatial step sizes (negative because we go from offshore to shore)
     dx = np.diff(distances, prepend=distances[0])
+
+    # JONSWAP bottom friction (applied before breaking — acts on all waves)
+    if cfjon is not None and cfjon > 0.0:
+        Hs = _bottom_friction(Hs, depths, dx, Cg, tp, L, cfjon)
 
     # Battjes-Janssen breaking dissipation
     Hs = _battjes_janssen(Hs, depths, gamma, dx, Cg, tp)
@@ -519,7 +554,7 @@ def _synthetic_profile(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Analytical 1D surf zone model benchmark"
+        description="SwellTrack cross-shore wave transformation model"
     )
     parser.add_argument("--hs", type=float, default=1.0, help="Hs at handoff (m)")
     parser.add_argument("--tp", type=float, default=12.0, help="Peak period (s)")
@@ -527,6 +562,7 @@ def main() -> None:
     parser.add_argument("--tide", type=float, default=0.0, help="Tide level (m)")
     parser.add_argument("--gamma", type=float, default=0.73, help="Breaking gamma")
     parser.add_argument("--beach-facing", type=float, default=180.0, help="Shore-normal (deg)")
+    parser.add_argument("--cfjon", type=float, default=None, help="JONSWAP friction coeff (0.038 swell, 0.067 windsea)")
     parser.add_argument("--bathy", type=str, default=None, help="Bathymetry CSV (distance,depth)")
     parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
@@ -544,6 +580,7 @@ def main() -> None:
         tide_level=args.tide,
         gamma=args.gamma,
         beach_facing=args.beach_facing,
+        cfjon=args.cfjon,
     )
 
     print(f"Runtime: {result.runtime_ms:.2f} ms")
