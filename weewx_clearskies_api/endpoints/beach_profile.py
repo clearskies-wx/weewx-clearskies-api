@@ -44,6 +44,7 @@ from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
 from weewx_clearskies_api.services.surf_1d_analytical import run_1d_analytical
+from weewx_clearskies_api.services.surfbeat_runner import get_cached_surfbeat_result
 from weewx_clearskies_api.services.surf_1d_pipeline import (
     PartitionBreakInfo,
     PipelineResult,
@@ -798,6 +799,10 @@ def get_beach_profile(
 
     all_transect_results: list[TransectResult] = pipeline_result.per_transect
 
+    # Look up cached SurfBeat result for approach-zone Hs blend (F1 fix).
+    _sb_cached = get_cached_surfbeat_result(location_id)
+    _sb_hs_profile = _sb_cached.hs_sw_profile if _sb_cached is not None else None
+
     # -----------------------------------------------------------------------
     # transect_index = "all" — return array of all transect profiles
     # -----------------------------------------------------------------------
@@ -812,6 +817,7 @@ def get_beach_profile(
                 distance_internal,
                 pbi_by_partition,
                 cfjon=spot_config.friction_coefficient,
+                surfbeat_hs_profile=_sb_hs_profile,
             )
             for tr in all_transect_results
         ]
@@ -860,6 +866,7 @@ def get_beach_profile(
         distance_internal,
         pbi_by_partition,
         cfjon=spot_config.friction_coefficient,
+        surfbeat_hs_profile=_sb_hs_profile,
     )
 
     return {

@@ -72,7 +72,11 @@ from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.surf_1d_pipeline import run_pipeline as _run_surf_pipeline
-from weewx_clearskies_api.services.surfbeat_runner import SurfBeatResult, run_surfbeat_strip
+from weewx_clearskies_api.services.surfbeat_runner import (
+    SurfBeatResult,
+    cache_surfbeat_result,
+    run_surfbeat_strip,
+)
 from weewx_clearskies_api.services.swan_formats import compute_spot_transects as _compute_spot_transects
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
@@ -731,6 +735,14 @@ def get_surf(location_id: str) -> dict:
                 location_id,
             )
 
+    # Cache the most recent successful SurfBeat result for beach_profile.py (F1 fix).
+    _last_sb = next(
+        (v for v in reversed(list(_surfbeat_by_hour.values())) if v is not None),
+        None,
+    )
+    if _last_sb is not None:
+        cache_surfbeat_result(location_id, _last_sb)
+
     # --- Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast timestep") ---
     forecast_entries: list[dict] = []
     for ts_idx, valid_time in enumerate(_ordered_times):
@@ -1093,8 +1105,14 @@ def get_surf(location_id: str) -> dict:
 
         if _sb_entry is not None:
             entry["setTimingMinutes"] = _sb_entry.set_timing_minutes
-            entry["setAmplitudeM"] = _sb_entry.set_amplitude_m
-            entry["igWaveHeightM"] = _sb_entry.hs_ig_shoreline
+            entry["setAmplitudeM"] = (
+                _convert_unit(_sb_entry.set_amplitude_m, "meter", wave_height_internal)
+                if _sb_entry.set_amplitude_m is not None else None
+            )
+            entry["igWaveHeightM"] = (
+                _convert_unit(_sb_entry.hs_ig_shoreline, "meter", wave_height_internal)
+                if _sb_entry.hs_ig_shoreline else None
+            )
         else:
             entry["setTimingMinutes"] = None
             entry["setAmplitudeM"] = None

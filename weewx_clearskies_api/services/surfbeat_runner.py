@@ -52,6 +52,22 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache: most recent SurfBeat result per location ID.
+# Written by surf.py after a successful SurfBeat strip run.
+# Read by beach_profile.py to supply the blended approach-zone Hs profile.
+_surfbeat_result_cache: dict[str, "SurfBeatResult"] = {}
+
+
+def cache_surfbeat_result(location_id: str, result: "SurfBeatResult") -> None:
+    """Store the most recent SurfBeat result for a location (called from surf.py)."""
+    _surfbeat_result_cache[location_id] = result
+
+
+def get_cached_surfbeat_result(location_id: str) -> "SurfBeatResult | None":
+    """Get the most recent SurfBeat result for a location (called from beach_profile.py)."""
+    return _surfbeat_result_cache.get(location_id)
+
+
 # IG / sea-swell split frequency — coordinator design decision (SURF-MODEL-FIX-PLAN §T2.1)
 _IG_SPLIT_HZ: float = 0.04
 
@@ -695,7 +711,7 @@ def _compute_ig_stats(
     - **Omnidirectional spectrum:** E_omni(f) = Σ_θ E(f, θ) · dθ
       where dθ = 2π / ndir (full CIRCLE 36 grid → dθ = 10° = π/18 rad).
     - **IG variance:** m0_ig = ∫ E_omni(f) df  for f < 0.04 Hz  (trapz).
-    - **Hs_ig:** sqrt(2 · m0_ig).
+    - **Hs_ig:** 4 · sqrt(m0_ig) — standard significant wave height (WMO/IAHR).
     - **Set timing:** T_ig = 1 / f_peak_ig (s), converted to minutes.
 
     Args:
@@ -730,8 +746,8 @@ def _compute_ig_stats(
     if m0_ig <= 0.0:
         return 0.0, None
 
-    # Hs_ig = sqrt(2 · m0_ig)  — coordinator design decision
-    hs_ig = math.sqrt(2.0 * m0_ig)
+    # Hs_ig = 4 · sqrt(m0_ig)  — standard WMO/IAHR significant wave height
+    hs_ig = 4.0 * math.sqrt(m0_ig)
 
     # Set timing from the frequency of peak IG energy
     peak_idx = int(np.argmax(e_ig))
