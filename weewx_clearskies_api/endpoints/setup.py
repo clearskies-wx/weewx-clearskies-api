@@ -36,6 +36,10 @@ Endpoints:
   POST /setup/marine/bathymetry/upload      — accept operator-supplied GeoTIFF bathymetry
                                             file; validate, save, return per-level coverage
                                             (SWAN-FIXES-PLAN Phase 24, T24.1)
+  POST /setup/providers/test-compute        — test connectivity to the remote wave modeling
+                                            compute service (SURF-MODEL-FIX-PLAN T5.2):
+                                            makes authenticated GET /health request and
+                                            returns {ok, version, error}
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -489,6 +493,16 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: "auto" (default) — enable L3 only when structures are present.
     #: "on" — always enable L3.  "off" — never enable L3.
     l3_enabled: str = "auto"
+    #: Bottom friction coefficient (cfjon) for SWAN FRICTION JON.
+    #: Default 0.038 (JONSWAP swell value).  Always enabled in production —
+    #: frictionless is not valid for nearshore wave modelling.
+    friction_coefficient: float = 0.038
+    #: Enable SurfBeat strip for infragravity / set timing predictions.
+    #: Default True.  When False, setTimingMinutes / igWaveHeightM are null.
+    surfbeat_enabled: bool = True
+    #: Hours between SurfBeat strip SWAN runs (1 per cadence hour, default 3).
+    #: Intermediate forecast hours carry forward the last strip result.
+    surfbeat_cadence_hours: int = 3
 
     @field_validator("bottom_type")
     @classmethod
@@ -786,6 +800,18 @@ class ApplyRequest(BaseModel):
     #: written to the [swan] section of api.conf.  None → skip (leaves any
     #: existing [swan] section unchanged, preserving manually-set values).
     swan: SwanApplyConfig | None = None
+    #: URL of remote wave modeling compute service (SURF-MODEL-FIX-PLAN T5.2).
+    #: Written to api.conf [providers] surf_compute_host.
+    #: None = in-process computation (default; valid for powerful API hosts).
+    surf_compute_host: str | None = None
+    #: Shared secret for compute service authentication.
+    #: Written to secrets.env as SURF_COMPUTE_SECRET.
+    #: Same write path as DB password and proxy secret — never goes to api.conf.
+    surf_compute_secret: str | None = None
+    #: Whether to verify TLS certificate on compute service requests.
+    #: Default True.  Set False for self-signed certs on same-VLAN deployments.
+    #: Written to api.conf [providers] surf_compute_verify_tls.
+    surf_compute_verify_tls: bool = True
 
 
 class ApplyResponse(BaseModel):
@@ -1085,6 +1111,11 @@ def _build_marine_conf_section(
                 "surf_height_display": surf.surf_height_display,
                 # L3 nested grid override (F2 audit remediation).
                 "l3_enabled": surf.l3_enabled,
+                # SwellTrack friction (SURF-MODEL-FIX-PLAN T5.2).
+                "friction_coefficient": str(surf.friction_coefficient),
+                # SurfBeat IG strip config (SURF-MODEL-FIX-PLAN T5.1 / T5.2).
+                "surfbeat_enabled": str(surf.surfbeat_enabled).lower(),
+                "surfbeat_cadence_hours": str(surf.surfbeat_cadence_hours),
             }
             if surf.directional_exposure:
                 surf_section["directional_exposure"] = [
@@ -1359,6 +1390,17 @@ def _write_api_conf(
         cfg["swan"]["omp_num_threads"] = str(ts.omp_num_threads)
         cfg["swan"]["outer_grid_resolution_km"] = str(ts.outer_grid_resolution_km)
         cfg["swan"]["inner_nest_resolution_m"] = str(ts.inner_nest_resolution_m)
+
+    # [providers] — compute offloading (SURF-MODEL-FIX-PLAN T5.2).
+    # surf_compute_host and surf_compute_verify_tls are non-secret; they go
+    # to api.conf [providers].  surf_compute_secret is handled by the apply
+    # handler (written to secrets.env as SURF_COMPUTE_SECRET — same pattern
+    # as proxy_secret).  None means "don't touch existing config".
+    if apply.surf_compute_host is not None:
+        if "providers" not in cfg:
+            cfg["providers"] = {}
+        cfg["providers"]["surf_compute_host"] = apply.surf_compute_host
+        cfg["providers"]["surf_compute_verify_tls"] = str(apply.surf_compute_verify_tls).lower()
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -1864,6 +1906,11 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         # OpenAQ API key (calibration bootstrap + AQI provider).
         if body.openaq_api_key:
             existing["WEEWX_CLEARSKIES_OPENAQ_API_KEY"] = body.openaq_api_key
+
+        # Compute service shared secret (SURF-MODEL-FIX-PLAN T5.2).
+        # Non-secret URL goes to api.conf; secret stays in secrets.env.
+        if body.surf_compute_secret:
+            existing["SURF_COMPUTE_SECRET"] = body.surf_compute_secret
 
         _write_secrets_env(secrets_path, existing)
     except Exception as exc:  # noqa: BLE001
@@ -3878,3 +3925,92 @@ async def marine_bathymetry_upload(
         datum=datum,
         levels=levels,
     )
+
+
+# ---------------------------------------------------------------------------
+# Test compute service connectivity (SURF-MODEL-FIX-PLAN T5.2)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeRequest(BaseModel):
+    """Request body for POST /setup/providers/test-compute."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: URL of the compute service (e.g. ``https://192.168.7.22:8770``).
+    url: str
+    #: Bearer token (the value of SURF_COMPUTE_SECRET on the compute host).
+    secret: str
+
+
+class TestComputeResponse(BaseModel):
+    """Response from POST /setup/providers/test-compute."""
+
+    #: True when the compute service responded with 200 to GET /health.
+    ok: bool
+    #: Compute service version string from the health response, or None.
+    version: str | None = None
+    #: Human-readable error description when ok is False.
+    error: str | None = None
+
+
+@router.post("/providers/test-compute", response_model=TestComputeResponse)
+async def providers_test_compute(
+    body: TestComputeRequest,
+    request: Request,
+) -> TestComputeResponse:
+    """Test connectivity to a remote wave modeling compute service (T5.2).
+
+    Makes an authenticated ``GET /health`` request to ``{url}/health`` with
+    ``Authorization: Bearer {secret}``.  Returns ``{ok: true, version: "..."}``
+    on success and ``{ok: false, error: "..."}`` on any failure.
+
+    TLS: uses ``verify=False`` so the operator can test before the cert
+    fingerprint is pinned.  This is a setup-time test against a user-
+    supplied URL; production pipeline calls respect ``surf_compute_verify_tls``
+    in api.conf.
+
+    Timeout: 10 s.  Auth: requires setup session (same as other /setup/ endpoints).
+    """
+    await require_setup_session(request)
+
+    import httpx  # noqa: PLC0415 — lazy import; httpx is in the project deps
+
+    health_url = body.url.rstrip("/") + "/health"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            resp = await client.get(
+                health_url,
+                headers={"Authorization": f"Bearer {body.secret}"},
+            )
+    except httpx.ConnectError as exc:
+        logger.debug("test-compute ConnectError for %s: %s", health_url, exc)
+        return TestComputeResponse(ok=False, error="Connection refused")
+    except httpx.TimeoutException:
+        return TestComputeResponse(ok=False, error="Connection timed out")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("test-compute unexpected error for %s: %s", health_url, type(exc).__name__)
+        return TestComputeResponse(ok=False, error=f"Connection failed: {type(exc).__name__}")
+
+    if resp.status_code == 401:
+        return TestComputeResponse(ok=False, error="Authentication failed — check secret")
+    if resp.status_code >= 500:
+        return TestComputeResponse(
+            ok=False, error=f"Compute service error (HTTP {resp.status_code})"
+        )
+    if resp.status_code >= 400:
+        return TestComputeResponse(
+            ok=False, error=f"Unexpected response (HTTP {resp.status_code})"
+        )
+
+    # Parse version from JSON body — compute service health returns {version, ...}.
+    version: str | None = None
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and data.get("version"):
+            version = str(data["version"])
+    except Exception:  # noqa: BLE001
+        pass  # version is informational — a non-JSON health body is still a pass
+
+    return TestComputeResponse(ok=True, version=version)
