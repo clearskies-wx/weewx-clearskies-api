@@ -219,6 +219,76 @@ def _serialize_partition_breaks(
     return result
 
 
+def _blend_hs_profiles(
+    swelltrack_profile: list[dict],
+    surfbeat_profile: list[dict],
+    break_point_distance_m: float,
+) -> list[float]:
+    """Return blended Hs (m) at each SwellTrack point using SurfBeat in the approach zone.
+
+    Applies a 50 m linear taper centred on the primary break point (T2.3):
+
+    - Offshore of (break_point + 25 m):     100 % SurfBeat Hs
+    - Taper zone (break_point ± 25 m):      linear ramp from SurfBeat → SwellTrack
+    - Shoreward of (break_point − 25 m):    100 % SwellTrack Hs
+
+    SurfBeat strip stations (≤ 25 m spacing) may be at different locations from the
+    SwellTrack CUDEM grid, so ``numpy.interp`` aligns SurfBeat Hs to SwellTrack
+    distance points before blending.  Points outside the SurfBeat profile range are
+    clamped to the nearest edge value.
+
+    The 50 m taper guarantees a smooth profile with no step discontinuities: at both
+    taper edges the weight is 0 or 1, so the blended value matches the pure-source
+    value exactly — maximum step is 0 % of local Hs.
+
+    Args:
+        swelltrack_profile: SwellTrack RSS-combined Hs at CUDEM grid points.
+            Each element is ``{"distance_m": float, "hs_m": float}``.
+            May be in any order; function sorts internally.
+        surfbeat_profile: SurfBeat TABLE Hs at strip stations
+            (``SurfBeatResult.hs_sw_profile``).
+            Each element is ``{"distance_m": float, "hs_m": float}``.
+        break_point_distance_m: Distance from shore (m) of the primary break
+            point on this transect, from the SwellTrack pipeline.
+
+    Returns:
+        List of blended Hs (m) in the **same order** as *swelltrack_profile*.
+        All values are non-negative (clipped at 0).
+    """
+    sw_raw_dist = np.array([p["distance_m"] for p in swelltrack_profile], dtype=float)
+    sw_raw_hs = np.array([p["hs_m"] for p in swelltrack_profile], dtype=float)
+
+    sb_raw_dist = np.array([p["distance_m"] for p in surfbeat_profile], dtype=float)
+    sb_raw_hs = np.array([p["hs_m"] for p in surfbeat_profile], dtype=float)
+
+    # Sort both ascending (shoreward → offshore) for numpy.interp (requires monotone xp).
+    sw_order = np.argsort(sw_raw_dist)
+    sb_order = np.argsort(sb_raw_dist)
+
+    sw_dist = sw_raw_dist[sw_order]
+    sw_hs = sw_raw_hs[sw_order]
+    sb_dist = sb_raw_dist[sb_order]
+    sb_hs = sb_raw_hs[sb_order]
+
+    # Interpolate SurfBeat Hs to SwellTrack point locations.
+    sb_hs_at_sw = np.interp(sw_dist, sb_dist, sb_hs)
+
+    # alpha = weight of SwellTrack (1.0 shoreward, 0.0 offshore).
+    # At outer_edge (bp+25m): alpha=0 → 100 % SurfBeat.
+    # At inner_edge (bp−25m): alpha=1 → 100 % SwellTrack.
+    taper_half_m = 25.0
+    outer_edge = float(break_point_distance_m) + taper_half_m
+    alpha = np.clip((outer_edge - sw_dist) / (2.0 * taper_half_m), 0.0, 1.0)
+
+    blended_sorted = alpha * sw_hs + (1.0 - alpha) * sb_hs_at_sw
+    blended_sorted = np.maximum(blended_sorted, 0.0)
+
+    # Restore original SwellTrack order before returning.
+    result = np.empty(len(swelltrack_profile), dtype=float)
+    result[sw_order] = blended_sorted
+    return result.tolist()
+
+
 def _build_transect_profile(
     tr: TransectResult,
     pipeline_result: PipelineResult,
@@ -227,6 +297,8 @@ def _build_transect_profile(
     h_unit: str,
     d_unit: str,
     pbi_by_partition: dict[int, PartitionBreakInfo],
+    cfjon: float = 0.038,
+    surfbeat_hs_profile: list[dict] | None = None,
 ) -> dict:
     """Build the full 1D model profile response dict for one TransectResult.
 
@@ -246,19 +318,75 @@ def _build_transect_profile(
             the case here — beach_profile.py does not pass canonical_partitions).
             If T4.5b canonical mapping is enabled in future, a different lookup
             strategy is needed.
+        surfbeat_hs_profile: SurfBeat TABLE Hs at strip stations
+            (``SurfBeatResult.hs_sw_profile``), or ``None`` when SurfBeat is
+            unavailable.  When provided, approach-zone Hs is blended with a
+            50 m linear taper centred on the dominant-partition primary break
+            point (T2.3).  Actual wiring from the SurfBeat cache happens in
+            Phase 6; this parameter exists so the blend is functional once data
+            is provided.
 
     Returns:
         Serializable dict with camelCase keys including hsEnvelope, breakPoints,
         waveShapes, surfZones, jackingFactors, and transect metadata.
     """
-    # --- Hs envelope (RSS-combined from pipeline) ---
+    # --- Dominant partition (needed early for blend derivation and wave shapes) ---
+    # Moved ahead of hs_envelope so that the break point distance can be derived
+    # before building the profile (T2.3).
+    dominant_pbi: PartitionBreakInfo | None = None
+    if pipeline_result.per_partition_breaks:
+        dominant_pbi = max(
+            pipeline_result.per_partition_breaks,
+            key=lambda p: p.height_m or 0.0,
+        )
+
+    # Derive the primary break point distance on THIS transect from the dominant
+    # partition's PartitionBreakResult.  Falls back to None when the dominant
+    # partition produced no break points on this transect (degraded run).
+    _break_point_distance_m: float | None = None
+    if dominant_pbi is not None:
+        _dom_idx = dominant_pbi.partition_index
+        if _dom_idx < len(tr.per_partition):
+            _dom_pbr = tr.per_partition[_dom_idx]
+            if _dom_pbr is not None and _dom_pbr.break_points:
+                _break_point_distance_m = float(_dom_pbr.break_points[0].distance_m)
+
+    # --- Hs envelope (RSS-combined from pipeline, optionally blended with SurfBeat) ---
+    # T2.3: when SurfBeat data and a break point are both available, blend the
+    # approach-zone Hs using a 50 m linear taper to correct the ~24 % SwellTrack
+    # overestimate offshore of the break.  Falls back to 100 % SwellTrack otherwise.
+    _raw_distances_m = [float(d) for d in tr.distances]
+    _raw_hs_m = [float(h) for h in tr.hs_total_profile]
+
+    if (
+        surfbeat_hs_profile is not None
+        and len(surfbeat_hs_profile) >= 2
+        and _break_point_distance_m is not None
+    ):
+        _sw_profile = [
+            {"distance_m": d, "hs_m": h}
+            for d, h in zip(_raw_distances_m, _raw_hs_m)
+        ]
+        _blended_hs_m: list[float] = _blend_hs_profiles(
+            _sw_profile, surfbeat_hs_profile, _break_point_distance_m
+        )
+        logger.debug(
+            "_build_transect_profile: SurfBeat blend applied "
+            "(transect=%d break_point=%.1f m surfbeat_stations=%d)",
+            tr.transect_index,
+            _break_point_distance_m,
+            len(surfbeat_hs_profile),
+        )
+    else:
+        _blended_hs_m = _raw_hs_m
+
     hs_envelope: list[dict] = [
         {
-            "distance": _convert_unit(float(d), "meter", d_unit),
+            "distance": _convert_unit(d, "meter", d_unit),
             "depth": _convert_unit(float(z), "meter", d_unit),
-            "hs": _convert_unit(float(h), "meter", h_unit),
+            "hs": _convert_unit(h, "meter", h_unit),
         }
-        for d, z, h in zip(tr.distances, tr.depths, tr.hs_total_profile)
+        for d, z, h in zip(_raw_distances_m, tr.depths, _blended_hs_m)
     ]
 
     # --- Break points (from per-partition results on this transect) ---
@@ -323,17 +451,10 @@ def _build_transect_profile(
     # profile — wave shapes, surf zone boundaries, and jacking factors are
     # computed by run_1d_analytical() per partition.  We run it here on the
     # dominant partition (highest Hs at handoff) to get these fields.
+    # dominant_pbi was already computed at the top of this function (T2.3).
     wave_shapes: list[dict] = []
     surf_zones: dict | None = None
     jacking_factors: list[dict] = []
-
-    # Dominant partition: highest handoff Hs among per_partition_breaks.
-    dominant_pbi: PartitionBreakInfo | None = None
-    if pipeline_result.per_partition_breaks:
-        dominant_pbi = max(
-            pipeline_result.per_partition_breaks,
-            key=lambda p: p.height_m or 0.0,
-        )
 
     if dominant_pbi is not None and dominant_pbi.height_m and dominant_pbi.height_m > 0.0:
         # Get bathy profile for this transect from the TransectInfo.
@@ -360,6 +481,7 @@ def _build_transect_profile(
                         tide_level=0.0,
                         gamma=0.73,
                         beach_facing=beach_facing_degrees,
+                        cfjon=cfjon,
                     )
 
                     # Wave shapes — whatever the model provides at selected points.
@@ -615,6 +737,7 @@ def get_beach_profile(
             transects=spot_transects,
             tide_level=0.0,
             beach_facing=spot_config.beach_facing_degrees,
+            cfjon=spot_config.friction_coefficient,
             bulk_hs=_bulk_hs,
             bulk_tp=_bulk_tp,
             bulk_dir=_bulk_dir,
@@ -688,6 +811,7 @@ def get_beach_profile(
                 wave_height_internal,
                 distance_internal,
                 pbi_by_partition,
+                cfjon=spot_config.friction_coefficient,
             )
             for tr in all_transect_results
         ]
@@ -735,6 +859,7 @@ def get_beach_profile(
         wave_height_internal,
         distance_internal,
         pbi_by_partition,
+        cfjon=spot_config.friction_coefficient,
     )
 
     return {
