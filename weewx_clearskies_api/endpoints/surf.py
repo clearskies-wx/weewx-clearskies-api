@@ -41,7 +41,7 @@ Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14.15:
     - ocean_data_resolver: water temperature (tiered OFS/ERDDAP/RTOFS fallback).
 
 Response bundle top-level fields (API-MANUAL §17 "Surf endpoint response"):
-  nearshoreModel: "swan"
+  nearshoreModel: "SWAN + SwellTrack"
   lastRunTime: ISO-8601 timestamp of the SWAN run that produced this data.
   dataAge: seconds elapsed since that run.
   breakerFormula: "komar_gaughan" or "caldwell" (per spot config).
@@ -61,6 +61,7 @@ import math
 from collections import defaultdict
 from datetime import UTC, datetime
 
+import numpy as np
 from fastapi import APIRouter, HTTPException
 
 from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocation
@@ -71,6 +72,7 @@ from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.surf_1d_pipeline import run_pipeline as _run_surf_pipeline
+from weewx_clearskies_api.services.surfbeat_runner import SurfBeatResult, run_surfbeat_strip
 from weewx_clearskies_api.services.swan_formats import compute_spot_transects as _compute_spot_transects
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
@@ -264,6 +266,77 @@ def _interpolate_hrrr_wind(
     speed = math.sqrt(u**2 + v**2)
     direction = (270.0 - math.degrees(math.atan2(v, u))) % 360.0
     return speed, direction
+
+
+# ---------------------------------------------------------------------------
+# SurfBeat bathy profile helper (T2.2)
+# ---------------------------------------------------------------------------
+
+
+def _compute_median_bathy_profile(transects: list) -> np.ndarray | None:
+    """Compute pointwise median depth profile across open (non-structure-affected) transects.
+
+    Used to derive the bathymetric boundary condition for the SurfBeat strip
+    (T2.2).  "Open" transects are those where ``is_structure_affected`` is
+    False.  Only transects that already have a populated ``bathymetric_profile``
+    list are included; when none do (first run before CUDEM load), returns None
+    and SurfBeat is skipped for that request.
+
+    Args:
+        transects: List of ``TransectInfo`` instances from
+            ``compute_spot_transects()``.
+
+    Returns:
+        Nx2 numpy array ``[[distance_from_shore_m, depth_m], ...]`` sorted by
+        distance ascending (shore first), or ``None`` when no usable profiles
+        are available.
+    """
+    open_with_bathy = [
+        t for t in transects
+        if not getattr(t, "is_structure_affected", False)
+        and getattr(t, "bathymetric_profile", None)
+    ]
+    if not open_with_bathy:
+        return None
+
+    # Parse each profile into a 2-column float64 array sorted shore → offshore.
+    profiles: list[np.ndarray] = []
+    for t in open_with_bathy:
+        pts = [
+            (float(p["distance_m"]), float(p["depth_m"]))
+            for p in t.bathymetric_profile
+            if p.get("distance_m") is not None and p.get("depth_m") is not None
+        ]
+        if len(pts) >= 2:
+            arr = np.array(pts, dtype=np.float64)
+            arr = arr[np.argsort(arr[:, 0])]  # sort by distance ascending
+            profiles.append(arr)
+
+    if not profiles:
+        return None
+    if len(profiles) == 1:
+        return profiles[0]
+
+    # Common distance range: intersection of all profile extents avoids extrapolation.
+    d_min = max(float(p[0, 0]) for p in profiles)
+    d_max = min(float(p[-1, 0]) for p in profiles)
+    if d_max <= d_min:
+        # No common range — fall back to the profile with the largest extent.
+        largest_idx = int(np.argmax([float(p[-1, 0] - p[0, 0]) for p in profiles]))
+        return profiles[largest_idx]
+
+    # 5 m grid (matches SurfBeat strip default dx=5 m)
+    n_pts = max(2, int(round((d_max - d_min) / 5.0)) + 1)
+    d_common = np.linspace(d_min, d_max, n_pts)
+
+    # Interpolate each profile at the common distances, then take pointwise median.
+    depths_stacked = np.vstack([
+        np.interp(d_common, p[:, 0], p[:, 1]) for p in profiles
+    ])
+    median_depths = np.median(depths_stacked, axis=0)
+    median_depths = np.maximum(median_depths, 0.01)  # clamp to minimum wet depth
+
+    return np.column_stack([d_common, median_depths])
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +621,116 @@ def get_surf(location_id: str) -> dict:
         if _hs_t:
             _handoff_specout_by_time[_hs_t] = _hs_entry
 
+    # --- t0 datetime for forecast hour offset calculations (used by SurfBeat and carry-forward) ---
+    _t0_dt: datetime | None = None
+    if _ordered_times:
+        try:
+            _t0_dt = datetime.fromisoformat(_ordered_times[0].replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass
+
+    # --- SurfBeat IG strip runs (T2.2) ---
+    # Run at every cadence_hours mark (default 3 h), covering hours 0–72 (25 runs).
+    # Results are keyed by integer forecast hour.  Intermediate hours carry forward
+    # the most recent result inside the per-timestep loop below (no interpolation —
+    # design decision per SURF-MODEL-FIX-PLAN §T2.2).
+    #
+    # SWAN binary path: TODO — read from config when compute-offloading config is
+    # added (Phase 3). For now uses the well-known installation path.
+    _SURFBEAT_SWAN_BINARY = "/usr/local/bin/swan"
+
+    _surfbeat_by_hour: dict[int, SurfBeatResult | None] = {}
+
+    if spot_config.surfbeat_enabled and _ordered_times and _t0_dt is not None:
+        _sb_bathy: np.ndarray | None = None
+        if _spot_transects:
+            try:
+                _sb_bathy = _compute_median_bathy_profile(_spot_transects)
+            except Exception:
+                logger.warning(
+                    "surf endpoint: SurfBeat bathy median failed for %s — "
+                    "SurfBeat skipped for this request",
+                    location_id,
+                    exc_info=True,
+                )
+
+        if _sb_bathy is not None:
+            for _sb_hr in range(0, 73, spot_config.surfbeat_cadence_hours):
+                # Find the SWAN timestep whose elapsed hours since t0 is closest
+                # to this cadence hour.
+                _best_ts: str | None = None
+                _best_diff: float | None = None
+                for _ts_candidate in _ordered_times:
+                    try:
+                        _ts_dt = datetime.fromisoformat(
+                            _ts_candidate.replace("Z", "+00:00")
+                        )
+                        _diff = abs((_ts_dt - _t0_dt).total_seconds() / 3600.0 - _sb_hr)
+                        if _best_diff is None or _diff < _best_diff:
+                            _best_diff = _diff
+                            _best_ts = _ts_candidate
+                    except (ValueError, TypeError):
+                        pass
+
+                if _best_ts is None:
+                    _surfbeat_by_hour[_sb_hr] = None
+                    continue
+
+                # Use the most offshore point at this timestep for boundary conditions.
+                _sb_pts = _points_by_time.get(_best_ts, [])
+                if not _sb_pts:
+                    _surfbeat_by_hour[_sb_hr] = None
+                    continue
+
+                _offshore_pt = max(
+                    _sb_pts,
+                    key=lambda p: float(p.get("distanceFromShore") or 0.0),
+                )
+                _sb_hs_raw = _offshore_pt.get("waveHeight")
+                _sb_tp_raw = _offshore_pt.get("wavePeriod")
+                _sb_dir_raw = _offshore_pt.get("waveDirection")
+
+                if _sb_hs_raw is None or _sb_tp_raw is None or _sb_dir_raw is None:
+                    _surfbeat_by_hour[_sb_hr] = None
+                    continue
+
+                try:
+                    _sb_result = run_surfbeat_strip(
+                        spot_id=location_id,
+                        profile=_sb_bathy,
+                        hs=float(_sb_hs_raw),
+                        tp=float(_sb_tp_raw),
+                        direction=float(_sb_dir_raw),
+                        cfjon=spot_config.friction_coefficient,
+                        swan_binary=_SURFBEAT_SWAN_BINARY,
+                    )
+                    _surfbeat_by_hour[_sb_hr] = _sb_result
+                    logger.debug(
+                        "surf endpoint: SurfBeat hr=%d Hs_ig=%.4f m set_timing=%s min",
+                        _sb_hr,
+                        _sb_result.hs_ig_shoreline,
+                        (
+                            f"{_sb_result.set_timing_minutes:.1f}"
+                            if _sb_result.set_timing_minutes is not None
+                            else "None"
+                        ),
+                    )
+                except Exception:
+                    logger.warning(
+                        "surf endpoint: SurfBeat strip failed for %s @ hour %d — "
+                        "IG fields will be null for timesteps carrying this result",
+                        location_id,
+                        _sb_hr,
+                        exc_info=True,
+                    )
+                    _surfbeat_by_hour[_sb_hr] = None
+        else:
+            logger.debug(
+                "surf endpoint: SurfBeat skipped for %s — "
+                "no open transect bathy profiles available yet",
+                location_id,
+            )
+
     # --- Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast timestep") ---
     forecast_entries: list[dict] = []
     for ts_idx, valid_time in enumerate(_ordered_times):
@@ -732,6 +915,7 @@ def get_surf(location_id: str) -> dict:
                     transects=_spot_transects,
                     tide_level=0.0,
                     beach_facing=spot_config.beach_facing_degrees,
+                    cfjon=spot_config.friction_coefficient,
                     # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
                     bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
                     bulk_tp=wave_period_pt if wave_period_pt else None,
@@ -886,6 +1070,36 @@ def get_surf(location_id: str) -> dict:
             entry["openTransectCount"] = 0
             entry["degraded"] = True
 
+        # T2.2: SurfBeat IG fields — carry-forward from nearest cadence hour.
+        # When SurfBeat is disabled, no profiles available, or the strip for the
+        # most recent cadence hour failed, all three fields are null (never omitted).
+        if spot_config.surfbeat_enabled and _surfbeat_by_hour and _t0_dt is not None:
+            try:
+                _ts_dt_sb = datetime.fromisoformat(valid_time.replace("Z", "+00:00"))
+                _ts_elapsed_h = (_ts_dt_sb - _t0_dt).total_seconds() / 3600.0
+            except (ValueError, TypeError):
+                _ts_elapsed_h = float(ts_idx)
+
+            # Carry-forward: largest cadence hour key <= current elapsed hour.
+            _avail_sb_hrs = sorted(k for k in _surfbeat_by_hour if k <= _ts_elapsed_h)
+            _nearest_sb_hr: int | None = _avail_sb_hrs[-1] if _avail_sb_hrs else None
+            _sb_entry: SurfBeatResult | None = (
+                _surfbeat_by_hour.get(_nearest_sb_hr)
+                if _nearest_sb_hr is not None
+                else None
+            )
+        else:
+            _sb_entry = None
+
+        if _sb_entry is not None:
+            entry["setTimingMinutes"] = _sb_entry.set_timing_minutes
+            entry["setAmplitudeM"] = _sb_entry.set_amplitude_m
+            entry["igWaveHeightM"] = _sb_entry.hs_ig_shoreline
+        else:
+            entry["setTimingMinutes"] = None
+            entry["setAmplitudeM"] = None
+            entry["igWaveHeightM"] = None
+
         forecast_entries.append(entry)
 
     # --- CO-OPS tide predictions (informational overlay, not scored) ---
@@ -967,7 +1181,7 @@ def get_surf(location_id: str) -> dict:
         "locationName": location.name,
         "coordinates": {"lat": location.lat, "lon": location.lon},
         # SWAN metadata (API-MANUAL §17)
-        "nearshoreModel": "swan",
+        "nearshoreModel": "SWAN + SwellTrack",
         "lastRunTime": last_run_time,
         "dataAge": data_age_seconds,
         "breakerFormula": spot_config.breaker_formula,
