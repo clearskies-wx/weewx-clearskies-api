@@ -183,6 +183,10 @@ class SwanConfig:
         Resolution of the inner nested SWAN grid in metres.  Controls the
         nearshore domain tight around surf spots (uses ``swan_domain_bbox``).
         Valid range: 50–1000.
+      verify_tls (bool, default True):
+        Whether to verify TLS certificates when connecting to the remote SWAN
+        service.  Default True.  Set False for self-signed certs on the same
+        VLAN.
 
     Example api.conf (remote mode, 4 threads, custom resolutions):
       [swan]
@@ -190,12 +194,14 @@ class SwanConfig:
         omp_num_threads = 4
         outer_grid_resolution_km = 3.0
         inner_nest_resolution_m = 200
+        verify_tls = false
     """
 
     service_url: str
     omp_num_threads: int
     outer_grid_resolution_km: float
     inner_nest_resolution_m: float
+    verify_tls: bool
 
     def __init__(self, section: dict[str, Any]) -> None:
         self.service_url = str(
@@ -219,6 +225,15 @@ class SwanConfig:
             self.inner_nest_resolution_m = float(raw_inner_m)
         else:
             self.inner_nest_resolution_m = 200.0  # metres — matches current behaviour
+
+        # T2.1 — TLS verification for remote SWAN service (same pattern as
+        # surf_compute_verify_tls in _parse_marine_config).  Default True
+        # (secure default — self-signed cert skip is opt-in).
+        raw_verify = section.get("verify_tls")
+        if raw_verify is not None and str(raw_verify).strip():
+            self.verify_tls = str(raw_verify).strip().lower() not in ("false", "0", "no")
+        else:
+            self.verify_tls = True  # secure default
 
     @property
     def is_remote(self) -> bool:

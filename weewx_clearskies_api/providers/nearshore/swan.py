@@ -807,7 +807,7 @@ class _SWANRunnerWithCleanup(SWANRunner):
 # ---------------------------------------------------------------------------
 
 
-def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
+def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool = True) -> None:
     """Background daemon thread: poll remote /health every 60 s (T4.3).
 
     On each successful health check:
@@ -835,12 +835,14 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
         spot_ids: Surf spot IDs from marine config.  The health response may
                   supply an updated spot list; we merge both to avoid missing
                   spots that were added to the remote config later.
+        verify_tls: When False, skip TLS certificate verification (e.g. for
+                    self-signed certs on the same VLAN).  Default True.
     """
     global _remote_consecutive_failures, _remote_healthy, _remote_warned_unreachable  # noqa: PLW0603
 
     while True:
         try:
-            resp = httpx.get(f"{service_url}/health", timeout=10.0)
+            resp = httpx.get(f"{service_url}/health", timeout=10.0, verify=verify_tls)
             resp.raise_for_status()
             health_data: dict[str, Any] = resp.json()
 
@@ -867,6 +869,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
                     forecast_resp = httpx.get(
                         f"{service_url}/surf/{spot_id}/forecast",
                         timeout=30.0,
+                        verify=verify_tls,
                     )
                     if forecast_resp.status_code == 200:
                         data: dict[str, Any] = forecast_resp.json()
@@ -934,7 +937,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str]) -> None:
         time.sleep(_REMOTE_HEALTH_INTERVAL_S)
 
 
-def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
+def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool = True) -> bool:
     """Attempt to activate remote SWAN mode and start the health check thread.
 
     Called lazily from run_all_spots() on the first invocation when
@@ -952,6 +955,8 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
         service_url: Base URL of the standalone SWAN service.
         marine_config: MarineConfig from api.conf (supplies spot_ids for the
                        health thread's initial spot list).
+        verify_tls: When False, skip TLS certificate verification (e.g. for
+                    self-signed certs on the same VLAN).  Default True.
 
     Returns:
         True if remote mode was activated; False if the startup probe failed
@@ -961,7 +966,7 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
 
     logger.info("SWAN: probing remote service at %s", service_url)
     try:
-        resp = httpx.get(f"{service_url}/health", timeout=10.0)
+        resp = httpx.get(f"{service_url}/health", timeout=10.0, verify=verify_tls)
         resp.raise_for_status()
         logger.info(
             "SWAN remote service reachable: %s (last_run=%s)",
@@ -982,7 +987,7 @@ def configure_remote_mode(service_url: str, marine_config: Any) -> bool:
     _remote_url = service_url
     _remote_health_thread = threading.Thread(
         target=_remote_health_loop,
-        args=(service_url, spot_ids),
+        args=(service_url, spot_ids, verify_tls),
         daemon=True,
         name="swan-remote-health",
     )
@@ -1125,7 +1130,7 @@ def run_all_spots(
                 # Double-check after acquiring the lock (another thread may have
                 # initialised while we were waiting).
                 if _remote_url is None:
-                    activated = configure_remote_mode(swan_cfg.service_url, marine_config)
+                    activated = configure_remote_mode(swan_cfg.service_url, marine_config, verify_tls=swan_cfg.verify_tls)
                     if not activated:
                         logger.warning(
                             "SWAN: remote mode startup probe failed; "
