@@ -807,13 +807,14 @@ class _SWANRunnerWithCleanup(SWANRunner):
 # ---------------------------------------------------------------------------
 
 
-def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool = True) -> None:
+def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool = True, auth_secret: str = "") -> None:
     """Background daemon thread: poll remote /health every 60 s (T4.3).
 
     On each successful health check:
       - Resets _remote_consecutive_failures to 0.
       - Fetches fresh forecast data for each configured spot from the remote
-        service's /surf/{spot_id}/forecast endpoint.
+        service's /surf/{spot_id}/forecast endpoint (authenticated with
+        ``auth_secret`` as a Bearer token).
       - Stores results in the local last-good cache (7-day TTL, same cache
         keys as bundled mode) so fetch() can serve them from the request path.
 
@@ -866,10 +867,12 @@ def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool 
             cache = get_cache()
             for spot_id in all_spots:
                 try:
+                    headers = {"Authorization": f"Bearer {auth_secret}"} if auth_secret else {}
                     forecast_resp = httpx.get(
                         f"{service_url}/surf/{spot_id}/forecast",
                         timeout=30.0,
                         verify=verify_tls,
+                        headers=headers,
                     )
                     if forecast_resp.status_code == 200:
                         data: dict[str, Any] = forecast_resp.json()
@@ -937,7 +940,7 @@ def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool 
         time.sleep(_REMOTE_HEALTH_INTERVAL_S)
 
 
-def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool = True) -> bool:
+def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool = True, auth_secret: str = "") -> bool:
     """Attempt to activate remote SWAN mode and start the health check thread.
 
     Called lazily from run_all_spots() on the first invocation when
@@ -987,7 +990,7 @@ def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool
     _remote_url = service_url
     _remote_health_thread = threading.Thread(
         target=_remote_health_loop,
-        args=(service_url, spot_ids, verify_tls),
+        args=(service_url, spot_ids, verify_tls, auth_secret),
         daemon=True,
         name="swan-remote-health",
     )
@@ -1130,7 +1133,12 @@ def run_all_spots(
                 # Double-check after acquiring the lock (another thread may have
                 # initialised while we were waiting).
                 if _remote_url is None:
-                    activated = configure_remote_mode(swan_cfg.service_url, marine_config, verify_tls=swan_cfg.verify_tls)
+                    activated = configure_remote_mode(
+                        swan_cfg.service_url,
+                        marine_config,
+                        verify_tls=swan_cfg.verify_tls,
+                        auth_secret=os.environ.get("SURF_COMPUTE_SECRET", ""),
+                    )
                     if not activated:
                         logger.warning(
                             "SWAN: remote mode startup probe failed; "
