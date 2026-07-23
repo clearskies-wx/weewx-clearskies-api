@@ -333,7 +333,7 @@ def _build_transect_profile(
             is provided.
 
     Returns:
-        Serializable dict with camelCase keys including transect, breakPoints,
+        Serializable dict with camelCase keys including hsEnvelope, breakPoints,
         waveShapes, surfZones, jackingFactors, and transect metadata.
     """
     # --- Dominant partition (needed early for blend derivation and wave shapes) ---
@@ -388,9 +388,9 @@ def _build_transect_profile(
 
     hs_envelope: list[dict] = [
         {
-            "distance": _convert_unit(d, "meter", d_unit),
+            "distanceFromShore": _convert_unit(d, "meter", d_unit),
             "depth": _convert_unit(float(z), "meter", d_unit),
-            "hs": _convert_unit(h, "meter", h_unit),
+            "waveHeight": _convert_unit(h, "meter", h_unit),
         }
         for d, z, h in zip(_raw_distances_m, tr.depths, _blended_hs_m)
     ]
@@ -423,9 +423,9 @@ def _build_transect_profile(
         # Primary break point — face height pre-computed by the pipeline.
         primary_bp = pbr.break_points[0]
         break_points.append({
-            "distance": _convert_unit(primary_bp.distance_m, "meter", d_unit),
+            "distanceFromShore": _convert_unit(primary_bp.distance_m, "meter", d_unit),
             "depth": _convert_unit(primary_bp.depth_m, "meter", d_unit),
-            "hs": _convert_unit(primary_bp.hs_m, "meter", h_unit),
+            "waveHeight": _convert_unit(primary_bp.hs_m, "meter", h_unit),
             "faceHeight": _convert_unit(pbr.face_height_m, "meter", h_unit),
             "breakerType": primary_bp.breaker_type,
             "iribarren": round(primary_bp.iribarren, 3),
@@ -440,9 +440,9 @@ def _build_transect_profile(
                 source="break_point",
             )
             break_points.append({
-                "distance": _convert_unit(inner_bp.distance_m, "meter", d_unit),
+                "distanceFromShore": _convert_unit(inner_bp.distance_m, "meter", d_unit),
                 "depth": _convert_unit(inner_bp.depth_m, "meter", d_unit),
-                "hs": _convert_unit(inner_bp.hs_m, "meter", h_unit),
+                "waveHeight": _convert_unit(inner_bp.hs_m, "meter", h_unit),
                 "faceHeight": _convert_unit(inner_face_h, "meter", h_unit),
                 "breakerType": inner_bp.breaker_type,
                 "iribarren": round(inner_bp.iribarren, 3),
@@ -450,7 +450,7 @@ def _build_transect_profile(
             })
 
     # Sort offshore to shore (descending distance from shore).
-    break_points.sort(key=lambda b: b["distance"], reverse=True)
+    break_points.sort(key=lambda b: b["distanceFromShore"], reverse=True)
 
     # --- Wave shapes, surf zones, jacking from dominant partition ---
     # The pipeline's per_transect result contains only the RSS-combined Hs
