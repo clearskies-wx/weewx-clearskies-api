@@ -874,13 +874,15 @@ def compute_spot_transect(
     d_spec = _dist_at_depth(target_spec_m, 300.0)
     d_shallow = _dist_at_depth(target_shallow_m, 50.0)
 
-    # Clip deep end to grid bbox if provided (T23.2).
-    # Analytically find the largest d_deep such that _offset(d_deep) stays
-    # within (lon_min, lat_min, lon_max, lat_max).
+    # Clip both ends to grid bbox if provided (T23.2 + T3.1 fix).
+    # The CURVE must stay within the CGRID — SWAN writes exception values
+    # for points outside the grid (swan-nesting-reference Q4).
     if grid_bbox is not None:
         lon_min, lat_min, lon_max, lat_max = grid_bbox
         dlon_per_m = math.sin(bearing_rad) / meters_per_lon
         dlat_per_m = math.cos(bearing_rad) / meters_per_lat
+
+        # Clip deep (offshore) end
         d_max = float(d_deep)
         if dlon_per_m > 1e-10:
             d_max = min(d_max, (lon_max - origin_lon) / dlon_per_m)
@@ -897,6 +899,28 @@ def compute_spot_transect(
                 d_deep, d_max, grid_bbox, spot_lon, spot_lat,
             )
             d_deep = max(d_max, d_shallow + spacing_m)
+
+        # Clip shallow (near-shore) end — find minimum distance that stays
+        # within the grid. The shallow end is closer to the origin (smaller
+        # distance), so we need the point at d_shallow to be inside the grid.
+        shal_lon, shal_lat = _offset(d_shallow)
+        if not (lon_min <= shal_lon <= lon_max and lat_min <= shal_lat <= lat_max):
+            d_min = 0.0
+            if dlon_per_m > 1e-10:
+                d_min = max(d_min, (lon_min - origin_lon) / dlon_per_m)
+            elif dlon_per_m < -1e-10:
+                d_min = max(d_min, (lon_max - origin_lon) / dlon_per_m)
+            if dlat_per_m > 1e-10:
+                d_min = max(d_min, (lat_min - origin_lat) / dlat_per_m)
+            elif dlat_per_m < -1e-10:
+                d_min = max(d_min, (lat_max - origin_lat) / dlat_per_m)
+            if d_min > d_shallow:
+                logger.warning(
+                    "compute_spot_transect: shallow end clipped from %.1f m to %.1f m "
+                    "to stay within grid bbox %s (spot lon=%.6f lat=%.6f)",
+                    d_shallow, d_min, grid_bbox, spot_lon, spot_lat,
+                )
+                d_shallow = d_min
 
     # Ensure sensible ordering (deep > spec > shallow)
     if d_deep <= d_shallow:
