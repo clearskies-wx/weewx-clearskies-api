@@ -1358,6 +1358,12 @@ def build_swan_input(
                     _cl = None
                     _cln = None
 
+                _grid_bbox_lonlat = (
+                    lon_sw,
+                    lat_sw,
+                    lon_sw + mxc * dlon,
+                    lat_sw + myc * dlat,
+                ) if grid_level == "inner" else None
                 transect = compute_spot_transect(
                     spot_lon,
                     spot_lat,
@@ -1365,6 +1371,7 @@ def build_swan_input(
                     _bp,
                     coastline_lat=_cl,
                     coastline_lon=_cln,
+                    grid_bbox=_grid_bbox_lonlat,
                 )
 
                 spot_order.append(spot_id)

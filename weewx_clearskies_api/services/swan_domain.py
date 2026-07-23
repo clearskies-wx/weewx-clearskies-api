@@ -514,6 +514,15 @@ def smart_size_l3_grid(
         center_lon + shoreward_dlon + lateral_m_dlon,
     ]
 
+    # Ensure the grid contains all spot pin positions (with padding).
+    # Smart-sizing from structures alone can produce a grid that excludes
+    # the spots when structures are offset from the pins.
+    spot_pad_deg = pad_m / (km_per_deg_lat * 1000.0)
+    corner_lats.extend(lat - spot_pad_deg for lat in cluster.lats)
+    corner_lats.extend(lat + spot_pad_deg for lat in cluster.lats)
+    corner_lons.extend(lon - pad_m / (km_per_deg_lon * 1000.0) for lon in cluster.lons)
+    corner_lons.extend(lon + pad_m / (km_per_deg_lon * 1000.0) for lon in cluster.lons)
+
     logger.info(
         "L3 smart sizing for cluster %s: struct %.0f m, shadow %.0f m → "
         "bbox [%.5f,%.5f – %.5f,%.5f]",
