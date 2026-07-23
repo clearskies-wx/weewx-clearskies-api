@@ -202,6 +202,7 @@ def remote_swelltrack(
     compute_secret: str,
     verify_tls: bool,
     *,
+    spot_id: str = "",
     specout_data: dict | None,
     transects: list[TransectInfo],
     tide_level: float,
@@ -241,6 +242,7 @@ def remote_swelltrack(
     """
     url = f"{compute_host.rstrip('/')}/compute/swelltrack"
     payload: dict[str, Any] = {
+        "spot_id": spot_id,
         "specout_data": specout_data,
         "transects": [_serialize_transect(t) for t in transects],
         "tide_level": float(tide_level),

@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import ipaddress
+import json
 import logging
 import os
 import sys
@@ -109,6 +110,7 @@ class SwellTrackRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    spot_id: str = ""
     specout_data: dict[str, Any] | None = None
     transects: list[TransectData]
     tide_level: float
@@ -435,17 +437,32 @@ def compute_swelltrack(
     converts all numpy arrays in the result to Python lists, and returns the
     serialized PipelineResult.
     """
+    # Load CUDEM bathymetric profile from local cache when transects arrive
+    # with empty profiles (remote-mode: API on weewx doesn't have profiles,
+    # but they exist here on the compute host at /etc/weewx-clearskies/spot_profiles/).
+    _local_profile: list[dict[str, float]] = []
+    if request.spot_id:
+        _profile_path = Path("/etc/weewx-clearskies/spot_profiles") / f"{request.spot_id}.json"
+        if _profile_path.exists():
+            try:
+                _cached = json.loads(_profile_path.read_text(encoding="utf-8"))
+                _pts = _cached.get("profile", [])
+                _local_profile = sorted(
+                    [p for p in _pts if p.get("depth_m") is not None and p.get("depth_m", 0) > 0],
+                    key=lambda p: p["distance_m"],
+                )
+            except Exception:
+                logger.debug("compute_swelltrack: failed to load CUDEM profile for %s", request.spot_id)
+
     transects: list[TransectInfo] = [
         TransectInfo(
             index=t.index,
             origin_lat=t.origin_lat,
             origin_lon=t.origin_lon,
-            # bearing_deg and handoff_depth_m are not used by run_pipeline();
-            # sensible defaults are provided so the dataclass can be constructed.
             bearing_deg=0.0,
             handoff_depth_m=10.0,
             is_structure_affected=t.is_structure_affected,
-            bathymetric_profile=list(t.bathymetric_profile),
+            bathymetric_profile=list(t.bathymetric_profile) if t.bathymetric_profile else _local_profile,
         )
         for t in request.transects
     ]
