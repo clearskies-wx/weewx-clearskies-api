@@ -749,6 +749,8 @@ def get_surf(location_id: str) -> dict:
                                 tp=float(_sb_tp_raw),
                                 direction=float(_sb_dir_raw),
                                 cfjon=spot_config.friction_coefficient,
+                                wind_speed_ms=float(ts_wind_speed or 0.0),
+                                wind_direction_deg=float(ts_wind_direction or 0.0),
                             )
                         except ComputeServiceError:
                             logger.warning(
@@ -766,6 +768,8 @@ def get_surf(location_id: str) -> dict:
                                 direction=float(_sb_dir_raw),
                                 cfjon=spot_config.friction_coefficient,
                                 swan_binary=_SURFBEAT_SWAN_BINARY,
+                                wind_speed_ms=float(ts_wind_speed or 0.0),
+                                wind_direction_deg=float(ts_wind_direction or 0.0),
                             )
                     else:
                         _sb_result = run_surfbeat_strip(
@@ -776,6 +780,8 @@ def get_surf(location_id: str) -> dict:
                             direction=float(_sb_dir_raw),
                             cfjon=spot_config.friction_coefficient,
                             swan_binary=_SURFBEAT_SWAN_BINARY,
+                            wind_speed_ms=float(ts_wind_speed or 0.0),
+                            wind_direction_deg=float(ts_wind_direction or 0.0),
                         )
                     _surfbeat_by_hour[_sb_hr] = _sb_result
                     logger.debug(

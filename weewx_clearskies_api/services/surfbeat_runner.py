@@ -240,8 +240,10 @@ def _generate_strip_files(
     cfjon: float,
     workdir: Path,
     config: SurfBeatStripConfig,
+    wind_speed_ms: float = 0.0,
+    wind_direction_deg: float = 0.0,
 ) -> dict:
-    """Generate SWAN INPUT + BOTTOM.txt for the SurfBeat strip.
+    """Generate SWAN INPUT + BOTTOM.txt + WIND.txt for the SurfBeat strip.
 
     INPUT syntax strictly follows swan-commands-extract.md §SURFBEAT and
     SURF-MODEL-FIX-PLAN §0.4.  Key rules enforced:
@@ -253,6 +255,7 @@ def _generate_strip_files(
     - OBSTACLE TRANSM 0.0 REFL [reflc] RDIFF [pown] — pown is REQUIRED.
     - SURFBEAT command placed before COMPUTEs.
     - BOTTOM.txt idla=3: row 0 = south, columns west → east.
+    - WIND.txt: uniform wind field (HRRR interpolated to spot coordinates).
 
     Args:
         spot_id: Spot identifier (used in logging only).
@@ -335,6 +338,24 @@ def _generate_strip_files(
         )
         # idla=3: south→north rows, west→east columns; scale=1.0; FREE format
         f.write("READINP BOTTOM 1. 'BOTTOM.txt' 3 0 FREE\n")
+        f.write("$\n")
+        # Uniform wind field (HRRR at spot coordinates for this timestep).
+        # GEN3 WESTHUYSEN requires a wind input — SWAN refuses to run
+        # quadruplets without one.
+        _wind_rad = math.radians(wind_direction_deg)
+        _wx = -wind_speed_ms * math.sin(_wind_rad)
+        _wy = -wind_speed_ms * math.cos(_wind_rad)
+        f.write(
+            f"INPGRID WIND REG {xp:.1f} {yp:.1f} 0. {nx} {ny} "
+            f"{config.dx:.1f} {config.dy:.1f}\n"
+        )
+        f.write("READINP WIND 1. 'WIND.txt' 3 0 FREE\n")
+        wind_path = workdir / "WIND.txt"
+        with wind_path.open("w", encoding="ascii") as wf:
+            for _row in range(ny + 1):
+                wf.write(" ".join(f"{_wx:.4f}" for _ in range(nx + 1)) + "\n")
+            for _row in range(ny + 1):
+                wf.write(" ".join(f"{_wy:.4f}" for _ in range(nx + 1)) + "\n")
         f.write("$\n")
         # West boundary only — SURFBEAT rejects any other boundary specification
         # v1: parametric JONSWAP (design decision; L2 SPECOUT boundary is future work)
@@ -775,6 +796,8 @@ def run_surfbeat_strip(
     workdir_base: str = _DEFAULT_WORKDIR_BASE,
     config: SurfBeatStripConfig | None = None,
     timeout_s: int = _DEFAULT_TIMEOUT_S,
+    wind_speed_ms: float = 0.0,
+    wind_direction_deg: float = 0.0,
 ) -> SurfBeatResult:
     """Run the SurfBeat strip for a surf spot and return IG wave statistics.
 
@@ -867,6 +890,8 @@ def run_surfbeat_strip(
             cfjon=cfjon,
             workdir=workdir,
             config=config,
+            wind_speed_ms=wind_speed_ms,
+            wind_direction_deg=wind_direction_deg,
         )
         station_names: list[str] = strip_meta["station_names"]
         station_distances: list[float] = strip_meta["station_distances_from_shore"]

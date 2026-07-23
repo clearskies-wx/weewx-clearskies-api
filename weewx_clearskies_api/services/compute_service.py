@@ -138,6 +138,8 @@ class SurfBeatRequest(BaseModel):
     tp: float
     direction: float
     cfjon: float
+    wind_speed_ms: float = 0.0
+    wind_direction_deg: float = 0.0
 
     @field_validator("profile")
     @classmethod
@@ -497,6 +499,8 @@ def compute_surfbeat(
             cfjon=request.cfjon,
             swan_binary=_SWAN_BINARY,
             workdir_base=_SWAN_WORKDIR_BASE,
+            wind_speed_ms=request.wind_speed_ms,
+            wind_direction_deg=request.wind_direction_deg,
         )
     except Exception as exc:
         logger.error(

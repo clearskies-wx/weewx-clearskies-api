@@ -296,6 +296,8 @@ def remote_surfbeat(
     tp: float,
     direction: float,
     cfjon: float,
+    wind_speed_ms: float = 0.0,
+    wind_direction_deg: float = 0.0,
 ) -> SurfBeatResult:
     """POST to /compute/surfbeat on the remote compute service.
 
@@ -327,6 +329,8 @@ def remote_surfbeat(
         "tp": float(tp),
         "direction": float(direction),
         "cfjon": float(cfjon),
+        "wind_speed_ms": float(wind_speed_ms),
+        "wind_direction_deg": float(wind_direction_deg),
     }
 
     try:
