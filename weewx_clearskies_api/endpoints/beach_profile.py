@@ -333,7 +333,7 @@ def _build_transect_profile(
             is provided.
 
     Returns:
-        Serializable dict with camelCase keys including hsEnvelope, breakPoints,
+        Serializable dict with camelCase keys including transect, breakPoints,
         waveShapes, surfZones, jackingFactors, and transect metadata.
     """
     # --- Dominant partition (needed early for blend derivation and wave shapes) ---
@@ -541,7 +541,7 @@ def _build_transect_profile(
         "transectBearingDeg": (
             t_info_meta.bearing_deg if t_info_meta is not None else None
         ),
-        "hsEnvelope": hs_envelope,
+        "transect": hs_envelope,
         "breakPoints": break_points,
         "waveShapes": wave_shapes,
         "surfZones": surf_zones,
