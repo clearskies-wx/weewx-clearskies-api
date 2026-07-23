@@ -32,6 +32,7 @@ wire_beach_profile_config(settings) stores the parsed MarineConfig module-level.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -39,6 +40,10 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocation
+from weewx_clearskies_api.services.compute_client import (
+    ComputeServiceError,
+    remote_swelltrack as _remote_swelltrack,
+)
 from weewx_clearskies_api.enrichment.breaker_height import hsig_to_face_height
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.services.freshness import build_freshness
@@ -622,6 +627,13 @@ def get_beach_profile(
     wave_height_internal, wave_height_symbol = _wave_height_unit()
     distance_internal, distance_symbol = _distance_unit()
 
+    # --- Compute offloading config (mirrors surf.py) ---
+    _compute_host: str | None = _marine_config.surf_compute_host if _marine_config else None
+    _compute_secret: str = os.environ.get("SURF_COMPUTE_SECRET", "") if _compute_host else ""
+    _compute_verify_tls: bool = (
+        _marine_config.surf_compute_verify_tls if _marine_config else True
+    )
+
     # --- SWAN: fetch cached nearshore data ---
     swan_result: dict | None = None
     try:
@@ -733,19 +745,49 @@ def get_beach_profile(
     _ts_specout = _handoff_specout_by_time.get(closest_time) or {}
     pipeline_result: PipelineResult | None = None
     try:
-        pipeline_result = _run_pipeline(
-            specout_data=_ts_specout,
-            transects=spot_transects,
-            tide_level=0.0,
-            beach_facing=spot_config.beach_facing_degrees,
-            cfjon=spot_config.friction_coefficient,
-            bulk_hs=_bulk_hs,
-            bulk_tp=_bulk_tp,
-            bulk_dir=_bulk_dir,
-            # canonical_partitions intentionally not supplied: when omitted,
-            # per_partition_breaks and per_partition use the same handoff
-            # partition indices, making the pbi_by_partition lookup consistent.
-        )
+        if _compute_host:
+            try:
+                pipeline_result = _remote_swelltrack(
+                    _compute_host,
+                    _compute_secret,
+                    _compute_verify_tls,
+                    spot_id=location_id,
+                    specout_data=_ts_specout,
+                    transects=spot_transects,
+                    tide_level=0.0,
+                    beach_facing=spot_config.beach_facing_degrees,
+                    gamma=0.73,
+                    cfjon=spot_config.friction_coefficient,
+                    bulk_hs=_bulk_hs,
+                    bulk_tp=_bulk_tp,
+                    bulk_dir=_bulk_dir,
+                )
+            except ComputeServiceError:
+                logger.warning(
+                    "beach_profile: compute service unavailable — falling back to in-process",
+                    exc_info=True,
+                )
+                pipeline_result = _run_pipeline(
+                    specout_data=_ts_specout,
+                    transects=spot_transects,
+                    tide_level=0.0,
+                    beach_facing=spot_config.beach_facing_degrees,
+                    cfjon=spot_config.friction_coefficient,
+                    bulk_hs=_bulk_hs,
+                    bulk_tp=_bulk_tp,
+                    bulk_dir=_bulk_dir,
+                )
+        else:
+            pipeline_result = _run_pipeline(
+                specout_data=_ts_specout,
+                transects=spot_transects,
+                tide_level=0.0,
+                beach_facing=spot_config.beach_facing_degrees,
+                cfjon=spot_config.friction_coefficient,
+                bulk_hs=_bulk_hs,
+                bulk_tp=_bulk_tp,
+                bulk_dir=_bulk_dir,
+            )
     except Exception:
         logger.warning(
             "beach_profile: 1D pipeline raised for %s @ %s",
