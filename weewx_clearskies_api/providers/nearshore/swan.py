@@ -880,6 +880,8 @@ def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool 
                             _build_last_good_key(spot_id),
                             {
                                 "forecast": data.get("forecast", []),
+                                "spectral": data.get("spectral", []),
+                                "transect": data.get("transect", {}),
                                 "run_time": data.get("run_time"),
                                 "hrrr_cycle_time": data.get("hrrr_cycle_time", ""),
                             },
@@ -1607,7 +1609,7 @@ def _run_all_spots_locked(
                 entry["offshore_distance_m"] = float(closest.get("distance_m", 0))
         spot_locations_for_domains.append(entry)
 
-    domains = compute_domains(spot_locations_for_domains)
+    domains = compute_domains(spot_locations_for_domains, structures=structures_for_swan)
     logger.info(
         "SWAN: 3-level domains computed — L1: %d cells, L2: %d cells, L3: %d clusters (%d total cells)",
         domains.level1.cell_count,
@@ -1970,7 +1972,7 @@ def _run_quick_update_locked(
             except Exception:
                 pass
         spot_locations_for_domains.append(entry)
-    domains = compute_domains(spot_locations_for_domains)
+    domains = compute_domains(spot_locations_for_domains, structures=structures_for_runner)
 
     # ── Check that Level 2 NESTOUT exists from the last full 3-level run ──
     # The file is named nest_out.dat (not the old nest_boundary.dat) per the

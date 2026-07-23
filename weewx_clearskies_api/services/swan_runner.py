@@ -1546,27 +1546,6 @@ class SWANRunner:
                 )
                 continue
 
-            # T3.2 — Smart-size the L3 bbox from structure positions + shadow zone
-            # when structures with coordinate data are present.  Overrides the
-            # pin-cluster bbox produced by compute_domains() at setup time.
-            if structures and cluster.grid is not None:
-                from weewx_clearskies_api.services.swan_domain import smart_size_l3_grid  # noqa: PLC0415
-                _rep_spot_id = cluster.spot_ids[0] if cluster.spot_ids else None
-                _sizing_bearing = float(
-                    _spot_cfgs_full.get(_rep_spot_id, {}).get("beach_facing_degrees", 270.0)
-                    if _rep_spot_id else 270.0
-                )
-                _smart_grid = smart_size_l3_grid(
-                    cluster, _sizing_bearing, structures,
-                    resolution_m=cluster.grid.resolution_m,
-                )
-                if _smart_grid is not None:
-                    cluster.grid = _smart_grid
-                    logger.debug(
-                        "SWAN L3[%d]: structure-based smart sizing applied for cluster %s",
-                        idx, cluster.spot_ids,
-                    )
-
             l3_dir = workdir / f"level3_{idx}"
             l3_dir.mkdir(exist_ok=True)
             l3_bbox = (

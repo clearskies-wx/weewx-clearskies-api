@@ -56,11 +56,13 @@ wire_surf_config(settings) stores the parsed MarineConfig module-level.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -629,6 +631,29 @@ def get_surf(location_id: str) -> dict:
             location_id,
             exc_info=True,
         )
+
+    # Populate bathymetric profiles on transects from cached CUDEM profile.
+    # The profile is static geography — computed once and cached at
+    # /etc/weewx-clearskies/spot_profiles/{id}.json by the SWAN setup phase.
+    if _spot_transects:
+        _profile_path = Path("/etc/weewx-clearskies/spot_profiles") / f"{location_id}.json"
+        if _profile_path.exists():
+            try:
+                _cached = json.loads(_profile_path.read_text(encoding="utf-8"))
+                _profile_pts = _cached.get("profile", [])
+                if _profile_pts:
+                    _offshore_only = [
+                        p for p in _profile_pts
+                        if p.get("depth_m") is not None and p.get("depth_m", 0) > 0
+                    ]
+                    _offshore_only.sort(key=lambda p: p["distance_m"])
+                    for t in _spot_transects:
+                        t.bathymetric_profile = _offshore_only
+            except Exception:
+                logger.debug(
+                    "surf endpoint: failed to load CUDEM profile for %s",
+                    location_id, exc_info=True,
+                )
 
     # T4.4: Build full-entry SPECOUT lookup by timestep for the handoff pipeline.
     # Each value is the complete _spec_entry dict (time + components today; future
