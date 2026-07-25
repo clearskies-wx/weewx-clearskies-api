@@ -711,6 +711,39 @@ def _select_l3_handoff_spectra(
     Callers already treat a missing timestep as a graceful bulk-fallback
     case (``endpoints/surf.py``'s ``_handoff_specout_by_time.get(t) or {}``)
     — this reuses that existing degrade path rather than inventing a new one.
+
+    The Hs(hour) proxy — a deliberate modelling choice, not an oversight.
+    ADR-093 Amendment 2 §2 defines the per-hour handoff formula as
+    ``1.3 * Hs(hour) / gamma`` but does not define which Hs value "Hs(hour)"
+    is when several are available at this spot. Three candidates existed:
+
+      1. **The L2 deep-water reference SPECOUT (~15 m, swan_runner.py's
+         separate DWR block).** Rejected: it is upstream of L3 entirely —
+         using it would size the handoff off a spectrum that has not yet
+         seen this cluster's structures or L3's own refraction/shoaling,
+         reintroducing exactly the "wrong-model's-output" contamination the
+         per-hour design exists to avoid.
+      2. **L3's own offshore boundary station (index 0).** Rejected: it sits
+         directly on the grid edge, which ADR-095 Amendment 2 already
+         excludes from SPECOUT extraction for the same reason — nest
+         boundary conditions have not necessarily relaxed into a
+         physically-developed field there yet, per L3-1D-BOUNDARY-
+         DECISIONS-BRIEF D1's open sub-question on seaward relaxation
+         margin. Using it as an input (not just refusing to extract from
+         it) would import that same uncertainty into the formula.
+      3. **The offshore-most INTERIOR station (index 1) — CHOSEN.** Inside
+         L3's own grid (so it reflects this cluster's actual structure/
+         refraction physics, unlike option 1), one station in from the
+         boundary (so it avoids the edge-relaxation uncertainty of option
+         2), and by construction the least-shoaled, least-dissipated point
+         on the curve — the closest available proxy to "the incident wave
+         height this hour" that L3 itself vouches for.
+
+    This is a choice made INSIDE an approved formula (which Hs value feeds
+    an already-decided equation), not a change to the formula, the grid, or
+    any boundary — no CLAUDE.md trigger is implicated. Flagged for the
+    coordinator's explicit review per the 2026-07-25 reopen; not changed
+    without an operator decision.
     """
     from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
     from weewx_clearskies_api.services.swan_spectral import decompose_spectrum  # noqa: PLC0415
@@ -782,10 +815,9 @@ def _select_l3_handoff_spectra(
     n_stations = len(station_records)
     n_timesteps = len(specout.station_timesteps[0]) if specout.station_timesteps else 0
 
-    # Offshore-most INTERIOR station (index 1) as the Hs(hour) proxy — least
-    # affected by shoaling/dissipation, closest to an incident wave height.
-    # Not spec'd exactly by ADR-093 Amendment 2 beyond "Hs(hour)"; flagged in
-    # the round closeout as a modelling choice worth explicit review.
+    # Hs(hour) proxy: offshore-most interior station — see this function's
+    # docstring ("The Hs(hour) proxy") for the full reasoning and the two
+    # alternatives considered and rejected.
     _hs_proxy_idx = 1 if n_stations > 2 else 0
 
     results: list[dict[str, Any]] = []

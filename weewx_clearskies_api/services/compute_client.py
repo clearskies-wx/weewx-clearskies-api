@@ -59,14 +59,46 @@ class ComputeServiceError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _serialize_transect(t: TransectInfo) -> dict[str, Any]:
-    """Serialize a TransectInfo to the dict shape the compute service expects."""
+def _serialize_transect(
+    t: TransectInfo,
+    t_idx: int,
+    handoff_by_transect: dict[int, tuple[float, str]] | None,
+) -> dict[str, Any]:
+    """Serialize a TransectInfo to the dict shape the compute service expects.
+
+    T4A.9/T4A.10 fix (2026-07-25, reopened): compute offloading is the LIVE
+    path in production, so this hour's per-hour handoff selection MUST cross
+    the HTTP boundary or the remote service silently computes with a stale
+    placeholder (the defect the coordinator caught). Mirrors run_pipeline()'s
+    OWN fallback exactly (`services.surf_1d_pipeline.run_pipeline`) so the
+    remote and in-process paths cannot diverge on this — same lookup, same
+    default, not a second implementation of the selection.
+
+    Args:
+        t: The transect being serialized.
+        t_idx: Its position in the transects list (matches TransectInfo.index
+            for real compute_spot_transects() output; run_pipeline() and the
+            compute service both key handoff_by_transect by this position).
+        handoff_by_transect: This hour's per-transect (handoff_depth_m,
+            handoff_source_level), as computed by
+            services.transect_handoff.select_hourly_handoff() /
+            refine_handoff_with_qb() upstream of this call. ``None`` or a
+            missing index falls back to (t.handoff_depth_m, "L2") -- the
+            same fallback run_pipeline() uses in-process.
+    """
+    handoff_depth_m, handoff_source_level = (
+        handoff_by_transect.get(t_idx, (t.handoff_depth_m, "L2"))
+        if handoff_by_transect is not None
+        else (t.handoff_depth_m, "L2")
+    )
     return {
         "index": t.index,
         "origin_lat": float(t.origin_lat),
         "origin_lon": float(t.origin_lon),
         "is_structure_affected": bool(t.is_structure_affected),
         "bathymetric_profile": list(t.bathymetric_profile),
+        "handoff_depth_m": float(handoff_depth_m),
+        "handoff_source_level": str(handoff_source_level),
     }
 
 
@@ -107,6 +139,8 @@ def _deserialize_transect_result(d: dict[str, Any]) -> TransectResult:
             _deserialize_partition_break_result(pbr) for pbr in d["per_partition"]
         ],
         best_face_height_m=float(d["best_face_height_m"]),
+        handoff_depth_m=float(d["handoff_depth_m"]),
+        handoff_source_level=str(d["handoff_source_level"]),
     )
 
 
@@ -213,6 +247,7 @@ def remote_swelltrack(
     bulk_tp: float | None = None,
     bulk_dir: float | None = None,
     canonical_partitions: list[dict] | None = None,
+    handoff_by_transect: dict[int, tuple[float, str]] | None = None,
 ) -> PipelineResult:
     """POST to /compute/swelltrack on the remote compute service.
 
@@ -233,6 +268,19 @@ def remote_swelltrack(
         bulk_tp: Fallback peak period (s) for T4.5 bulk mode.
         bulk_dir: Fallback wave direction (degrees) for T4.5 bulk mode.
         canonical_partitions: Deep-water SPECOUT partitions for T4.5b index mapping.
+        handoff_by_transect: T4A.9/T4A.10 fix (2026-07-25, reopened) — this
+            hour's per-transect (handoff_depth_m, handoff_source_level),
+            EXACTLY the same argument ``run_pipeline()`` accepts in-process.
+            Compute offloading is the live production path (surf_compute_host
+            is configured on both weewx and librewxr), so this must be
+            threaded onto the wire or the remote service computes with a
+            stale placeholder — the defect this fix closes. Serialized onto
+            each transect (mirroring the field that already exists on
+            TransectInfo/TransectData) rather than as a separate payload
+            structure. ``None`` falls back per-transect to
+            ``(transect.handoff_depth_m, "L2")`` — identical to
+            ``run_pipeline()``'s own fallback, so the two paths cannot
+            silently disagree on what "no selection supplied" means.
 
     Returns:
         PipelineResult reconstructed from the remote response.
@@ -244,7 +292,10 @@ def remote_swelltrack(
     payload: dict[str, Any] = {
         "spot_id": spot_id,
         "specout_data": specout_data,
-        "transects": [_serialize_transect(t) for t in transects],
+        "transects": [
+            _serialize_transect(t, i, handoff_by_transect)
+            for i, t in enumerate(transects)
+        ],
         "tide_level": float(tide_level),
         "beach_facing": float(beach_facing),
         "gamma": float(gamma),

@@ -49,6 +49,7 @@ from weewx_clearskies_api.services.surf_1d_pipeline import (
 )
 from weewx_clearskies_api.services.surfbeat_runner import SurfBeatResult, run_surfbeat_strip
 from weewx_clearskies_api.services.swan_formats import TransectInfo
+from weewx_clearskies_api.services.transect_handoff import L2_REFERENCE_DEPTH_M
 from weewx_clearskies_api.tls import compute_fingerprint
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,17 @@ class TransectData(BaseModel):
     origin_lon: float
     is_structure_affected: bool
     bathymetric_profile: list[dict[str, float]]
+    # T4A.9/T4A.10 fix (2026-07-25): this hour's per-hour handoff selection,
+    # computed in-process by services.transect_handoff.select_hourly_handoff()
+    # (and possibly services.transect_handoff.refine_handoff_with_qb()) BEFORE
+    # the request is built. Optional/nullable so an older client is
+    # detectable rather than silently defaulted (see compute_swelltrack()'s
+    # handling below) — the field existing with a hardcoded fallback value
+    # is exactly the defect this reopened. Not reimplemented server-side;
+    # the service only re-assembles what it is given, per-transect, into
+    # the shape run_pipeline()'s own handoff_by_transect parameter expects.
+    handoff_depth_m: float | None = None
+    handoff_source_level: str | None = None
 
     @field_validator("bathymetric_profile")
     @classmethod
@@ -216,6 +228,8 @@ class TransectResultResponse(BaseModel):
     depths: list[float]
     per_partition: list[PartitionBreakResultResponse | None]
     best_face_height_m: float
+    handoff_depth_m: float
+    handoff_source_level: str
 
 
 class PartitionBreakInfoResponse(BaseModel):
@@ -341,6 +355,8 @@ def _transect_result_to_dict(tr: TransectResult) -> dict[str, Any]:
             for pbr in tr.per_partition
         ],
         "best_face_height_m": float(tr.best_face_height_m),
+        "handoff_depth_m": float(tr.handoff_depth_m),
+        "handoff_source_level": tr.handoff_source_level,
     }
 
 
@@ -454,18 +470,41 @@ def compute_swelltrack(
             except Exception:
                 logger.debug("compute_swelltrack: failed to load CUDEM profile for %s", request.spot_id)
 
-    transects: list[TransectInfo] = [
-        TransectInfo(
+    # T4A.9/T4A.10 fix (2026-07-25, reopened): compute offloading is the LIVE
+    # path in production (surf_compute_host is configured on both weewx and
+    # librewxr) -- a hardcoded handoff_depth_m here silently discarded every
+    # per-hour selection computed in-process and replaced it with a constant,
+    # the exact frozen-depth defect T4A.9 exists to remove. Fail LOUDLY (not
+    # silently) when a transect's per-hour selection is missing from the
+    # request -- an older client, or a malformed payload -- rather than
+    # hiding it behind a fallback that looks like a real value.
+    transects: list[TransectInfo] = []
+    handoff_by_transect: dict[int, tuple[float, str]] = {}
+    for i, t in enumerate(request.transects):
+        if t.handoff_depth_m is None or t.handoff_source_level is None:
+            logger.error(
+                "compute_swelltrack: spot=%r transect index=%d missing "
+                "handoff_depth_m/handoff_source_level in request (client did "
+                "not send the T4A.9 per-hour selection -- stale client or "
+                "malformed payload) -- falling back to the L2 reference "
+                "depth (%.1f m) for this transect only, NOT a silent 10.0.",
+                request.spot_id, t.index, L2_REFERENCE_DEPTH_M,
+            )
+            handoff_depth = L2_REFERENCE_DEPTH_M
+            handoff_source = "L2"
+        else:
+            handoff_depth = t.handoff_depth_m
+            handoff_source = t.handoff_source_level
+        handoff_by_transect[i] = (handoff_depth, handoff_source)
+        transects.append(TransectInfo(
             index=t.index,
             origin_lat=t.origin_lat,
             origin_lon=t.origin_lon,
             bearing_deg=0.0,
-            handoff_depth_m=10.0,
+            handoff_depth_m=handoff_depth,
             is_structure_affected=t.is_structure_affected,
             bathymetric_profile=list(t.bathymetric_profile) if t.bathymetric_profile else _local_profile,
-        )
-        for t in request.transects
-    ]
+        ))
 
     try:
         result = run_pipeline(
@@ -479,6 +518,7 @@ def compute_swelltrack(
             bulk_tp=request.bulk_tp,
             bulk_dir=request.bulk_dir,
             canonical_partitions=request.canonical_partitions,
+            handoff_by_transect=handoff_by_transect,
         )
     except Exception as exc:
         logger.error(

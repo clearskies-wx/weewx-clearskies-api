@@ -1128,6 +1128,12 @@ def get_surf(location_id: str) -> dict:
                             # T4.5b: canonical partitions from deep-water SPECOUT
                             # so per_partition_breaks uses indices the swell card knows.
                             canonical_partitions=ts_spectral or None,
+                            # T4A.9/T4A.10 fix (2026-07-25, reopened): thread this
+                            # hour's per-hour handoff onto the wire — compute
+                            # offloading is the live production path, so without
+                            # this the remote service computes with a stale
+                            # placeholder instead of the real per-hour selection.
+                            handoff_by_transect=_handoff_by_transect,
                         )
                     except ComputeServiceError:
                         logger.warning(
@@ -1150,6 +1156,7 @@ def get_surf(location_id: str) -> dict:
                             # T4.5b: canonical partitions from deep-water SPECOUT
                             # so per_partition_breaks uses indices the swell card knows.
                             canonical_partitions=ts_spectral or None,
+                            handoff_by_transect=_handoff_by_transect,
                         )
                 else:
                     _pipeline_result = _run_surf_pipeline(
@@ -1165,6 +1172,7 @@ def get_surf(location_id: str) -> dict:
                         # T4.5b: canonical partitions from deep-water SPECOUT
                         # so per_partition_breaks uses indices the swell card knows.
                         canonical_partitions=ts_spectral or None,
+                        handoff_by_transect=_handoff_by_transect,
                     )
             except Exception:
                 logger.warning(
