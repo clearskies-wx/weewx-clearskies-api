@@ -150,31 +150,174 @@ def _bottom_friction(
     return Hs * np.exp(-0.5 * cumulative)
 
 
+_ALPHA_BJ = 1.0  # SWAN default (SWAN tech doc eq. 2.65: "alpha_BJ = 1 in SWAN")
+
+
+def _solve_breaking_fraction(beta: float, max_iter: int = 60, tol: float = 1e-10) -> float:
+    """Solve the *exact* implicit Battjes & Janssen (1978) fraction-of-
+    breaking-waves equation for ``Qb`` given ``beta = Hrms/Hmax``.
+
+    LC-22 (P4A-SWELLTRACK-PHYSICS-BRIEF round brief): replaces the closed-
+    form stand-in ``Qb = 1 - exp(-ratio**2)`` that was previously here.  That
+    stand-in has a spurious floor: as ``ratio -> 0`` (deep water, far from
+    breaking), ``Qb/ratio**2 -> 1`` exactly, which — combined with
+    ``Dtot ~ Qb * Hmax**2`` — produces a dissipation rate that does NOT
+    vanish away from breaking (``Dtot/E -> 1/T`` regardless of gamma).  The
+    real implicit equation's small-beta asymptote is ``Qb ~ exp(-1/beta**2)``
+    — vanishing superexponentially, with no such floor. Verified against SWAN
+    technical documentation, eq. (2.66):
+    https://swanmodel.sourceforge.io/online_doc/swantech/node16.html ::
+
+        (1 - Qb) / ln(Qb) = -8 * Etot / Hmax**2
+
+    With ``Etot = Hrms**2 / 8`` (the standard Rayleigh-distribution relation
+    between the zeroth spectral moment and Hrms — SWAN's ``Etot`` is a
+    variance-density quantity in m², not an energy density; PROVIDER-MANUAL/
+    this module use physical energy separately, see ``_battjes_janssen``),
+    substituting gives the textbook form used here::
+
+        (1 - Qb) / ln(Qb) = -(Hrms / Hmax)**2 = -beta**2
+
+    Solved in ``u = ln(Qb)`` space (not directly in Qb) because ``Qb`` can
+    legitimately be as small as ~1e-300 or literally underflow to 0.0 for
+    realistic non-breaking beta; bisecting in log space converges in a fixed,
+    small iteration count regardless of how small the true root is, and lets
+    IEEE-754 float underflow (``math.exp`` of a very negative number ->
+    ``0.0``) do the "floor to exactly 0.0" step for free rather than as a
+    special case.
+
+    ``g(u) = (1 - exp(u)) + beta**2 * u``. ``g(u) -> -inf`` as ``u -> -inf``;
+    ``g(ln(beta**2)) >= 0`` for all ``beta`` in ``(0, 1)`` (the function
+    ``(1-b) + b*ln(b)`` for ``b = beta**2`` is non-negative on ``(0, 1)`` and
+    approaches 0 only as ``beta -> 1``) — so ``(very-negative, ln(beta**2))``
+    always brackets the physical root (the *other* root, at ``u=0``/``Qb=1``,
+    is the trivial always-fully-breaking solution, not the one we want except
+    in the ``beta -> 1`` limit, which the ``beta >= 1.0`` guard below handles
+    directly).
+    """
+    if beta <= 0.0:
+        return 0.0
+    if beta >= 1.0:
+        return 1.0
+
+    beta2 = beta * beta
+
+    def g(u: float) -> float:
+        return (1.0 - math.exp(u)) + beta2 * u
+
+    u_hi = math.log(beta2)
+    g_hi = g(u_hi)
+    if g_hi < 0.0:
+        # Only reachable at beta essentially == 1 (floating-point rounding)
+        # — treat as fully breaking.
+        return 1.0
+
+    # Qb ~ exp(-1/beta**2) asymptotically for small beta (per the docstring
+    # above) — start comfortably beyond that estimate, widening once more if
+    # the (defensive, shouldn't trigger given the proof above) guess
+    # undershoots.
+    u_lo = min(-50.0, -3.0 / beta2 - 10.0)
+    g_lo = g(u_lo)
+    while g_lo > 0.0 and u_lo > -1e6:
+        u_lo *= 2.0
+        g_lo = g(u_lo)
+
+    for _ in range(max_iter):
+        u_mid = 0.5 * (u_lo + u_hi)
+        g_mid = g(u_mid)
+        if abs(g_mid) < tol or (u_hi - u_lo) < tol:
+            u_hi = u_mid
+            break
+        if g_mid < 0.0:
+            u_lo = u_mid
+        else:
+            u_hi = u_mid
+
+    return math.exp(u_hi)
+
+
 def _battjes_janssen(
-    Hs: np.ndarray,
+    Hs_in: np.ndarray,
     d: np.ndarray,
     gamma: float,
     dx: np.ndarray,
     Cg: np.ndarray,
+    Kr: np.ndarray,
     T: float,
 ) -> np.ndarray:
-    """Battjes-Janssen (1978) dissipation. Returns dissipated Hs array.
+    """Battjes-Janssen (1978) breaking dissipation via conservative energy-
+    flux marching (LC-2, LC-22 — P4A-SWELLTRACK-PHYSICS-BRIEF round brief).
 
-    Operates on Hs directly (Hrms = Hs/sqrt(2) internally).
+    WHY marching the flux rather than re-deriving Hs independently at each
+    point: ``F = E * Cg`` is the conserved wave-energy-flux quantity absent
+    dissipation. Marching ``F`` (not re-deriving Hs from the pre-dissipation
+    shoaled/refracted ``Hs_in`` at every step) lets shoaling (the ``Cg``
+    gradient) and refraction (the ``Kr`` ratio) keep acting on the wave as it
+    crosses each grid cell, while B-J dissipation is subtracted from the flux
+    that has actually arrived — not independently re-applied to the
+    undissipated shoaled height every step. The previous implementation
+    re-derived ``E`` from ``Hs`` at each point independently, so dissipation
+    scaled with ``dx`` (a 50m step nearly zeroed the wave; a 2m step removed
+    almost nothing per step AND never accumulated across steps) — the exact
+    bug this function exists to fix.
+
+    ``Hs_in`` still carries the shoaling/refraction (``Ks*Kr``) and optional
+    bottom-friction adjustment applied by the caller (``run_1d_analytical``)
+    BEFORE this function runs. Only ``Hs_in[0]`` (the boundary condition at
+    the handoff point) is read here — the interior of ``Hs_in`` is NOT read,
+    because doing so would independently re-derive Hs at each point from the
+    undissipated shoaled input, reintroducing the same bug. ``Kr`` (Snell's-
+    law refraction, already computed by the caller) is passed in rather than
+    recomputed here (DRY, rules/coding.md §3) and used to keep refraction
+    acting on the flux as it marches.
+
+    ``Qb`` (fraction of breaking waves) is the *exact* implicit Battjes &
+    Janssen (1978) solution (see ``_solve_breaking_fraction``), not a
+    closed-form stand-in — LC-22. ``Dtot`` and the ``beta = Hrms/Hmax``
+    convention are verified against SWAN technical documentation eq. (2.65):
+    https://swanmodel.sourceforge.io/online_doc/swantech/node16.html ::
+
+        Dtot = -(1/4) * alpha_BJ * Qb * (sigma_tilde / (2*pi)) * Hmax**2
+
+    where ``sigma_tilde/(2*pi)`` is mean frequency (``1/T`` here) and SWAN's
+    ``Dtot``/``Etot`` are variance-density quantities (m², no rho*g); this
+    module works in physical energy (J/m², via ``0.125*rho*g*Hs**2``), so the
+    SWAN-normalized ``Dtot`` is scaled by ``rho*g`` to get a physical
+    dissipation rate: ``Dtot = alpha_BJ * Qb * rho * g * Hmax**2 / (4*T)``.
+    The previous implementation used ``beta = Hrms/(Hmax/sqrt(2))`` (a
+    spurious extra factor of sqrt(2) versus the primary source's
+    ``Hrms/Hmax``) and ``Dtot`` with ``(Hmax/sqrt(2))**2`` in place of
+    ``Hmax**2`` (a spurious factor-of-2 reduction) — both corrected here.
     """
-    Hmax = gamma * d
-    Hrms = Hs / np.sqrt(2.0)
+    n = len(Hs_in)
+    eps = 0.01  # matches the existing Cg/C guards elsewhere in this module
 
-    ratio = np.clip(Hrms / np.maximum(Hmax / np.sqrt(2.0), 0.01), 0.0, 10.0)
-    Qb = np.where(ratio >= 1.0, 1.0, 1.0 - np.exp(-ratio**2))
+    Hs_out = np.empty(n)
+    Hs_out[0] = Hs_in[0]
 
-    alpha_bj = 1.0
-    Dtot = alpha_bj * Qb * _RHO * _G * (Hmax / np.sqrt(2.0)) ** 2 / (4.0 * T)
+    E0 = 0.125 * _RHO * _G * Hs_in[0] ** 2
+    F = np.empty(n)
+    F[0] = E0 * Cg[0]
 
-    E = 0.125 * _RHO * _G * Hs**2
-    E_new = E - Dtot * np.abs(dx) / np.maximum(Cg, 0.01)
-    E_new = np.maximum(E_new, 0.0)
-    return np.sqrt(8.0 * E_new / (_RHO * _G))
+    for i in range(1, n):
+        Cg_i = max(float(Cg[i]), eps)
+        Kr_prev = max(float(Kr[i - 1]), eps)
+        kr_ratio = float(Kr[i]) / Kr_prev
+
+        E_pred = F[i - 1] / Cg_i
+        Hs_pred = math.sqrt(max(8.0 * E_pred / (_RHO * _G), 0.0)) * kr_ratio
+
+        Hmax = gamma * float(d[i])
+        Hrms_pred = Hs_pred / math.sqrt(2.0)
+        beta = Hrms_pred / max(Hmax, eps)
+        Qb = _solve_breaking_fraction(beta)
+
+        Dtot = _ALPHA_BJ * Qb * _RHO * _G * Hmax**2 / (4.0 * T)
+
+        F[i] = max(F[i - 1] * kr_ratio**2 - Dtot * abs(float(dx[i])), 0.0)
+        Hs_out[i] = math.sqrt(max(8.0 * (F[i] / Cg_i) / (_RHO * _G), 0.0))
+
+    return Hs_out
 
 
 def _roller_model(
@@ -474,8 +617,11 @@ def run_1d_analytical(
     if cfjon is not None and cfjon > 0.0:
         Hs = _bottom_friction(Hs, depths, dx, Cg, tp, L, cfjon)
 
-    # Battjes-Janssen breaking dissipation
-    Hs = _battjes_janssen(Hs, depths, gamma, dx, Cg, tp)
+    # Battjes-Janssen breaking dissipation (LC-2: conservative energy-flux
+    # marching — needs Kr to keep refraction acting during the march. Only
+    # Hs[0] is read as the boundary condition; the shoaled/refracted
+    # interior is NOT read by the function. See _battjes_janssen docstring.)
+    Hs = _battjes_janssen(Hs, depths, gamma, dx, Cg, Kr, tp)
 
     # Roller model for realistic post-breaking behavior
     Hs = _roller_model(Hs, depths, gamma, dx, C, tp)
