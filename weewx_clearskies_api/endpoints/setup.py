@@ -503,6 +503,11 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: Hours between SurfBeat strip SWAN runs (1 per cadence hour, default 3).
     #: Intermediate forecast hours carry forward the last strip result.
     surfbeat_cadence_hours: int = 3
+    #: Maximum expected significant wave height (m) for this spot (T4A.3 Do
+    #: step 11, API-MANUAL §17). Drives SwellTrack's fine-zone sizing
+    #: (T4A.2) and the L3 viability check's breaking-depth expression
+    #: (ADR-093 Amendment 2). Default 4.0m.
+    max_hs_m: float = Field(default=4.0, gt=0, le=30)
 
     @field_validator("bottom_type")
     @classmethod
@@ -1118,6 +1123,8 @@ def _build_marine_conf_section(
                 # SurfBeat IG strip config (SURF-MODEL-FIX-PLAN T5.1 / T5.2).
                 "surfbeat_enabled": str(surf.surfbeat_enabled).lower(),
                 "surfbeat_cadence_hours": str(surf.surfbeat_cadence_hours),
+                # Max expected Hs for fine-zone/viability sizing (T4A.3 Do step 11).
+                "max_hs_m": str(surf.max_hs_m),
             }
             if surf.directional_exposure:
                 surf_section["directional_exposure"] = [

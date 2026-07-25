@@ -439,6 +439,13 @@ class SurfSpotConfig:
     friction_coefficient: float
     surfbeat_enabled: bool
     surfbeat_cadence_hours: int
+    #: T4A.3 Do step 11 / API-MANUAL §17 "SwellTrack configuration" — maximum
+    #: expected significant wave height (m) for this spot. Drives
+    #: ``fine_zone_max_depth = max(1.3 * max_hs_m / gamma, structure_zone_depth)``
+    #: (T4A.2) and the L3 viability check's breaking-depth expression
+    #: (ADR-093 Amendment 2 §2/§4). Documented in API-MANUAL §17 since before
+    #: this field existed on the config object — this was a doc-code gap.
+    max_hs_m: float
 
     # Computed (derived at load time, NOT stored in api.conf)
     _beach_facing_degrees: float
@@ -510,6 +517,13 @@ class SurfSpotConfig:
             self.surfbeat_cadence_hours = int(raw_cadence)
         else:
             self.surfbeat_cadence_hours = 3
+        # T4A.3 Do step 11 — per-spot max Hs for fine-zone/viability sizing.
+        # Default 4.0m per API-MANUAL §17 (matches the plan's documented default).
+        raw_max_hs = section.get("max_hs_m")
+        if raw_max_hs is not None and str(raw_max_hs).strip():
+            self.max_hs_m = float(raw_max_hs)
+        else:
+            self.max_hs_m = 4.0
         # Note: if api.conf still has a [[[[bathymetric_profile]]]] subsection,
         # ConfigObj loads it into the section dict but we intentionally do not
         # read it here — runtime CUDEM profiles are cached at
@@ -604,6 +618,11 @@ class SurfSpotConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf] l3_enabled "
                 f"{self.l3_enabled!r} must be one of {sorted(_VALID_L3_ENABLED)}"
+            )
+        if not (0.0 < self.max_hs_m <= 30.0):
+            raise ValueError(
+                f"[marine.locations.{location_id}.surf] max_hs_m "
+                f"{self.max_hs_m!r} out of range (0, 30] metres"
             )
         for structure in self.structures:
             structure.validate(location_id)
