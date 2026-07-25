@@ -111,6 +111,13 @@ _CUDEM_GRID_PATH_L1 = Path("/etc/weewx-clearskies/swan_bathymetry_L1.json")
 _CUDEM_GRID_PATH_L2 = Path("/etc/weewx-clearskies/swan_bathymetry_L2.json")
 _CUDEM_L3_CACHE_DIR = Path("/etc/weewx-clearskies")
 
+# T4A.3 Do step 8/9 — grid boundary metadata written by the apply-time chain
+# (endpoints/setup.py `_run_marine_apply_chain()`). MUST match that module's
+# `_SWAN_GRID_SIZING_CACHE_PATH` — duplicated here rather than imported
+# because `providers/nearshore/swan.py` sits below `endpoints/` in the
+# dependency direction this codebase otherwise keeps.
+_SWAN_GRID_SIZING_CACHE_PATH = Path("/etc/weewx-clearskies/swan_grid_sizing.json")
+
 # On-disk SWAN forecast cache — persists the parsed wave forecast across API
 # restarts so the surf endpoint serves data immediately (T8.1, Phase 8).
 _FORECAST_CACHE_PATH = Path("/var/run/weewx-clearskies/swan/forecast_cache.json")
@@ -178,7 +185,9 @@ def _load_or_download_cudem_grid(
 # ---------------------------------------------------------------------------
 
 
-def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, Any]:
+def download_bathymetry_for_level(
+    domain: GridDomain, level: int, *, allow_download: bool = True
+) -> dict[str, Any]:
     """Load a cached per-level CUDEM depth grid, or download from NCEI if absent/stale.
 
     Cache paths:
@@ -197,6 +206,16 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
     Args:
         domain: GridDomain from swan_domain.compute_domains() for the target level.
         level:  1, 2, or 3.
+        allow_download: When ``False`` (T4A.3 Do step 9 — the SWAN runtime
+            path, ``_run_all_spots_locked()``), a missing cache is an ERROR
+            returning ``{}``, never a download — the apply-time chain
+            (``endpoints/setup.py``) is the only caller that downloads.  A
+            STALE cache (>180 days) is still used as-is with a WARNING
+            rather than treated as missing — "old but real data" beats
+            "no data" at runtime, and a fresh re-download only happens the
+            next time the operator runs apply.  Default ``True`` — the
+            apply-time chain and the pre-apply ``/marine/compute-estimate``
+            preview both need it.
 
     Returns:
         Grid dict on success, empty dict on failure (SWAN falls back to 15 m depth).
@@ -214,10 +233,13 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
         # Level 1 (and any unexpected level value — treat as coarse grid)
         cache_path = _CUDEM_GRID_PATH_L1
 
-    # 180-day TTL check (matches _load_or_download_cudem_grid pattern)
+    # 180-day TTL check (matches _load_or_download_cudem_grid pattern).
+    # When allow_download=False, staleness never triggers a re-download —
+    # only "cache missing or unreadable" does (see below).
     if cache_path.exists():
         age_s = time.time() - os.path.getmtime(str(cache_path))
-        if age_s > _PROFILE_MAX_AGE_S:
+        is_stale = age_s > _PROFILE_MAX_AGE_S
+        if is_stale and allow_download:
             logger.info(
                 "CUDEM L%d grid cache is %.0f days old — refreshing (path=%s)",
                 level,
@@ -225,10 +247,17 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
                 cache_path,
             )
         else:
+            if is_stale:
+                logger.warning(
+                    "CUDEM L%d grid cache is %.0f days old but downloads are "
+                    "disabled at runtime (T4A.3 Do step 9) — using it anyway "
+                    "(path=%s). Run /setup/apply to refresh.",
+                    level, age_s / 86400, cache_path,
+                )
             try:
                 grid = json.loads(cache_path.read_text(encoding="utf-8"))
                 if grid.get("depths"):
-                    if "vertical_datum" not in grid:
+                    if "vertical_datum" not in grid and allow_download:
                         logger.info(
                             "CUDEM L%d: cached bathymetry lacks vertical_datum"
                             " — treating as stale, re-downloading (path=%s)",
@@ -246,11 +275,25 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
                         return grid
             except Exception:
                 logger.warning(
-                    "CUDEM L%d grid file %s is corrupt; re-downloading",
+                    "CUDEM L%d grid file %s is corrupt%s",
                     level,
                     cache_path,
+                    "; re-downloading" if allow_download else " and downloads "
+                    "are disabled at runtime — this level will use uniform "
+                    "15m depth this cycle",
                     exc_info=True,
                 )
+
+    if not allow_download:
+        logger.error(
+            "CUDEM L%d: no usable cache at %s and downloads are disabled at "
+            "runtime (T4A.3 Do step 9) — SWAN will use uniform 15m depth "
+            "for this level this cycle. Run /setup/apply to generate the "
+            "cache (operator likely never ran apply, or the cache file was "
+            "deleted).",
+            level, cache_path,
+        )
+        return {}
 
     # download_swan_depth_grid expects (lon_sw, lat_sw, lon_ne, lat_ne)
     bbox = (domain.lon_min, domain.lat_min, domain.lon_max, domain.lat_max)
@@ -367,14 +410,19 @@ def download_bathymetry_for_level(domain: GridDomain, level: int) -> dict[str, A
         return {}
 
 
-def download_all_bathymetry(domains: DomainSizing) -> dict[str, Any]:
+def download_all_bathymetry(
+    domains: DomainSizing, *, allow_download: bool = True
+) -> dict[str, Any]:
     """Download CUDEM bathymetry for all three grid levels.
 
     Orchestrates per-level downloads using ``download_bathymetry_for_level()``.
-    Called by the Phase 14c 3-level run function before launching SWAN.
 
     Args:
-        domains: DomainSizing from swan_domain.compute_domains().
+        domains: DomainSizing (T4A.3: loaded from the apply-time grid-sizing
+            cache at runtime, not recomputed — see ``_run_all_spots_locked``).
+        allow_download: Passed through to ``download_bathymetry_for_level()``
+            for every level. ``False`` at runtime (T4A.3 Do step 9) — a
+            missing cache is an ERROR + empty grid, never a download.
 
     Returns:
         dict with three keys:
@@ -384,8 +432,12 @@ def download_all_bathymetry(domains: DomainSizing) -> dict[str, Any]:
         Any individual download failure yields an empty dict for that entry;
         SWAN falls back to uniform 15 m depth for that grid level.
     """
-    level1_grid = download_bathymetry_for_level(domains.level1, level=1)
-    level2_grid = download_bathymetry_for_level(domains.level2, level=2)
+    level1_grid = download_bathymetry_for_level(
+        domains.level1, level=1, allow_download=allow_download
+    )
+    level2_grid = download_bathymetry_for_level(
+        domains.level2, level=2, allow_download=allow_download
+    )
 
     level3_grids: dict[int, dict[str, Any]] = {}
     for idx, cluster in enumerate(domains.level3_clusters):
@@ -395,13 +447,57 @@ def download_all_bathymetry(domains: DomainSizing) -> dict[str, Any]:
                 idx,
             )
             continue
-        level3_grids[idx] = download_bathymetry_for_level(cluster.grid, level=3)
+        level3_grids[idx] = download_bathymetry_for_level(
+            cluster.grid, level=3, allow_download=allow_download
+        )
 
     return {
         "level1": level1_grid,
         "level2": level2_grid,
         "level3": level3_grids,
     }
+
+
+def load_grid_sizing_cache() -> DomainSizing | None:
+    """Load the L1/L2/L3 grid geometry computed at apply time (T4A.3 Do
+    step 9).
+
+    Replaces calling ``compute_domains()``/``compute_level3_domains()``
+    fresh at SWAN runtime — grid geometry is computed ONCE, at apply time
+    (``endpoints/setup.py`` ``_run_marine_apply_chain()``), and never
+    recomputed here. This is what keeps grid geometry byte-identical across
+    a forecast cycle (C2/C3, P4A Round 2) and what lets the SWAN runtime
+    path perform zero CUDEM downloads and zero grid sizing.
+
+    Returns ``None`` and logs ERROR — never raises, never falls back to
+    fresh computation — when the cache is missing or unreadable. The only
+    way to produce this cache is a successful ``/setup/apply``; a missing
+    cache means the operator has not applied marine config since T4A.3
+    landed, or the cache file was deleted.
+    """
+    from weewx_clearskies_api.services.swan_domain import (  # noqa: PLC0415
+        domain_sizing_from_dict,
+    )
+
+    if not _SWAN_GRID_SIZING_CACHE_PATH.exists():
+        logger.error(
+            "SWAN: no grid sizing cache at %s — SWAN cannot run without it. "
+            "Run /setup/apply to generate it (T4A.3: grid sizing moved to "
+            "apply time; the runtime path no longer computes it).",
+            _SWAN_GRID_SIZING_CACHE_PATH,
+        )
+        return None
+    try:
+        raw = json.loads(_SWAN_GRID_SIZING_CACHE_PATH.read_text(encoding="utf-8"))
+        return domain_sizing_from_dict(raw)
+    except Exception:
+        logger.error(
+            "SWAN: grid sizing cache at %s is corrupt or malformed — SWAN "
+            "cannot run without it. Run /setup/apply to regenerate it.",
+            _SWAN_GRID_SIZING_CACHE_PATH,
+            exc_info=True,
+        )
+        return None
 
 
 def build_obstacle_structures(surf_locations: list[Any], marine_config: Any) -> list[dict]:
@@ -1518,12 +1614,18 @@ def _run_all_spots_locked(
     # T3.1 — build per-spot transect configs for CURVE output.
     # Converts SurfSpotConfig.beach_facing_degrees and bathymetric_profile into
     # the plain-dict shape that build_swan_input() + compute_spot_transect() expect.
-    # Also loads or refreshes the bidirectional CUDEM profile (180-day cache) so
-    # compute_spot_transect() can extend the transect from the actual coastline
-    # (~0 m depth) rather than the operator's pin — ensuring the surf zone is
-    # included in the SWAN CURVE output.
+    #
+    # T4A.3 Do step 9: the per-spot profile is read from the apply-time cache
+    # ONLY — no download, no fallback. `endpoints/setup.py`'s
+    # `_run_marine_apply_chain()` is the sole writer (PCHIP variable-
+    # resolution profile, T4A.2/T4A.3), replacing the runtime
+    # `download_bidirectional_profile()` call this block used to make. A
+    # missing or unreadable cache is an explicit ERROR for that spot, never
+    # a silent runtime download — the run continues for the OTHER spots
+    # (a coastal API outage should degrade one spot, not the whole cycle),
+    # but this spot's CURVE transect will lack the coastline-anchored
+    # extension the profile normally provides.
     spot_configs_for_runner: dict[str, dict] = {}
-    _PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     for loc in surf_locations:
         spot_cfg = marine_config.surf_spots.get(loc.id)
         if spot_cfg is None:
@@ -1533,59 +1635,35 @@ def _run_all_spots_locked(
             "l3_enabled": spot_cfg.l3_enabled,
         }
 
-        # Load or refresh the bidirectional CUDEM profile for this spot.
         cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
         runtime_profile: dict | None = None
-
         if cache_path.exists():
-            age_s = time.time() - cache_path.stat().st_mtime
-            if age_s < _PROFILE_MAX_AGE_S:
-                try:
-                    runtime_profile = json.loads(cache_path.read_text(encoding="utf-8"))
-                    logger.debug(
-                        "SWAN: loaded bidirectional profile for spot %r from cache "
-                        "(age %.0f days, %d points).",
-                        loc.id,
-                        age_s / 86400,
-                        len((runtime_profile or {}).get("profile", [])),
-                    )
-                except Exception:
-                    logger.warning(
-                        "SWAN: bidirectional profile cache for spot %r is corrupt; "
-                        "re-downloading.",
-                        loc.id,
-                        exc_info=True,
-                    )
-                    runtime_profile = None
-
-        if runtime_profile is None:
             try:
-                from weewx_clearskies_api.enrichment.bathymetry import (  # noqa: PLC0415
-                    download_bidirectional_profile,
-                )
-
-                runtime_profile = download_bidirectional_profile(
-                    loc.lat,
-                    loc.lon,
-                    float(spot_cfg.beach_facing_degrees),
-                )
-                cache_path.write_text(json.dumps(runtime_profile), encoding="utf-8")
-                logger.info(
-                    "SWAN: downloaded and cached bidirectional CUDEM profile for "
-                    "spot %r (%d points, coastline=%.6f,%.6f).",
-                    loc.id,
-                    len(runtime_profile.get("profile", [])),
-                    runtime_profile.get("coastline_lat", loc.lat),
-                    runtime_profile.get("coastline_lon", loc.lon),
+                runtime_profile = json.loads(cache_path.read_text(encoding="utf-8"))
+                age_s = time.time() - cache_path.stat().st_mtime
+                logger.debug(
+                    "SWAN: loaded PCHIP profile for spot %r from apply-time "
+                    "cache (age %.0f days, %d points).",
+                    loc.id, age_s / 86400,
+                    len((runtime_profile or {}).get("profile", [])),
                 )
             except Exception:
-                logger.warning(
-                    "SWAN: bidirectional profile download failed for spot %r; "
-                    "falling back to wizard-configured profile for this run.",
-                    loc.id,
-                    exc_info=True,
+                logger.error(
+                    "SWAN: profile cache for spot %r at %s is corrupt — "
+                    "this spot's CURVE transect will not have a "
+                    "coastline-anchored profile this cycle. Run "
+                    "/setup/apply to regenerate it.",
+                    loc.id, cache_path, exc_info=True,
                 )
                 runtime_profile = None
+        else:
+            logger.error(
+                "SWAN: no profile cache for spot %r at %s — this spot's "
+                "CURVE transect will not have a coastline-anchored profile "
+                "this cycle. Run /setup/apply to generate it (T4A.3: "
+                "profile generation moved to apply time).",
+                loc.id, cache_path,
+            )
 
         if runtime_profile is not None:
             cfg_dict["runtime_profile"] = runtime_profile
@@ -1600,41 +1678,34 @@ def _run_all_spots_locked(
     resolved_inner_m: float = float(_cfg_inner_m) if _cfg_inner_m is not None else inner_nest_resolution_m
 
     # ------------------------------------------------------------------
-    # 4. Domain sizing + per-level bathymetry (3-level nesting, Phase 14).
+    # 4. Domain sizing (T4A.3 Do step 9): loaded from the apply-time cache,
+    # never recomputed here. Grid geometry fixed at setup; the runtime path
+    # performs zero CUDEM downloads and zero grid sizing.
     # ------------------------------------------------------------------
-    from weewx_clearskies_api.services.swan_domain import compute_domains
+    domains = load_grid_sizing_cache()
+    if domains is None:
+        logger.error(
+            "SWAN: no grid sizing cache — skipping this run entirely "
+            "(no last-good cache is overwritten). Run /setup/apply."
+        )
+        return
 
-    spot_locations_for_domains = []
-    for loc in surf_locations:
-        entry: dict[str, Any] = {
-            "id": loc.id,
-            "lat": loc.lat,
-            "lon": loc.lon,
-            "beach_facing_degrees": float(
-                getattr(marine_config.surf_spots.get(loc.id), "beach_facing_degrees", 0.0)
-            ),
-        }
-        # Extract distance to 15m depth from the cached profile so the Level 3
-        # grid extends to the actual 15m contour, not a hardcoded distance.
-        runner_cfg = spot_configs_for_runner.get(loc.id, {})
-        rt_profile = runner_cfg.get("runtime_profile")
-        if isinstance(rt_profile, dict):
-            profile_pts = rt_profile.get("profile", [])
-            if profile_pts:
-                closest = min(profile_pts, key=lambda pt: abs(pt.get("depth_m", 0) - 15.0))
-                entry["offshore_distance_m"] = float(closest.get("distance_m", 0))
-        spot_locations_for_domains.append(entry)
-
-    domains = compute_domains(spot_locations_for_domains, structures=structures_for_swan)
     logger.info(
-        "SWAN: 3-level domains computed — L1: %d cells, L2: %d cells, L3: %d clusters (%d total cells)",
+        "SWAN: 3-level domains loaded from apply-time cache — L1: %d cells, "
+        "L2: %d cells, L3: %d clusters (%d total cells)",
         domains.level1.cell_count,
         domains.level2.cell_count,
         len(domains.level3_clusters),
         domains.total_cells,
     )
 
-    bathymetry = download_all_bathymetry(domains)
+    # T4A.3 Do step 9: cache-only — no download fallback at runtime. A
+    # missing per-level cache is an ERROR from download_bathymetry_for_level
+    # itself; that level falls back to uniform 15m depth for this cycle
+    # rather than aborting the whole run (matches this function's existing
+    # per-component degradation posture — e.g. WW3/OFS/tide failures above
+    # also degrade rather than abort).
+    bathymetry = download_all_bathymetry(domains, allow_download=False)
 
     swan_config: dict[str, Any] = {
         "outer_bbox": list(outer_bbox),
@@ -1904,8 +1975,9 @@ def run_quick_update(
     Reuses the Level 2 NESTOUT boundary file from the last full 3-level run.
 
     This is the 3-level equivalent of the old ``run_stationary_inner()`` path.
-    It uses the same domain sizing (``compute_domains()``) and per-cluster
-    bathymetry as the full run, but only executes Level 3 (stationary mode).
+    It uses the same domain sizing (``load_grid_sizing_cache()``, T4A.3 Do
+    step 9) and per-cluster bathymetry as the full run, but only executes
+    Level 3 (stationary mode).
 
     Skipped when:
       - A full run completed within the last 30 minutes
@@ -1964,31 +2036,23 @@ def _run_quick_update_locked(
     if hrrr_wind_field is None:
         return
 
-    # ── 3-level domain sizing (same math as full run, no I/O) ──
-    from weewx_clearskies_api.services.swan_domain import compute_domains
-
-    spot_locations_for_domains = []
-    for loc in surf_locations:
-        entry: dict[str, Any] = {
-            "id": loc.id,
-            "lat": loc.lat,
-            "lon": loc.lon,
-            "beach_facing_degrees": float(
-                getattr(marine_config.surf_spots.get(loc.id), "beach_facing_degrees", 0.0)
-            ),
-        }
-        cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
-        if cache_path.exists():
-            try:
-                profile_data = json.loads(cache_path.read_text(encoding="utf-8"))
-                profile_pts = profile_data.get("profile", [])
-                if profile_pts:
-                    closest = min(profile_pts, key=lambda pt: abs(pt.get("depth_m", 0) - 15.0))
-                    entry["offshore_distance_m"] = float(closest.get("distance_m", 0))
-            except Exception:
-                pass
-        spot_locations_for_domains.append(entry)
-    domains = compute_domains(spot_locations_for_domains, structures=structures_for_runner)
+    # ── 3-level domain sizing (T4A.3 Do step 9): loaded from the apply-time
+    # cache, same as the full run — MUST be the same cache, not recomputed,
+    # or quick-update and full-run geometry could diverge and spuriously
+    # invalidate the L3 hotstart (the bbox-hash comparison further below
+    # assumes both paths agree on grid geometry). This also fixes a
+    # pre-existing bug: the old `compute_domains(..., structures=
+    # structures_for_runner)` call referenced `structures_for_runner`
+    # before that name was defined later in this function (~line 2133 at
+    # the time of this fix) — a NameError waiting to happen the first time
+    # this code path actually ran with surf spots configured.
+    domains = load_grid_sizing_cache()
+    if domains is None:
+        logger.error(
+            "SWAN quick update: no grid sizing cache — skipping "
+            "(no last-good cache is overwritten). Run /setup/apply."
+        )
+        return
 
     # ── Check that Level 2 NESTOUT exists from the last full 3-level run ──
     # The file is named nest_out.dat (not the old nest_boundary.dat) per the
@@ -2002,10 +2066,13 @@ def _run_quick_update_locked(
         return
 
     # ── Per-cluster Level 3 bathymetry (cached from last full run) ──
+    # T4A.3 Do step 9: cache-only, same as the full run.
     l3_bathymetry: dict[int, dict] = {}
     for idx, cluster in enumerate(domains.level3_clusters):
         if cluster.grid is not None:
-            l3_bathymetry[idx] = download_bathymetry_for_level(cluster.grid, level=3)
+            l3_bathymetry[idx] = download_bathymetry_for_level(
+                cluster.grid, level=3, allow_download=False
+            )
     bathymetry = {"level3": l3_bathymetry}
 
     # ── Build runner and spot configs ──
