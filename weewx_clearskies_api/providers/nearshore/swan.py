@@ -404,6 +404,88 @@ def download_all_bathymetry(domains: DomainSizing) -> dict[str, Any]:
     }
 
 
+def build_obstacle_structures(surf_locations: list[Any], marine_config: Any) -> list[dict]:
+    """Build the OBSTACLE-command structure list from marine config (T2.3/T3.1).
+
+    Three cases per structure:
+      a. Explicit coordinates present → use directly.
+      b. No coordinates but bearing_degrees + length_m + distance_m present →
+         compute a two-point line via geodesic projection from the spot pin.
+         Coordinate order is [lon, lat] per point to match swan_formats.py
+         OBSTACLE emission (``lonlat_to_utm(pt[0], pt[1], zone)``).
+      c. Neither → WARNING log; never skip silently (Finding C, brief §4b).
+
+    Each returned dict carries ``"spot_id"`` (T4A.11, P4A Round 2) so
+    ``swan_domain._cluster_structures()`` can scope a structure to its own
+    L3 cluster instead of applying it to every cluster in the domain.
+
+    Extracted from what were two duplicated inline blocks in
+    ``_run_all_spots_locked()`` and ``run_quick_update()`` (identical logic,
+    drifting risk) — now a single shared implementation used by both, and
+    by the apply-time chain in ``endpoints/setup.py`` (T4A.3) for L3 sizing
+    and ``structure_zone_depth`` before any SWAN run happens.
+    """
+    obstacle_structures: list[dict] = []
+    for loc in surf_locations:
+        surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
+        if surf_cfg is None:
+            continue
+        pin_lat: float = loc.lat
+        pin_lon: float = loc.lon
+        for structure in getattr(surf_cfg, "structures", []):
+            s_type = getattr(structure, "type", "unknown")
+            coords = getattr(structure, "coordinates", None)
+            if coords and isinstance(coords, list) and len(coords) >= 2:
+                obstacle_structures.append({
+                    "type": s_type,
+                    "coordinates": coords,
+                    "spot_id": loc.id,
+                })
+                logger.info(
+                    "SWAN structure emitted: type=%s, spot=%r, %d coordinate "
+                    "points (explicit)",
+                    s_type, loc.id, len(coords),
+                )
+            else:
+                bearing = getattr(structure, "bearing_degrees", None)
+                length = getattr(structure, "length_m", None)
+                distance = getattr(structure, "distance_m", None)
+                if bearing is not None and length is not None and distance is not None:
+                    # Compute start point: offset pin by distance_m along bearing.
+                    # bearing convention: 0° = North, 90° = East (standard geodesic).
+                    lat_rad = math.radians(pin_lat)
+                    dx_start = float(distance) * math.sin(math.radians(float(bearing)))
+                    dy_start = float(distance) * math.cos(math.radians(float(bearing)))
+                    start_lon = pin_lon + dx_start / (111320.0 * math.cos(lat_rad))
+                    start_lat = pin_lat + dy_start / 110540.0
+                    # Compute end point: extend start by length_m along bearing.
+                    lat_rad_start = math.radians(start_lat)
+                    dx_end = float(length) * math.sin(math.radians(float(bearing)))
+                    dy_end = float(length) * math.cos(math.radians(float(bearing)))
+                    end_lon = start_lon + dx_end / (111320.0 * math.cos(lat_rad_start))
+                    end_lat = start_lat + dy_end / 110540.0
+                    obstacle_structures.append({
+                        "type": s_type,
+                        "coordinates": [[start_lon, start_lat], [end_lon, end_lat]],
+                        "spot_id": loc.id,
+                    })
+                    logger.info(
+                        "SWAN structure emitted: type=%s, spot=%r, bearing=%.1f°,"
+                        " length=%.0fm, distance=%.0fm"
+                        " (computed from pin at %.4f, %.4f)",
+                        s_type, loc.id,
+                        float(bearing), float(length), float(distance),
+                        pin_lat, pin_lon,
+                    )
+                else:
+                    logger.warning(
+                        "SWAN structure SKIPPED: type=%s, spot=%r —"
+                        " missing both coordinates and bearing/length/distance",
+                        s_type, loc.id,
+                    )
+    return obstacle_structures
+
+
 # ---------------------------------------------------------------------------
 # Remote mode state (T4.2 / T4.3 — set when [swan] service_url is active)
 # ---------------------------------------------------------------------------
@@ -1418,78 +1500,12 @@ def _run_all_spots_locked(
 
     # ------------------------------------------------------------------
     # 2c. Build coastal structures for OBSTACLE commands (T2.3 / T3.1).
-    #     Three cases per structure:
-    #       a. Explicit coordinates present → use directly.
-    #       b. No coordinates but bearing_degrees + length_m + distance_m
-    #          present → compute two-point line via geodesic projection from
-    #          the spot pin.  Coordinate order is [lon, lat] per point to
-    #          match swan_formats.py OBSTACLE emission (lonlat_to_utm(pt[0],
-    #          pt[1], zone) where pt[0]=lon, pt[1]=lat).
-    #       c. Neither → WARNING log; never skip silently (Finding C, brief §4b).
+    #     Shared with run_quick_update() and the apply-time chain
+    #     (endpoints/setup.py, T4A.3) via build_obstacle_structures() —
+    #     see its docstring for the case-by-case logic and why spot_id is
+    #     attached to each dict (T4A.11 per-cluster structure scoping).
     # ------------------------------------------------------------------
-    obstacle_structures: list[dict] = []
-    for loc in surf_locations:
-        surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
-        if surf_cfg is None:
-            continue
-        pin_lat: float = loc.lat
-        pin_lon: float = loc.lon
-        for structure in getattr(surf_cfg, "structures", []):
-            s_type = getattr(structure, "type", "unknown")
-            coords = getattr(structure, "coordinates", None)
-            if coords and isinstance(coords, list) and len(coords) >= 2:
-                obstacle_structures.append({
-                    "type": s_type,
-                    "coordinates": coords,
-                })
-                logger.info(
-                    "SWAN structure emitted: type=%s, %d coordinate points (explicit)",
-                    s_type,
-                    len(coords),
-                )
-            else:
-                bearing = getattr(structure, "bearing_degrees", None)
-                length = getattr(structure, "length_m", None)
-                distance = getattr(structure, "distance_m", None)
-                if bearing is not None and length is not None and distance is not None:
-                    # Compute start point: offset pin by distance_m along bearing.
-                    # bearing convention: 0° = North, 90° = East (standard geodesic).
-                    lat_rad = math.radians(pin_lat)
-                    dx_start = float(distance) * math.sin(math.radians(float(bearing)))
-                    dy_start = float(distance) * math.cos(math.radians(float(bearing)))
-                    start_lon = pin_lon + dx_start / (111320.0 * math.cos(lat_rad))
-                    start_lat = pin_lat + dy_start / 110540.0
-                    # Compute end point: extend start by length_m along bearing.
-                    lat_rad_start = math.radians(start_lat)
-                    dx_end = float(length) * math.sin(math.radians(float(bearing)))
-                    dy_end = float(length) * math.cos(math.radians(float(bearing)))
-                    end_lon = start_lon + dx_end / (111320.0 * math.cos(lat_rad_start))
-                    end_lat = start_lat + dy_end / 110540.0
-                    computed_coords = [
-                        [start_lon, start_lat],
-                        [end_lon, end_lat],
-                    ]
-                    obstacle_structures.append({
-                        "type": s_type,
-                        "coordinates": computed_coords,
-                    })
-                    logger.info(
-                        "SWAN structure emitted: type=%s, bearing=%.1f°,"
-                        " length=%.0fm, distance=%.0fm"
-                        " (computed from pin at %.4f, %.4f)",
-                        s_type,
-                        float(bearing),
-                        float(length),
-                        float(distance),
-                        pin_lat,
-                        pin_lon,
-                    )
-                else:
-                    logger.warning(
-                        "SWAN structure SKIPPED: type=%s —"
-                        " missing both coordinates and bearing/length/distance",
-                        s_type,
-                    )
+    obstacle_structures = build_obstacle_structures(surf_locations, marine_config)
     structures_for_swan: list[dict] | None = obstacle_structures or None
 
     # ------------------------------------------------------------------
@@ -2044,50 +2060,9 @@ def _run_quick_update_locked(
     )
 
     # ── T3.2: Structures for OBSTACLE commands ───────────────────────────────
-    # Same three-case logic as the full-run assembly (lines 1118-1192):
-    #   a. Explicit coordinates → use directly.
-    #   b. bearing_degrees + length_m + distance_m → compute from pin.
-    #   c. Neither → WARNING log, skip.
-    obstacle_structures: list[dict] = []
-    for loc in surf_locations:
-        surf_cfg = getattr(marine_config, "surf_spots", {}).get(loc.id)
-        if surf_cfg is None:
-            continue
-        pin_lat = loc.lat
-        pin_lon = loc.lon
-        for structure in getattr(surf_cfg, "structures", []):
-            s_type = getattr(structure, "type", "unknown")
-            coords = getattr(structure, "coordinates", None)
-            if coords and isinstance(coords, list) and len(coords) >= 2:
-                obstacle_structures.append({
-                    "type": s_type,
-                    "coordinates": coords,
-                })
-            else:
-                bearing = getattr(structure, "bearing_degrees", None)
-                length = getattr(structure, "length_m", None)
-                distance = getattr(structure, "distance_m", None)
-                if bearing is not None and length is not None and distance is not None:
-                    lat_rad = math.radians(pin_lat)
-                    dx_s = float(distance) * math.sin(math.radians(float(bearing)))
-                    dy_s = float(distance) * math.cos(math.radians(float(bearing)))
-                    start_lon = pin_lon + dx_s / (111320.0 * math.cos(lat_rad))
-                    start_lat = pin_lat + dy_s / 110540.0
-                    lat_rad_s = math.radians(start_lat)
-                    dx_e = float(length) * math.sin(math.radians(float(bearing)))
-                    dy_e = float(length) * math.cos(math.radians(float(bearing)))
-                    end_lon = start_lon + dx_e / (111320.0 * math.cos(lat_rad_s))
-                    end_lat = start_lat + dy_e / 110540.0
-                    obstacle_structures.append({
-                        "type": s_type,
-                        "coordinates": [[start_lon, start_lat], [end_lon, end_lat]],
-                    })
-                else:
-                    logger.warning(
-                        "SWAN quick update structure SKIPPED: type=%s —"
-                        " missing both coordinates and bearing/length/distance",
-                        s_type,
-                    )
+    # Shared with _run_all_spots_locked() and the apply-time chain via
+    # build_obstacle_structures() — see its docstring.
+    obstacle_structures = build_obstacle_structures(surf_locations, marine_config)
     structures_for_runner: list[dict] | None = obstacle_structures or None
 
     # ── Datum-aware tide prediction for static WLEVEL (ADR-098, T3.4) ─────────
