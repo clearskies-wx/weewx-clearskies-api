@@ -21,6 +21,7 @@ import json
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 
 from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocation, SurfSpotConfig
 from weewx_clearskies_api.endpoints.beach_profile import _build_transect_profile
@@ -558,3 +559,287 @@ def test_vertical_datum_null_when_cache_says_unknown(monkeypatch, tmp_path):
     response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
 
     assert response["data"]["metadata"]["verticalDatum"] is None
+
+
+# ---------------------------------------------------------------------------
+# 9. SURF-PUBLISH-RESULTS-ONLY §3.2/§3.5/§3.6 — remote-mode profile fetch and
+# null semantics.
+#
+# Remote mode: the local pipeline / compute-offload cascade is replaced by a
+# call to the model host's own GET /surf/{spot_id}/profile. Bundled mode
+# (already covered by section 7/8 above, which run with remote mode NOT
+# configured) is unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _rm_make_pipeline_result() -> PipelineResult:
+    tr = TransectResult(
+        transect_index=0,
+        is_structure_affected=False,
+        hs_total_profile=np.array([1.0]),
+        distances=np.array([50.0]),
+        depths=np.array([2.0]),
+        per_partition=[None],
+        best_face_height_m=0.0,
+        handoff_depth_m=_EP_REAL_HANDOFF_DEPTH_M,
+        handoff_source_level=_EP_REAL_HANDOFF_SOURCE,
+    )
+    return PipelineResult(
+        best_peak_face_height_m=0.0,
+        spot_average_face_height_m=0.0,
+        peel_angle_deg=None,
+        peel_classification=None,
+        peel_direction=None,
+        transect_count=1,
+        open_transect_count=1,
+        per_transect=[tr],
+        per_partition_breaks=[],
+        degraded=False,
+    )
+
+
+def _rm_wire_remote_endpoint(monkeypatch, beach_profile_mod) -> None:
+    """Shared wiring for the remote-mode endpoint-level tests below."""
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+    monkeypatch.setattr(
+        beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.is_remote_mode", lambda: True
+    )
+
+
+def test_remote_mode_success_queries_model_host_not_local_pipeline(monkeypatch):
+    """§3.2/§3.5: remote mode calls swan.fetch_profile() -- never the local
+    _run_pipeline() cascade, which is the courier round trip this brief
+    eliminates."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _rm_wire_remote_endpoint(monkeypatch, beach_profile_mod)
+
+    pipeline_result = _rm_make_pipeline_result()
+    fetch_profile_calls: list[tuple[str, str]] = []
+
+    def _fake_fetch_profile(*, spot_id, time_iso):
+        fetch_profile_calls.append((spot_id, time_iso))
+        return pipeline_result
+
+    def _fail_if_local_pipeline_called(**_kwargs):
+        raise AssertionError("local pipeline must not run in remote SWAN mode (§3.5)")
+
+    monkeypatch.setattr(beach_profile_mod, "_run_pipeline", _fail_if_local_pipeline_called)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch_profile", _fake_fetch_profile
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    assert len(fetch_profile_calls) == 1
+    assert fetch_profile_calls[0][0] == _EP_LOCATION_ID
+    assert response["data"]["modelStatus"] == "ok"
+    # US units wired -> handoffDepthM is converted to feet (matches
+    # test_handoff_fields_are_unit_converted's convention above).
+    assert response["data"]["handoffDepthM"] == pytest.approx(
+        _EP_REAL_HANDOFF_DEPTH_M * 3.28084, rel=0.01
+    )
+    assert response["data"]["handoffSourceLevel"] == _EP_REAL_HANDOFF_SOURCE
+
+
+def test_remote_mode_no_model_answer_best_mode_returns_200_null(monkeypatch):
+    """§3.6: the model has no answer for this hour -> HTTP 200, null
+    payload, modelStatus="unavailable" -- never a 404. Key set is IDENTICAL
+    to the success ("best"/int) response, only nulled (lead correction:
+    a typed client must not have to branch on which keys are present)."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _rm_wire_remote_endpoint(monkeypatch, beach_profile_mod)
+
+    gap_reports: list = []
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch_profile", lambda **kw: None
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.report_gap",
+        lambda **kw: gap_reports.append(kw),
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    data = response["data"]
+    assert data["modelStatus"] == "unavailable"
+    assert data["locationId"] == _EP_LOCATION_ID
+    assert data["timestep"] == _EP_TIME_ISO
+    for key in (
+        "transectIndex", "isStructureAffected", "transectBearingDeg",
+        "transect", "breakPoints", "waveShapes", "surfZones",
+        "jackingFactors", "handoffDepthM", "handoffSourceLevel",
+    ):
+        assert key in data, f"{key} missing from unavailable response (key set must match success)"
+        assert data[key] is None
+    assert data["perPartitionBreaks"] is None
+    assert data["metadata"]["verticalDatum"] is None
+    assert data["metadata"]["handoffDepthM"] is None
+
+    assert len(gap_reports) == 1
+    assert gap_reports[0]["endpoint"] == "profile"
+    assert gap_reports[0]["spot_id"] == _EP_LOCATION_ID
+
+
+def test_remote_mode_no_model_answer_all_mode_nulls_profiles_key(monkeypatch):
+    """The transect_index=all success shape uses "profiles" (plural, a
+    list) instead of the single-transect key set -- the null response must
+    match THAT key set, not the single-transect one."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _rm_wire_remote_endpoint(monkeypatch, beach_profile_mod)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch_profile", lambda **kw: None
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.report_gap", lambda **kw: None
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="all")
+
+    data = response["data"]
+    assert data["modelStatus"] == "unavailable"
+    assert data["profiles"] is None
+    assert data["perPartitionBreaks"] is None
+    # Single-transect-only keys must NOT appear in "all" mode's response,
+    # success or failure -- a typed client keyed to transect_index=all's
+    # shape should never see them.
+    assert "transect" not in data
+    assert "breakPoints" not in data
+
+
+def test_no_swan_data_cached_returns_200_null_not_404(monkeypatch):
+    """§3.6: "no SWAN data cached yet" is a model gap, not a configuration
+    error -- 200/null, not 404. Applies in both modes; remote mode not
+    configured here."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", lambda **kw: None
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    assert response["data"]["modelStatus"] == "unavailable"
+    assert response["data"]["timestep"] is None
+    assert response["data"]["transect"] is None
+
+
+def test_no_forecast_timesteps_returns_200_null_not_404(monkeypatch):
+    """§3.6: SWAN data cached but no forecast timesteps -- also a model
+    gap, not a configuration error."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch",
+        lambda **kw: {"forecast": [], "spectral": []},
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    assert response["data"]["modelStatus"] == "unavailable"
+    assert response["data"]["timestep"] is None
+
+
+def test_bundled_mode_pipeline_produces_nothing_returns_200_null_not_404(monkeypatch):
+    """§3.6: the 1D pipeline producing no usable per-transect output is a
+    model gap in BOTH modes -- this reclassification is not remote-only.
+    Exercised here with remote mode NOT configured (bundled)."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+
+    def _degraded_pipeline(**_kwargs):
+        return PipelineResult(
+            best_peak_face_height_m=0.0,
+            spot_average_face_height_m=0.0,
+            peel_angle_deg=None,
+            peel_classification=None,
+            peel_direction=None,
+            transect_count=0,
+            open_transect_count=0,
+            per_transect=[],
+            per_partition_breaks=[],
+            degraded=True,
+        )
+
+    monkeypatch.setattr(
+        beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects
+    )
+    monkeypatch.setattr(beach_profile_mod, "_run_pipeline", _degraded_pipeline)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    assert response["data"]["modelStatus"] == "unavailable"
+
+
+def test_no_transects_available_still_raises_404_not_200(monkeypatch):
+    """§3.6 explicitly: "spot not configured or segment has zero length" is
+    a CONFIGURATION error, not a model gap, and must stay 404 in both
+    modes -- distinguishing the two is the entire point of §3.6."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+    monkeypatch.setattr(beach_profile_mod, "_compute_spot_transects", lambda **kw: [])
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+    assert exc_info.value.status_code == 404
+
+
+def test_unknown_location_still_raises_404_not_200(monkeypatch):
+    """Configuration error (unknown location) stays 404 -- untouched by
+    §3.6."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    beach_profile_mod._marine_config = MarineConfig(locations=[])
+
+    with pytest.raises(HTTPException) as exc_info:
+        beach_profile_mod.get_beach_profile("nonexistent-spot", transect_index="best")
+    assert exc_info.value.status_code == 404
