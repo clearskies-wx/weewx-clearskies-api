@@ -1388,7 +1388,7 @@ def build_swan_input(
             ]
             logger.info(
                 "SWAN TABLE output columns: %s",
-                "TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR",
+                "TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR PTHSIGN PTRTP PTDIR PTDSPR",
             )
             spot_order: list[str] = []
             for n, (spot_id, (spot_lon, spot_lat)) in enumerate(spots.items(), start=1):
@@ -1442,6 +1442,7 @@ def build_swan_input(
                     (
                         f"TABLE '{curve_name}' HEAD '{table_file}'"
                         f" TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR"
+                        f" PTHSIGN PTRTP PTDIR PTDSPR"
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                     ),
                     "",
