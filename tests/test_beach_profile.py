@@ -55,6 +55,13 @@ def _make_fixture() -> tuple[TransectResult, PipelineResult, list[TransectInfo]]
         depths=np.array([8.0, 4.0, 2.0]),
         per_partition=[pbr],
         best_face_height_m=1.905,
+        # T4A.9 (B1) landed these as required fields mid-round — real per-hour
+        # handoff depth/source, always present on a real TransectResult.
+        # Fixture values chosen to be distinguishable from the API's other
+        # numbers so a wiring bug (wrong field read) shows up as a wrong
+        # number, not a coincidentally-right one.
+        handoff_depth_m=1.83,
+        handoff_source_level="L3",
     )
     pbi = PartitionBreakInfo(
         partition_index=0,
@@ -177,3 +184,48 @@ def test_hs_values_are_unit_converted():
     hs_ft = profile_ft["transect"][0]["hs"]
     assert hs_m > 0.0  # fixture's first envelope point has non-zero Hs
     assert hs_ft == pytest.approx(hs_m * 3.28084, rel=0.01)
+
+
+# ---------------------------------------------------------------------------
+# 6. Per-hour handoff depth/source reach the response (T4A.6 item g / LC-R2-13)
+#
+# handoff_depth_m / handoff_source_level are now REQUIRED fields on
+# TransectResult (B1's T4A.9 landed mid-round — see the fixture above) ->
+# handoffDepthM / handoffSourceLevel on the response. These tests prove the
+# wiring end to end using the exact names LC-R2-13 fixed with B1. If either
+# side renames its attribute, this fails loudly instead of the response
+# silently going back to null.
+# ---------------------------------------------------------------------------
+
+
+def test_handoff_fields_reach_response():
+    profile = _build()
+    assert profile["handoffDepthM"] == pytest.approx(1.83)
+    assert profile["handoffSourceLevel"] == "L3"
+
+
+def test_handoff_fields_are_unit_converted():
+    profile_m = _build(h_unit="meter", d_unit="meter")
+    profile_ft = _build(h_unit="foot", d_unit="foot")
+    assert profile_m["handoffDepthM"] == pytest.approx(1.83)
+    assert profile_ft["handoffDepthM"] == pytest.approx(1.83 * 3.28084, rel=0.01)
+    # Source level is a passthrough label, never unit-converted.
+    assert profile_m["handoffSourceLevel"] == "L3"
+    assert profile_ft["handoffSourceLevel"] == "L3"
+
+
+def test_handoff_fields_degrade_to_null_when_attribute_genuinely_absent():
+    """_handoff_fields() guards against a caller that lacks the attribute
+    entirely (getattr default), independent of whether the real
+    TransectResult dataclass can construct one — it no longer can (B1 made
+    both fields required positional args), so this exercises the defensive
+    path directly against a stand-in object rather than the real dataclass.
+    """
+    from types import SimpleNamespace
+
+    from weewx_clearskies_api.endpoints.beach_profile import _handoff_fields
+
+    stub = SimpleNamespace()  # deliberately has neither attribute
+    depth, source = _handoff_fields(stub, "meter")
+    assert depth is None
+    assert source is None

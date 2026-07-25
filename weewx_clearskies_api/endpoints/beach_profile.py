@@ -180,6 +180,49 @@ def _serialize_surf_zones(surf_zones: object, d_unit: str) -> dict | None:
     return out
 
 
+def _handoff_fields(tr: TransectResult, d_unit: str) -> tuple[float | None, str | None]:
+    """Return (handoffDepthM, handoffSourceLevel) for one transect, display-unit-converted.
+
+    T4A.6 item (g) / LC-R2-13: B1 (T4A.9/T4A.10) lands ``handoff_depth_m: float``
+    and ``handoff_source_level: "L3" | "L2"`` on ``TransectResult`` as a separate
+    task in the same round. The names are fixed by that lead call — do not
+    invent different ones here.
+
+    Uses ``getattr`` with a ``None`` default so this endpoint degrades to
+    ``null`` fields (not a 500) if B1's dataclass fields have not landed yet
+    when this runs. That silent-null path is deliberately covered by
+    ``test_handoff_fields_reach_response`` in tests/test_beach_profile.py,
+    which fails loudly the moment a real ``TransectResult`` carries these
+    attributes under a different name than the contract — so drift between
+    the two sides cannot go unnoticed the way a bare ``getattr`` normally
+    would.
+    """
+    depth_m = getattr(tr, "handoff_depth_m", None)
+    source_level = getattr(tr, "handoff_source_level", None)
+    depth_out = (
+        _convert_unit(float(depth_m), "meter", d_unit) if depth_m is not None else None
+    )
+    return depth_out, source_level
+
+
+def _select_best_transect(
+    all_transect_results: list[TransectResult],
+) -> TransectResult | None:
+    """Pick the open transect with the highest face height (falls back to all transects).
+
+    Shared by the ``transect_index="best"`` selector and the response
+    ``metadata`` block's representative handoff depth/source (T4A.6 item g) —
+    both want the same "best" transect, so this is the single definition
+    (``rules/coding.md`` §3 DRY) rather than two independent selections that
+    could silently diverge.
+    """
+    if not all_transect_results:
+        return None
+    open_trs = [tr for tr in all_transect_results if not tr.is_structure_affected]
+    candidates = open_trs if open_trs else all_transect_results
+    return max(candidates, key=lambda tr: tr.best_face_height_m)
+
+
 def _serialize_partition_breaks(
     per_partition_breaks: list[PartitionBreakInfo],
     h_unit: str,
@@ -537,6 +580,9 @@ def _build_transect_profile(
         else None
     )
 
+    # --- Per-hour handoff depth/source (T4A.6 item g / LC-R2-13) ---
+    _handoff_depth_m, _handoff_source_level = _handoff_fields(tr, d_unit)
+
     return {
         "transectIndex": tr.transect_index,
         "isStructureAffected": tr.is_structure_affected,
@@ -548,6 +594,8 @@ def _build_transect_profile(
         "waveShapes": wave_shapes,
         "surfZones": surf_zones,
         "jackingFactors": jacking_factors,
+        "handoffDepthM": _handoff_depth_m,
+        "handoffSourceLevel": _handoff_source_level,
     }
 
 
@@ -821,11 +869,22 @@ def get_beach_profile(
     )
 
     # --- Common metadata block ---
+    # Representative handoff depth/source (T4A.6 item g): the same "best"
+    # transect used by transect_index="best" below, so metadata reports the
+    # handoff for whichever transect the response actually foregrounds.
+    _rep_tr = _select_best_transect(pipeline_result.per_transect)
+    _meta_handoff_depth_m, _meta_handoff_source_level = (
+        _handoff_fields(_rep_tr, distance_internal)
+        if _rep_tr is not None
+        else (None, None)
+    )
     metadata = {
         "axisUnits": {"x": distance_symbol, "y": distance_symbol},
         "verticalDatum": "NAVD88",
         "transectCount": pipeline_result.transect_count,
         "openTransectCount": pipeline_result.open_transect_count,
+        "handoffDepthM": _meta_handoff_depth_m,
+        "handoffSourceLevel": _meta_handoff_source_level,
     }
 
     now_str = utc_isoformat(now)
@@ -880,11 +939,8 @@ def get_beach_profile(
     # Single-transect responses ("best" or integer index)
     # -----------------------------------------------------------------------
     if _ti_mode == "best":
-        open_trs = [
-            tr for tr in all_transect_results if not tr.is_structure_affected
-        ]
-        candidates = open_trs if open_trs else all_transect_results
-        selected_tr = max(candidates, key=lambda tr: tr.best_face_height_m)
+        selected_tr = _select_best_transect(all_transect_results)
+        assert selected_tr is not None  # all_transect_results is non-empty (checked above)
     else:
         # _ti_mode == "int"
         assert _ti_int is not None  # guaranteed by the parsing block above
