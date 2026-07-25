@@ -817,6 +817,305 @@ def decompose_spectrum(
 
 
 # ---------------------------------------------------------------------------
+# SWAN TABLE PT* (watershed partitioning) parsing — T4B.2
+#
+# SWAN's own spectral partitioning (Hanson & Phillips 2001 watershed
+# algorithm) is available directly from TABLE output via the PTHSIGN /
+# PTRTP / PTDIR / PTDSPR quantities (see docs/reference/swan-commands-extract.md
+# "Spectral partitioning output (PT* quantities)" and swanmain.ftn:2649+).
+# This is a candidate REPLACEMENT for decompose_spectrum()'s ±4-bin
+# neighbourhood peak-finder — that replacement is trigger 1 (algorithm
+# change) and is NOT approved. The functions below exist to PARSE this
+# output and let scripts/compare_partitioning.py MEASURE the two algorithms
+# against each other on real data. decompose_spectrum() above is untouched
+# and remains the only partitioning path any production caller uses.
+# ---------------------------------------------------------------------------
+
+# Column-name prefix (10-column block, "<PREFIX>01".."<PREFIX>10") -> the
+# SWAN exception ("no partition here") value for that quantity.
+#
+# PARSER TRAP, deliberately called out per LC-4B-4: PTDIR's exception value
+# is -999, every other PT* quantity's is -9. Verified against
+# swanmain.ftn:2649+ (OVEXCV per IVTYPE: 100->-9, 110->-9, 120->-9,
+# 130->-999, 140->-9, 150->-9, 160->-9). A parser that assumes one uniform
+# sentinel across all PT* columns will read an absent partition's direction
+# as a real (if implausible after a raw %360) heading instead of recognising
+# it as absent. This table is intentionally per-prefix, not a single module
+# constant, so that mistake cannot be made by construction.
+_PT_PREFIX_EXCEPTION_VALUES: dict[str, float] = {
+    "HSPT": -9.0,    # PTHSIGN -> HsPT01..HsPT10 (m)
+    "TPPT": -9.0,    # PTRTP   -> TpPT01..TpPT10 (s)
+    "WLPT": -9.0,    # PTWLEN  -> WlPT01..WlPT10 (m)
+    "DRPT": -999.0,  # PTDIR   -> DrPT01..DrPT10 (deg)  <- the odd one out
+    "DSPT": -9.0,    # PTDSPR  -> DsPT01..DsPT10 (deg)
+    "WFPT": -9.0,    # PTWFRAC -> WfPT01..WfPT10 (dimensionless)
+    "STPT": -9.0,    # PTSTEE  -> StPT01..StPT10 (dimensionless)
+}
+
+# Tolerance for matching a parsed float against its prefix's exception value.
+# SWAN emits the exception value with full floating-point precision, but a
+# generous tolerance guards against any formatting rounding in the ASCII
+# TABLE file without ever risking a real reading (Hs/Tp/Wl/Dspr/Wfrac/Steep
+# are always >= 0; Dir is always in [0, 360)) being mistaken for absent.
+_PT_EXCEPTION_TOLERANCE = 0.5
+
+_PT_MAX_PARTITIONS = 10
+
+
+def _is_pt_exception(value: float, prefix: str) -> bool:
+    """True if *value* is the "no partition here" sentinel for *prefix*.
+
+    Looks the sentinel up per-prefix (see ``_PT_PREFIX_EXCEPTION_VALUES``) —
+    never a single shared constant. Unknown prefixes are treated as never-
+    exceptional (defensive default; callers only pass prefixes they found in
+    the file's own header).
+    """
+    sentinel = _PT_PREFIX_EXCEPTION_VALUES.get(prefix)
+    if sentinel is None:
+        return False
+    return abs(value - sentinel) < _PT_EXCEPTION_TOLERANCE
+
+
+def compute_total_m0(
+    freqs_hz: list[float],
+    dirs_deg: list[float],
+    energy: list[list[float]],
+) -> float:
+    """Integrate a 2-D SWAN directional spectrum to total zeroth moment (m0).
+
+    Same integral ``decompose_spectrum()`` computes internally to normalise
+    its peak-energy threshold (variable-width df/dtheta via midpoint
+    spacing). Kept as a standalone function — rather than refactoring
+    ``decompose_spectrum()`` to expose it — so this addition carries zero
+    risk to the live default partitioning path; the two are independently
+    computed from the same well-established Hs = 4*sqrt(m0) definition.
+
+    Used by ``scripts/compare_partitioning.py`` as the conservation
+    reference: whichever algorithm's partitions are being measured, "does
+    Σ partition m0 equal total m0" needs a total computed from the full 2-D
+    spectrum, which is what this function provides for the SPECOUT-file side
+    of the comparison (LC-4B-6 — the comparison is a measurement, not an
+    assertion).
+
+    Returns 0.0 for a degenerate spectrum (fewer than 2 frequency or
+    direction bins), matching ``decompose_spectrum()``'s own guard.
+    """
+    nf = len(freqs_hz)
+    nd = len(dirs_deg)
+    if nf < 2 or nd < 2 or not energy:
+        return 0.0
+
+    df = [0.0] * nf
+    for i in range(nf):
+        if i == 0:
+            df[i] = freqs_hz[1] - freqs_hz[0]
+        elif i == nf - 1:
+            df[i] = freqs_hz[-1] - freqs_hz[-2]
+        else:
+            df[i] = (freqs_hz[i + 1] - freqs_hz[i - 1]) / 2.0
+
+    dd = [0.0] * nd
+    for j in range(nd):
+        if j == 0:
+            dd[j] = abs(dirs_deg[1] - dirs_deg[0])
+        elif j == nd - 1:
+            dd[j] = abs(dirs_deg[-1] - dirs_deg[-2])
+        else:
+            dd[j] = abs(dirs_deg[j + 1] - dirs_deg[j - 1]) / 2.0
+
+    return sum(
+        energy[i][j] * df[i] * dd[j]
+        for i in range(nf)
+        for j in range(nd)
+        if i < len(energy) and j < len(energy[i]) and energy[i][j] > 0
+    )
+
+
+def parse_table_pt_partitions(table_text: str) -> list[dict[str, Any]]:
+    """Parse SWAN TABLE ASCII output's PT* (watershed partitioning) columns.
+
+    Reads whichever ``HsPT##`` / ``TpPT##`` / ``DrPT##`` / ``DsPT##`` /
+    ``WlPT##`` / ``WfPT##`` / ``StPT##`` columns are present in the file's
+    ``HEAD`` header line (only PTHSIGN/PTRTP/PTDIR/PTDSPR are emitted as of
+    T4B.1 — see ``docs/reference/swan-commands-extract.md``), applies the
+    correct per-quantity exception value to each (LC-4B-4), and returns one
+    entry per output row (one row = one station at one timestep) containing
+    only the partitions that actually exist at that row — never a partition
+    padded in as a fabricated 0.
+
+    A TABLE row's ``HsPT0k`` column is treated as the presence signal for
+    partition *k*: SWAN writes the exception value to every PT* quantity for
+    an absent partition simultaneously, so anchoring on Hs (always present
+    when any PT* quantity was requested) avoids depending on which of the
+    optional quantities were actually emitted.
+
+    Per SWAN convention (docs/reference/swan-commands-extract.md,
+    docs/planning/MARINE-SERVICE-SEPARATION-PLAN.md Phase 4B "Verified SWAN
+    mechanics"): partition 1 is the wind sea; partitions 2-10 are swells in
+    descending significant wave height. That ordering is preserved as-is —
+    this parser does not re-sort.
+
+    Args:
+        table_text: Full content of a SWAN TABLE ASCII file (``HEAD`` format)
+            that includes at least the ``HsPT01``..``HsPT10`` columns.
+
+    Returns:
+        List of dicts, one per parsed row:
+          {
+            "time":  ISO-8601 UTC string, or None if no TIME column,
+            "xp":    float, station longitude/x (degrees or UTM, as emitted),
+            "yp":    float, station latitude/y,
+            "partitions": [
+              {
+                "partition_index": int,       # 1-10, SWAN's own numbering
+                "is_wind_sea":     bool,       # True only for partition_index == 1
+                "height":          float,      # m, from HsPT0k
+                "period":          float | None,   # s, from TpPT0k if present
+                "direction":       float | None,   # deg, from DrPT0k if present
+                "spread":          float | None,   # deg, from DsPT0k if present
+                "energy":          float,      # m0 (m^2), back-solved from height
+                "classification":  str,        # groundswell/swell/wind_swell
+              },
+              ...
+            ],
+          }
+        Rows with no header match, or with a missing/exception-valued HsPT
+        column across all 10 slots (no partitions at all — dry point or zero
+        energy), are omitted entirely. Never returns a row with a fabricated
+        partition.
+    """
+    lines = [ln.rstrip("\r\n") for ln in table_text.splitlines()]
+
+    col_idx: dict[str, int] = {}
+    header_found = False
+    results: list[dict[str, Any]] = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("%"):
+            tokens = line.lstrip("%").split()
+            if not header_found and tokens and tokens[0].upper() not in ("RUN:V1", "[DEGR]", "[M]", "[SEC]"):
+                if any(t.upper() in ("XP", "YP", "TIME") or t.upper().startswith("HSPT") for t in tokens):
+                    col_idx = {tok.upper(): idx for idx, tok in enumerate(tokens)}
+                    header_found = True
+            continue
+
+        if not header_found:
+            continue
+
+        parts = line.split()
+        if not parts:
+            continue
+
+        i_time = col_idx.get("TIME")
+        i_xp = col_idx.get("XP")
+        i_yp = col_idx.get("YP")
+        if i_xp is None or i_yp is None:
+            continue
+
+        # Per-prefix column index lists: prefix -> [idx_01, idx_02, ..., idx_10 | None]
+        prefix_cols: dict[str, list[int | None]] = {}
+        for prefix in _PT_PREFIX_EXCEPTION_VALUES:
+            cols: list[int | None] = []
+            any_present = False
+            for k in range(1, _PT_MAX_PARTITIONS + 1):
+                idx = col_idx.get(f"{prefix}{k:02d}")
+                cols.append(idx)
+                if idx is not None:
+                    any_present = True
+            if any_present:
+                prefix_cols[prefix] = cols
+
+        if "HSPT" not in prefix_cols:
+            # No presence signal available at all — nothing to parse.
+            continue
+
+        max_idx = max(i_xp, i_yp)
+        if i_time is not None:
+            max_idx = max(max_idx, i_time)
+        for cols in prefix_cols.values():
+            for idx in cols:
+                if idx is not None:
+                    max_idx = max(max_idx, idx)
+        if len(parts) < max_idx + 1:
+            continue
+
+        try:
+            xp = float(parts[i_xp])
+            yp = float(parts[i_yp])
+        except (ValueError, IndexError):
+            continue
+
+        time_iso: str | None = None
+        if i_time is not None and i_time < len(parts):
+            time_token = parts[i_time]
+            try:
+                date_part, time_part = time_token.split(".")
+                time_iso = (
+                    f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+                    f"T{time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}Z"
+                )
+            except (ValueError, IndexError):
+                time_iso = None
+
+        def _value_at(prefix: str, k_zero_based: int) -> float | None:
+            cols = prefix_cols.get(prefix)
+            if cols is None:
+                return None
+            idx = cols[k_zero_based]
+            if idx is None or idx >= len(parts):
+                return None
+            try:
+                v = float(parts[idx])
+            except (ValueError, TypeError):
+                return None
+            if _is_pt_exception(v, prefix):
+                return None
+            return v
+
+        row_partitions: list[dict[str, Any]] = []
+        for k in range(1, _PT_MAX_PARTITIONS + 1):
+            k0 = k - 1
+            hs = _value_at("HSPT", k0)
+            if hs is None:
+                # Absent partition — HsPT0k carries the exception value.
+                # Do NOT treat this slot as height 0; it does not exist.
+                continue
+
+            tp = _value_at("TPPT", k0)
+            direction = _value_at("DRPT", k0)
+            spread = _value_at("DSPT", k0)
+
+            classification = _classify_period(tp) if tp is not None and tp > 0 else "wind_swell"
+
+            row_partitions.append({
+                "partition_index": k,
+                "is_wind_sea": k == 1,
+                "height": hs,
+                "period": tp,
+                "direction": direction,
+                "spread": spread,
+                "energy": (hs / 4.0) ** 2,
+                "classification": classification,
+            })
+
+        if not row_partitions:
+            continue
+
+        results.append({
+            "time": time_iso,
+            "xp": xp,
+            "yp": yp,
+            "partitions": row_partitions,
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Top-level: parse file + decompose all timesteps
 # ---------------------------------------------------------------------------
 

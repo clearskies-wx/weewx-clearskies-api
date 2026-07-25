@@ -19,8 +19,10 @@ import pytest
 
 from weewx_clearskies_api.services.swan_spectral import (
     SpecoutParseError,
+    compute_total_m0,
     parse_specout_file,
     parse_specout_file_multi,
+    parse_table_pt_partitions,
 )
 
 _HEADER = """SWAN   1                                Swan standard spectral file, version
@@ -127,3 +129,185 @@ def test_single_location_parser_unchanged_by_the_multi_location_addition():
 
     assert len(result) == 1
     assert result[0]["energy"] == [[1.0, 2.0], [3.0, 4.0]]
+
+
+# ---------------------------------------------------------------------------
+# parse_table_pt_partitions() / compute_total_m0() — T4B.2
+#
+# Fixtures built directly from the documented column layout
+# (docs/reference/swan-commands-extract.md "Spectral partitioning output
+# (PT* quantities)"): each keyword expands to exactly 10 columns
+# (<PREFIX>01..<PREFIX>10), PTDIR's exception value is -999, every other
+# PT* quantity's is -9. This is real SWAN TABLE ASCII shape, not an
+# approximation of it — the "% <header tokens>" line and space-separated
+# data row are exactly what _parse_transect_table() (swan_runner.py) already
+# parses in production for the non-PT* columns.
+# ---------------------------------------------------------------------------
+
+_PT_COLUMNS = (
+    ["TIME", "XP", "YP"]
+    + [f"HsPT{k:02d}" for k in range(1, 11)]
+    + [f"TpPT{k:02d}" for k in range(1, 11)]
+    + [f"DrPT{k:02d}" for k in range(1, 11)]
+    + [f"DsPT{k:02d}" for k in range(1, 11)]
+)
+
+
+def _pt_header() -> str:
+    return "%" + " ".join(_PT_COLUMNS) + "\n"
+
+
+def _pt_row(
+    time: str,
+    xp: float,
+    yp: float,
+    hs: list[float],
+    tp: list[float],
+    dr: list[float],
+    ds: list[float],
+) -> str:
+    assert len(hs) == len(tp) == len(dr) == len(ds) == 10
+    values = [time, str(xp), str(yp)] + [str(v) for v in hs + tp + dr + ds]
+    return " ".join(values) + "\n"
+
+
+def test_parses_two_partitions_wind_sea_and_swell():
+    # Partition 1 = wind sea, partition 2 = swell, partitions 3-10 absent.
+    hs = [0.30, 1.80] + [-9.0] * 8
+    tp = [6.0, 14.0] + [-9.0] * 8
+    dr = [270.0, 184.0] + [-999.0] * 8
+    ds = [25.0, 8.0] + [-9.0] * 8
+    text = _pt_header() + _pt_row("20260101.000000", 100.0, 200.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["time"] == "2026-01-01T00:00:00Z"
+    assert row["xp"] == 100.0
+    assert row["yp"] == 200.0
+    assert len(row["partitions"]) == 2
+
+    p1, p2 = row["partitions"]
+    assert p1["partition_index"] == 1
+    assert p1["is_wind_sea"] is True
+    assert p1["height"] == 0.30
+    assert p1["period"] == 6.0
+    assert p1["direction"] == 270.0
+    assert p1["classification"] == "wind_swell"
+
+    assert p2["partition_index"] == 2
+    assert p2["is_wind_sea"] is False
+    assert p2["height"] == 1.80
+    assert p2["period"] == 14.0
+    assert p2["direction"] == 184.0
+    assert p2["classification"] == "groundswell"
+
+
+def test_absent_partitions_are_omitted_not_zero():
+    """LC-4B-4: absent partitions carry the exception value — not zero and
+    not blank. A partition slot at its exception value must not appear in
+    the output at all (never as a fabricated height-0 partition)."""
+    hs = [0.5] + [-9.0] * 9
+    tp = [10.0] + [-9.0] * 9
+    dr = [100.0] + [-999.0] * 9
+    ds = [12.0] + [-9.0] * 9
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    assert len(rows[0]["partitions"]) == 1
+    assert all(p["height"] != 0.0 for p in rows[0]["partitions"])
+
+
+def test_uniform_sentinel_assumption_would_fail():
+    """LC-4B-4's exact failure mode: a parser assuming ONE sentinel value
+    across all PT* quantities misreads absent partitions as real data.
+
+    PTDIR's exception is -999, not -9. A direction reading of exactly -9.0
+    is not the real DrPT exception value — a correct per-quantity parser
+    must keep it as literal data. A parser that (wrongly) checked every PT*
+    column against a single -9 sentinel would instead discard this real
+    reading as if it were absent — exactly the "-9 m wave height is
+    obviously wrong [...] but a partition direction of -9 deg is a
+    plausible-looking northerly and would not [be caught]" scenario the
+    plan calls out.
+    """
+    hs = [0.5, 1.0] + [-9.0] * 8
+    tp = [10.0, 11.0] + [-9.0] * 8
+    # Partition 2's direction is exactly the OTHER prefixes' sentinel value
+    # (-9), not DrPT's own (-999). A uniform-sentinel parser would drop it;
+    # the correct per-prefix parser must not.
+    dr = [100.0, -9.0] + [-999.0] * 8
+    ds = [12.0, 15.0] + [-9.0] * 8
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    assert len(rows[0]["partitions"]) == 2
+    p2 = rows[0]["partitions"][1]
+    assert p2["height"] == 1.0
+    # -9.0 is real DrPT data here (not DrPT's exception value), so it must
+    # survive the parse unchanged rather than being nulled out.
+    assert p2["direction"] == -9.0
+
+    # And the reverse: a genuinely absent partition's DrPT slot (-999) must
+    # not leak through as a literal "-999 degree" direction on any
+    # partition that IS returned.
+    for p in rows[0]["partitions"]:
+        assert p["direction"] != -999.0
+
+
+def test_no_partitions_row_omitted():
+    hs = [-9.0] * 10
+    tp = [-9.0] * 10
+    dr = [-999.0] * 10
+    ds = [-9.0] * 10
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert rows == []
+
+
+def test_two_rows_two_stations_stay_independent():
+    hs_a = [1.0] + [-9.0] * 9
+    hs_b = [2.0, 0.5] + [-9.0] * 8
+    tp = [10.0, 10.0] + [-9.0] * 8
+    dr = [180.0, 190.0] + [-999.0] * 8
+    ds = [10.0, 10.0] + [-9.0] * 8
+    text = (
+        _pt_header()
+        + _pt_row("20260101.000000", 0.0, 0.0, hs_a, tp, dr, ds)
+        + _pt_row("20260101.000000", 1.0, 1.0, hs_b, tp, dr, ds)
+    )
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 2
+    assert len(rows[0]["partitions"]) == 1
+    assert len(rows[1]["partitions"]) == 2
+    assert rows[0]["xp"] == 0.0
+    assert rows[1]["xp"] == 1.0
+
+
+def test_compute_total_m0_matches_manual_integration():
+    freqs_hz = [0.05, 0.10]
+    dirs_deg = [30.0, 60.0]
+    energy = [[1.0, 2.0], [3.0, 4.0]]
+
+    # Edge bins use single-sided spacing (matches decompose_spectrum()'s own
+    # midpoint-spacing convention): df = 0.05 for both bins (2-bin edge
+    # case), dd = 30.0 for both direction bins.
+    df = 0.05
+    dd = 30.0
+    expected = (1.0 + 2.0 + 3.0 + 4.0) * df * dd
+
+    assert compute_total_m0(freqs_hz, dirs_deg, energy) == pytest.approx(expected)
+
+
+def test_compute_total_m0_zero_for_degenerate_spectrum():
+    assert compute_total_m0([0.1], [30.0], [[1.0]]) == 0.0
+    assert compute_total_m0([], [], []) == 0.0
