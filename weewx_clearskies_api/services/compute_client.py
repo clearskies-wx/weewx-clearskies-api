@@ -196,6 +196,18 @@ def _deserialize_pipeline_result(data: dict[str, Any]) -> PipelineResult:
     )
 
 
+# Public alias (SURF-PUBLISH-RESULTS-ONLY §3.2, 2026-07-25): the SWAN
+# service's GET /surf/{spot_id}/profile endpoint returns the exact same wire
+# format as this module's own POST /compute/swelltrack response ("one wire
+# format, not two" — brief §3.2). providers/nearshore/swan.py's
+# fetch_profile() reuses this deserializer across the module boundary
+# instead of forking a second implementation of the same parsing (DRY,
+# rules/coding.md §3). Importing the private name directly would be a
+# maintenance trap, so this is the one sanctioned public entry point —
+# no other change to this file.
+deserialize_pipeline_result = _deserialize_pipeline_result
+
+
 def _deserialize_surfbeat_result(data: dict[str, Any]) -> SurfBeatResult:
     return SurfBeatResult(
         hs_ig_shoreline=float(data["hs_ig_shoreline"]),

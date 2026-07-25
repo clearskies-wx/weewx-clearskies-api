@@ -53,11 +53,12 @@ import json
 import logging
 import math
 import os
+import queue as _queue
 import shutil
 import tempfile
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,7 @@ from weewx_clearskies_api.providers._common.capability import (
 )
 from weewx_clearskies_api.services.swan_runner import SWANRunner, SWANRunError
 from weewx_clearskies_api.services.swan_domain import GridDomain, DomainSizing
+from weewx_clearskies_api.services.surf_1d_pipeline import PipelineResult
 from weewx_clearskies_api.enrichment.bathymetry import download_swan_depth_grid
 
 logger = logging.getLogger(__name__)
@@ -589,6 +591,14 @@ def build_obstacle_structures(surf_locations: list[Any], marine_config: Any) -> 
 #: URL of the standalone SWAN service (None = bundled mode).
 _remote_url: str | None = None
 
+#: Bearer secret and TLS verification for the remote service, set once by
+#: configure_remote_mode().  Needed by report_gap()/fetch_profile() below,
+#: which are called from request-path code in other modules (surf.py,
+#: beach_profile.py) — not from the health thread — so the secret/verify
+#: flag must be reachable without threading them through every call site.
+_remote_auth_secret: str = ""
+_remote_verify_tls: bool = True
+
 #: Number of consecutive health check failures since last success.
 _remote_consecutive_failures: int = 0
 
@@ -1042,9 +1052,31 @@ def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool 
             all_spots = list(dict.fromkeys(spot_ids + remote_spots))  # preserve order, deduplicate
 
             # Refresh per-spot forecast data in local last-good cache.
+            #
+            # T3.4 (SURF-PUBLISH-RESULTS-ONLY, 2026-07-25): fetch the ~2.8 MB
+            # published payload ONLY when this spot's model cycle actually
+            # advanced -- compare the health response's last_run against the
+            # run_time already sitting in our local last-good cache. Health
+            # checks themselves stay on the existing 60s cadence (cheap);
+            # only the forecast download becomes conditional. A missing
+            # cache entry always fetches -- the last-good cache has a 7-day
+            # TTL and can expire, so "no entry" must never be treated as
+            # "unchanged."
             cache = get_cache()
+            last_run = health_data.get("last_run")
             for spot_id in all_spots:
                 try:
+                    cached_entry = cache.get(_build_last_good_key(spot_id))
+                    cached_run_time = cached_entry.get("run_time") if cached_entry else None
+                    if cached_entry is not None and cached_run_time == last_run:
+                        logger.debug(
+                            "SWAN remote: spot %r run_time unchanged (%s) -- "
+                            "skipping forecast fetch",
+                            spot_id,
+                            cached_run_time,
+                        )
+                        continue
+
                     headers = {"Authorization": f"Bearer {auth_secret}"} if auth_secret else {}
                     forecast_resp = httpx.get(
                         f"{service_url}/surf/{spot_id}/forecast",
@@ -1151,7 +1183,7 @@ def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool
         True if remote mode was activated; False if the startup probe failed
         and the caller should fall back to bundled mode.
     """
-    global _remote_url, _remote_health_thread  # noqa: PLW0603
+    global _remote_url, _remote_health_thread, _remote_auth_secret, _remote_verify_tls  # noqa: PLW0603
 
     logger.info("SWAN: probing remote service at %s", service_url)
     try:
@@ -1174,6 +1206,8 @@ def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool
     spot_ids = list(getattr(marine_config, "surf_spots", {}).keys()) if marine_config else []
 
     _remote_url = service_url
+    _remote_auth_secret = auth_secret
+    _remote_verify_tls = verify_tls
     _remote_health_thread = threading.Thread(
         target=_remote_health_loop,
         args=(service_url, spot_ids, verify_tls, auth_secret),
@@ -1189,6 +1223,214 @@ def configure_remote_mode(service_url: str, marine_config: Any, verify_tls: bool
         _REMOTE_HEALTH_INTERVAL_S,
     )
     return True
+
+
+def is_remote_mode() -> bool:
+    """True when SWAN runs on a separate model host (``[swan] service_url`` set).
+
+    Callers outside this module (``endpoints/surf.py``, ``endpoints/beach_profile.py``)
+    use this to decide whether on-demand local computation is available.
+    Bundled mode (this returns False) means SWAN runs in-process on this
+    host — local on-demand computation there IS the model, not a fallback
+    (SURF-PUBLISH-RESULTS-ONLY brief §2). Remote mode (True) means a
+    separate model host exists and produced the last-good cache; this host
+    must not recompute — see ``report_gap()`` / ``fetch_profile()`` below.
+    """
+    return _remote_url is not None
+
+
+# ---------------------------------------------------------------------------
+# Gap reporting — POST /report/gap (§3.3) — single worker, bounded queue
+# ---------------------------------------------------------------------------
+#
+# Must never delay, fail, or alter the response the visitor receives (brief
+# §3.3/§3.5). A daemon thread PER report is not safe: with the swelltrack
+# cache empty (today's actual production state), every GET /surf produces
+# up to ~67 gaps, and at production request volume that is well over a
+# thousand threads a minute -- a thread bomb, not a fire-and-forget call
+# (lead correction, 2026-07-25). Instead: one long-lived daemon worker
+# drains a bounded queue; report_gap() only ever does a fast, non-blocking
+# enqueue from the request path.
+
+#: Cap on both the pending-report queue and the dedup LRU -- neither a
+#: single large gap burst nor a dashboard refresh loop can grow the
+#: process without limit.
+_GAP_REPORT_QUEUE_MAXSIZE = 256
+_GAP_REPORT_DEDUP_MAXSIZE = 256
+_GAP_REPORT_TIMEOUT_S = 2.0
+
+_GapReportKey = tuple[str, str, str, "str | None"]
+
+_gap_report_queue: "_queue.Queue[_GapReportKey]" = _queue.Queue(maxsize=_GAP_REPORT_QUEUE_MAXSIZE)
+_gap_report_worker_thread: threading.Thread | None = None
+_gap_report_worker_lock = threading.Lock()
+
+#: Bounded LRU of (spot_id, valid_time, endpoint, run_time) already
+#: reported this run_time -- a refresh loop hitting the same missing
+#: timestep repeatedly must not re-enqueue it forever. The service-side
+#: dedup the SWAN service itself performs (§3.3) is defence in depth, not
+#: a substitute for this -- it doesn't stop this host from re-sending.
+_gap_report_seen: "OrderedDict[_GapReportKey, None]" = OrderedDict()
+_gap_report_seen_lock = threading.Lock()
+
+
+def _gap_report_worker() -> None:
+    """Long-lived daemon thread: drain _gap_report_queue, POST each report."""
+    while True:
+        spot_id, valid_time, endpoint, run_time = _gap_report_queue.get()
+        try:
+            headers = (
+                {"Authorization": f"Bearer {_remote_auth_secret}"}
+                if _remote_auth_secret
+                else {}
+            )
+            httpx.post(
+                f"{_remote_url}/report/gap",
+                json={
+                    "spot_id": spot_id,
+                    "valid_time": valid_time,
+                    "endpoint": endpoint,
+                    "run_time": run_time,
+                },
+                headers=headers,
+                verify=_remote_verify_tls,
+                timeout=_GAP_REPORT_TIMEOUT_S,
+            )
+        except Exception:
+            logger.debug(
+                "SWAN remote: gap report failed for %r @ %s (%s)",
+                spot_id,
+                valid_time,
+                endpoint,
+                exc_info=True,
+            )
+        finally:
+            _gap_report_queue.task_done()
+
+
+def _ensure_gap_report_worker_started() -> None:
+    global _gap_report_worker_thread  # noqa: PLW0603
+    if _gap_report_worker_thread is not None and _gap_report_worker_thread.is_alive():
+        return
+    with _gap_report_worker_lock:
+        if _gap_report_worker_thread is not None and _gap_report_worker_thread.is_alive():
+            return
+        _gap_report_worker_thread = threading.Thread(
+            target=_gap_report_worker, daemon=True, name="swan-gap-report-worker",
+        )
+        _gap_report_worker_thread.start()
+
+
+def report_gap(spot_id: str, valid_time: str, endpoint: str, run_time: str | None) -> None:
+    """Fire-and-forget gap report to the model host's POST /report/gap (§3.3).
+
+    No-op in bundled mode (no separate model host to report to -- SWAN runs
+    in-process, and an on-demand pipeline outcome there is the model's own
+    answer, not a gap). Deduplicated per (spot_id, valid_time, endpoint,
+    run_time) with a bounded LRU, then handed to the single background
+    worker via a non-blocking, bounded queue -- see the module comment
+    above. A full queue drops the report and logs once at DEBUG; it never
+    blocks or raises into the caller's request path.
+    """
+    if not _remote_url:
+        return
+
+    key: _GapReportKey = (spot_id, valid_time, endpoint, run_time)
+    with _gap_report_seen_lock:
+        if key in _gap_report_seen:
+            return
+        _gap_report_seen[key] = None
+        _gap_report_seen.move_to_end(key)
+        while len(_gap_report_seen) > _GAP_REPORT_DEDUP_MAXSIZE:
+            _gap_report_seen.popitem(last=False)
+
+    _ensure_gap_report_worker_started()
+    try:
+        _gap_report_queue.put_nowait(key)
+    except _queue.Full:
+        logger.debug(
+            "SWAN remote: gap report queue full (cap=%d) -- dropping report "
+            "for %r @ %s (%s)",
+            _GAP_REPORT_QUEUE_MAXSIZE,
+            spot_id,
+            valid_time,
+            endpoint,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Beach profile — GET /surf/{spot_id}/profile (§3.2)
+# ---------------------------------------------------------------------------
+
+
+def fetch_profile(spot_id: str, time_iso: str) -> PipelineResult | None:
+    """GET {service_url}/surf/{spot_id}/profile?time=<time_iso> (§3.2).
+
+    Returns the 1D (SwellTrack) pipeline result for the requested timestep,
+    computed on the model host from its full internal spectral data --
+    never recomputed here. Returns None (not an exception, not a
+    substitute value) whenever the model has no answer: a 503 from the
+    service, any other non-200 response, a network error, or a malformed
+    body. Callers (beach_profile.py) turn None into the §3.6 200/null
+    response, never a 404 or a local recompute. Returns None immediately in
+    bundled mode (no remote host to ask).
+
+    Deserializes using compute_client.deserialize_pipeline_result -- the
+    SAME wire format the compute service's own POST /compute/swelltrack
+    response uses ("one wire format, not two", brief §3.2) -- rather than
+    forking a second parser for what is structurally the same PipelineResult
+    payload.
+    """
+    if not _remote_url:
+        return None
+
+    from weewx_clearskies_api.services.compute_client import (  # noqa: PLC0415
+        deserialize_pipeline_result,
+    )
+
+    headers = (
+        {"Authorization": f"Bearer {_remote_auth_secret}"} if _remote_auth_secret else {}
+    )
+    try:
+        resp = httpx.get(
+            f"{_remote_url}/surf/{spot_id}/profile",
+            params={"time": time_iso},
+            headers=headers,
+            verify=_remote_verify_tls,
+            timeout=30.0,
+        )
+    except httpx.RequestError:
+        logger.warning(
+            "SWAN remote: profile request failed for %r @ %s",
+            spot_id,
+            time_iso,
+            exc_info=True,
+        )
+        return None
+
+    if resp.status_code == 503:
+        logger.debug(
+            "SWAN remote: no profile answer for %r @ %s (503)", spot_id, time_iso
+        )
+        return None
+    if resp.status_code != 200:
+        logger.warning(
+            "SWAN remote: /surf/%s/profile returned %d -- treating as unavailable",
+            spot_id,
+            resp.status_code,
+        )
+        return None
+
+    try:
+        return deserialize_pipeline_result(resp.json())
+    except (KeyError, TypeError, ValueError):
+        logger.warning(
+            "SWAN remote: profile response deserialization failed for %r @ %s",
+            spot_id,
+            time_iso,
+            exc_info=True,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
