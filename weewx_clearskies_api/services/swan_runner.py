@@ -657,6 +657,203 @@ def _parse_transect_table(
     return results
 
 
+def _select_l3_handoff_spectra(
+    spot_id: str,
+    specout: Any,  # swan_spectral.MultiLocationSpecout — typed Any to avoid a
+                    # module-level import cycle; imported locally at the call site.
+    table_points: list[MarineForecastPoint],
+    transect_points: list[dict[str, Any]],
+    utm_zone: int | None,
+    *,
+    coord_tol_m: float = 200.0,
+    coord_tol_deg: float = 0.003,
+) -> list[dict[str, Any]]:
+    """T4A.9/T4A.10: select, per forecast hour, which L3 CURVE station's
+    spectrum is this spot's handoff spectrum.
+
+    Replaces the pre-Phase-4A fixed single ~10 m SPECOUT point with a
+    per-hour lookup (ADR-093 Amendment 2 §2): ``handoff depth (this hour) =
+    1.3 * Hs(hour) / gamma``. The grid/curve is frozen at setup (C2) — this
+    only ever selects among stations that already exist.
+
+    Station alignment is BY COORDINATE, not index order. ``specout``'s
+    stations (from ``parse_specout_file_multi()``, LOCATIONS/LONLAT order)
+    are matched against the canonical ``transect_points`` list (the same
+    list ``_parse_transect_table()`` matched ``table_points`` against) by
+    nearest coordinate within *coord_tol_m* (UTM meters, Cartesian mode) or
+    *coord_tol_deg* (lon/lat degrees, spherical mode) — mirroring
+    ``_parse_transect_table()``'s own dual-unit tolerance exactly, since
+    treating a metres threshold as degrees (or vice versa) would silently
+    accept a match that is not one. QB and Hs per station per
+    timestep then come from ``table_points`` via an EXACT match on
+    ``distanceFromShore`` — both this function's station distances and
+    ``table_points``' distances are assigned from the same
+    ``transect_points`` entries, so a distance match is a same-station
+    match, not an approximation. This two-step design (fuzzy coordinate
+    match once, at setup-time station identity; exact value match per
+    timestep) is deliberate: the coordinator flagged an unverified
+    index-order assumption between TABLE and SPECOUT as the highest-risk
+    part of this mechanism — pairing a spectrum from one station with a
+    different station's depth/QB would be silent and plausible-looking,
+    the exact failure shape T4A.10 exists to catch.
+
+    Returns a list shaped like the pre-existing ``self._spectral_results``
+    entries (one dict per timestep: "time", "components", "freqs_hz",
+    "dirs_deg", "energy"), plus additive "handoff_depth_m" /
+    "handoff_source_level" (T4A.6 item g). A timestep is OMITTED (not
+    included with placeholder data) when:
+      - station alignment fails for any station (logged ERROR — the whole
+        spot's L3 handoff data for this run is untrustworthy, not just one
+        timestep), or
+      - T4A.10's QB assertion cannot find a clean station within its search
+        cap (``HandoffBreakingError`` — logged ERROR by
+        ``refine_handoff_with_qb()`` itself, counter incremented there).
+    Callers already treat a missing timestep as a graceful bulk-fallback
+    case (``endpoints/surf.py``'s ``_handoff_specout_by_time.get(t) or {}``)
+    — this reuses that existing degrade path rather than inventing a new one.
+    """
+    from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
+    from weewx_clearskies_api.services.swan_spectral import decompose_spectrum  # noqa: PLC0415
+    from weewx_clearskies_api.services.transect_handoff import (  # noqa: PLC0415
+        HandoffBreakingError,
+        refine_handoff_with_qb,
+        select_hourly_handoff,
+    )
+
+    if not specout.station_lonlat or not transect_points:
+        return []
+
+    # ---- Step 1: align SPECOUT stations to transect_points BY COORDINATE ----
+    # Tolerance must be in the SAME unit as the coordinates being compared —
+    # UTM meters in Cartesian mode, lon/lat degrees in spherical mode.
+    # Comparing degree-scale distances against a metres threshold (or vice
+    # versa) would silently accept a match that is not one.
+    if utm_zone is not None:
+        tp_xy = [
+            (lonlat_to_utm(float(p["lon"]), float(p["lat"]), utm_zone), p)
+            for p in transect_points
+        ]
+        station_xy = list(specout.station_lonlat)  # already UTM (Cartesian mode)
+        coord_tol = coord_tol_m
+    else:
+        tp_xy = [((float(p["lon"]), float(p["lat"])), p) for p in transect_points]
+        station_xy = list(specout.station_lonlat)
+        coord_tol = coord_tol_deg
+
+    station_records: list[dict[str, float]] = []
+    for sx, sy in station_xy:
+        best_p: dict[str, Any] | None = None
+        best_d = float("inf")
+        for (tx, ty), p in tp_xy:
+            d = math.sqrt((tx - sx) ** 2 + (ty - sy) ** 2)
+            if d < best_d:
+                best_d = d
+                best_p = p
+        if best_p is None or best_d > coord_tol:
+            logger.error(
+                "SWAN handoff: spot %r SPECOUT station at (%.4f, %.4f) has no "
+                "transect_points match within %.4g (nearest=%.4g) — "
+                "discarding this run's L3 handoff data for this spot "
+                "(falling back to L2 baseline for every timestep).",
+                spot_id, sx, sy, coord_tol, best_d,
+            )
+            return []
+        station_records.append({
+            "depth_m": float(best_p.get("depth_m", 0.0)),
+            "distance_m": round(float(best_p.get("distance_m", 0.0)), 1),
+        })
+
+    station_depths_m = [r["depth_m"] for r in station_records]
+
+    # ---- Step 2: per-timestep QB / Hs lookup from table_points, keyed by ----
+    # ---- (time, distance_m) — an EXACT match, both sides sourced from the ----
+    # ---- same transect_points entries.                                    ----
+    qb_by_time_dist: dict[tuple[str, float], float] = {}
+    hs_by_time_dist: dict[tuple[str, float], float] = {}
+    for pt in table_points:
+        if pt.distanceFromShore is None:
+            continue
+        key = (pt.time, round(pt.distanceFromShore, 1))
+        if pt.breakingFraction is not None:
+            qb_by_time_dist[key] = pt.breakingFraction
+        if pt.waveHeight is not None:
+            hs_by_time_dist[key] = pt.waveHeight
+
+    n_stations = len(station_records)
+    n_timesteps = len(specout.station_timesteps[0]) if specout.station_timesteps else 0
+
+    # Offshore-most INTERIOR station (index 1) as the Hs(hour) proxy — least
+    # affected by shoaling/dissipation, closest to an incident wave height.
+    # Not spec'd exactly by ADR-093 Amendment 2 beyond "Hs(hour)"; flagged in
+    # the round closeout as a modelling choice worth explicit review.
+    _hs_proxy_idx = 1 if n_stations > 2 else 0
+
+    results: list[dict[str, Any]] = []
+    for t_idx in range(n_timesteps):
+        time_iso = specout.station_timesteps[0][t_idx]["time"]
+
+        hs_key = (time_iso, station_records[_hs_proxy_idx]["distance_m"])
+        hs_this_hour = hs_by_time_dist.get(hs_key)
+        if hs_this_hour is None:
+            logger.debug(
+                "SWAN handoff: spot %r %s: no HSIGN match for the Hs(hour) "
+                "proxy station — skipping this timestep's L3 handoff.",
+                spot_id, time_iso,
+            )
+            continue
+
+        selection = select_hourly_handoff(hs_this_hour, station_depths_m)
+
+        station_qb = [
+            qb_by_time_dist.get((time_iso, r["distance_m"]))
+            for r in station_records
+        ]
+        if any(q is None for q in station_qb):
+            station_qb_arg: list[float] | None = None  # incomplete QB data this hour
+        else:
+            station_qb_arg = station_qb  # type: ignore[assignment]
+
+        try:
+            selection = refine_handoff_with_qb(
+                selection,
+                station_qb_arg,
+                station_depths_m,
+                transect_index=0,
+                hour=t_idx,
+            )
+        except HandoffBreakingError:
+            # Already logged ERROR with the "SWAN handoff" pattern and
+            # incremented the /metrics counter inside refine_handoff_with_qb.
+            # Never serve a sample from a breaking cell — omit this timestep.
+            continue
+
+        if selection.station_index is None:
+            continue
+
+        spectrum_entry = specout.station_timesteps[selection.station_index][t_idx]
+        components = decompose_spectrum(
+            freqs_hz=spectrum_entry["freqs_hz"],
+            dirs_deg=spectrum_entry["dirs_deg"],
+            energy=spectrum_entry["energy"],
+        )
+        results.append({
+            "time": time_iso,
+            "components": components,
+            "freqs_hz": spectrum_entry["freqs_hz"],
+            "dirs_deg": spectrum_entry["dirs_deg"],
+            "energy": spectrum_entry["energy"],
+            "handoff_depth_m": selection.handoff_depth_m,
+            "handoff_source_level": selection.source_level,
+        })
+
+    logger.info(
+        "SWAN handoff: spot %r → %d/%d timestep(s) resolved a per-hour L3 "
+        "station (T4A.9).",
+        spot_id, len(results), n_timesteps,
+    )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # SWANRunner
 # ---------------------------------------------------------------------------
@@ -2600,56 +2797,17 @@ class SWANRunner:
             SWANRunError: No TABLE output found (SWAN may have aborted early).
         """
         from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
-            parse_and_decompose,
-            parse_specout_file,
+            SpecoutParseError,
+            parse_specout_file_multi,
         )
 
         transect_spot_order: list[str] = grid_info.get("transect_spot_order") or []
         transect_points_map: dict[str, list[dict]] = grid_info.get("transect_points") or {}
 
-        # ---- SPECOUT spectral decomposition (T3.3) ----
-        # NOTE: Do NOT reset self._spectral_results here.  run_3level() populates
-        # it with L2 DWR baseline entries after the L2 run; each L3 cluster call
-        # to _parse_output() then overrides per-spot entries with L3 handoff data.
-        # Resetting here would erase the DWR baseline for already-processed spots
-        # and, for multi-cluster runs, erase previous clusters' results.
-        for n, spot_id in enumerate(transect_spot_order, start=1):
-            spec_path = tmpdir / f"SPEC_{n}.txt"
-            if spec_path.exists():
-                # Decomposed components (for swell display / multiSwell)
-                decomposed = parse_and_decompose(spec_path)
-                # Raw 2-D spectrum (freqs_hz/dirs_deg/energy) for 1D pipeline
-                raw_spec_text = spec_path.read_text(encoding="utf-8", errors="replace")
-                raw_spectra = parse_specout_file(raw_spec_text)
-                raw_by_time = {r.get("time", ""): r for r in raw_spectra}
-                # Merge raw fields into each decomposed entry so callers see a
-                # single unified dict per timestep (surf.py T3.3 comment).
-                merged_entries: list[dict] = [
-                    {
-                        "time": entry.get("time", ""),
-                        "components": entry.get("components", []),
-                        "freqs_hz": raw_by_time.get(entry.get("time", ""), {}).get(
-                            "freqs_hz", []
-                        ),
-                        "dirs_deg": raw_by_time.get(entry.get("time", ""), {}).get(
-                            "dirs_deg", []
-                        ),
-                        "energy": raw_by_time.get(entry.get("time", ""), {}).get(
-                            "energy", []
-                        ),
-                    }
-                    for entry in decomposed
-                ]
-                # Override DWR baseline with L3 handoff data for this spot
-                self._spectral_results[spot_id] = merged_entries
-                logger.debug(
-                    "SWAN SPECOUT: spot %r → %d timestep(s) (L3 handoff, raw+decomposed merged)",
-                    spot_id, len(merged_entries),
-                )
-            else:
-                logger.debug("SWAN SPECOUT: %s not found (spot %r)", spec_path.name, spot_id)
-
-        # ---- TABLE parsing ----
+        # ---- TABLE parsing FIRST (T4A.9 needs per-station depth/QB before ----
+        # ---- SPECOUT can select a per-hour station — see _select_l3_       ----
+        # ---- handoff_spectra()'s docstring on why the join must be exact). ----
+        table_result: dict[str, list[MarineForecastPoint]] | None = None
         if transect_spot_order:
             # T3.1 path: read per-spot TABLE files (CURVE output)
             result: dict[str, list[MarineForecastPoint]] = {
@@ -2683,7 +2841,56 @@ class SWANRunner:
                     "SWAN: no per-spot TABLE files found; falling back to OUTPUT_TABLE.txt"
                 )
                 return self._parse_output_legacy(tmpdir)
-            return result
+            table_result = result
+
+        # ---- SPECOUT: per-hour L3 handoff station selection (T4A.9/T4A.10) ----
+        # NOTE: Do NOT reset self._spectral_results here.  run_3level() populates
+        # it with L2 DWR baseline entries after the L2 run; each L3 cluster call
+        # to _parse_output() then overrides per-spot entries with L3 handoff data.
+        # Resetting here would erase the DWR baseline for already-processed spots
+        # and, for multi-cluster runs, erase previous clusters' results.
+        for n, spot_id in enumerate(transect_spot_order, start=1):
+            spec_path = tmpdir / f"SPEC_{n}.txt"
+            if not spec_path.exists():
+                logger.debug("SWAN SPECOUT: %s not found (spot %r)", spec_path.name, spot_id)
+                continue
+
+            raw_spec_text = spec_path.read_text(encoding="utf-8", errors="replace")
+            try:
+                specout = parse_specout_file_multi(raw_spec_text)
+            except SpecoutParseError:
+                logger.error(
+                    "SWAN handoff: %s failed to parse as a multi-location "
+                    "SPECOUT file (spot %r) — keeping the L2 DWR baseline "
+                    "for this spot instead of guessing.",
+                    spec_path.name, spot_id, exc_info=True,
+                )
+                continue
+
+            merged_entries = _select_l3_handoff_spectra(
+                spot_id,
+                specout,
+                (table_result or {}).get(spot_id) or [],
+                transect_points_map.get(spot_id) or [],
+                grid_info.get("_utm_zone"),
+            )
+            if merged_entries:
+                # Override DWR baseline with L3 handoff data for this spot
+                self._spectral_results[spot_id] = merged_entries
+                logger.debug(
+                    "SWAN SPECOUT: spot %r → %d timestep(s) (T4A.9 per-hour "
+                    "L3 handoff, raw+decomposed merged)",
+                    spot_id, len(merged_entries),
+                )
+            else:
+                logger.warning(
+                    "SWAN handoff: spot %r produced zero usable L3 handoff "
+                    "timesteps — leaving the L2 DWR baseline in place.",
+                    spot_id,
+                )
+
+        if table_result is not None:
+            return table_result
 
         # ---- Legacy path: single OUTPUT_TABLE.txt ----
         return self._parse_output_legacy(tmpdir)

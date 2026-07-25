@@ -92,6 +92,10 @@ from weewx_clearskies_api.services.surf_1d_pipeline import (
     PipelineResult,
     run_pipeline as _run_surf_pipeline,
 )
+from weewx_clearskies_api.services.transect_handoff import (
+    HandoffSelection,
+    select_hourly_handoff as _select_hourly_handoff,
+)
 from weewx_clearskies_api.services.surfbeat_runner import (
     SurfBeatResult,
     cache_surfbeat_result,
@@ -1067,6 +1071,40 @@ def get_surf(location_id: str) -> dict:
         # cannot produce a usable result yields modelStatus="unavailable"
         # (see _determine_model_status()), not a formula-based substitute.
         _ts_handoff_specout = _handoff_specout_by_time.get(valid_time) or {}
+
+        # T4A.9/T4A.6 item g: this hour's handoff depth/source, per transect.
+        # The real per-hour selection happens upstream in swan_runner.py
+        # (_select_l3_handoff_spectra(), which has direct access to the L3
+        # CURVE's per-station depths/QB) and is published on the SPECOUT
+        # entry as "handoff_depth_m"/"handoff_source_level". This endpoint
+        # only reads that published choice — it does not recompute it, and
+        # it never touches grid geometry (C2). A spot with no L3 grid (or a
+        # timestep T4A.10 rejected as unrecoverable breaking) has no
+        # published value here; select_hourly_handoff() with no station data
+        # falls back to the same L2 reference depth every source in this
+        # pipeline agrees on.
+        if "handoff_depth_m" in _ts_handoff_specout:
+            _handoff_selection = HandoffSelection(
+                handoff_depth_m=_ts_handoff_specout["handoff_depth_m"],
+                source_level=_ts_handoff_specout.get("handoff_source_level", "L3"),
+                station_index=None,
+                station_depth_m=_ts_handoff_specout["handoff_depth_m"],
+                clamped=False,
+            )
+        else:
+            _handoff_selection = _select_hourly_handoff(
+                hs_m=float(raw_hsig) if raw_hsig is not None else 0.0,
+                station_depths_m=None,
+            )
+        _handoff_by_transect: dict[int, tuple[float, str]] = (
+            {
+                _idx: (_handoff_selection.handoff_depth_m, _handoff_selection.source_level)
+                for _idx in range(len(_spot_transects))
+            }
+            if _spot_transects
+            else {}
+        )
+
         _pipeline_result = None
         if _spot_transects:
             try:

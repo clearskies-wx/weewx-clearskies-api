@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -304,6 +305,323 @@ def parse_specout_file(text: str) -> list[dict[str, Any]]:
         i += 1
 
     return results
+
+
+class SpecoutParseError(Exception):
+    """Raised by ``parse_specout_file_multi()`` when a SPECOUT file's
+    declared location count does not match the number of per-location
+    spectral blocks actually found for some timestep.
+
+    Deliberately fails loudly rather than returning a short list: a parser
+    that silently keeps only the first N-of-M locations reintroduces the
+    defect this function exists to fix — see the module-level note on
+    ``parse_specout_file_multi()`` (Phase 4A T4A.9).
+    """
+
+
+@dataclass
+class MultiLocationSpecout:
+    """Result of ``parse_specout_file_multi()`` (Phase 4A T4A.9).
+
+    Carries station coordinates alongside the spectra so callers can align a
+    SPECOUT file's stations against another file's stations (e.g. the
+    matching ``TABLE_n.txt``'s XP/YP columns) BY COORDINATE rather than by
+    trusting that both files iterate the same named CURVE in the same index
+    order. The coordinator flagged this as the highest-risk part of the
+    per-hour handoff mechanism: an unverified index-order assumption between
+    the TABLE (depth/QB) and SPECOUT (spectrum) parses would silently pair a
+    spectrum from one station with the depth/QB of a different one — a
+    passing-looking, wrong result, the exact shape T4A.10 exists to catch.
+    """
+
+    station_lonlat: list[tuple[float, float]]
+    """(lon, lat) per station, 0-based, in the file's LONLAT/LOCATIONS
+    declaration order — the same order ``station_timesteps`` is indexed by."""
+
+    station_timesteps: list[list[dict[str, Any]]]
+    """Outer index = station (matches ``station_lonlat``), inner index =
+    timestep in file order. Same per-timestep dict shape as
+    ``parse_specout_file()``: ``{"time", "freqs_hz", "dirs_deg", "energy"}``."""
+
+
+def parse_specout_file_multi(text: str) -> MultiLocationSpecout:
+    """Parse a MULTI-location SWAN SPECOUT ASCII file (Phase 4A T4A.9).
+
+    ``parse_specout_file()`` above assumes exactly one output location per
+    file — correct for the L2 deep-water reference SPECOUT (a genuine
+    single-point emission) but wrong for the L3 per-hour handoff mechanism,
+    which emits ``SPECOUT 'CVn' SPEC2D ABS`` on the spot's full cross-shore
+    CURVE (multiple stations) so a station can be selected per forecast hour
+    without moving any grid geometry (ADR-093 Amendment 2 §2; C2).
+
+    Per the SWAN 41.51 User Manual, Appendix D "Formal description of the
+    1D- and 2D-spectral file" (verified on librewxr, `/tmp/swanuse.txt`):
+    for a 2D spectrum, each timestep's table repeats, **for each location in
+    the order declared under LONLAT/LOCATIONS**, one of:
+      - ``FACTOR`` <scale> <nf x nd energy matrix>
+      - ``ZERO`` (spectrum is identically zero — no matrix follows)
+      - ``NODATA`` (spectrum undefined, e.g. on land — no matrix follows)
+    There is no per-location index marker for 2D spectra (that only exists
+    for 1D spectra, under the keyword ``LOCATION <n>``) — location identity
+    is purely positional, so a station's index in this function's output
+    must be read against the SAME point order the CURVE was emitted with.
+
+    This function is intentionally NOT unified with ``parse_specout_file()``
+    despite the header-parsing overlap: the lead's explicit constraint on
+    this rewrite is that the L2 single-location path must keep working
+    unchanged, and the surest way to guarantee that is to not touch it at
+    all. See ``parse_specout_file()`` for the single-location parser.
+
+    Args:
+        text: Full content of a SWAN multi-location SPECOUT ASCII file.
+
+    Returns:
+        ``MultiLocationSpecout`` with ``station_lonlat`` (coordinates, for
+        aligning against another file's stations by position rather than by
+        trusting index order) and ``station_timesteps`` (the spectra). A
+        station with ``ZERO``/``NODATA`` for a given timestep gets an
+        all-zero energy matrix (of the correct shape) rather than a missing
+        entry, so every station's list stays aligned to the same timestep
+        index across all stations.
+
+    Raises:
+        SpecoutParseError: the LONLAT/LOCATIONS location count could not be
+            determined, or some timestep did not contain exactly that many
+            per-location blocks. Never returns a partial/truncated result.
+    """
+    lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
+    if not lines:
+        raise SpecoutParseError("parse_specout_file_multi: empty file")
+
+    freqs_hz: list[float] = []
+    dirs_deg: list[float] = []
+    n_locations: int | None = None
+    station_lonlat: list[tuple[float, float]] = []
+    # results[station_idx] = list of per-timestep dicts, station order fixed
+    # once n_locations is known.
+    results: list[list[dict[str, Any]]] = []
+
+    i = 0
+    n_lines = len(lines)
+
+    def _skip_comments_and_blanks() -> None:
+        nonlocal i
+        while i < n_lines and (lines[i].startswith("$") or not lines[i].strip()):
+            i += 1
+
+    def _read_count_on_next_line() -> int:
+        nonlocal i
+        i += 1
+        _skip_comments_and_blanks()
+        if i >= n_lines:
+            return 0
+        try:
+            count = int(lines[i].split()[0])
+        except (ValueError, IndexError):
+            count = 0
+        i += 1
+        return count
+
+    while i < n_lines:
+        _skip_comments_and_blanks()
+        if i >= n_lines:
+            break
+        tok = lines[i].split()
+        if not tok:
+            i += 1
+            continue
+
+        keyword = tok[0].upper()
+
+        if keyword in ("LONLAT", "LOCATIONS"):
+            n_locations = _read_count_on_next_line()
+            for _ in range(n_locations):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    coord_tok = lines[i].split()
+                    try:
+                        station_lonlat.append((float(coord_tok[0]), float(coord_tok[1])))
+                    except (ValueError, IndexError):
+                        station_lonlat.append((float("nan"), float("nan")))
+                    i += 1
+            results = [[] for _ in range(n_locations)]
+            continue
+
+        if keyword == "AFREQ":
+            nf = _read_count_on_next_line()
+            for _ in range(nf):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    try:
+                        freqs_hz.append(float(lines[i].split()[0]))
+                    except (ValueError, IndexError):
+                        pass
+                    i += 1
+            continue
+
+        if keyword == "NDIR":
+            nd = _read_count_on_next_line()
+            for _ in range(nd):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    try:
+                        dirs_deg.append(float(lines[i].split()[0]))
+                    except (ValueError, IndexError):
+                        pass
+                    i += 1
+            continue
+
+        if keyword == "TIME":
+            i += 1
+            _skip_comments_and_blanks()
+            if i < n_lines:
+                i += 1
+            continue
+
+        if keyword == "QUANT":
+            nq = _read_count_on_next_line()
+            for _ in range(nq):
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+                _skip_comments_and_blanks()
+                if i < n_lines:
+                    i += 1
+            continue
+
+        if keyword == "SWAN":
+            i += 1
+            continue
+
+        stripped = lines[i].strip()
+        if (
+            len(stripped) >= 15
+            and stripped[8:9] == "."
+            and stripped[:8].isdigit()
+            and stripped[9:15].isdigit()
+        ):
+            # Timestep block.
+            if n_locations is None:
+                raise SpecoutParseError(
+                    "parse_specout_file_multi: timestep block encountered "
+                    "before LONLAT/LOCATIONS — cannot determine location "
+                    "count"
+                )
+            if not freqs_hz or not dirs_deg:
+                raise SpecoutParseError(
+                    "parse_specout_file_multi: timestep block encountered "
+                    "before AFREQ/NDIR"
+                )
+
+            timestamp = stripped[:15]
+            iso = (
+                f"{timestamp[:4]}-{timestamp[4:6]}-{timestamp[6:8]}"
+                f"T{timestamp[9:11]}:{timestamp[11:13]}:{timestamp[13:15]}Z"
+            )
+            i += 1
+            _skip_comments_and_blanks()
+
+            nf = len(freqs_hz)
+            nd = len(dirs_deg)
+
+            for loc_idx in range(n_locations):
+                if i >= n_lines:
+                    raise SpecoutParseError(
+                        f"parse_specout_file_multi: timestep {iso} ended "
+                        f"after {loc_idx}/{n_locations} location block(s) — "
+                        "file truncated"
+                    )
+                _skip_comments_and_blanks()
+                block_kw = lines[i].strip().upper()
+
+                if block_kw in ("NODATA", "ZERO"):
+                    # No matrix follows for either keyword (Appendix D: NODATA
+                    # explicitly has none; ZERO is a spectrum identically 0 —
+                    # treated the same way here rather than risk consuming
+                    # the NEXT location's FACTOR line as if it were data).
+                    i += 1
+                    results[loc_idx].append({
+                        "time": iso,
+                        "freqs_hz": list(freqs_hz),
+                        "dirs_deg": list(dirs_deg),
+                        "energy": [[0.0] * nd for _ in range(nf)],
+                    })
+                    continue
+
+                if block_kw != "FACTOR":
+                    raise SpecoutParseError(
+                        f"parse_specout_file_multi: timestep {iso} location "
+                        f"{loc_idx}/{n_locations}: expected FACTOR/ZERO/"
+                        f"NODATA, got {lines[i]!r}"
+                    )
+
+                i += 1
+                _skip_comments_and_blanks()
+                try:
+                    factor = float(lines[i].split()[0])
+                except (ValueError, IndexError) as exc:
+                    raise SpecoutParseError(
+                        f"parse_specout_file_multi: timestep {iso} location "
+                        f"{loc_idx}/{n_locations}: could not parse FACTOR "
+                        f"value from {lines[i]!r}"
+                    ) from exc
+                i += 1
+
+                energy: list[list[float]] = []
+                rows_read = 0
+                while rows_read < nf and i < n_lines:
+                    _skip_comments_and_blanks()
+                    if i >= n_lines:
+                        break
+                    row_floats: list[float] = []
+                    while len(row_floats) < nd and i < n_lines:
+                        for v in lines[i].split():
+                            try:
+                                row_floats.append(float(v) * factor)
+                            except ValueError:
+                                pass
+                            if len(row_floats) >= nd:
+                                break
+                        if len(row_floats) >= nd:
+                            break
+                        i += 1
+                    energy.append(row_floats[:nd])
+                    rows_read += 1
+                    i += 1
+
+                if len(energy) != nf or not all(len(row) == nd for row in energy):
+                    raise SpecoutParseError(
+                        f"parse_specout_file_multi: timestep {iso} location "
+                        f"{loc_idx}/{n_locations}: incomplete energy matrix "
+                        f"(got {len(energy)}/{nf} rows)"
+                    )
+
+                results[loc_idx].append({
+                    "time": iso,
+                    "freqs_hz": list(freqs_hz),
+                    "dirs_deg": list(dirs_deg),
+                    "energy": energy,
+                })
+            continue
+
+        i += 1
+
+    if n_locations is None:
+        raise SpecoutParseError(
+            "parse_specout_file_multi: no LONLAT/LOCATIONS block found"
+        )
+
+    n_timesteps = {len(station_results) for station_results in results}
+    if len(n_timesteps) > 1:
+        raise SpecoutParseError(
+            f"parse_specout_file_multi: stations disagree on timestep count "
+            f"— {[len(r) for r in results]}"
+        )
+
+    return MultiLocationSpecout(station_lonlat=station_lonlat, station_timesteps=results)
 
 
 # ---------------------------------------------------------------------------
