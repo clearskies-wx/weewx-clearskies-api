@@ -27,11 +27,11 @@ from weewx_clearskies_api.services.swan_domain import (
     SpotCluster,
     _cluster_structures,
     _haversine_km,
-    _l3_shoreward_edge_reach_m,
     _l3_trigger_reason,
     _l3_viability_check,
     compute_domains,
     compute_level3_domains,
+    l3_shoreward_edge_depth_m,
     smart_size_l3_grid,
 )
 
@@ -77,21 +77,18 @@ class TestL2SizingFromRealContour:
 
 
 class TestL3DoesNotReachShore:
-    def test_l3_shoreward_edge_stays_near_pin_not_at_shoreline(self) -> None:
-        """Blocker 2 RESOLVED (operator ruling): a classification-only
-        cluster (no structure) has no feature geometry to size a
-        shoreward reach from, so _l3_shoreward_edge_reach_m() returns
-        None and the grid keeps the pre-existing ~100m pin margin — this
-        is the deliberate answer, not an open gap. See
-        _l3_shoreward_edge_reach_m()'s docstring for the full ruling."""
+    def test_l3_shoreward_edge_falls_back_to_estimate_without_contour_data(self) -> None:
+        """No shoreward_distance_m supplied (pre-apply preview) -> the
+        grid keeps the small logged ESTIMATE margin, not a much larger
+        distance -- this test documents the fallback path only. The real
+        criterion (ADR-093 Amendment 2 §2) is exercised in
+        TestShorewardEdgeADR093Section2 below with real contour data."""
         spot = {**_HB_SPOT, "offshore_distance_m": 2350.0}
         domains = compute_domains(
             [spot], spot_topographic_features={"hb-pier": "point_break"}
         )
         grid = domains.level3_clusters[0].grid
         assert grid is not None
-        # landward_km = 0.1 -> the grid's shoreward-most extent is close to
-        # the pin, not extended all the way to a separately-computed shoreline.
         lat_span_km = abs(grid.lat_max - grid.lat_min) * 111.0
         assert lat_span_km < 5.0  # sanity: not an absurdly large grid
 
@@ -194,65 +191,40 @@ class TestPerClusterStructureScoping:
         assert _cluster_structures(structs, ["anything"]) == structs
 
 
-class TestShorewardEdgeResolved:
-    """Blocker 2 RESOLVED (operator ruling 2026-07-25): the shoreward edge
-    is set by feature coverage, not the (uncomputable) breaking-depth
-    expression. See _l3_shoreward_edge_reach_m()'s docstring for the full
-    ruling and reasoning — the breaking-depth check is still carried, but
-    at runtime by T4A.9's per-hour clamp-and-WARNING, not here."""
+class TestShorewardEdgeADR093Section2:
+    """P4A Round 2, "reopened Blocker 2," RESOLVED: L3's shoreward edge is
+    ADR-093 Amendment 2 §2's breaking-depth criterion —
+    ``1.3 * _MIN_DESIGN_HS_M / gamma`` — evaluated identically for every
+    L3 cluster. Feature geometry (structures, classification) is NOT a
+    sizing input; §4's viability test (TestViabilityTest below) is where
+    it applies, after sizing. Two earlier readings that let feature
+    geometry drive the edge were both wrong — see
+    l3_shoreward_edge_depth_m()'s docstring for the full history."""
 
-    def test_shoreward_edge_reach_returns_shadow_zone_for_structure(self) -> None:
-        assert _l3_shoreward_edge_reach_m(100.0) == 300.0  # 3x structure length
+    def test_shoreward_edge_depth_is_the_adr_worked_example(self) -> None:
+        """ADR-093 Amendment 2 §2: "1 m swell -> hand off at 1.8 m"."""
+        assert abs(l3_shoreward_edge_depth_m() - 1.78) < 0.01
 
-    def test_shoreward_edge_reach_returns_none_for_classification_only(self) -> None:
-        """No structure geometry to size from -- caller keeps its own
-        pre-existing near-shore margin (not a new constant)."""
-        assert _l3_shoreward_edge_reach_m(None) is None
+    def test_shoreward_edge_depth_takes_no_arguments(self) -> None:
+        """Fixed design constant (_MIN_DESIGN_HS_M), not a per-spot or
+        per-structure input — confirms the function signature itself
+        cannot be fed feature geometry."""
+        import inspect
+        sig = inspect.signature(l3_shoreward_edge_depth_m)
+        assert len(sig.parameters) == 0
 
-    def test_structure_bearing_spot_grid_reaches_past_structure_by_shadow_zone(
+    def test_classification_only_spot_grid_reaches_supplied_shoreward_distance(
         self,
     ) -> None:
-        """The smart-sized L3 grid for a structure-bearing spot must reach
-        shoreward of the structure's own shoreward-most point by the full
-        shadow-zone margin (3x structure length) plus pad -- not merely
-        touch the structure."""
-        cluster = SpotCluster(spot_ids=["hb-pier"], lats=[33.6553], lons=[-118.0007])
-        # beach_facing_degrees=270 (due west/offshore) makes the shoreward
-        # direction due east, so distances project cleanly onto longitude.
-        structures = [{
-            "type": "pier",
-            "coordinates": [[-118.0005, 33.655], [-118.002, 33.655]],
-        }]
-        grid = smart_size_l3_grid(cluster, beach_facing_degrees=270.0, structures=structures)
-        assert grid is not None
-
-        struct_shoreward_lat, struct_shoreward_lon = 33.655, -118.0005
-        struct_length_m = _haversine_km(
-            33.655, -118.0005, 33.655, -118.002
-        ) * 1000.0
-        expected_margin_m = _l3_shoreward_edge_reach_m(struct_length_m)
-        assert expected_margin_m is not None
-
-        dist_to_edge_m = _haversine_km(
-            struct_shoreward_lat, struct_shoreward_lon,
-            struct_shoreward_lat, grid.lon_max,
-        ) * 1000.0
-        pad_m = 100.0  # smart_size_l3_grid()'s default pad_m
-        # The grid's shoreward edge sits at struct tip + shadow margin + pad.
-        assert abs(dist_to_edge_m - (expected_margin_m + pad_m)) < 20.0
-
-    def test_classification_only_spot_grid_keeps_pin_margin_unchanged(self) -> None:
-        """No structure -> no feature-derived reach -> the grid's shoreward
-        extent is the pre-existing ~100m pin margin, same value as before
-        Blocker 2 was resolved (confirms no new constant was introduced)."""
-        # beach_facing_degrees=270 (due west/offshore) makes the shoreward
-        # direction due east and the lateral margin project purely onto
-        # latitude, so grid.lon_max isolates just the landward_km offset
-        # (same axis-alignment trick as the structure-bearing test above).
+        """With a real (apply-time-chain-supplied) shoreward_distance_m,
+        the grid's shoreward edge lands there — same mechanism as the
+        offshore 15m contour."""
         pin_lat, pin_lon = 33.6553, -118.0007
         spot = {
             "id": "point-break-spot", "lat": pin_lat, "lon": pin_lon,
-            "beach_facing_degrees": 270.0, "offshore_distance_m": 2350.0,
+            "beach_facing_degrees": 270.0,  # due west/offshore -> shoreward = due east
+            "offshore_distance_m": 2350.0,
+            "shoreward_distance_m": 120.0,
         }
         domains = compute_domains(
             [spot], spot_topographic_features={"point-break-spot": "point_break"}
@@ -262,10 +234,62 @@ class TestShorewardEdgeResolved:
         dist_from_pin_m = _haversine_km(
             pin_lat, pin_lon, pin_lat, grid.lon_max
         ) * 1000.0
-        # landward_km = 0.1 -> ~100m from the pin, not a much larger
-        # feature-derived distance (e.g. a shadow-zone margin would be
-        # several hundred metres for any realistic structure length).
-        assert dist_from_pin_m < 200.0
+        assert abs(dist_from_pin_m - 120.0) < 5.0
+
+    def test_structure_deeper_than_breaking_depth_does_not_move_the_edge(self) -> None:
+        """L3-1D-BOUNDARY-DECISIONS-BRIEF.md lines 317-321: "a structure
+        cannot push L3's shoreward boundary past the depth where SWAN
+        stops being reliable... the breakdown depth is a hard ceiling
+        regardless of what is in the water." A structure sitting far
+        offshore (i.e. "deeper") must produce the IDENTICAL shoreward
+        edge as a structure sitting close to shore, given the same
+        shoreward_distance_m — only the OFFSHORE/lateral extent may
+        differ with structure position, never the shoreward one."""
+        pin_lat, pin_lon = 33.6553, -118.0007
+        spot = {
+            "id": "hb-pier", "lat": pin_lat, "lon": pin_lon,
+            "beach_facing_degrees": 270.0,
+            "shoreward_distance_m": 120.0,
+        }
+        near_shore_structure = [{
+            "type": "pier", "spot_id": "hb-pier",
+            "coordinates": [[-118.001, 33.655], [-118.0015, 33.655]],
+        }]
+        far_offshore_structure = [{
+            "type": "breakwater", "spot_id": "hb-pier",
+            "coordinates": [[-118.05, 33.655], [-118.06, 33.655]],
+        }]
+        grid_near = compute_domains(
+            [spot], structures=near_shore_structure
+        ).level3_clusters[0].grid
+        grid_far = compute_domains(
+            [spot], structures=far_offshore_structure
+        ).level3_clusters[0].grid
+        assert grid_near is not None
+        assert grid_far is not None
+        # Shoreward edge (lon_max, due to beach_facing_degrees=270) is
+        # identical regardless of structure depth/position.
+        assert grid_near.lon_max == grid_far.lon_max
+
+    def test_smart_sized_grid_uses_same_criterion_as_pin_based_grid(self) -> None:
+        """The structure-triggered path (smart_size_l3_grid) and the
+        classification-only path (pin-based) must produce the SAME
+        shoreward edge for the same shoreward_distance_m and pin — one
+        criterion, not two."""
+        cluster = SpotCluster(spot_ids=["hb-pier"], lats=[33.6553], lons=[-118.0007])
+        structures = [{
+            "type": "pier",
+            "coordinates": [[-118.001, 33.655], [-118.0015, 33.655]],
+        }]
+        smart_grid = smart_size_l3_grid(
+            cluster, beach_facing_degrees=270.0, structures=structures,
+            shoreward_distance_m=120.0,
+        )
+        assert smart_grid is not None
+        dist_m = _haversine_km(
+            33.6553, -118.0007, 33.6553, smart_grid.lon_max
+        ) * 1000.0
+        assert abs(dist_m - 120.0) < 5.0
 
 
 class TestViabilityTest:
@@ -300,6 +324,37 @@ class TestViabilityTest:
         assert _l3_trigger_reason([], [], ["point_break"])[0] is True
         assert _l3_trigger_reason([], [], ["straight_beach"])[0] is False
         assert _l3_trigger_reason([{"type": "pier"}], [], [])[0] is True
+
+    def test_end_to_end_sizing_then_viability_can_still_disable_a_cluster(
+        self, caplog: logging.LogCaptureFixture
+    ) -> None:
+        """ADR-093 Amendment 2 §2 THEN §4, through the real entry point
+        (compute_domains -> _size_l3_cluster): a structure whose own
+        shoreward-most point sits closer to shore than the sized grid's
+        shoreward edge reaches is a real viability-test failure now that
+        the shoreward edge is a fixed depth-based distance, not derived
+        from the structure's own position. Confirms sizing happens FIRST
+        (a real grid is computed) and viability runs SECOND (that grid is
+        then found not to reach the feature and is disabled)."""
+        pin_lat, pin_lon = 33.6553, -118.0007
+        spot = {
+            "id": "hb-pier", "lat": pin_lat, "lon": pin_lon,
+            "beach_facing_degrees": 270.0,
+            "shoreward_distance_m": 5.0,  # grid barely reaches shoreward
+        }
+        # Structure's shoreward-most point ~120m from the pin -- well past
+        # where the 5m-reach grid stops.
+        far_shoreward_structure = [{
+            "type": "pier", "spot_id": "hb-pier",
+            "coordinates": [[-118.0007 + 0.0013, 33.6553], [-118.001, 33.655]],
+        }]
+        with caplog.at_level(logging.INFO):
+            domains = compute_domains([spot], structures=far_shoreward_structure)
+        cluster = domains.level3_clusters[0]
+        assert cluster.grid is None  # viability disabled it
+        assert any(
+            "viability test FAILED" in r.message for r in caplog.records
+        )
 
 
 class TestGridGeometryFrozen:

@@ -17,6 +17,10 @@ import logging
 import math
 from dataclasses import dataclass, field
 
+from weewx_clearskies_api.enrichment.bathymetry import (
+    # ADR-093 Amendment 2 §2's 1.3x shoaling margin — T4A.2's single definition, reused here.
+    _FINE_ZONE_SHOALING_MARGIN,
+)
 from weewx_clearskies_api.services.shelf_boundary import find_shelf_distance
 
 logger = logging.getLogger(__name__)
@@ -239,99 +243,57 @@ def _l3_viability_check(
     return False
 
 
-def _l3_shoreward_edge_reach_m(max_struct_length_m: float | None) -> float | None:
-    """⚠ UNAPPROVED — COORDINATOR CALL, NOT AN OPERATOR RULING. AWAITING
-    OPERATOR ADJUDICATION (raised 2026-07-25 by the Phase 4A adversarial
-    audit, finding F1).
+# ADR-093 Amendment 2 §2 — the breaking parameter (H/d at depth-induced
+# breaking onset). No named constant for this value exists elsewhere in
+# the codebase; it appears as an inline literal (0.73) in
+# endpoints/setup.py and services/swan_runner.py. This is the first
+# shared definition, not a second one — nothing to reconcile.
+_GAMMA = 0.73
 
-    **Attribution correction.** An earlier version of this docstring said
-    "operator ruling 2026-07-25." **That was false.** The operator never
-    approved this reading. It was a coordinator decision, presented to the
-    implementing agent inside a "Settled decisions ALL agents must apply"
-    block alongside genuine operator decisions, which is how it acquired an
-    attribution it never earned. `CLAUDE.md` names this exact failure:
-    "Documents describing a superseded design are exactly how a wrong
-    architectural change acquires a paper trail that looks legitimate."
+# ADR-093 Amendment 2 §2, verbatim: "grid shoreward reach = the smallest
+# value [1.3 * Hs(hour) / gamma] ever produces for this spot's
+# conditions." Small-swell days break shallow, and the grid must be able
+# to reach the shallow end of the breaking range — this is the entire
+# reason the earlier frozen-max_hs_m version was withdrawn (freezing at
+# the LARGEST swell's breaking depth "shrinks L3 below the size needed
+# to reach its own structures").
+#
+# The "smallest Hs" input has no config source, and the operator has
+# explicitly ruled out adding one (nobody should be asked to supply a
+# minimum wave height). It is therefore a fixed DESIGN constant, not a
+# per-spot config value — the same status as _GAMMA above. 1.0 m matches
+# the ADR's own worked example: "1 m swell -> hand off at 1.8 m" (§2) and
+# "a grid reaching ~2 m depth spans the pier end to end" (§5).
+_MIN_DESIGN_HS_M = 1.0
 
-    **This function's behaviour is therefore provisional and must not be
-    treated as settled architecture.** Do not build on it, and do not cite
-    it as precedent, until the operator has ruled.
 
-    **The disputed call: the grid's shoreward edge is set by what the
-    feature L3 exists for requires; the breaking-depth expression is a
-    runtime CHECK, not a setup-time driver.** ADR-093 Amendment 2 §2 §4,
-    read in order, say the opposite — size FROM the breaking-depth
-    expression, THEN test the result against feature reach. Inverting that
-    changes which criterion sets a model's grid boundary, which is trigger
-    3 on `CLAUDE.md`'s list, and the coordinator was not entitled to decide
-    it.
+def l3_shoreward_edge_depth_m() -> float:
+    """ADR-093 Amendment 2 §2, then §4 — in that order.
 
-    Why, on the record: ADR-093 Amendment 2 §2, read literally, sizes L3's
-    shoreward reach FROM the breaking-depth expression
-    ``1.3 * Hs(hour) / gamma`` — specifically "the smallest value it ever
-    produces for this spot's conditions," i.e. the spot's shallowest,
-    smallest-swell breaking depth. **That expression is not computable.**
-    It requires a minimum Hs, and none exists anywhere in this codebase —
-    confirmed independently by both the coordinator and this agent via
-    grep — and the operator has explicitly ruled out adding one (nobody
-    should be asked to supply a minimum wave height). Only ``max_hs_m``,
-    the LARGEST swell, is configured, and it is the wrong end for this
-    purpose. So the literal reading has no implementable form, and the
-    implementable reading — feature coverage drives the edge — is the one
-    whose inputs (structure geometry, bathymetry) already exist at setup.
+    §2 sizes L3's grid: the shoreward edge is the depth at which the
+    smallest swell this spot could ever see starts breaking, plus the
+    1.3x shoaling margin, verbatim ``1.3 * Hs(hour) / gamma`` evaluated
+    at ``_MIN_DESIGN_HS_M`` (see that constant's comment for why it is a
+    fixed value rather than a config input). §4 then TESTS the sized
+    grid: does it reach the feature — structure or classified headland/
+    point/bay — it exists for? If not, the cluster is disabled
+    (``_l3_viability_check`` / ``_size_l3_cluster``). Sizing and
+    viability are two separate steps, in that order — feature geometry
+    is never an input to this function, only to the test that runs
+    after it.
 
-    **What still carries the breaking-depth check, so this is not a
-    fudge:** T4A.9's per-hour handoff selection
-    (``services/transect_handoff.py``) clamps a computed handoff to the
-    nearest interior grid station and logs a WARNING when the true
-    handoff would fall outside the grid. An hour whose breaking depth
-    sits shallower than the grid reaches is therefore not silently
-    mis-sampled — it is clamped and it announces itself. The
-    breaking-depth expression still governs, but as a per-hour RUNTIME
-    check with observability, rather than as a setup-time input that
-    cannot be evaluated. If those warnings fire routinely at a spot, that
-    is real evidence the grid should reach shallower, and it arrives as
-    data rather than as a guessed constant.
-
-    Args:
-        max_struct_length_m: The longest structure in this cluster, in
-            metres, or ``None`` when the cluster has no structures
-            (classification-only trigger — point_break/headland/bay_break
-            with no manmade structure).
+    A structure sitting deeper than this depth does NOT move the edge.
+    ``L3-1D-BOUNDARY-DECISIONS-BRIEF.md`` lines 317-321: "a structure
+    cannot push L3's shoreward boundary past the depth where SWAN stops
+    being reliable... the breakdown depth is a hard ceiling regardless
+    of what is in the water." If the grid sized here doesn't reach a
+    structure, that is a viability-test finding (§4) — the cluster is
+    disabled with an INFO log — not a reason to move this depth.
 
     Returns:
-        The additional shoreward margin (metres) the grid must reach past
-        the feature's own shoreward-most point, or ``None`` when there is
-        no feature geometry to size from.
-
-        **Structure-triggered** (``max_struct_length_m`` given): returns
-        ``3 * max_struct_length_m`` — the shadow-zone extent (ADR-093
-        Amendment 1 §2 / PROVIDER-MANUAL §14.15 Amendment:
-        ``shadow_length = structure_length + 2 * structure_length =
-        3 * max_length``). This already reaches past the structure to
-        capture the diffraction fill-in the shadow acquires with
-        distance from the tip — the reason it needs no additional
-        breaking-depth input to be a correct "feature coverage" answer.
-        This is the SAME formula ``smart_size_l3_grid()`` already applied
-        before this round; this function is now its single authoritative
-        source rather than an inline duplicate.
-
-        **Classification-only** (``max_struct_length_m`` is ``None``):
-        there is no structure geometry to extend from, and inferring a
-        feature position from shoreline or contour shape is out of scope
-        (ADR-093 Amendment 2 §3's scope boundary, LC-R2-7 — contour
-        curvature and orientation analysis are explicitly not built).
-        Returns ``None`` — the caller keeps the pre-existing near-shore
-        pin margin (``landward_km = 0.1``, ~100 m, unchanged since Era 1).
-        This is NOT a new constant: LC-R1-4 forecloses inventing a
-        minimum-wave-height config key or a new shallow-depth constant,
-        and this function introduces neither — it reuses the margin that
-        was already there for exactly the case where no feature geometry
-        exists to replace it with.
+        Target depth in metres (``1.3 * 1.0 / 0.73`` ~= 1.78 m).
     """
-    if max_struct_length_m is None:
-        return None
-    return 3.0 * max_struct_length_m
+    return _FINE_ZONE_SHOALING_MARGIN * _MIN_DESIGN_HS_M / _GAMMA
 
 
 def _size_l3_cluster(
@@ -342,6 +304,7 @@ def _size_l3_cluster(
     lateral_m: float,
     offshore_depth_m: float,
     offshore_distance_m: float | None,
+    shoreward_distance_m: float | None,
     structures: list[dict] | None,
     spot_l3_configs: dict[str, str] | None,
     spot_topographic_features: dict[str, str] | None,
@@ -378,11 +341,10 @@ def _size_l3_cluster(
         logger.info("L3 skipped for cluster %s: %s", cluster.spot_ids, reason)
         return None
 
-    # _compute_level3_grid() (and smart_size_l3_grid() beneath it, for the
-    # structure-triggered path) already applies the resolved shoreward-edge
-    # criterion internally — see _l3_shoreward_edge_reach_m()'s docstring
-    # for the Blocker 2 ruling (feature coverage drives; breaking depth is
-    # a runtime check carried by T4A.9's clamp-and-WARNING).
+    # ADR-093 Amendment 2 §2: size from the breaking-depth criterion
+    # (l3_shoreward_edge_depth_m(), ~1.78 m) — the same criterion for
+    # every cluster regardless of what triggered it. Feature geometry is
+    # NOT a sizing input; §4's viability test below is where it applies.
     grid = _compute_level3_grid(
         cluster,
         avg_bearing,
@@ -390,6 +352,7 @@ def _size_l3_cluster(
         lateral_m=lateral_m,
         offshore_depth_m=offshore_depth_m,
         offshore_distance_m=offshore_distance_m,
+        shoreward_distance_m=shoreward_distance_m,
         structures=cluster_structs or None,
     )
 
@@ -502,6 +465,16 @@ def compute_domains(
         if d is not None and d > 0:
             spot_offshore[s["id"]] = float(d)
 
+    # ADR-093 Amendment 2 §2 — per-spot distance to the
+    # l3_shoreward_edge_depth_m() contour (~1.78 m), found by the caller
+    # via enrichment.bathymetry.find_depth_contour_distance() the same way
+    # the offshore 15m/30m contours are (LC-10: per-spot bearing).
+    spot_shoreward: dict[str, float] = {}
+    for s in spot_locations:
+        d = s.get("shoreward_distance_m")
+        if d is not None and d > 0:
+            spot_shoreward[s["id"]] = float(d)
+
     for cluster in clusters:
         # Use the maximum offshore distance from any spot in this cluster.
         # This ensures the grid reaches the 15m contour for all spots.
@@ -509,6 +482,13 @@ def compute_domains(
             spot_offshore[sid] for sid in cluster.spot_ids if sid in spot_offshore
         ]
         cluster_offshore_m = max(cluster_distances) if cluster_distances else None
+
+        cluster_shoreward_distances = [
+            spot_shoreward[sid] for sid in cluster.spot_ids if sid in spot_shoreward
+        ]
+        cluster_shoreward_m = (
+            max(cluster_shoreward_distances) if cluster_shoreward_distances else None
+        )
 
         # T4A.11 — trigger (structure OR classification, subject to
         # l3_enabled) → size → viability check, all in one place.
@@ -519,6 +499,7 @@ def compute_domains(
             lateral_m=level3_lateral_m,
             offshore_depth_m=level3_offshore_depth_m,
             offshore_distance_m=cluster_offshore_m,
+            shoreward_distance_m=cluster_shoreward_m,
             structures=structures,
             spot_l3_configs=spot_l3_configs,
             spot_topographic_features=spot_topographic_features,
@@ -622,6 +603,7 @@ def compute_level3_domains(
     structures: list[dict] | None = None,
     spot_l3_configs: dict[str, str] | None = None,
     contour_15m_by_spot: dict[str, float] | None = None,
+    shoreward_contour_by_spot: dict[str, float] | None = None,
     spot_topographic_features: dict[str, str] | None = None,
 ) -> list[SpotCluster]:
     """Cluster spots and size each L3 grid from the actual 15m depth contour
@@ -635,6 +617,12 @@ def compute_level3_domains(
     still part of the cluster/grid extent via pin position) — the caller is
     responsible for logging a WARNING when a spot's contour search failed
     (per "Silent skipping of configured inputs is a bug pattern").
+
+    ``shoreward_contour_by_spot`` maps spot id -> distance to the
+    ``l3_shoreward_edge_depth_m()`` contour (~1.78 m, ADR-093 Amendment 2
+    §2), found the same way against the same MEDIUM grid. Each cluster uses
+    the MAX distance across its member spots — the shared rectangle must
+    reach shoreward far enough for every spot in it.
 
     Args:
         spot_locations: List of dicts with keys: id, lat, lon,
@@ -660,12 +648,20 @@ def compute_level3_domains(
     bearings = [float(s.get("beach_facing_degrees", 270.0)) for s in spot_locations]
     avg_bearing = sum(bearings) / len(bearings)
     contour_by_spot = contour_15m_by_spot or {}
+    shoreward_by_spot = shoreward_contour_by_spot or {}
 
     for cluster in clusters:
         cluster_distances = [
             contour_by_spot[sid] for sid in cluster.spot_ids if sid in contour_by_spot
         ]
         cluster_offshore_m = max(cluster_distances) if cluster_distances else None
+
+        cluster_shoreward_distances = [
+            shoreward_by_spot[sid] for sid in cluster.spot_ids if sid in shoreward_by_spot
+        ]
+        cluster_shoreward_m = (
+            max(cluster_shoreward_distances) if cluster_shoreward_distances else None
+        )
 
         cluster.grid = _size_l3_cluster(
             cluster,
@@ -674,6 +670,7 @@ def compute_level3_domains(
             lateral_m=lateral_m,
             offshore_depth_m=offshore_depth_m,
             offshore_distance_m=cluster_offshore_m,
+            shoreward_distance_m=cluster_shoreward_m,
             structures=structures,
             spot_l3_configs=spot_l3_configs,
             spot_topographic_features=spot_topographic_features,
@@ -901,17 +898,30 @@ def smart_size_l3_grid(
     *,
     resolution_m: float = 10.0,
     pad_m: float = 100.0,
+    shoreward_distance_m: float | None = None,
 ) -> GridDomain | None:
     """Compute a structure-based Level 3 grid for a cluster.
 
     When coastal structures (jetty, pier, breakwater, etc.) are present near
-    the cluster, sizes the L3 bbox from structure positions + shadow zone
-    rather than the pin cluster centre.
+    the cluster, sizes the L3 bbox's ALONGSHORE (lateral) extent from
+    structure positions + shadow zone, rather than the pin cluster centre.
 
-    Shadow zone extent (PROVIDER-MANUAL §14.15 Amendment):
+    Alongshore shadow zone extent (ADR-093 Amendment 1 §2 / PROVIDER-MANUAL
+    §14.15 Amendment — unaffected by the shoreward-edge ruling below):
       shadow_length = structure_length + 2 × structure_length = 3 × max_length
-      Direction: shoreward (opposite beach_facing_degrees) — waves propagate
-      toward shore; the shadow extends behind the structure toward shore.
+      Direction: alongshore, downstream in the predominant wave direction.
+
+    The CROSS-SHORE (offshore/shoreward) extent is NOT feature-derived.
+    Offshore stays the 15 m contour (D1, unchanged — see the offshore
+    caller). Shoreward is ADR-093 Amendment 2 §2's breaking-depth
+    criterion (``shoreward_distance_m`` — a distance, pre-computed by the
+    apply-time chain via ``l3_shoreward_edge_depth_m()`` and a bathymetry
+    contour search), applied uniformly regardless of whether the cluster
+    was triggered by a structure or an operator classification. Structure
+    geometry never moves this edge (P4A Round 2 "reopened Blocker 2" —
+    two earlier coordinator readings that let feature geometry drive the
+    shoreward edge were both wrong; see ``l3_shoreward_edge_depth_m()``'s
+    docstring).
 
     Args:
         cluster: Spot cluster with lat/lon pin positions.
@@ -921,10 +931,16 @@ def smart_size_l3_grid(
             key (list of [lon, lat] pairs) from Overpass/wizard discovery.
         resolution_m: L3 grid resolution (default 10 m).
         pad_m: Padding added to all sides of the computed bbox (default 100 m).
+        shoreward_distance_m: Distance (metres) from the cluster centre to
+            the ADR-093 Amendment 2 §2 breaking-depth contour, pre-computed
+            by the caller. ``None`` falls back to a small logged ESTIMATE
+            (pre-apply preview only).
 
     Returns:
-        GridDomain sized to the structure shadow zone, or None if no structure
-        has usable coordinate data (caller should fall back to pin-cluster sizing).
+        GridDomain sized to the structure's alongshore shadow zone (lateral)
+        and the breaking-depth criterion (shoreward), or None if no
+        structure has usable coordinate data (caller falls back to
+        pin-cluster sizing).
     """
     # Collect all structure coordinate points (lon, lat)
     all_lons: list[float] = []
@@ -958,9 +974,11 @@ def smart_size_l3_grid(
             + lon * km_per_deg_lon * math.sin(bearing_rad)
         )
 
+    # proj_min (most shoreward structure point) is no longer read here —
+    # the shoreward edge is ADR-093 Amendment 2 §2's depth criterion
+    # (shoreward_distance_m), not derived from structure position.
     projections = [_proj_offshore(lat, lon) for lat, lon in zip(all_lats, all_lons)]
     proj_max = max(projections)  # most offshore point
-    proj_min = min(projections)  # most shoreward point
 
     # Project onto perpendicular axis for lateral extent
     perp_rad = bearing_rad + math.pi / 2
@@ -984,20 +1002,36 @@ def smart_size_l3_grid(
         # Structure too small to estimate from bbox — use minimum 20m
         max_struct_length_km = 0.020
 
-    # Shadow zone shoreward of the structure (Blocker 2, RESOLVED — see
-    # _l3_shoreward_edge_reach_m()'s docstring for the full ruling and
-    # reasoning). This IS the feature-coverage answer for a
-    # structure-triggered cluster. Always non-None here — this branch only
-    # runs when structures is non-empty, so a length is always supplied.
-    shadow_km = (_l3_shoreward_edge_reach_m(max_struct_length_km * 1000.0) or 0.0) / 1000.0
     pad_km = pad_m / 1000.0
+
+    # ADR-093 Amendment 2 §2 (reopened and RESOLVED — see
+    # l3_shoreward_edge_depth_m()'s docstring): the shoreward edge is the
+    # breaking-depth criterion, evaluated the same way for every L3
+    # cluster regardless of what triggered it. Structure geometry does
+    # NOT size the shoreward edge — max_struct_length_km still sizes the
+    # ALONGSHORE shadow zone (Amendment 1 §2, unaffected by this ruling;
+    # see the lateral_* terms below, which are unchanged). When no
+    # bathymetry-derived distance is available (pre-apply preview only —
+    # the T4A.3 apply-time chain always supplies one for a real SWAN
+    # run), falls back to a small ESTIMATE with a WARNING, matching this
+    # module's other ESTIMATE-fallback conventions.
+    if shoreward_distance_m is not None and shoreward_distance_m > 0:
+        shoreward_reach_km = shoreward_distance_m / 1000.0
+    else:
+        shoreward_reach_km = 0.1  # ESTIMATE fallback only
+        logger.warning(
+            "L3 smart sizing for cluster %s: no shoreward-edge contour "
+            "distance available — using ESTIMATE fallback %.1f km. This "
+            "is only valid for the pre-apply compute-estimate preview; "
+            "the T4A.3 apply-time chain always supplies "
+            "shoreward_distance_m for real SWAN runs.",
+            cluster.spot_ids, shoreward_reach_km,
+        )
 
     # Reference point for converting projections back to lat/lon.
     # Pick a point on the offshore axis at proj_max + pad.
     offshore_total_km = (proj_max - _proj_offshore(center_lat, center_lon)) + pad_km
-    shoreward_total_km = (
-        _proj_offshore(center_lat, center_lon) - proj_min + shadow_km + pad_km
-    )
+    shoreward_total_km = shoreward_reach_km
     lateral_plus_km = (lat_proj_max - _proj_lateral(center_lat, center_lon)) + pad_km
     lateral_minus_km = (
         _proj_lateral(center_lat, center_lon) - lat_proj_min + pad_km
@@ -1027,11 +1061,12 @@ def smart_size_l3_grid(
     ]
 
     logger.info(
-        "L3 smart sizing for cluster %s: struct %.0f m, shadow %.0f m → "
-        "bbox [%.5f,%.5f – %.5f,%.5f]",
+        "L3 smart sizing for cluster %s: struct %.0f m (alongshore extent "
+        "only, Amendment 1 §2), shoreward reach %.0f m (breaking-depth "
+        "criterion, ADR-093 Amendment 2 §2) → bbox [%.5f,%.5f – %.5f,%.5f]",
         cluster.spot_ids,
         max_struct_length_km * 1000,
-        shadow_km * 1000,
+        shoreward_reach_km * 1000,
         min(corner_lats), min(corner_lons),
         max(corner_lats), max(corner_lons),
     )
@@ -1090,19 +1125,18 @@ def _compute_level3_grid(
     lateral_m: float,
     offshore_depth_m: float,
     offshore_distance_m: float | None = None,
+    shoreward_distance_m: float | None = None,
     structures: list[dict] | None = None,
     spot_deep_points: list[tuple[float, float]] | None = None,
 ) -> GridDomain:
     """Compute one Level 3 grid for a spot cluster.
 
-    The grid extends from the coastline (100m landward of the pin) to the
-    15m depth contour offshore, using the actual distance from the cached
-    bathymetric profile.  If no profile data is available, falls back to
-    2.5 km (conservative estimate for typical continental shelves).
-
-    The research brief (§5, Level 3) specifies "shore to 15m depth" — NOT
-    a fixed distance.  The ~1 km estimate in the brief was illustrative;
-    actual 15m depth distance varies (e.g., 2.35 km at HB Pier).
+    The grid extends from the ADR-093 Amendment 2 §2 breaking-depth
+    contour (shoreward, ~1.78 m depth by default — see
+    ``l3_shoreward_edge_depth_m()``) to the 15m depth contour (offshore),
+    using actual distances from the apply-time bathymetry search. If no
+    contour data is available, falls back to a small logged ESTIMATE on
+    each side (conservative; only valid for the pre-apply preview).
 
     Uses beach_facing_degrees to orient the grid offshore.
     Lateral: 250m each side along coast.
@@ -1130,6 +1164,7 @@ def _compute_level3_grid(
             structures,
             resolution_m=resolution_m,
             pad_m=100.0,
+            shoreward_distance_m=shoreward_distance_m,
         )
         if smart is not None:
             if spot_deep_points:
@@ -1163,14 +1198,26 @@ def _compute_level3_grid(
             "SWAN runs.",
             cluster.spot_ids, offshore_km,
         )
-    # Blocker 2, RESOLVED — see _l3_shoreward_edge_reach_m()'s docstring.
-    # This pin-based path only runs for a classification-only trigger (no
-    # structures — see the `if structures:` branch above, which returns
-    # early via smart_size_l3_grid() otherwise), so there is no feature
-    # geometry to size a reach from; the function returns None and this
-    # keeps the pre-existing near-shore margin, not a new constant.
-    _reach_m = _l3_shoreward_edge_reach_m(None)
-    landward_km = (_reach_m / 1000.0) if _reach_m is not None else 0.1
+    # ADR-093 Amendment 2 §2 (reopened and RESOLVED — see
+    # l3_shoreward_edge_depth_m()'s docstring): the shoreward edge is the
+    # breaking-depth criterion, applied identically here (classification-
+    # only trigger — the `if structures:` branch above already returned
+    # for a structure-triggered cluster) and in smart_size_l3_grid()'s
+    # structure-triggered path. shoreward_distance_m is the pre-computed
+    # distance (metres) to that criterion's depth contour; falls back to
+    # a small logged ESTIMATE when unavailable (pre-apply preview only).
+    if shoreward_distance_m is not None and shoreward_distance_m > 0:
+        landward_km = shoreward_distance_m / 1000.0
+    else:
+        landward_km = 0.1  # ESTIMATE fallback only
+        logger.warning(
+            "Level 3 grid for cluster %s: no shoreward-edge contour "
+            "distance available — using ESTIMATE fallback %.1f km. This "
+            "is only valid for the pre-apply compute-estimate preview; "
+            "the T4A.3 apply-time chain always supplies "
+            "shoreward_distance_m for real SWAN runs.",
+            cluster.spot_ids, landward_km,
+        )
 
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))

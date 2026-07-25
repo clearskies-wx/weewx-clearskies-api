@@ -1938,6 +1938,7 @@ def _run_marine_apply_chain(config_dir: Path) -> None:
         compute_level2_domain,
         compute_level3_domains,
         domain_sizing_to_dict,
+        l3_shoreward_edge_depth_m,
     )
 
     try:
@@ -2050,6 +2051,16 @@ def _run_marine_apply_chain(config_dir: Path) -> None:
 
         # --- Do step 6: per-spot 15m contour search on the finer MEDIUM grid -> size L3 ---
         contour_15m_by_spot: dict[str, float] = {}
+        # ADR-093 Amendment 2 §2: the L3 shoreward edge is the depth-based
+        # breaking criterion (~1.78m by default -- see
+        # swan_domain.l3_shoreward_edge_depth_m()), found the SAME way as
+        # the 15m/30m offshore contours: search the already-downloaded
+        # MEDIUM grid, per spot's own bearing (LC-10). A structure being
+        # present does not change this search -- feature geometry is a
+        # viability-test input, not a sizing input (P4A Round 2, reopened
+        # Blocker 2, resolved).
+        shoreward_edge_depth_m = l3_shoreward_edge_depth_m()
+        shoreward_contour_by_spot: dict[str, float] = {}
         for loc in surf_locations:
             bearing = float(marine_config.surf_spots[loc.id].beach_facing_degrees)
             coast_lat, coast_lon = find_shoreline_from_grid(
@@ -2066,12 +2077,25 @@ def _run_marine_apply_chain(config_dir: Path) -> None:
                     "%r -- this spot does not contribute to L3 sizing this cycle",
                     loc.id, exc_info=True,
                 )
+            try:
+                shoreward_contour_by_spot[loc.id] = find_depth_contour_distance(
+                    medium_grid, coast_lat, coast_lon, bearing,
+                    shoreward_edge_depth_m, spot_id=loc.id,
+                )
+            except ValueError:
+                logger.error(
+                    "Marine apply chain: %.2fm shoreward-edge contour search "
+                    "(ADR-093 Amendment 2 §2) failed for spot %r -- this spot "
+                    "does not contribute to L3's shoreward sizing this cycle",
+                    shoreward_edge_depth_m, loc.id, exc_info=True,
+                )
 
         level3_clusters = compute_level3_domains(
             spot_locations,
             structures=structures,
             spot_l3_configs=spot_l3_configs,
             contour_15m_by_spot=contour_15m_by_spot,
+            shoreward_contour_by_spot=shoreward_contour_by_spot,
             spot_topographic_features=spot_topographic_features,
         )
         n_l3_enabled = sum(1 for c in level3_clusters if c.grid is not None)
