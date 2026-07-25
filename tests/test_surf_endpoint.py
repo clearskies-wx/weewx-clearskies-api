@@ -624,3 +624,228 @@ def test_surfbeat_precompute_block_runs_without_nameerror(monkeypatch):
     assert hr3_call["wind_speed_ms"] == pytest.approx(6.0)
     assert hr3_call["wind_direction_deg"] == pytest.approx(270.0)
     assert hr3_call["wind_speed_ms"] != pytest.approx(_SB_STATION_WIND_SPEED)
+
+
+# ---------------------------------------------------------------------------
+# 9. SURF-PUBLISH-RESULTS-ONLY §3.5 — no recomputation in remote SWAN mode.
+#
+# Production's actual current state (measured 2026-07-25): the swelltrack
+# cache is empty in remote mode. Every timestep must come back
+# modelStatus="unavailable", the on-demand 1D pipeline must NEVER run (no
+# local recompute of data the model host owns), and a gap report must fire
+# per missing/malformed timestep. Bundled mode (no remote SWAN service) is
+# already covered by test_surfbeat_precompute_block_runs_without_nameerror
+# above, which exercises the on-demand pipeline end to end with remote mode
+# NOT configured.
+# ---------------------------------------------------------------------------
+
+_RM_T0_ISO = "2026-07-25T00:00:00Z"
+_RM_T1_ISO = "2026-07-25T01:00:00Z"
+
+
+def _rm_make_surf_spot_config() -> SurfSpotConfig:
+    config = SurfSpotConfig(
+        {"bottom_type": "sand", "topographic_feature": "straight_beach"}
+    )
+    config.validate("wrightsville_beach")
+    return config
+
+
+def _rm_fake_compute_spot_transects(**_kwargs):
+    return [
+        SimpleNamespace(
+            is_structure_affected=False,
+            bathymetric_profile=[
+                {"distance_m": 0.0, "depth_m": 4.0},
+                {"distance_m": 100.0, "depth_m": 9.0},
+            ],
+        )
+    ]
+
+
+def _rm_wire_common_providers(monkeypatch) -> None:
+    """Shared provider monkeypatching for the remote-mode tests below --
+    every provider except SWAN degrades to an empty/neutral value so the
+    endpoint completes without live network (PROVIDER-MANUAL §11)."""
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.wind.hrrr.fetch", lambda **kw: None
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.buoy.ndbc.fetch", lambda **kw: {"spectral": []}
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.services.marine_location_resolver.is_station_served",
+        lambda location_id: False,
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.services.marine_weather_cache.get_marine_weather_cache",
+        lambda: _SBFakeWeatherCache(),
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.tides.coops.fetch", lambda **kw: {"predictions": []}
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.marine.nws_srf.fetch", lambda **kw: {"forecasts": []}
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.services.ocean_data_resolver.resolve",
+        lambda **kw: SimpleNamespace(surface_temp=None),
+    )
+
+
+def test_remote_mode_empty_swelltrack_cache_all_timesteps_unavailable_no_recompute(
+    monkeypatch,
+):
+    """The exact production state measured 2026-07-25: swelltrack={} in
+    remote mode, 67 forecast timesteps, 0 precomputed entries. Every
+    timestep must be modelStatus="unavailable", never a local recompute."""
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    _wire_test_station()
+    _wire_test_units("US")
+
+    location = _make_location("wrightsville_beach")
+    surf_config = _rm_make_surf_spot_config()
+    surf.wire_surf_config(
+        MarineConfig(locations=[location], surf_spots={"wrightsville_beach": surf_config})
+    )
+
+    def _fake_swan_fetch(*, spot_id):
+        return {
+            "forecast": [
+                {
+                    "time": _RM_T0_ISO,
+                    "distanceFromShore": 500.0,
+                    "waveHeight": 1.2,
+                    "wavePeriod": 9.0,
+                    "waveDirection": 190.0,
+                },
+                {
+                    "time": _RM_T1_ISO,
+                    "distanceFromShore": 500.0,
+                    "waveHeight": 1.3,
+                    "wavePeriod": 9.2,
+                    "waveDirection": 192.0,
+                },
+            ],
+            # §3.1 published view: energy/freqs_hz/dirs_deg/handoff_by_transect
+            # never cross the host boundary in remote mode.
+            "spectral": [],
+            # Production's actual current state -- no precomputed entries.
+            "swelltrack": {},
+            "run_time": _RM_T0_ISO,
+            "data_age_seconds": 0,
+        }
+
+    recompute_calls: list = []
+
+    def _fail_if_recompute_called(**kwargs):
+        recompute_calls.append(kwargs)
+        raise AssertionError(
+            "on-demand 1D pipeline must not run in remote SWAN mode (§3.5)"
+        )
+
+    gap_reports: list = []
+
+    monkeypatch.setattr(surf, "_compute_spot_transects", _rm_fake_compute_spot_transects)
+    monkeypatch.setattr(surf, "_compute_pipeline_for_timestep", _fail_if_recompute_called)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _fake_swan_fetch
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.is_remote_mode", lambda: True
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.report_gap",
+        lambda **kw: gap_reports.append(kw),
+    )
+    _rm_wire_common_providers(monkeypatch)
+
+    response = surf.get_surf("wrightsville_beach")
+
+    assert "data" in response
+    forecast = response["data"]["forecast"]
+    assert len(forecast) == 2
+    for entry in forecast:
+        assert entry["modelStatus"] == "unavailable"
+        # T4A.4: unavailable means null height fields, never a formula guess.
+        assert entry["breakingFaceHeight"] is None
+
+    # The whole point: no local recompute in remote mode.
+    assert recompute_calls == []
+
+    # A gap report fires per missing timestep, naming the real run_time.
+    assert len(gap_reports) == 2
+    assert {g["valid_time"] for g in gap_reports} == {_RM_T0_ISO, _RM_T1_ISO}
+    assert all(g["endpoint"] == "forecast" for g in gap_reports)
+    assert all(g["run_time"] == _RM_T0_ISO for g in gap_reports)
+    assert all(g["spot_id"] == "wrightsville_beach" for g in gap_reports)
+
+
+def test_remote_mode_malformed_swelltrack_entry_unavailable_no_recompute(monkeypatch):
+    """A malformed cached entry (deserialization raises) must degrade the
+    same way an absent one does in remote mode -- unavailable + gap report,
+    never a fallback to local recompute."""
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    _wire_test_station()
+    _wire_test_units("US")
+
+    location = _make_location("wrightsville_beach")
+    surf_config = _rm_make_surf_spot_config()
+    surf.wire_surf_config(
+        MarineConfig(locations=[location], surf_spots={"wrightsville_beach": surf_config})
+    )
+
+    def _fake_swan_fetch(*, spot_id):
+        return {
+            "forecast": [
+                {
+                    "time": _RM_T0_ISO,
+                    "distanceFromShore": 500.0,
+                    "waveHeight": 1.2,
+                    "wavePeriod": 9.0,
+                    "waveDirection": 190.0,
+                },
+            ],
+            "spectral": [],
+            # Malformed entry (missing required keys) -- must be treated
+            # exactly like "no entry", not raise, not recompute.
+            "swelltrack": {_RM_T0_ISO: {"not": "a valid pipeline result"}},
+            "run_time": _RM_T0_ISO,
+            "data_age_seconds": 0,
+        }
+
+    recompute_calls: list = []
+
+    def _fail_if_recompute_called(**kwargs):
+        recompute_calls.append(kwargs)
+        raise AssertionError(
+            "on-demand 1D pipeline must not run in remote SWAN mode (§3.5)"
+        )
+
+    gap_reports: list = []
+
+    monkeypatch.setattr(surf, "_compute_spot_transects", _rm_fake_compute_spot_transects)
+    monkeypatch.setattr(surf, "_compute_pipeline_for_timestep", _fail_if_recompute_called)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _fake_swan_fetch
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.is_remote_mode", lambda: True
+    )
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.report_gap",
+        lambda **kw: gap_reports.append(kw),
+    )
+    _rm_wire_common_providers(monkeypatch)
+
+    response = surf.get_surf("wrightsville_beach")
+
+    forecast = response["data"]["forecast"]
+    assert len(forecast) == 1
+    assert forecast[0]["modelStatus"] == "unavailable"
+    assert recompute_calls == []
+    assert len(gap_reports) == 1
+    assert gap_reports[0]["valid_time"] == _RM_T0_ISO
+    assert gap_reports[0]["endpoint"] == "forecast"
