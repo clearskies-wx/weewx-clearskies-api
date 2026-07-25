@@ -307,3 +307,185 @@ def test_point_along_bearing_zero_distance():
     lat2, lon2 = bathymetry.point_along_bearing(34.2, -77.8, 135.0, 0.0)
     assert lat2 == pytest.approx(34.2, abs=1e-6)
     assert lon2 == pytest.approx(-77.8, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# interpolate_profile_pchip / compute_fine_zone_max_depth (Phase 4A, T4A.2)
+# ---------------------------------------------------------------------------
+
+
+def _native_profile(
+    step_m: float = 8.0, length_m: float = 600.0, max_depth: float = 16.0, bar: bool = False
+) -> list[dict[str, float]]:
+    """A plausible native-resolution (~8m) raw profile: coastline (0m, ~0m
+    depth) to ~600m offshore at ~16m depth, optionally with a Gaussian
+    sandbar dip so monotonicity is NOT assumed everywhere."""
+    n = int(length_m / step_m) + 1
+    distances = [round(i * step_m, 1) for i in range(n)]
+    depths = []
+    for d in distances:
+        z = max_depth * d / length_m
+        if bar:
+            z -= 1.5 * math.exp(-((d - 300.0) ** 2) / (2 * 40.0**2))
+        depths.append(round(max(0.05, z), 3))
+    return [{"distance_m": d, "depth_m": z} for d, z in zip(distances, depths, strict=True)]
+
+
+def test_compute_fine_zone_max_depth_hb_example():
+    # Plan T4A.2 step 4 worked example: HB, no structures, 4m max Hs.
+    assert bathymetry.compute_fine_zone_max_depth(4.0, 0.73, 0.0) == pytest.approx(
+        1.3 * 4.0 / 0.73, abs=1e-9
+    )
+
+
+def test_compute_fine_zone_max_depth_newport_example():
+    # Plan T4A.2 step 4 worked example: Newport, breakwater at 8m ->
+    # structure_zone_depth=10.0. LC-1: max(), not +. max(7.1..., 10.0) = 10.0,
+    # NOT 17.1.
+    result = bathymetry.compute_fine_zone_max_depth(4.0, 0.73, 10.0)
+    assert result == pytest.approx(10.0, abs=1e-9)
+    assert result != pytest.approx(1.3 * 4.0 / 0.73 + 10.0)
+
+
+@pytest.mark.parametrize(
+    ("max_hs_m", "gamma", "structure_zone_depth"),
+    [
+        (0.0, 0.73, 0.0),
+        (-1.0, 0.73, 0.0),
+        (4.0, 0.0, 0.0),
+        (4.0, -0.5, 0.0),
+        (4.0, 0.73, -1.0),
+    ],
+)
+def test_compute_fine_zone_max_depth_validates_inputs(max_hs_m, gamma, structure_zone_depth):
+    with pytest.raises(ValueError):
+        bathymetry.compute_fine_zone_max_depth(max_hs_m, gamma, structure_zone_depth)
+
+
+def test_interpolate_profile_pchip_zone_dx_bounds():
+    raw = _native_profile(step_m=8.0, bar=True)
+    result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+    assert len(result) > len(raw)
+
+    # Classify each output point by DISTANCE against the same zone-boundary
+    # distances the implementation itself computes -- classifying by each
+    # point's own instantaneous depth is unreliable near a sandbar dip, where
+    # depth crosses the threshold more than once.
+    raw_distances = [float(p["distance_m"]) for p in raw]
+    raw_depths = [float(p["depth_m"]) for p in raw]
+    fine_max_depth = bathymetry.compute_fine_zone_max_depth(4.0, 0.73, 0.0)
+    dist_fine = bathymetry._find_depth_crossing_distance(raw_distances, raw_depths, fine_max_depth)
+    dist_shoal = max(
+        dist_fine,
+        bathymetry._find_depth_crossing_distance(
+            raw_distances, raw_depths, bathymetry._SHOALING_ZONE_MAX_DEPTH_M
+        ),
+    )
+
+    dists = [p["distance_m"] for p in result]
+    for i in range(1, len(dists)):
+        dx = dists[i] - dists[i - 1]
+        x_here = dists[i - 1]
+        if x_here < dist_fine - 1e-6:
+            assert dx <= 2.0 + 1e-6, f"fine-zone dx {dx} exceeds 2m spec at {x_here}"
+        elif x_here < dist_shoal - 1e-6:
+            assert 3.0 - 1e-6 <= dx <= 5.5, f"shoaling-zone dx {dx} outside 3-5m spec at {x_here}"
+        elif abs(x_here - dist_shoal) < 1e-3:
+            # The single transition segment from the interpolated zone
+            # boundary to the next native sample is a fractional leftover
+            # (<= one native step) -- not a violation of "native spacing".
+            assert dx <= 8.0 + 1e-6
+        else:
+            # Approach zone (fully past the boundary): native raw spacing,
+            # never finer than the input.
+            assert dx >= 8.0 - 1e-6, f"approach-zone dx {dx} finer than native 8m input"
+
+
+def test_interpolate_profile_pchip_no_duplicate_distances():
+    raw = _native_profile(bar=True)
+    result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+    dists = [p["distance_m"] for p in result]
+    for i in range(1, len(dists)):
+        assert dists[i] > dists[i - 1]
+
+
+def test_interpolate_profile_pchip_monotonic_input_no_phantom_bars():
+    # PCHIP is monotonicity-preserving: a strictly-increasing-depth input
+    # must not produce a decreasing (phantom bar/trough) interpolated output.
+    raw = _native_profile(bar=False)
+    result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+    depths = [p["depth_m"] for p in result]
+    for i in range(1, len(depths)):
+        assert depths[i] >= depths[i - 1] - 1e-9
+
+
+def test_interpolate_profile_pchip_dedup_keeps_shallower_first_occurrence():
+    # Adaptive-refinement near-duplicates (T4A.2 step 2): two points 0.15m
+    # apart (within the 0.5m dedup tolerance) at the same rough location.
+    # The shallower PAIR wins as a unit (not a hybrid of one point's
+    # distance with the other's depth) -- keeping the (distance, depth)
+    # measurement pair whichever is shallower is the physically-meaningful
+    # choice: you're picking which of two nearly-coincident samples to
+    # trust, not synthesizing a new point.
+    distances = [10.0, 30.05, 30.2, 50.0, 70.0, 90.0]
+    depths = [1.0, 3.0, 2.5, 5.0, 6.0, 7.0]
+    out_d, out_z = bathymetry._dedup_profile_by_distance(distances, depths, 0.5)
+    # Shallower of the near-duplicate pair (30.2, 2.5) wins over (30.05, 3.0).
+    assert out_d == [10.0, 30.2, 50.0, 70.0, 90.0]
+    assert out_z == [1.0, 2.5, 5.0, 6.0, 7.0]
+
+
+def test_interpolate_profile_pchip_dedup_tie_keeps_first_occurrence():
+    distances = [10.0, 30.0, 30.3, 50.0]
+    depths = [1.0, 4.0, 4.0, 5.0]
+    out_d, out_z = bathymetry._dedup_profile_by_distance(distances, depths, 0.5)
+    assert out_d == [10.0, 30.0, 50.0]
+    assert out_z == [1.0, 4.0, 5.0]
+
+
+def test_interpolate_profile_pchip_raises_below_min_points():
+    raw = [{"distance_m": 0.0, "depth_m": 0.0}, {"distance_m": 10.0, "depth_m": 1.0}]
+    with pytest.raises(ValueError, match="at least"):
+        bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+
+
+def test_interpolate_profile_pchip_raises_on_negative_depth():
+    raw = _native_profile()
+    raw[3]["depth_m"] = -1.0
+    with pytest.raises(ValueError, match="negative depth_m"):
+        bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+
+
+def test_interpolate_profile_pchip_raises_on_50m_production_bug_spacing():
+    # The real, live production bug this task fixes: 50 points at ~49.8m
+    # spacing (brief §3 / plan T4A.2 problem statement) is NOT native DEM
+    # resolution -- must raise, not silently interpolate garbage (LC-4).
+    distances = [round(i * 49.8, 1) for i in range(50)]
+    depths = [max(0.05, 15.0 * d / distances[-1]) for d in distances]
+    raw = [{"distance_m": d, "depth_m": z} for d, z in zip(distances, depths, strict=True)]
+    with pytest.raises(ValueError, match="exceeds the plausible native"):
+        bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+
+
+def test_interpolate_profile_pchip_warns_in_grey_band(caplog):
+    # 12m median spacing: coarser than the finest documented native
+    # resolution (~10.3m at HB) but not yet implausible (<=15m) -- WARN,
+    # do not raise (LC-4 / coordinator's raise-vs-warn ruling).
+    raw = _native_profile(step_m=12.0, length_m=600.0)
+    with caplog.at_level(logging.WARNING):
+        result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+    assert len(result) > 0
+    assert any("native spacing" in record.message for record in caplog.records)
+
+
+def test_interpolate_profile_pchip_accepts_real_hb_native_spacing(caplog):
+    # Coordinator's live DEM-coverage check (c:\tmp\marine-sep-P4A-scratch.md,
+    # "DEM coverage at HB pier"): HB's actual finest available tile is 1/3
+    # arc-second ~ 10.28m, NOT exactly 10.0m. This must be treated as clean
+    # native data -- no WARNING -- or the function would flag HB's own
+    # correct production data every time.
+    raw = _native_profile(step_m=10.28, length_m=600.0)
+    with caplog.at_level(logging.WARNING):
+        result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
+    assert len(result) > 0
+    assert not any("native spacing" in record.message for record in caplog.records)
