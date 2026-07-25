@@ -240,12 +240,31 @@ def _l3_viability_check(
 
 
 def _l3_shoreward_edge_reach_m(max_struct_length_m: float | None) -> float | None:
-    """RESOLVED (Blocker 2, operator ruling 2026-07-25 — P4A Round 2, see
-    P4A-R2-COMPLETE-PHASE-BRIEF.md).
+    """⚠ UNAPPROVED — COORDINATOR CALL, NOT AN OPERATOR RULING. AWAITING
+    OPERATOR ADJUDICATION (raised 2026-07-25 by the Phase 4A adversarial
+    audit, finding F1).
 
-    **Ruling: the grid's shoreward edge is set by what the feature L3
-    exists for requires. The breaking-depth expression is a runtime CHECK,
-    not a setup-time driver.**
+    **Attribution correction.** An earlier version of this docstring said
+    "operator ruling 2026-07-25." **That was false.** The operator never
+    approved this reading. It was a coordinator decision, presented to the
+    implementing agent inside a "Settled decisions ALL agents must apply"
+    block alongside genuine operator decisions, which is how it acquired an
+    attribution it never earned. `CLAUDE.md` names this exact failure:
+    "Documents describing a superseded design are exactly how a wrong
+    architectural change acquires a paper trail that looks legitimate."
+
+    **This function's behaviour is therefore provisional and must not be
+    treated as settled architecture.** Do not build on it, and do not cite
+    it as precedent, until the operator has ruled.
+
+    **The disputed call: the grid's shoreward edge is set by what the
+    feature L3 exists for requires; the breaking-depth expression is a
+    runtime CHECK, not a setup-time driver.** ADR-093 Amendment 2 §2 §4,
+    read in order, say the opposite — size FROM the breaking-depth
+    expression, THEN test the result against feature reach. Inverting that
+    changes which criterion sets a model's grid boundary, which is trigger
+    3 on `CLAUDE.md`'s list, and the coordinator was not entitled to decide
+    it.
 
     Why, on the record: ADR-093 Amendment 2 §2, read literally, sizes L3's
     shoreward reach FROM the breaking-depth expression
