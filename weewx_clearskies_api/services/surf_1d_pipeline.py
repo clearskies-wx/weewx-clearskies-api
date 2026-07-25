@@ -38,7 +38,7 @@ import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -745,6 +745,54 @@ def _degraded_result(
     )
 
 
+def _watershed_partitions_to_pipeline_format(
+    watershed_partitions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert SWAN TABLE PT* watershed partitions into the same partition
+    dict shape ``decompose_spectrum()`` produces (T4B.2 — build-and-measure
+    only; NOT the default path, see ``run_pipeline()``'s ``partition_source``
+    parameter).
+
+    Input rows come from ``swan_spectral.parse_table_pt_partitions()``: one
+    row's ``"partitions"`` list, ordered per SWAN's own convention —
+    partition 1 is the wind sea, partitions 2-10 are swells in descending
+    Hs — and carrying a ``is_wind_sea`` flag that ``decompose_spectrum()``'s
+    output has no equivalent for.
+
+    ``decompose_spectrum()``'s consumers below (the per-partition
+    SwellTrack loop and ``_aggregate_partition_breaks()``) assume the
+    existing height-descending, no-wind-sea-concept ordering contract.
+    Rather than silently re-sorting without comment (the coordinator
+    flagged this exact contract mismatch as a real finding, not a sorting
+    nit — see T4B.2 closeout), this function explicitly re-sorts by
+    descending Hs to match that contract, AND explicitly documents, at this
+    exact point, that the wind-sea/swell distinction watershed partitioning
+    carries is discarded here because the existing consumer has no concept
+    of it. Consuming that distinction would be a separate, not-yet-approved
+    change.
+
+    Partitions with no period or direction (should not occur — SWAN emits
+    all PT* quantities for a given partition simultaneously — but handled
+    defensively since a partial TABLE emission is a plausible operator
+    misconfiguration) are dropped rather than fed through with a bogus 0.
+    """
+    converted = [
+        {
+            "height": p["height"],
+            "period": p["period"],
+            "direction": p["direction"],
+            "energy": p["energy"],
+            "frequencyRange": [0.0, 0.0],  # not derivable from TABLE bulk PT* output
+            "classification": p["classification"],
+        }
+        for p in watershed_partitions
+        if p.get("period") is not None and p.get("direction") is not None
+    ]
+    # Wind-sea/swell distinction discarded here — see docstring above.
+    converted.sort(key=lambda c: c["height"], reverse=True)
+    return converted
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -762,6 +810,8 @@ def run_pipeline(
     bulk_dir: float | None = None,
     canonical_partitions: list[dict[str, Any]] | None = None,
     handoff_by_transect: dict[int, tuple[float, str]] | None = None,
+    partition_source: Literal["neighbourhood", "watershed"] = "neighbourhood",
+    watershed_partitions: list[dict[str, Any]] | None = None,
 ) -> PipelineResult:
     """Run the per-partition multi-transect 1D swell transformation pipeline.
 
@@ -821,6 +871,23 @@ def run_pipeline(
             ``(transect.handoff_depth_m, "L2")`` — the TransectInfo setup-time
             placeholder, labelled conservatively as L2 since no real per-hour
             selection was supplied.
+        partition_source: T4B.2 — build-and-measure only, NOT a production
+            selector. ``"neighbourhood"`` (default) is the existing
+            ``decompose_spectrum()`` ±4-bin path and reproduces prior
+            behaviour byte-for-byte; every existing caller is unaffected by
+            this parameter's addition. ``"watershed"`` uses
+            *watershed_partitions* instead (SWAN's own Hanson & Phillips
+            partitioning, parsed from TABLE PT* columns) — exercised only by
+            ``scripts/compare_partitioning.py`` in this round. This
+            parameter is in-process only; it must never be threaded across
+            the compute-service HTTP boundary (``services/compute_client.py``
+            / ``services/compute_service.py``) — doing so would be a data
+            contract change (trigger 4) and is not approved.
+        watershed_partitions: T4B.2 — pre-parsed watershed partitions for
+            THIS forecast hour/station, from
+            ``swan_spectral.parse_table_pt_partitions()``'s per-row
+            ``"partitions"`` list. Required (and used) only when
+            *partition_source* is ``"watershed"``; ignored otherwise.
 
     Returns:
         PipelineResult with headline metrics and full per-transect output.
@@ -841,11 +908,17 @@ def run_pipeline(
     if specout_data is None:
         specout_data = {}
 
-    partitions = decompose_spectrum(
-        freqs_hz=specout_data.get("freqs_hz", []),
-        dirs_deg=specout_data.get("dirs_deg", []),
-        energy=specout_data.get("energy", []),
-    )
+    if partition_source == "watershed":
+        # T4B.2 — build-and-measure only. decompose_spectrum() is NOT
+        # called on this path; it remains the only path any production
+        # caller exercises (partition_source defaults to "neighbourhood").
+        partitions = _watershed_partitions_to_pipeline_format(watershed_partitions or [])
+    else:
+        partitions = decompose_spectrum(
+            freqs_hz=specout_data.get("freqs_hz", []),
+            dirs_deg=specout_data.get("dirs_deg", []),
+            energy=specout_data.get("energy", []),
+        )
 
     # T4.5: track whether we degraded due to missing SPECOUT.
     _specout_degraded: bool = False
