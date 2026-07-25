@@ -54,7 +54,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from scipy.interpolate import PchipInterpolator
 
 from weewx_clearskies_api.providers._common.errors import (
     ProviderError,
@@ -882,6 +884,310 @@ def download_bidirectional_profile(
         "profile": profile,
         "source": "crm_point_query",
     }
+
+
+# ---------------------------------------------------------------------------
+# PCHIP variable-resolution profile generation (Phase 4A, T4A.2;
+# MARINE-SERVICE-SEPARATION-PLAN.md §T4A.2; SURF-ZONE-MODEL-BRIEF §6.1).
+#
+# Problem this fixes: ``download_bidirectional_profile`` samples at a fixed
+# ``_BIDIR_PROFILE_STEP_M`` (50m) interval regardless of the underlying
+# native DEM resolution.  At 50m dx the Battjes-Janssen breaking dissipation
+# in ``services/surf_1d_analytical.py`` over-attenuates wave energy and
+# SwellTrack finds zero break points.  ``interpolate_profile_pchip`` takes a
+# raw depth transect (ideally sampled at native CUDEM resolution — T4A.2
+# step 3, wired by T4A.3) and produces a depth-zone variable-resolution grid:
+# 1-2m dx through the breaking/structure zone, 3-5m dx through the shoaling
+# zone, and native resolution beyond ~15m depth where wave transformation is
+# minimal.
+# ---------------------------------------------------------------------------
+
+# De-duplication tolerance for near-duplicate ``distance_m`` values that the
+# adaptive-refinement path above can emit (T4A.2 step 2). Comfortably below
+# the coarsest legitimate native DEM spacing (~10m, see
+# ``_NATIVE_SPACING_RAISE_THRESHOLD_M`` below) so genuine distinct samples
+# are never merged.
+_DEDUP_TOLERANCE_M = 0.5
+
+# Minimum raw profile points required to fit a meaningful variable-resolution
+# grid. Below this the profile is too sparse to define fine/shoaling/approach
+# zones at all.
+_MIN_RAW_PROFILE_POINTS = 4
+
+# LC-4 (P4A-SWELLTRACK-PHYSICS-BRIEF round brief): plausible native DEM
+# resolution for the per-spot FINE-zone raw profile this function consumes.
+# Sourced from PROVIDER-MANUAL §14.7's data-source priority chain and this
+# module's own docstring:
+#   - NCEI regional coastal DEMs (priority 2): ~10m (1/3 arc-second)
+#   - USGS Great Lakes DEMs (priority 3): ~3-5m
+#   - This module's own CUDEM identify endpoint: 1/9 arc-second, ~3.4m
+#   - CRM/DEM_all (priority 4, ~90m/3 arc-second) is NOT a legitimate source
+#     for this function's input: plan T4A.3 step 6/8 (the FINE download that
+#     feeds per-spot raw profiles) targets ~3-10m only; CRM is reserved for
+#     coarse L1 shelf-scale sizing, never the per-spot fine-zone profile.
+# Coordinator's live data check (c:\tmp\marine-sep-P4A-scratch.md, "DEM
+# coverage at HB pier", 2026-07-24) confirms HB's actual finest available
+# tile is 1/3 arc-second = 0.3333" ~ 10.28m (NOT exactly 10.0m) — 1/9
+# arc-second does not exist south of 36°N on the Pacific coast. The clean
+# threshold must accept genuine 10.3m native data, not just <=10.0m exactly,
+# or this function would WARN on the real HB spot's correct, legitimate
+# native resolution every time. 11m gives a small margin above the documented
+# 10.28m worst-legitimate-case; 15m (unchanged) still unambiguously catches
+# both the current 49.8m production bug and any accidental CRM-native
+# (~90m) profile misrouted here.
+_NATIVE_SPACING_WARN_THRESHOLD_M = 11.0
+_NATIVE_SPACING_RAISE_THRESHOLD_M = 15.0
+
+# Shoaling amplification margin (LC-1, P4A-SWELLTRACK-PHYSICS-BRIEF): the
+# plan's own worked examples and Accept bullet use max(), not +; a 4m
+# offshore swell shoals to ~7.1m before breaking, not 5.5m + a separate
+# structure-depth addend.
+_FINE_ZONE_SHOALING_MARGIN = 1.3
+
+# Per-zone target dx (T4A.2 step 1 / API-MANUAL "1D grid resolution" table).
+_FINE_ZONE_DX_M = 1.5  # within the 1-2m fine-zone spec
+_SHOALING_ZONE_DX_M = 4.0  # within the 3-5m shoaling-zone spec
+_SHOALING_ZONE_MAX_DEPTH_M = 15.0  # shoaling zone upper bound; beyond is "approach"
+
+
+def compute_fine_zone_max_depth(
+    max_hs_m: float, gamma: float, structure_zone_depth: float = 0.0
+) -> float:
+    """Companion helper (LC-3): the fine-zone depth threshold, exposed
+    separately from ``interpolate_profile_pchip``'s fixed signature so T4A.3
+    can persist it (per-spot profile cache metadata) without this function
+    needing to return anything beyond the point list.
+
+    ``fine_zone_max_depth = max(1.3 * max_hs_m / gamma, structure_zone_depth)``
+    — LC-1: the two terms are independently-derived depths for the same
+    zone (max breaking depth with shoaling margin vs. structure interaction
+    depth), not additive contributions. See MARINE-SERVICE-SEPARATION-PLAN.md
+    §T4A.2 step 4 and its two worked examples (Newport:
+    ``max(7.1, 10.0) = 10.0``, not 17.1).
+    """
+    if max_hs_m <= 0.0:
+        raise ValueError(f"max_hs_m must be positive, got {max_hs_m!r}")
+    if gamma <= 0.0:
+        raise ValueError(f"gamma must be positive, got {gamma!r}")
+    if structure_zone_depth < 0.0:
+        raise ValueError(
+            f"structure_zone_depth must be non-negative, got {structure_zone_depth!r}"
+        )
+    return max(_FINE_ZONE_SHOALING_MARGIN * max_hs_m / gamma, structure_zone_depth)
+
+
+def _dedup_profile_by_distance(
+    distances: list[float], depths: list[float], tolerance_m: float
+) -> tuple[list[float], list[float]]:
+    """Merge near-duplicate ``distance_m`` values within *tolerance_m*.
+
+    Keeps the shallower depth of the pair; ties keep the first-encountered
+    (lower-distance) occurrence — T4A.2 step 2's "keep the shallower/first
+    occurrence deterministically" rule. Input need not be pre-sorted; output
+    is sorted ascending by distance.
+    """
+    paired = sorted(zip(distances, depths, strict=True), key=lambda p: p[0])
+    out: list[tuple[float, float]] = []
+    for d, z in paired:
+        if out and (d - out[-1][0]) < tolerance_m:
+            if z < out[-1][1]:
+                out[-1] = (d, z)
+            # else: tie or new point deeper — keep the first-encountered pair.
+        else:
+            out.append((d, z))
+    return [p[0] for p in out], [p[1] for p in out]
+
+
+def _dedup_sorted_floats(values: list[float], tolerance_m: float) -> list[float]:
+    """Drop near-duplicate values (within *tolerance_m*) from a sorted-ascending
+    build-up of grid boundary points (zone-boundary coincidences), keeping the
+    first occurrence."""
+    out: list[float] = []
+    for v in sorted(values):
+        if out and (v - out[-1]) < tolerance_m:
+            continue
+        out.append(v)
+    return out
+
+
+def _find_depth_crossing_distance(
+    distances: list[float], depths: list[float], target_depth_m: float
+) -> float:
+    """Walk shore->offshore (ascending distance) and return the (linearly
+    interpolated) distance at which *depths* first reaches *target_depth_m*.
+
+    Same "first point that meets the threshold" technique already used by
+    ``download_bathymetric_profile``'s deep-water search (DRY — rules/coding.md
+    §3) — a soft guide for zone-grid density, not itself a physical result, so
+    local sandbar/trough non-monotonicity is an acceptable simplification.
+    Clamps to the profile's own extent when the target is never reached
+    (too-large fine zone) or already exceeded at the first point.
+    """
+    if depths[0] >= target_depth_m:
+        return distances[0]
+    for i in range(1, len(distances)):
+        if depths[i] >= target_depth_m:
+            d0, d1 = depths[i - 1], depths[i]
+            x0, x1 = distances[i - 1], distances[i]
+            if d1 == d0:
+                return x1
+            frac = (target_depth_m - d0) / (d1 - d0)
+            return x0 + frac * (x1 - x0)
+    return distances[-1]
+
+
+def interpolate_profile_pchip(
+    raw_profile: list[dict[str, float]],
+    max_hs_m: float,
+    gamma: float,
+    structure_zone_depth: float = 0.0,
+) -> list[dict[str, float]]:
+    """Interpolate a raw CUDEM depth transect to a depth-zone variable-
+    resolution grid using PCHIP (Piecewise Cubic Hermite Interpolating
+    Polynomial).
+
+    Pure function (LC-3): raw profile in, variable-resolution profile out.
+    Does NOT download, does NOT write files, does NOT read config — T4A.3's
+    caller owns I/O; this function is designed to lift into the marine
+    service unchanged at Phase 5.
+
+    Args:
+        raw_profile: list of ``{"distance_m": float, "depth_m": float}``,
+            distance measured from the coastline (0) increasing offshore.
+            **Input contract (T4A.2 step 3):** must be sampled at native
+            CUDEM DEM resolution (~3-10m) — NOT the 50m
+            ``download_bidirectional_profile`` stepper output, and NOT a
+            resampled/cached L3 grid. Wiring the native-resolution
+            extraction is T4A.3's job; this function validates the spacing
+            it's actually given (see Raises).
+        max_hs_m: spot's configured maximum expected significant wave height
+            (m). Must be positive.
+        gamma: breaking parameter (H/d at breaking, e.g. 0.73).
+        structure_zone_depth: deepest configured structure's depth + margin
+            for this spot, or 0.0 when no structures are configured. Must be
+            non-negative. Required (no silently-extending default beyond
+            0.0) — LC-3 / T4A.2 step 6.
+
+    Returns:
+        Variable-resolution profile: list of ``{"distance_m": float,
+        "depth_m": float}`` dicts (same keys ``download_bidirectional_profile``
+        already uses — the on-disk spot-profile cache format is unchanged),
+        sorted ascending by distance_m:
+          - Fine zone (0 -> ``compute_fine_zone_max_depth(...)``): ~1.5m dx.
+          - Shoaling zone (fine max -> ~15m depth): ~4m dx.
+          - Approach zone (>~15m depth): the raw profile's own native points,
+            unmodified — no benefit from finer interpolation there.
+
+    Raises:
+        ValueError: fewer than 4 raw points (before or after de-duplication),
+            non-positive ``max_hs_m``/``gamma``, negative
+            ``structure_zone_depth``, a negative ``depth_m`` in the raw
+            profile, non-monotonic ``distance_m`` remaining after
+            de-duplication and sorting (PCHIP requires strictly increasing
+            x — never silently caught, per LC-3: "a silent try/except around
+            it is a defect, not a fix"), or a raw profile whose median native
+            spacing exceeds ``_NATIVE_SPACING_RAISE_THRESHOLD_M`` (15m) — LC-4:
+            there is no legitimate caller that should feed a profile coarser
+            than plausible native DEM resolution into this function. Logs a
+            WARNING (does not raise) for the grey band between 10m and 15m.
+    """
+    if len(raw_profile) < _MIN_RAW_PROFILE_POINTS:
+        raise ValueError(
+            f"interpolate_profile_pchip requires at least {_MIN_RAW_PROFILE_POINTS} "
+            f"raw profile points, got {len(raw_profile)}"
+        )
+    if max_hs_m <= 0.0:
+        raise ValueError(f"max_hs_m must be positive, got {max_hs_m!r}")
+    if gamma <= 0.0:
+        raise ValueError(f"gamma must be positive, got {gamma!r}")
+    if structure_zone_depth < 0.0:
+        raise ValueError(
+            f"structure_zone_depth must be non-negative, got {structure_zone_depth!r}"
+        )
+
+    raw_distances = [float(p["distance_m"]) for p in raw_profile]
+    raw_depths = [float(p["depth_m"]) for p in raw_profile]
+    if any(z < 0.0 for z in raw_depths):
+        raise ValueError("interpolate_profile_pchip: raw profile contains negative depth_m")
+
+    distances, depths = _dedup_profile_by_distance(raw_distances, raw_depths, _DEDUP_TOLERANCE_M)
+
+    if len(distances) < _MIN_RAW_PROFILE_POINTS:
+        raise ValueError(
+            f"interpolate_profile_pchip: only {len(distances)} distinct distance_m "
+            f"values remain after de-duplication (need >= {_MIN_RAW_PROFILE_POINTS}); "
+            "raw profile is degenerate."
+        )
+    for i in range(1, len(distances)):
+        if distances[i] <= distances[i - 1]:
+            raise ValueError(
+                "interpolate_profile_pchip: non-monotonic distance_m after "
+                f"de-duplication and sorting (index {i}: "
+                f"{distances[i - 1]} -> {distances[i]}); PCHIP requires "
+                "strictly increasing x."
+            )
+
+    # LC-4: validate the raw profile actually looks like native-DEM-resolution
+    # data, not a resampled/stepped substitute.
+    diffs = sorted(distances[i] - distances[i - 1] for i in range(1, len(distances)))
+    median_dx = diffs[len(diffs) // 2]
+    if median_dx > _NATIVE_SPACING_RAISE_THRESHOLD_M:
+        raise ValueError(
+            f"interpolate_profile_pchip: raw profile median native spacing "
+            f"{median_dx:.1f}m exceeds the plausible native CUDEM/DEM "
+            f"resolution ({_NATIVE_SPACING_RAISE_THRESHOLD_M:.0f}m — "
+            "PROVIDER-MANUAL §14.7). This function's input contract (T4A.2 "
+            "step 3) requires a profile sampled at native DEM resolution "
+            "(~3-10m); a 50m-stepped `download_bidirectional_profile` "
+            "output (or an accidental CRM-native ~90m profile) is a known "
+            "contract violation that T4A.3 fixes by extracting raw profiles "
+            "from the FINE CUDEM download instead. Refusing to interpolate "
+            "garbage."
+        )
+    if median_dx > _NATIVE_SPACING_WARN_THRESHOLD_M:
+        logger.warning(
+            "interpolate_profile_pchip: raw profile median native spacing is "
+            "%.1fm — coarser than the finest documented native CUDEM "
+            "resolution (~10m, PROVIDER-MANUAL §14.7) but within the "
+            "%.0fm raise threshold. Proceeding, but this profile may not "
+            "have been extracted at true native DEM resolution (T4A.2 step 3).",
+            median_dx,
+            _NATIVE_SPACING_RAISE_THRESHOLD_M,
+        )
+
+    fine_zone_max_depth = compute_fine_zone_max_depth(max_hs_m, gamma, structure_zone_depth)
+
+    shore_distance = distances[0]
+    dist_fine = _find_depth_crossing_distance(distances, depths, fine_zone_max_depth)
+    dist_shoal = _find_depth_crossing_distance(distances, depths, _SHOALING_ZONE_MAX_DEPTH_M)
+    dist_shoal = max(dist_shoal, dist_fine)
+
+    grid_distances: list[float] = []
+
+    # Fine zone: shore -> dist_fine, dx ~= _FINE_ZONE_DX_M (<= 2m spec).
+    n_fine = max(2, round((dist_fine - shore_distance) / _FINE_ZONE_DX_M) + 1)
+    grid_distances.extend(_linspace(shore_distance, dist_fine, n_fine))
+
+    # Shoaling zone: dist_fine -> dist_shoal, dx ~= _SHOALING_ZONE_DX_M (3-5m spec).
+    if dist_shoal > dist_fine:
+        n_shoal = max(2, round((dist_shoal - dist_fine) / _SHOALING_ZONE_DX_M) + 1)
+        grid_distances.extend(_linspace(dist_fine, dist_shoal, n_shoal)[1:])
+
+    # Approach zone: the raw profile's own native points beyond dist_shoal —
+    # no interpolation added (T4A.2: "no benefit from finer grid" there).
+    grid_distances.extend(d for d in distances if d > dist_shoal)
+
+    grid_distances = _dedup_sorted_floats(grid_distances, _DEDUP_TOLERANCE_M)
+
+    pchip = PchipInterpolator(np.array(distances), np.array(depths))
+    min_x, max_x = distances[0], distances[-1]
+    clipped = np.array([min(max(d, min_x), max_x) for d in grid_distances])
+    grid_depths = pchip(clipped)
+
+    return [
+        {"distance_m": float(round(d, 3)), "depth_m": float(round(max(z, 0.0), 3))}
+        for d, z in zip(grid_distances, grid_depths, strict=True)
+    ]
 
 
 # ---------------------------------------------------------------------------

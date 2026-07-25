@@ -64,6 +64,15 @@ dependencies = [
     "sse-starlette>=2.0.0",
     # ADR-079: scikit-learn for forecast correction Random Forest model.
     "scikit-learn>=1.5.0",
+    # Phase 4A T4A.2/T4A.2b: scipy.interpolate.PchipInterpolator for
+    # variable-resolution bathymetric profile interpolation
+    # (enrichment/bathymetry.py), scipy.special.ellipj/ellipk for cnoidal
+    # wave shape computation (services/surf_1d_analytical.py). Previously
+    # only present transitively via scikit-learn's own scipy dependency —
+    # pinned explicitly per rules/coding.md §1 "Pin dependency versions"
+    # (a lockfile alone does not satisfy that rule). Pinned at the version
+    # uv.lock already resolves.
+    "scipy==1.18.0",
     # T8.2: PyYAML for loading operator-editable reference data (currently
     # data/species.yaml, enrichment/fishing_species.py) via yaml.safe_load()
     # at import time. Previously only present transitively (e.g. via
