@@ -1,7 +1,7 @@
 """Breaker height conversion: SWAN Hsig → breaking face height (T2.6).
 
-Converts post-supplement significant wave height (Hsig) from SWAN output
-points to the trough-to-crest face height that surfers observe at the break.
+Converts significant wave height (Hsig) from SWAN output points to the
+trough-to-crest face height that surfers observe at the break.
 
 Two formulas are supported, selected per surf spot via ``breaker_formula``
 in the marine location config:
@@ -23,11 +23,10 @@ in the marine location config:
       fall back to Komar-Gaughan (the paper states "unrealistic for wave
       periods less than ~10 seconds").
 
-Pipeline position (T2.6 / T4.3):
+Pipeline position (T2.6 / T4.3, amended T4A.7):
 
-  SWAN Hsig (raw)
-    → wave_transform.apply_supplements() → corrected Hsig
-    → 1D cross-shore model (surf_1d_model.py) → break-point Hs
+  SWAN handoff SPECOUT (raw Hsig, at the requested handoff coordinate)
+    → 1D cross-shore model (SwellTrack, services/surf_1d_pipeline.py) → break-point Hs
     → hsig_to_face_height(break_point_hs, Tp, formula=…, source="break_point")
     → breakingFaceHeight
     → hawaiian_height(face_height)
@@ -36,14 +35,17 @@ Pipeline position (T2.6 / T4.3):
 Legacy path (no 1D model, deep-water Hs fed directly):
     → hsig_to_face_height(offshore_hsig, Tp, formula=…, source="deep_water")
 
-The supplements always run BEFORE this module. No double-counting: the
-supplements correct the physical Hsig at the output point; this module
-converts that corrected Hs to the display-convention height surfers use.
-When the 1D model provides the break-point Hs, use source="break_point"
-(Rayleigh H1/10 only). For direct offshore Hs inputs, use source="deep_water"
-(full K-G or Caldwell formula). The ad-hoc linear depth correction that
-previously existed in this module has been removed (T4.3 — no physical basis;
-superseded by the 1D model which explicitly tracks the complete shoaling path).
+T4A.7 (2026-07-25) removed the `enrichment/wave_transform.py` supplement
+stage that used to run between SWAN and this module — both of its
+surviving supplements were dead or redundant (see that module's
+docstring). The 1D model now consumes SWAN's handoff Hsig directly; this
+module converts the resulting break-point Hs to the display-convention
+height surfers use. When the 1D model provides the break-point Hs, use
+source="break_point" (Rayleigh H1/10 only). For direct offshore Hs inputs,
+use source="deep_water" (full K-G or Caldwell formula). The ad-hoc linear
+depth correction that previously existed in this module has been removed
+(T4.3 — no physical basis; superseded by the 1D model which explicitly
+tracks the complete shoaling path).
 """
 
 from __future__ import annotations

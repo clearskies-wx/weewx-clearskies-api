@@ -1016,53 +1016,23 @@ def get_surf(location_id: str) -> dict:
         swell_height_m: float = float(swell_height_raw) if swell_height_raw is not None else float(raw_hsig)
 
         # T4A.4: the CURVE-path face-height formula that used to consume
-        # corrected_hsig (enrichment/breaker_height.py's deep-water K-G/
-        # Caldwell conversion, source="deep_water") is removed — the 1D
-        # (SwellTrack) pipeline below is now the SOLE source of breaking
-        # wave heights (Do step 1).
+        # wave_transform's corrected Hsig (enrichment/breaker_height.py's
+        # deep-water K-G/Caldwell conversion, source="deep_water") is
+        # removed — the 1D (SwellTrack) pipeline below is now the SOLE
+        # source of breaking wave heights (Do step 1).
         #
-        # apply_supplements() itself is INTENTIONALLY still called here and
-        # NOT rewired into the 1D pipeline's input. Round MARINE-SEP-P4A-A2
-        # lead ruling: Supplement 1 (site-specific Battjes breaker gamma from
-        # beach slope) and Supplement 4 (topographic focusing/sheltering) are
-        # real corrections that neither SWAN's OBSTACLE command/L3 handoff
-        # SPECOUT nor the 1D pipeline's fixed gamma=0.73 replicate — a 1D
-        # cross-shore transect is alongshore-uniform by construction and
-        # cannot represent 2D headland focusing. (Supplement 2 was already
-        # removed per ADR-095 — SWAN OBSTACLE. Supplement 3 was already a
-        # no-op here — grid_data/grid_lats/grid_lons are never passed, SWAN's
-        # own grid handles spatial interpolation.) Whether/how to feed
-        # Supplements 1 and 4 into the 1D pipeline's boundary Hs is a design
-        # decision reserved for the coordinator, not implemented in this
-        # round. corrected_hsig is therefore computed but not yet consumed by
-        # any height field — logged below so the correction stays visible in
-        # the audit trail pending that decision.
-        supplemented = wave_transform.apply_supplements(
-            {
-                "wave_height": float(raw_hsig),
-                "wave_period": wave_period_pt,
-                "wave_direction": wave_direction_pt,
-            },
-            spot_config,
-            location.lat,
-            location.lon,
-        )
-        if supplemented is not None and supplemented.get("wave_height") is not None:
-            corrected_hsig = supplemented["wave_height"]
-        else:
-            corrected_hsig = float(raw_hsig)
-        if corrected_hsig != raw_hsig:
-            logger.debug(
-                "surf endpoint: wave_transform supplements corrected Hsig "
-                "%.3f -> %.3f m for %s @ %s (gamma=%s, applied=%s) — not yet "
-                "consumed by any response field pending T4A.4 rewiring decision",
-                raw_hsig,
-                corrected_hsig,
-                location_id,
-                valid_time,
-                supplemented.get("breaker_gamma") if supplemented else None,
-                supplemented.get("supplements_applied") if supplemented else None,
-            )
+        # T4A.7 (2026-07-25): the wave_transform.apply_supplements() call
+        # that used to run here is removed. Both surviving supplements it
+        # applied are gone: Supplement 1 (breaker gamma correction) was
+        # dead code (its guard required SurfSpotConfig.bathymetric_profile,
+        # a field that no longer exists) and superseded in principle by the
+        # 1D pipeline's own per-point Iribarren computation; Supplement 3
+        # (sub-grid bilinear interpolation) is redundant because SWAN
+        # already bilinearly interpolates POINTS/SPECOUT output to the
+        # exact requested handoff coordinate (verified against the
+        # installed SWAN manual — see enrichment/wave_transform.py's
+        # module docstring). The 1D model's boundary condition comes
+        # directly from the SWAN handoff SPECOUT; nothing here adjusts it.
 
         # Step 5: wind source per timestep (ADR-094)
         # First timestep (closest to now) = t=0 (current conditions).
