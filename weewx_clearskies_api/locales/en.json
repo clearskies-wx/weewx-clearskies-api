@@ -471,7 +471,8 @@
       "wind_no_speed": "{wind_label} winds.",
       "swell_clean": "Clean conditions with long-period swell.",
       "swell_mixed": "Mixed swell conditions.",
-      "swell_chop": "Wind chop dominates."
+      "swell_chop": "Wind chop dominates.",
+      "unavailable": "Surf forecast unavailable — model data incomplete."
     }
   },
   "fishing": {

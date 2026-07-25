@@ -1,12 +1,12 @@
 """Surf quality scoring processor (API-MANUAL.md §17 "Surf quality scorer").
 
-Registered against the surf endpoint pipeline. Runs after
-``enrichment/wave_transform.py`` has applied the SWAN bathymetric/
-structure/topographic supplements and ``enrichment/breaker_height.py`` has
-converted the corrected Hsig to breaking face height (API-MANUAL.md §17
-"SWAN nearshore model") — this module scores whatever wave data it
-is handed and does not itself correct for shoaling, refraction, or
-site-specific breaker physics.
+Registered against the surf endpoint pipeline. Runs after the 1D
+(SwellTrack) per-partition, multi-transect pipeline (``services/
+surf_1d_pipeline.py``) has produced (or failed to produce) a breaking face
+height — this module scores whatever wave data it is handed and does not
+itself correct for shoaling, refraction, or site-specific breaker physics.
+As of T4A.4, there is no SWAN CURVE fallback: ``wave_height`` is the
+SwellTrack face height or ``None`` (see ``score_surf()`` docstring).
 
 Three weighted scoring factors combine into a 1-5 star rating (T4.1):
 
@@ -553,7 +553,7 @@ def _build_multi_swell(
 
 
 def score_surf(
-    wave_height: float,
+    wave_height: float | None,
     wave_period: float,
     wave_direction: float,
     wind_speed: float | None,
@@ -576,11 +576,16 @@ def score_surf(
     """Score surf quality and produce a SurfForecast model instance.
 
     Args:
-        wave_height: meters; breaking face height (``breakingFaceHeight`` from
-            ``breaker_height.hsig_to_face_height()``). As of T3.2, the scorer
-            receives the trough-to-crest face height, not raw post-supplement
-            Hsig. ``_WAVE_HEIGHT_RANGES_FT`` thresholds are calibrated
-            accordingly (+17%, T2.6).
+        wave_height: meters; SwellTrack breaking face height
+            (``best_peak_face_height_m`` from the 1D pipeline), or ``None``
+            when the pipeline is unavailable (T4A.4, LC-17). ``None`` is NOT
+            the same as ``0.0``: ``0.0`` means the model ran and found
+            genuinely flat conditions (a valid rating — "Flat"/0 stars);
+            ``None`` means the model failed or never ran, so no rating can
+            be computed — the caller must not paper over that with a
+            defaulted score. ``_WAVE_HEIGHT_RANGES_FT`` thresholds are
+            calibrated for the trough-to-crest face height, not raw Hsig
+            (+17%, T2.6).
         wave_period: seconds; dominant period.
         wave_direction: degrees true north; dominant swell direction.
         wind_speed: m/s; at-beach wind (station hardware for t=0, HRRR
@@ -616,6 +621,37 @@ def score_surf(
             composite. None when SPECOUT is unavailable (neutral fallback).
     """
     loc = locale or i18n.get_active_locale()
+
+    if wave_height is None:
+        # T4A.4/LC-17: the 1D pipeline is unavailable — no face height, no
+        # quality rating. windQuality and swellDominance are independent of
+        # face height (wind is a real observation; swell dominance is a
+        # spectral-energy ratio) and remain meaningful, so they are still
+        # computed rather than nulled out. qualityStars/qualityLabel/scoring
+        # would require the wave-height component of the composite score,
+        # which cannot be computed truthfully without a face height — they
+        # are None rather than a defaulted "Poor"/0-star rating (LC-17: a
+        # missing rating is not the same lie as a confident wrong one).
+        # conditionsText must still resolve through the locale file (rules
+        # §6.2) — it is a "forecast unavailable" sentence, never empty.
+        wind_score, wind_label_key = _wind_quality(
+            wind_speed, wind_direction, spot_config.beach_facing_degrees
+        )
+        wind_quality_label = i18n.t(f"surf.wind_quality.{wind_label_key}", loc)
+        swell_dom_score = _swell_dominance(multi_swell)
+        return SurfForecast(
+            time=time_utc or "",
+            waveHeightAtBreak=None,
+            period=wave_period,
+            direction=wave_direction,
+            qualityStars=None,
+            qualityLabel=None,
+            conditionsText=i18n.t("surf.conditions.unavailable", loc),
+            windQuality=wind_quality_label,
+            swellDominance=swell_dom_score,
+            multiSwell=_build_multi_swell(multi_swell),
+            scoring=None,
+        )
 
     # Scorer uses SWAN height/period/direction directly (no _effective_swell()
     # NDBC override — removed in T4.1/ADR-096).

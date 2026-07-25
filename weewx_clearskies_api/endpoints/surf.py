@@ -14,13 +14,24 @@ Data flow per API-MANUAL §17/§18 and PROVIDER-MANUAL §14.15:
   other model.
 
   Per-timestep pipeline (API-MANUAL §17 "Data pipeline per forecast
-  timestep"):
-    1. SwanProvider.fetch(spot_id) → SWAN Hsig (stored as swellHeight).
-    2. wave_transform.apply_supplements() → corrected Hsig (waveHeightAtBreak).
-    3. breaker_height.hsig_to_face_height(corrected_hsig, Tp, depth, formula)
-       → breakingFaceHeight.
-    4. breaker_height.hawaiian_height(face_height) → breakingHawaiianHeight.
-    5. surf_scorer.score_surf(breakingFaceHeight, wind, ...) → SurfForecast.
+  timestep", T4A.4 — SWAN CURVE face-height fallback removed):
+    1. SwanProvider.fetch(spot_id) → SWAN Hsig/period/direction (SWAN TABLE
+       HSIGN/TM01/DIR at ~10m — kept as scorer inputs regardless of which
+       face-height source applies) and deep-water SPECOUT (swellHeight).
+    2. surf_1d_pipeline.run_pipeline() (SwellTrack) → per-partition,
+       multi-transect wave transformation → best_peak_face_height_m. This is
+       the SOLE source of breaking wave heights — no single-point formula
+       fallback (Do step 1). _determine_model_status() classifies the
+       outcome as "ok" / "no_breaking" / "unavailable" / "degraded_bulk"
+       (modelStatus; replaces the old boolean `degraded` field — a model
+       that ran and found flat water is not the same as a model that
+       failed).
+    3. breaker_height.hawaiian_height(best_peak_face_height_m) →
+       breakingHawaiianHeight. Null/0.0 follow breakingFaceHeight's
+       null/0.0 (modelStatus == "unavailable" / "no_breaking").
+    4. surf_scorer.score_surf(swelltrack_face_height_or_None, wind, ...) →
+       SurfForecast. Returns a null quality score (no star rating) rather
+       than a confident-looking rating when the face height is None.
 
   Wind source for surf quality scoring (ADR-094):
     - t=0 (first forecast point / current conditions): station hardware →
@@ -77,7 +88,10 @@ from weewx_clearskies_api.services.compute_client import (
     remote_surfbeat as _remote_surfbeat,
     remote_swelltrack as _remote_swelltrack,
 )
-from weewx_clearskies_api.services.surf_1d_pipeline import run_pipeline as _run_surf_pipeline
+from weewx_clearskies_api.services.surf_1d_pipeline import (
+    PipelineResult,
+    run_pipeline as _run_surf_pipeline,
+)
 from weewx_clearskies_api.services.surfbeat_runner import (
     SurfBeatResult,
     cache_surfbeat_result,
@@ -180,10 +194,12 @@ def _units_block() -> dict[str, str]:
     _, speed_symbol = _ocean_speed_unit()
     _, period_symbol = _wave_period_unit()
     return {
-        "waveHeight": height_symbol,
+        # T4A.1 Addition 2: "hs" (not "waveHeight") — matches the model
+        # vocabulary used by breakPoints[].hs and beach_profile.py.
+        "hs": height_symbol,
         "wavePeriod": period_symbol,
         "windSpeed": speed_symbol,
-        # setup is wave setup (m converted to display height unit — same as waveHeight)
+        # setup is wave setup (m converted to display height unit — same as hs)
         "setup": height_symbol,
     }
 
@@ -347,6 +363,61 @@ def _compute_median_bathy_profile(transects: list) -> np.ndarray | None:
     median_depths = np.maximum(median_depths, 0.01)  # clamp to minimum wet depth
 
     return np.column_stack([d_common, median_depths])
+
+
+# ---------------------------------------------------------------------------
+# 1D pipeline outcome classification (T4A.4)
+# ---------------------------------------------------------------------------
+
+
+def _determine_model_status(pipeline_result: PipelineResult | None) -> str:
+    """Classify the 1D (SwellTrack) pipeline outcome truthfully (T4A.4, LC-16).
+
+    A model that ran and found flat water is NOT the same as a model that
+    failed — conflating them tells a surfer "it's flat" when the truth is
+    "we don't know." This replaces the old boolean ``degraded`` flag, which
+    folded two distinct conditions (bulk fallback used vs. total pipeline
+    failure) into one bit and left "genuinely flat" indistinguishable from
+    "the SWAN CURVE fallback papered over a failure."
+
+    Note: ``_swelltrack_compute_fallback`` (remote compute service
+    unreachable, fell back to running the same pipeline in-process) is
+    deliberately NOT a factor here — it is an infrastructure detail about
+    *where* the computation ran, not a signal about data completeness or
+    quality. The previous code's line ``degraded = pipeline_result.degraded
+    or _swelltrack_compute_fallback`` conflated these two unrelated
+    conditions (LC-16); this function only considers the former.
+
+    Returns one of:
+      "unavailable"   — the pipeline never produced a usable result: either
+                         ``pipeline_result`` is ``None`` (compute_spot_transects
+                         failed, the pipeline call raised, or the compute
+                         service and in-process fallback both failed), or it
+                         is the ``_degraded_result()`` total-failure sentinel
+                         (``per_transect`` empty — no transects had bathymetric
+                         profiles, all transects failed the 1D model, or
+                         spectrum decomposition found zero partitions with no
+                         bulk fallback available).
+      "degraded_bulk" — SPECOUT was unavailable/unparseable; the pipeline ran
+                         on a single bulk-fallback partition synthesised from
+                         SWAN TABLE bulk Hs/Tp/Dir (T4.5) instead of the full
+                         spectral decomposition. Face height may be zero or
+                         positive — degraded_bulk always takes priority over
+                         ok/no_breaking because it is about input data
+                         completeness, not about whether waves broke.
+      "no_breaking"   — the full spectral pipeline ran and genuinely found no
+                         break points at any open transect (flat conditions;
+                         gamma×d crossing criterion never satisfied).
+      "ok"            — the full spectral pipeline ran and found genuine
+                         breaking waves at one or more open transects.
+    """
+    if pipeline_result is None or not pipeline_result.per_transect:
+        return "unavailable"
+    if pipeline_result.degraded:
+        return "degraded_bulk"
+    if pipeline_result.best_peak_face_height_m > 0.0:
+        return "ok"
+    return "no_breaking"
 
 
 # ---------------------------------------------------------------------------
@@ -598,16 +669,6 @@ def get_surf(location_id: str) -> dict:
             exc_info=True,
         )
 
-    # Fallback output depth from bathymetric profile (used when no depth info
-    # from SWAN TABLE DEPTH column — old single-point mode).
-    # bathymetric_profile was removed from SurfSpotConfig when the wizard-time
-    # CUDEM download was replaced by runtime bidirectional profiles; getattr
-    # keeps this code path safe for configs that pre-date that change.
-    _fallback_depth_m: float | None = None
-    _bath_profile = getattr(spot_config, "bathymetric_profile", None)
-    if _bath_profile and _bath_profile[0] is not None:
-        _fallback_depth_m = _bath_profile[0].depth_m
-
     # T4.4: Compute surf spot transects once (static geometry — same for all timesteps).
     # Used by the per-partition 1D pipeline (run_pipeline) to model wave transformation
     # independently on each cross-shore transect.  Degrades gracefully on failure.
@@ -831,11 +892,13 @@ def get_surf(location_id: str) -> dict:
                 if _qb >= _prev_qb and _qb >= _next_qb:
                     _bp_wh = _bp_pt.get("waveHeight")
                     break_points.append({
-                        "distanceFromShore": _bp_pt.get("distanceFromShore"),
+                        # T4A.1: model vocabulary (distance/depth/hs) — matches
+                        # beach_profile.py's transect/breakPoints field names.
+                        "distance": _bp_pt.get("distanceFromShore"),
                         "depth": _bp_pt.get("depth"),
                         # Convert raw SWAN Hs (meters) to display unit — same
                         # conversion applied to the other height fields below.
-                        "waveHeight": (
+                        "hs": (
                             _convert_unit(float(_bp_wh), "meter", wave_height_internal)
                             if _bp_wh is not None
                             else None
@@ -882,14 +945,28 @@ def get_surf(location_id: str) -> dict:
         swell_height_raw = ref_point.get("swellHeight")
         swell_height_m: float = float(swell_height_raw) if swell_height_raw is not None else float(raw_hsig)
 
-        # T3.4: Output depth from SWAN TABLE DEPTH column (more accurate than
-        # the static bathymetric_profile value used previously).
-        ref_depth = ref_point.get("depth")
-        output_depth_m: float | None = float(ref_depth) if ref_depth is not None else _fallback_depth_m
-
-        # Step 2: wave_transform supplements → corrected Hsig = waveHeightAtBreak
-        # grid_data omitted: SWAN outputs at spot/transect coordinates, so
-        # Supplement 3 (spatial interpolation) is handled by SWAN internally.
+        # T4A.4: the CURVE-path face-height formula that used to consume
+        # corrected_hsig (enrichment/breaker_height.py's deep-water K-G/
+        # Caldwell conversion, source="deep_water") is removed — the 1D
+        # (SwellTrack) pipeline below is now the SOLE source of breaking
+        # wave heights (Do step 1).
+        #
+        # apply_supplements() itself is INTENTIONALLY still called here and
+        # NOT rewired into the 1D pipeline's input. Round MARINE-SEP-P4A-A2
+        # lead ruling: Supplement 1 (site-specific Battjes breaker gamma from
+        # beach slope) and Supplement 4 (topographic focusing/sheltering) are
+        # real corrections that neither SWAN's OBSTACLE command/L3 handoff
+        # SPECOUT nor the 1D pipeline's fixed gamma=0.73 replicate — a 1D
+        # cross-shore transect is alongshore-uniform by construction and
+        # cannot represent 2D headland focusing. (Supplement 2 was already
+        # removed per ADR-095 — SWAN OBSTACLE. Supplement 3 was already a
+        # no-op here — grid_data/grid_lats/grid_lons are never passed, SWAN's
+        # own grid handles spatial interpolation.) Whether/how to feed
+        # Supplements 1 and 4 into the 1D pipeline's boundary Hs is a design
+        # decision reserved for the coordinator, not implemented in this
+        # round. corrected_hsig is therefore computed but not yet consumed by
+        # any height field — logged below so the correction stays visible in
+        # the audit trail pending that decision.
         supplemented = wave_transform.apply_supplements(
             {
                 "wave_height": float(raw_hsig),
@@ -902,27 +979,20 @@ def get_surf(location_id: str) -> dict:
         )
         if supplemented is not None and supplemented.get("wave_height") is not None:
             corrected_hsig = supplemented["wave_height"]
-            wave_period_pt = supplemented.get("wave_period") or wave_period_pt
-            wave_direction_pt = supplemented.get("wave_direction") or wave_direction_pt
         else:
             corrected_hsig = float(raw_hsig)
-
-        # Step 3: breaker height conversion → breakingFaceHeight
-        # T3.4: K-G/Caldwell applied at ~10m depth (ref_point depth) instead of
-        # the old pin-drop depth.  At 10m, SWAN has handled refraction but not
-        # final shoaling-to-breaking, so K-G applies ~60–80% amplification.
-        # T4.3: depth_m replaces output_depth_m; source="deep_water" is explicit
-        # (deep-water/offshore Hs → full K-G/Caldwell formula, no double-counting).
-        face_height_m = _breaker_height.hsig_to_face_height(
-            corrected_hsig,
-            wave_period_pt,
-            depth_m=output_depth_m,
-            formula=spot_config.breaker_formula,
-            source="deep_water",
-        )
-
-        # Step 4: Hawaiian scale → breakingHawaiianHeight
-        hawaiian_height_m = _breaker_height.hawaiian_height(face_height_m)
+        if corrected_hsig != raw_hsig:
+            logger.debug(
+                "surf endpoint: wave_transform supplements corrected Hsig "
+                "%.3f -> %.3f m for %s @ %s (gamma=%s, applied=%s) — not yet "
+                "consumed by any response field pending T4A.4 rewiring decision",
+                raw_hsig,
+                corrected_hsig,
+                location_id,
+                valid_time,
+                supplemented.get("breaker_gamma") if supplemented else None,
+                supplemented.get("supplements_applied") if supplemented else None,
+            )
 
         # Step 5: wind source per timestep (ADR-094)
         # First timestep (closest to now) = t=0 (current conditions).
@@ -967,10 +1037,11 @@ def get_surf(location_id: str) -> dict:
         #     (current state — future SWAN runner update adds it; no changes needed here)
         #   - transects have no bathymetric profiles (until CUDEM load at SWAN runtime)
         # Tide level is 0.0: CO-OPS predictions are fetched after this loop.
-        # A degraded result triggers the existing SWAN CURVE-based fallback path.
+        # T4A.4: no SWAN CURVE fallback exists anymore — a pipeline that
+        # cannot produce a usable result yields modelStatus="unavailable"
+        # (see _determine_model_status()), not a formula-based substitute.
         _ts_handoff_specout = _handoff_specout_by_time.get(valid_time) or {}
         _pipeline_result = None
-        _swelltrack_compute_fallback = False
         if _spot_transects:
             try:
                 if _compute_host:
@@ -1002,7 +1073,6 @@ def get_surf(location_id: str) -> dict:
                             valid_time,
                             exc_info=True,
                         )
-                        _swelltrack_compute_fallback = True
                         _pipeline_result = _run_surf_pipeline(
                             specout_data=_ts_handoff_specout,
                             transects=_spot_transects,
@@ -1034,21 +1104,35 @@ def get_surf(location_id: str) -> dict:
                     )
             except Exception:
                 logger.warning(
-                    "surf endpoint: 1D pipeline raised for %s @ %s — degrading to SWAN CURVE",
+                    "surf endpoint: 1D pipeline raised for %s @ %s — modelStatus will be "
+                    "'unavailable' for this timestep",
                     location_id,
                     valid_time,
                     exc_info=True,
                 )
 
-        # Step 6: score surf using breakingFaceHeight (ADR-094)
+        # T4A.4: classify the 1D pipeline outcome BEFORE scoring, so the
+        # scorer receives the SwellTrack face height (or None) directly —
+        # never a formula guess (Do step 1/3, LC-16).
+        _model_status = _determine_model_status(_pipeline_result)
+        _swelltrack_face_m: float | None = (
+            _pipeline_result.best_peak_face_height_m
+            if _model_status != "unavailable" and _pipeline_result is not None
+            else None
+        )
+
+        # Step 6: score surf using the SwellTrack face height (ADR-094, T4A.4)
         # T3.5: spectral_components=None — NDBC spectral data is NOT passed to
         # the scorer.  Scoring uses SWAN values only.  The NDBC fetch still
         # runs and spectralComponents is still in the response (reference data),
         # but it no longer feeds the surf score or multiSwell display.
         # T4.1: directional_spread and multi_swell pass SWAN DSPR/SPECOUT data
         # to the organization composite sub-factors.
+        # T4A.4: wave_height is the SwellTrack face height, or None when
+        # modelStatus == "unavailable" — score_surf() returns a null quality
+        # score in that case rather than a confident-looking rating (LC-17).
         surf_forecast = score_surf(
-            wave_height=face_height_m,
+            wave_height=_swelltrack_face_m,
             wave_period=wave_period_pt,
             wave_direction=wave_direction_pt,
             wind_speed=ts_wind_speed,
@@ -1074,13 +1158,15 @@ def get_surf(location_id: str) -> dict:
         # were found (flat conditions, single-point mode, or QB data absent).
         entry["breakPoints"] = break_points if break_points else None
 
-        # Overwrite height fields with the four canonical values (unit-converted).
+        # Height fields (unit-converted). swellHeight is independent of the
+        # 1D pipeline outcome (deep-water SPECOUT/SWAN TABLE, per Do step 5)
+        # and is set unconditionally; it may be overridden below by the
+        # deep-water SPECOUT dominant-partition value when ts_spectral is
+        # available. breakingFaceHeight/waveHeightAtBreak/
+        # breakingHawaiianHeight are SwellTrack-only (T4A.4 Do steps 1/4,
+        # LC-19) — set from _swelltrack_face_m immediately below, alongside
+        # the other pipeline-derived fields.
         entry["swellHeight"] = _convert_unit(swell_height_m, "meter", wave_height_internal)
-        entry["waveHeightAtBreak"] = _convert_unit(corrected_hsig, "meter", wave_height_internal)
-        entry["breakingFaceHeight"] = _convert_unit(face_height_m, "meter", wave_height_internal)
-        entry["breakingHawaiianHeight"] = _convert_unit(
-            hawaiian_height_m, "meter", wave_height_internal
-        )
         entry["windSource"] = ts_wind_source
 
         # T5.2: DSPR and SETUP from SWAN TABLE at ~10m depth point.
@@ -1121,56 +1207,56 @@ def get_surf(location_id: str) -> dict:
             entry["multiSwell"] = None  # SPECOUT not available for this timestep
             # ts_spectral absent: retain the nearshore HSWELL value set above.
 
-        # T4.4/T4.5: Apply 1D pipeline results.
-        # On success (degraded=False): override breaking heights with physics-based
-        # values; add pipeline-specific response fields.
-        # T4.5 bulk-fallback (degraded=True, face_height > 0): apply 1D results
-        # (more accurate than SWAN CURVE) but preserve degraded=True in the response
-        # so the consumer knows spectral decomposition was not available.
-        # Total failure (degraded=True, face_height == 0) or no pipeline result:
-        # keep existing SWAN CURVE-based values and mark degraded.
+        # T4A.4: Apply 1D (SwellTrack) pipeline results — the SOLE source of
+        # breaking wave heights (Do step 1). No SWAN CURVE fallback: when the
+        # model is unavailable, height fields are null (never a formula
+        # guess). `degraded` is replaced by `modelStatus` (Do step 2/7,
+        # LC-16) — see _determine_model_status() above for the mapping.
+        #
         # swellHeight was overridden from deep-water SPECOUT dominant partition
         # when ts_spectral was available (multiSwell block above); it is NOT
         # overridden here.  When SPECOUT is unavailable, the nearshore HSWELL
         # value from ref_point is preserved as-is.
-        _1d_face_m = (
-            _pipeline_result.best_peak_face_height_m
-            if _pipeline_result is not None
-            else 0.0
-        )
-        _apply_1d = _pipeline_result is not None and _1d_face_m > 0.0
-        if _apply_1d:
-            _best_face_m = _1d_face_m
-            _avg_face_m = _pipeline_result.spot_average_face_height_m
-            # Override with pipeline-computed breaking heights.
+        entry["modelStatus"] = _model_status
+        if _swelltrack_face_m is not None:
+            # modelStatus in {"ok", "no_breaking", "degraded_bulk"} — the
+            # model ran and produced a real result, 0.0 for genuinely flat
+            # conditions.
             entry["breakingFaceHeight"] = _convert_unit(
-                _best_face_m, "meter", wave_height_internal
+                _swelltrack_face_m, "meter", wave_height_internal
             )
             # waveHeightAtBreak: Hs at the best break point.
             # face_height = 1.27 × Hs_break (H1/10 Rayleigh factor, source="break_point"),
-            # so Hs_break = face_height / 1.27.
-            _hs_at_best_break_m = _best_face_m / 1.27
+            # so Hs_break = face_height / 1.27. 0.0 stays 0.0 when no_breaking.
+            _hs_at_best_break_m = _swelltrack_face_m / 1.27
             entry["waveHeightAtBreak"] = _convert_unit(
                 _hs_at_best_break_m, "meter", wave_height_internal
             )
-            # Pipeline-specific fields.
+            # T4A.4 Do step 4: Hawaiian height recomputed from the SwellTrack
+            # face height (hawaiian_height() returns 0.0 for non-positive
+            # input, so no_breaking correctly yields 0.0 here too).
+            _hawaiian_m = _breaker_height.hawaiian_height(_swelltrack_face_m)
+            entry["breakingHawaiianHeight"] = _convert_unit(
+                _hawaiian_m, "meter", wave_height_internal
+            )
             entry["bestPeakFaceHeight"] = _convert_unit(
-                _best_face_m, "meter", wave_height_internal
+                _swelltrack_face_m, "meter", wave_height_internal
             )
             entry["spotAverageFaceHeight"] = _convert_unit(
-                _avg_face_m, "meter", wave_height_internal
+                _pipeline_result.spot_average_face_height_m, "meter", wave_height_internal
             )
             entry["peelAngle"] = _pipeline_result.peel_angle_deg
             entry["peelClassification"] = _pipeline_result.peel_classification
             entry["peelDirection"] = _pipeline_result.peel_direction
             entry["transectCount"] = _pipeline_result.transect_count
             entry["openTransectCount"] = _pipeline_result.open_transect_count
-            # T4.5: preserve degraded flag — True when bulk fallback was used.
-            # T3.2: also True when SwellTrack was offloaded but compute service
-            # was unreachable and we fell back to in-process execution.
-            entry["degraded"] = _pipeline_result.degraded or _swelltrack_compute_fallback
         else:
-            # Total failure or no pipeline result: keep SWAN CURVE-based values.
+            # modelStatus == "unavailable": the model failed or never ran —
+            # a real failure, not a "flat" reading. Every height field is
+            # null (never 0.0, never a SWAN CURVE formula guess).
+            entry["breakingFaceHeight"] = None
+            entry["waveHeightAtBreak"] = None
+            entry["breakingHawaiianHeight"] = None
             entry["bestPeakFaceHeight"] = None
             entry["spotAverageFaceHeight"] = None
             entry["peelAngle"] = None
@@ -1178,7 +1264,6 @@ def get_surf(location_id: str) -> dict:
             entry["peelDirection"] = None
             entry["transectCount"] = len(_spot_transects) if _spot_transects else 0
             entry["openTransectCount"] = 0
-            entry["degraded"] = True
 
         # T2.2: SurfBeat IG fields — carry-forward from nearest cadence hour.
         # When SurfBeat is disabled, no profiles available, or the strip for the

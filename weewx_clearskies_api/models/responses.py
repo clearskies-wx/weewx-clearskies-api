@@ -1655,12 +1655,19 @@ class SurfForecast(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     time: str  # UTC ISO-8601 with Z; forecast valid time
-    waveHeightAtBreak: float  # post-supplement Hsig in meters (after nearshore supplements)
+    # T4A.4: waveHeightAtBreak is now derived from the SwellTrack break-point
+    # Hs (never the removed SWAN CURVE formula) — null when modelStatus is
+    # "unavailable" (model failed/never ran), 0.0 when "no_breaking" (LC-19).
+    waveHeightAtBreak: float | None = None
     period: float              # group_wave_period; dominant period
     direction: float            # degrees true north; dominant swell direction
-    qualityStars: int           # 1-5 star rating
-    qualityLabel: str           # "Poor" | "Fair" | "Good" | "Very Good" | "Epic"
-    conditionsText: str         # natural-language conditions summary
+    # T4A.4/LC-17: null when score_surf() receives no face height (model
+    # unavailable) — a missing rating, not a defaulted "Poor" one.
+    qualityStars: int | None = None    # 1-5 star rating
+    qualityLabel: str | None = None    # "Poor" | "Fair" | "Good" | "Very Good" | "Epic"
+    conditionsText: str         # natural-language conditions summary; resolves
+    # through the locale file even in the null-score case (a "forecast
+    # unavailable" sentence, never an empty string — API-MANUAL §17 i18n).
     windQuality: str            # offshore | cross_offshore | cross | cross_onshore | onshore
     swellDominance: float       # ratio of primary swell energy to total energy (0.0-1.0)
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
@@ -1670,7 +1677,7 @@ class SurfForecast(BaseModel):
     breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
     windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
-    breakPoints: list[dict] | None = None  # QB peak locations [{distanceFromShore, depth, waveHeight}] (T3.4)
+    breakPoints: list[dict] | None = None  # QB peak locations [{distance, depth, hs}] (T3.4, T4A.1)
     # T5.2 — SWAN TABLE quantities at ~10m depth
     directionalSpread: float | None = None  # DSPR — directional spreading (degrees)
     setup: float | None = None              # SETUP — wave-induced water level rise (meters)
