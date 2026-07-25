@@ -1879,6 +1879,7 @@ class SWANRunner:
             structures=structures,
             override_bbox=l1_bbox,
             override_resolution_m=domains.level1.resolution_m,
+            hotstart_key="level1",
         )
 
         self._inner_bbox = saved_inner_bbox
@@ -1946,6 +1947,7 @@ class SWANRunner:
             structures=structures,
             override_bbox=l2_bbox,
             override_resolution_m=domains.level2.resolution_m,
+            hotstart_key="level2",
         )
 
         self._inner_bbox = saved_inner_bbox
@@ -2393,6 +2395,7 @@ class SWANRunner:
                 override_resolution_m=cluster.grid.resolution_m,
                 setup_profile=_cluster_setup_profile,
                 beach_bearing=_cluster_bearing,
+                hotstart_key=f"level3_{idx}",
             )
             logger.info(
                 "SWAN L3[%d]: %d×%d cells at 10 m (%d spots) in %s"
@@ -2570,6 +2573,7 @@ class SWANRunner:
         override_resolution_m: float | None = None,
         setup_profile: list[dict] | None = None,
         beach_bearing: float | None = None,
+        hotstart_key: str | None = None,
     ) -> dict[str, Any]:
         """Write SWAN input files for a given grid level and return grid_info.
 
@@ -2588,7 +2592,14 @@ class SWANRunner:
             wind_field: Blended wind field dict with ``"grids"`` list.
             ww3_boundary: WW3 data (used for outer level only; ignored for inner).
             cudem_bathymetry: CUDEM depth grid dict.
-            grid_level: ``"outer"`` or ``"inner"``.
+            grid_level: ``"outer"`` or ``"inner"``.  Selects nesting/physics
+                behaviour only — it is NOT the persistent hotstart identity.
+                In run_3level() both L1 and L2 pass ``"outer"``, so it cannot
+                distinguish their hotstart files.  Use ``hotstart_key``.
+            hotstart_key: Identity of this level's persistent hotstart file,
+                matching what ``_save_hotstart()`` writes — ``"level1"``,
+                ``"level2"``, ``"level3_<idx>"``.  Defaults to ``grid_level``
+                for the legacy 2-level path, where save and load already agree.
             stationary: When True, build a single-snapshot stationary computation.
             tide_predictions: CO-OPS tidal predictions (list of dicts with "time"
                 ISO-8601 and "height" meters).  When provided, WLEVEL.txt is written
@@ -2972,11 +2983,20 @@ class SWANRunner:
         # The persistent copy lives one level up (tmpdir / "{level}_hotstart.dat")
         # so it survives the outer/inner subdir cleanup between runs.
         hotstart_arg: str | None = None
-        persistent_hot = run_dir.parent / f"{grid_level}_{self._HOTSTART_FILE}"
+        hot_key = hotstart_key or grid_level
+        persistent_hot = run_dir.parent / f"{hot_key}_{self._HOTSTART_FILE}"
         if persistent_hot.exists():
             shutil.copy2(str(persistent_hot), str(run_dir / self._HOTSTART_FILE))
             hotstart_arg = self._HOTSTART_FILE
-            logger.info("SWAN %s: using hotstart from previous run", grid_level)
+            logger.info("SWAN %s: using hotstart from previous run", hot_key)
+        else:
+            # Remove the previous cycle's HOTFILE *output* left behind in this
+            # run dir.  SWAN never reads it (INIT HOTSTART is emitted only when
+            # hotstart_arg is set), but _spawn_swan_with_hotstart_retry() infers
+            # "a hotstart was loaded" from this file's presence — so a stale copy
+            # makes an unrelated crash delete a perfectly good persistent
+            # hotstart and log a misleading "crashed with hotstart loaded".
+            (run_dir / self._HOTSTART_FILE).unlink(missing_ok=True)
 
         # SWAN INPUT command file
         input_text = build_swan_input(
