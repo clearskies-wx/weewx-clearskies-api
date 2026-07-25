@@ -657,6 +657,81 @@ def _build_transect_profile(
     }
 
 
+def _unavailable_profile_response(
+    location_id: str,
+    timestep: str | None,
+    ti_mode: str,
+    distance_symbol: str,
+    wave_height_symbol: str,
+) -> dict:
+    """Build the §3.6 "model has no answer" response — HTTP 200, null payload.
+
+    SURF-PUBLISH-RESULTS-ONLY §3.6: a missing profile used to raise 404,
+    which reads as "wrong URL" when the truth is "the model has no answer
+    for this hour." This is a genuine model gap (no cached SWAN data yet,
+    no forecast timesteps, or the 1D pipeline produced nothing) — never a
+    configuration error. Configuration errors (unknown location, no
+    surf-spot config, no transects available) still raise 404 elsewhere in
+    this module and are untouched by this helper.
+
+    Keeps the SAME key set the success response for this ``ti_mode`` would
+    use (``profiles`` for "all"; the single-transect profile keys for
+    "best"/an integer index) and nulls the payload, rather than
+    introducing keys that only exist in the failure case — a typed client
+    branches on ``modelStatus`` alone, never on which keys are present
+    (lead correction, 2026-07-25).
+    """
+    now = datetime.now(UTC)
+    metadata = {
+        "axisUnits": {"x": distance_symbol, "y": distance_symbol},
+        # Always null here. Separately: _read_vertical_datum() is a KNOWN,
+        # independently-tracked defect (verticalDatum does not currently
+        # reach the API at all, on the success path either) — this null is
+        # a consequence of there being no data at all, not evidence that
+        # defect is fixed or in scope for this change.
+        "verticalDatum": None,
+        "transectCount": None,
+        "openTransectCount": None,
+        "handoffDepthM": None,
+        "handoffSourceLevel": None,
+    }
+    data = {
+        "locationId": location_id,
+        "timestep": timestep,
+        "modelStatus": "unavailable",
+    }
+    if ti_mode == "all":
+        data["profiles"] = None
+    else:
+        data.update({
+            "transectIndex": None,
+            "isStructureAffected": None,
+            "transectBearingDeg": None,
+            "transect": None,
+            "breakPoints": None,
+            "waveShapes": None,
+            "surfZones": None,
+            "jackingFactors": None,
+            "handoffDepthM": None,
+            "handoffSourceLevel": None,
+        })
+    data["perPartitionBreaks"] = None
+    data["metadata"] = metadata
+
+    units_block = {
+        "distance": distance_symbol,
+        "depth": distance_symbol,
+        "hs": wave_height_symbol,
+    }
+    envelope = {
+        "stationClock": build_station_clock().model_dump(by_alias=True),
+        "freshness": build_freshness("surf").model_dump(by_alias=True),
+        "units": units_block,
+        "generatedAt": utc_isoformat(now),
+    }
+    return {"data": data, **envelope}
+
+
 # ---------------------------------------------------------------------------
 # GET /surf/{location_id}/profile — 1D model beach profile
 # ---------------------------------------------------------------------------
@@ -685,11 +760,20 @@ def get_beach_profile(
     (impact / foam / total / reform trough), jacking factors, and per-partition
     break overlay — all for the transect selected by transect_index.
 
-    404 when:
+    404 (configuration error) when:
     - Location does not exist or does not have "surf" enabled.
     - No surf spot configuration is present for the location.
-    - No SWAN data has been cached for the location.
-    - The 1D pipeline is degraded (no bathymetric profiles loaded yet).
+    - No transects available (spot not configured, or the shoreline
+      segment has zero length).
+
+    200 with a null profile payload and ``modelStatus: "unavailable"``
+    (SURF-PUBLISH-RESULTS-ONLY §3.6 — "the model has no answer for this
+    hour" is not a configuration error) when:
+    - No SWAN data has been cached for the location yet.
+    - No forecast timesteps are available.
+    - The 1D pipeline produced no usable output for the requested timestep
+      (degraded, no bathymetric profiles loaded yet, or the remote model
+      host has no answer for that hour).
     """
     # --- Validate transect_index ---
     _ti_str = str(transect_index).strip().lower()
@@ -744,9 +828,19 @@ def get_beach_profile(
 
     # --- SWAN: fetch cached nearshore data ---
     swan_result: dict | None = None
+    # SURF-PUBLISH-RESULTS-ONLY §2/§3.5: bundled mode (SWAN in-process on
+    # this host) keeps the existing local pipeline / compute-offload cascade
+    # below unchanged — that IS the model, not a fallback. Remote mode (a
+    # separate model host) queries that host's own profile endpoint instead
+    # of recomputing here. Defaults to bundled-mode behavior (False) if the
+    # import itself fails, matching this block's existing degrade-gracefully
+    # posture.
+    swan = None
+    _is_remote_mode: bool = False
     try:
         from weewx_clearskies_api.providers.nearshore import swan  # noqa: PLC0415
 
+        _is_remote_mode = swan.is_remote_mode()
         swan_result = swan.fetch(spot_id=location_id)
     except Exception:
         logger.warning(
@@ -754,9 +848,14 @@ def get_beach_profile(
         )
 
     if swan_result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No SWAN data cached for location {location_id!r}",
+        # SURF-PUBLISH-RESULTS-ONLY §3.6: no cached SWAN data yet is a model
+        # gap ("the model has no answer"), not a configuration error — 200
+        # with a null payload, not 404. See _unavailable_profile_response().
+        logger.warning(
+            "beach_profile: no SWAN data cached for %s", location_id
+        )
+        return _unavailable_profile_response(
+            location_id, None, _ti_mode, distance_symbol, wave_height_symbol,
         )
 
     # --- Build timestep→SPECOUT and timestep→points lookups ---
@@ -798,9 +897,13 @@ def get_beach_profile(
             )
 
     if closest_time is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No forecast timesteps found for location {location_id!r}",
+        # SURF-PUBLISH-RESULTS-ONLY §3.6: no forecast timesteps is a model
+        # gap, not a configuration error — 200 with a null payload.
+        logger.warning(
+            "beach_profile: no forecast timesteps found for %s", location_id
+        )
+        return _unavailable_profile_response(
+            location_id, None, _ti_mode, distance_symbol, wave_height_symbol,
         )
 
     # --- Bulk fallback parameters (from SWAN TABLE point nearest to now) ---
@@ -850,70 +953,98 @@ def get_beach_profile(
         )
 
     # --- Run the per-partition 1D pipeline ---
-    _ts_specout = _handoff_specout_by_time.get(closest_time) or {}
-
-    # T4A.9/T4A.6 item g (reopened 2026-07-25 — adversarial audit finding):
-    # this hour's handoff depth/source, per transect, mirrored from
-    # surf.py's identical block. The real per-hour selection happens
-    # upstream in swan_runner.py (_select_l3_handoff_spectra()) and is
-    # published on the SPECOUT entry as "handoff_depth_m"/
-    # "handoff_source_level" — this endpoint only reads that published
-    # choice, it does not recompute it, and it never touches grid geometry
-    # (C2). Without building and passing this dict, run_pipeline() falls
-    # back to TransectInfo.handoff_depth_m, which is documented
-    # (swan_formats.py) as a setup-time-only placeholder that MUST NOT be
-    # read as "the" handoff — that fallback previously made handoffDepthM/
-    # handoffSourceLevel report 15.0/"L2" for every request regardless of
-    # the spot's real per-hour L3 selection, defeating the entire point of
-    # item (g): distinguishing a handoff sampled from a breaking cell from
-    # genuinely small surf.
-    if "handoff_depth_m" in _ts_specout:
-        _handoff_selection = HandoffSelection(
-            handoff_depth_m=_ts_specout["handoff_depth_m"],
-            source_level=_ts_specout.get("handoff_source_level", "L3"),
-            station_index=None,
-            station_depth_m=_ts_specout["handoff_depth_m"],
-            clamped=False,
-        )
-    else:
-        _handoff_selection = _select_hourly_handoff(
-            hs_m=_bulk_hs if _bulk_hs is not None else 0.0,
-            station_depths_m=None,
-        )
-    _handoff_by_transect: dict[int, tuple[float, str]] = (
-        {
-            _idx: (_handoff_selection.handoff_depth_m, _handoff_selection.source_level)
-            for _idx in range(len(spot_transects))
-        }
-        if spot_transects
-        else {}
-    )
-
     pipeline_result: PipelineResult | None = None
-    try:
-        if _compute_host:
-            try:
-                pipeline_result = _remote_swelltrack(
-                    _compute_host,
-                    _compute_secret,
-                    _compute_verify_tls,
-                    spot_id=location_id,
-                    specout_data=_ts_specout,
-                    transects=spot_transects,
-                    tide_level=0.0,
-                    beach_facing=spot_config.beach_facing_degrees,
-                    gamma=0.73,
-                    cfjon=spot_config.friction_coefficient,
-                    bulk_hs=_bulk_hs,
-                    bulk_tp=_bulk_tp,
-                    bulk_dir=_bulk_dir,
-                    handoff_by_transect=_handoff_by_transect,
-                )
-            except ComputeServiceError:
-                logger.warning(
-                    "beach_profile: compute service unavailable — falling back to in-process",
-                    exc_info=True,
-                )
+
+    if _is_remote_mode:
+        # SURF-PUBLISH-RESULTS-ONLY §3.2/§3.5: query the model host's own
+        # profile endpoint instead of recomputing here. It runs the 1D
+        # pipeline itself against its full internal spectral data (never
+        # trimmed) and performs its own per-hour handoff selection -- this
+        # host no longer builds specout_data/handoff_by_transect at all for
+        # this path. Eliminates the courier round trip §1 point 2 measured:
+        # downloading spectra from the SWAN service then POSTing them back
+        # to the compute service on the SAME remote host.
+        pipeline_result = swan.fetch_profile(spot_id=location_id, time_iso=closest_time)
+    else:
+        # Bundled mode (SURF-PUBLISH-RESULTS-ONLY §2): SWAN runs in-process
+        # on this host -- the local pipeline / optional compute-service
+        # offload cascade below IS the model, not a fallback, and is
+        # unchanged.
+        _ts_specout = _handoff_specout_by_time.get(closest_time) or {}
+
+        # T4A.9/T4A.6 item g (reopened 2026-07-25 — adversarial audit finding):
+        # this hour's handoff depth/source, per transect, mirrored from
+        # surf.py's identical block. The real per-hour selection happens
+        # upstream in swan_runner.py (_select_l3_handoff_spectra()) and is
+        # published on the SPECOUT entry as "handoff_depth_m"/
+        # "handoff_source_level" — this endpoint only reads that published
+        # choice, it does not recompute it, and it never touches grid
+        # geometry (C2). Without building and passing this dict,
+        # run_pipeline() falls back to TransectInfo.handoff_depth_m, which
+        # is documented (swan_formats.py) as a setup-time-only placeholder
+        # that MUST NOT be read as "the" handoff — that fallback previously
+        # made handoffDepthM/handoffSourceLevel report 15.0/"L2" for every
+        # request regardless of the spot's real per-hour L3 selection,
+        # defeating the entire point of item (g): distinguishing a handoff
+        # sampled from a breaking cell from genuinely small surf.
+        if "handoff_depth_m" in _ts_specout:
+            _handoff_selection = HandoffSelection(
+                handoff_depth_m=_ts_specout["handoff_depth_m"],
+                source_level=_ts_specout.get("handoff_source_level", "L3"),
+                station_index=None,
+                station_depth_m=_ts_specout["handoff_depth_m"],
+                clamped=False,
+            )
+        else:
+            _handoff_selection = _select_hourly_handoff(
+                hs_m=_bulk_hs if _bulk_hs is not None else 0.0,
+                station_depths_m=None,
+            )
+        _handoff_by_transect: dict[int, tuple[float, str]] = (
+            {
+                _idx: (_handoff_selection.handoff_depth_m, _handoff_selection.source_level)
+                for _idx in range(len(spot_transects))
+            }
+            if spot_transects
+            else {}
+        )
+
+        try:
+            if _compute_host:
+                try:
+                    pipeline_result = _remote_swelltrack(
+                        _compute_host,
+                        _compute_secret,
+                        _compute_verify_tls,
+                        spot_id=location_id,
+                        specout_data=_ts_specout,
+                        transects=spot_transects,
+                        tide_level=0.0,
+                        beach_facing=spot_config.beach_facing_degrees,
+                        gamma=0.73,
+                        cfjon=spot_config.friction_coefficient,
+                        bulk_hs=_bulk_hs,
+                        bulk_tp=_bulk_tp,
+                        bulk_dir=_bulk_dir,
+                        handoff_by_transect=_handoff_by_transect,
+                    )
+                except ComputeServiceError:
+                    logger.warning(
+                        "beach_profile: compute service unavailable — falling back to in-process",
+                        exc_info=True,
+                    )
+                    pipeline_result = _run_pipeline(
+                        specout_data=_ts_specout,
+                        transects=spot_transects,
+                        tide_level=0.0,
+                        beach_facing=spot_config.beach_facing_degrees,
+                        cfjon=spot_config.friction_coefficient,
+                        bulk_hs=_bulk_hs,
+                        bulk_tp=_bulk_tp,
+                        bulk_dir=_bulk_dir,
+                        handoff_by_transect=_handoff_by_transect,
+                    )
+            else:
                 pipeline_result = _run_pipeline(
                     specout_data=_ts_specout,
                     transects=spot_transects,
@@ -925,33 +1056,33 @@ def get_beach_profile(
                     bulk_dir=_bulk_dir,
                     handoff_by_transect=_handoff_by_transect,
                 )
-        else:
-            pipeline_result = _run_pipeline(
-                specout_data=_ts_specout,
-                transects=spot_transects,
-                tide_level=0.0,
-                beach_facing=spot_config.beach_facing_degrees,
-                cfjon=spot_config.friction_coefficient,
-                bulk_hs=_bulk_hs,
-                bulk_tp=_bulk_tp,
-                bulk_dir=_bulk_dir,
-                handoff_by_transect=_handoff_by_transect,
+        except Exception:
+            logger.warning(
+                "beach_profile: 1D pipeline raised for %s @ %s",
+                location_id,
+                closest_time,
+                exc_info=True,
             )
-    except Exception:
-        logger.warning(
-            "beach_profile: 1D pipeline raised for %s @ %s",
-            location_id,
-            closest_time,
-            exc_info=True,
-        )
 
     if pipeline_result is None or not pipeline_result.per_transect:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"1D model output unavailable for {location_id!r} — "
-                "pipeline degraded or bathymetric profiles not yet loaded"
-            ),
+        # SURF-PUBLISH-RESULTS-ONLY §3.6: "the model has no answer for this
+        # hour" is a 200 with a null profile payload and an explicit
+        # modelStatus, not a 404 — a 404 reads as "wrong URL" when the truth
+        # is a model gap. Applies in both modes (response-code honesty fix,
+        # not a remote-mode-only optimization). report_gap() is a no-op in
+        # bundled mode (no separate model host to report to).
+        logger.warning(
+            "beach_profile: no model answer for %s @ %s", location_id, closest_time
+        )
+        if swan is not None:
+            swan.report_gap(
+                spot_id=location_id,
+                valid_time=closest_time,
+                endpoint="profile",
+                run_time=swan_result.get("run_time"),
+            )
+        return _unavailable_profile_response(
+            location_id, closest_time, _ti_mode, distance_symbol, wave_height_symbol,
         )
 
     # --- Build lookup: partition_index → PartitionBreakInfo ---
@@ -1031,6 +1162,7 @@ def get_beach_profile(
             "data": {
                 "locationId": location_id,
                 "timestep": closest_time,
+                "modelStatus": "ok",
                 "profiles": profiles,
                 "perPartitionBreaks": per_partition_breaks_out,
                 "metadata": metadata,
@@ -1076,6 +1208,7 @@ def get_beach_profile(
         "data": {
             "locationId": location_id,
             "timestep": closest_time,
+            "modelStatus": "ok",
             **profile,
             "perPartitionBreaks": per_partition_breaks_out,
             "metadata": metadata,
