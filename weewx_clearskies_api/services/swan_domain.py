@@ -239,44 +239,80 @@ def _l3_viability_check(
     return False
 
 
-def _l3_shoreward_edge_reach_m(
-    cluster: SpotCluster,
-    max_hs_m_by_spot: dict[str, float] | None,
-    gamma: float = 0.73,
-) -> float | None:
-    """PARKED pending operator decision (P4A Round 2 "Blocker 2", escalated
-    2026-07-25 — see P4A-R2-COMPLETE-PHASE-BRIEF.md).
+def _l3_shoreward_edge_reach_m(max_struct_length_m: float | None) -> float | None:
+    """RESOLVED (Blocker 2, operator ruling 2026-07-25 — P4A Round 2, see
+    P4A-R2-COMPLETE-PHASE-BRIEF.md).
 
-    ADR-093 Amendment 2 §2/§4, read literally, sizes L3's shoreward reach
-    FROM the breaking-depth expression ``1.3 * Hs(hour) / gamma`` — the
-    SMALLEST value it ever produces for the spot (its shallowest,
-    smallest-swell breaking depth). That "smallest Hs" has no config source
-    anywhere in this codebase (only ``max_hs_m``, the LARGEST swell, is
-    configured). A coordinator attempt to resolve that gap by inverting the
-    relationship — feature coverage drives the edge, breaking depth only
-    checks it — was a unilateral trigger-3 architectural call (grid
-    boundary/handoff point) and has been escalated to the operator rather
-    than implemented here. The two readings agree at HB (~1.8 m, which
-    happens to span the pier) but diverge at other spots, which is exactly
-    why this is live rather than settled.
+    **Ruling: the grid's shoreward edge is set by what the feature L3
+    exists for requires. The breaking-depth expression is a runtime CHECK,
+    not a setup-time driver.**
 
-    Until the operator decides, this function deliberately returns
-    ``None``, meaning "no independent shoreward-edge constraint is applied."
-    The grid's shoreward reach is therefore whatever the pre-existing sizing
-    already produces — ``smart_size_l3_grid()``'s shadow-zone extent for
-    structure clusters, or the near-shore pin-based margin otherwise. This
-    intentionally leaves T4A.3's known gap (``git show 244ee08``: "sizes
-    L3's offshore edge only") open on the shoreward side for this round.
+    Why, on the record: ADR-093 Amendment 2 §2, read literally, sizes L3's
+    shoreward reach FROM the breaking-depth expression
+    ``1.3 * Hs(hour) / gamma`` — specifically "the smallest value it ever
+    produces for this spot's conditions," i.e. the spot's shallowest,
+    smallest-swell breaking depth. **That expression is not computable.**
+    It requires a minimum Hs, and none exists anywhere in this codebase —
+    confirmed independently by both the coordinator and this agent via
+    grep — and the operator has explicitly ruled out adding one (nobody
+    should be asked to supply a minimum wave height). Only ``max_hs_m``,
+    the LARGEST swell, is configured, and it is the wrong end for this
+    purpose. So the literal reading has no implementable form, and the
+    implementable reading — feature coverage drives the edge — is the one
+    whose inputs (structure geometry, bathymetry) already exist at setup.
 
-    Callers: this is called from ``_compute_level3_grid`` but its return
-    value is not yet consumed (see the call site's comment) — deep parameter
-    threading was deliberately deferred because the two candidate readings
-    consume a resolved value differently enough (clamp an existing
-    feature-derived edge vs. replace the near-shore margin outright) that
-    committing to a shape now risks being the wrong shape either way. Once
-    decided, only this function's body — and the one call site — change.
+    **What still carries the breaking-depth check, so this is not a
+    fudge:** T4A.9's per-hour handoff selection
+    (``services/transect_handoff.py``) clamps a computed handoff to the
+    nearest interior grid station and logs a WARNING when the true
+    handoff would fall outside the grid. An hour whose breaking depth
+    sits shallower than the grid reaches is therefore not silently
+    mis-sampled — it is clamped and it announces itself. The
+    breaking-depth expression still governs, but as a per-hour RUNTIME
+    check with observability, rather than as a setup-time input that
+    cannot be evaluated. If those warnings fire routinely at a spot, that
+    is real evidence the grid should reach shallower, and it arrives as
+    data rather than as a guessed constant.
+
+    Args:
+        max_struct_length_m: The longest structure in this cluster, in
+            metres, or ``None`` when the cluster has no structures
+            (classification-only trigger — point_break/headland/bay_break
+            with no manmade structure).
+
+    Returns:
+        The additional shoreward margin (metres) the grid must reach past
+        the feature's own shoreward-most point, or ``None`` when there is
+        no feature geometry to size from.
+
+        **Structure-triggered** (``max_struct_length_m`` given): returns
+        ``3 * max_struct_length_m`` — the shadow-zone extent (ADR-093
+        Amendment 1 §2 / PROVIDER-MANUAL §14.15 Amendment:
+        ``shadow_length = structure_length + 2 * structure_length =
+        3 * max_length``). This already reaches past the structure to
+        capture the diffraction fill-in the shadow acquires with
+        distance from the tip — the reason it needs no additional
+        breaking-depth input to be a correct "feature coverage" answer.
+        This is the SAME formula ``smart_size_l3_grid()`` already applied
+        before this round; this function is now its single authoritative
+        source rather than an inline duplicate.
+
+        **Classification-only** (``max_struct_length_m`` is ``None``):
+        there is no structure geometry to extend from, and inferring a
+        feature position from shoreline or contour shape is out of scope
+        (ADR-093 Amendment 2 §3's scope boundary, LC-R2-7 — contour
+        curvature and orientation analysis are explicitly not built).
+        Returns ``None`` — the caller keeps the pre-existing near-shore
+        pin margin (``landward_km = 0.1``, ~100 m, unchanged since Era 1).
+        This is NOT a new constant: LC-R1-4 forecloses inventing a
+        minimum-wave-height config key or a new shallow-depth constant,
+        and this function introduces neither — it reuses the margin that
+        was already there for exactly the case where no feature geometry
+        exists to replace it with.
     """
-    return None
+    if max_struct_length_m is None:
+        return None
+    return 3.0 * max_struct_length_m
 
 
 def _size_l3_cluster(
@@ -323,6 +359,11 @@ def _size_l3_cluster(
         logger.info("L3 skipped for cluster %s: %s", cluster.spot_ids, reason)
         return None
 
+    # _compute_level3_grid() (and smart_size_l3_grid() beneath it, for the
+    # structure-triggered path) already applies the resolved shoreward-edge
+    # criterion internally — see _l3_shoreward_edge_reach_m()'s docstring
+    # for the Blocker 2 ruling (feature coverage drives; breaking depth is
+    # a runtime check carried by T4A.9's clamp-and-WARNING).
     grid = _compute_level3_grid(
         cluster,
         avg_bearing,
@@ -332,11 +373,6 @@ def _size_l3_cluster(
         offshore_distance_m=offshore_distance_m,
         structures=cluster_structs or None,
     )
-
-    # Parked (Blocker 2) — see _l3_shoreward_edge_reach_m docstring. Once the
-    # operator decides which criterion sets L3's shoreward edge, this is the
-    # one place it plugs in, ahead of the viability check below.
-    _l3_shoreward_edge_reach_m(cluster, max_hs_m_by_spot=None)
 
     feature_points, feature_label = _l3_feature_points(cluster_structs, cluster)
     if not _l3_viability_check(grid, feature_points, feature_label, cluster.spot_ids):
@@ -929,12 +965,12 @@ def smart_size_l3_grid(
         # Structure too small to estimate from bbox — use minimum 20m
         max_struct_length_km = 0.020
 
-    # Shadow zone: 3× structure length in the shoreward direction
-    # PARKED (Blocker 2, see _l3_shoreward_edge_reach_m): this is the smart-
-    # sized grid's entire shoreward-edge logic today. Once the operator
-    # decides which criterion sets L3's shoreward reach, this is the value
-    # that changes.
-    shadow_km = 3.0 * max_struct_length_km
+    # Shadow zone shoreward of the structure (Blocker 2, RESOLVED — see
+    # _l3_shoreward_edge_reach_m()'s docstring for the full ruling and
+    # reasoning). This IS the feature-coverage answer for a
+    # structure-triggered cluster. Always non-None here — this branch only
+    # runs when structures is non-empty, so a length is always supplied.
+    shadow_km = (_l3_shoreward_edge_reach_m(max_struct_length_km * 1000.0) or 0.0) / 1000.0
     pad_km = pad_m / 1000.0
 
     # Reference point for converting projections back to lat/lon.
@@ -1108,12 +1144,14 @@ def _compute_level3_grid(
             "SWAN runs.",
             cluster.spot_ids, offshore_km,
         )
-    # PARKED (Blocker 2, see _l3_shoreward_edge_reach_m): this near-shore
-    # margin is the pin-based grid's entire shoreward-edge logic today. Once
-    # the operator decides which criterion sets L3's shoreward reach, this
-    # is the value that changes — either clamped by, or replaced with, the
-    # resolved criterion's output.
-    landward_km = 0.1
+    # Blocker 2, RESOLVED — see _l3_shoreward_edge_reach_m()'s docstring.
+    # This pin-based path only runs for a classification-only trigger (no
+    # structures — see the `if structures:` branch above, which returns
+    # early via smart_size_l3_grid() otherwise), so there is no feature
+    # geometry to size a reach from; the function returns None and this
+    # keeps the pre-existing near-shore margin, not a new constant.
+    _reach_m = _l3_shoreward_edge_reach_m(None)
+    landward_km = (_reach_m / 1000.0) if _reach_m is not None else 0.1
 
     km_per_deg_lat = 111.0
     km_per_deg_lon = 111.0 * math.cos(math.radians(center_lat))
