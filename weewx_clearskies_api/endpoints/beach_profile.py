@@ -31,10 +31,12 @@ wire_beach_profile_config(settings) stores the parsed MarineConfig module-level.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections import defaultdict
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
@@ -106,6 +108,58 @@ def _find_location(location_id: str) -> MarineLocation | None:
         if loc.id == location_id:
             return loc
     return None
+
+
+# ---------------------------------------------------------------------------
+# Vertical datum (T4A.6 item f / F3, reopened 2026-07-25)
+# ---------------------------------------------------------------------------
+
+#: Per-spot profile cache endpoints/setup.py's apply-time chain writes
+#: (T4A.3 Do step 8) — same path/convention as providers/nearshore/swan.py's
+#: _PROFILE_CACHE_DIR, services/compute_service.py's _PROFILE_CACHE_DIR, and
+#: endpoints/setup.py's _MARINE_PROFILE_CACHE_DIR. A module-level constant
+#: (not inlined) so tests can monkeypatch it instead of touching the real
+#: /etc directory.
+_PROFILE_CACHE_DIR = Path("/etc/weewx-clearskies/spot_profiles")
+
+
+def _read_vertical_datum(location_id: str) -> str | None:
+    """Read the real vertical datum from the per-spot profile cache.
+
+    B2's apply-time chain (endpoints/setup.py ~2153) resolves the DEM's
+    actual vertical_datum and writes it into this cache. Before this fix,
+    ``metadata.verticalDatum`` was hardcoded ``"NAVD88"`` — silently wrong
+    for any spot served from a DEM tile in a different datum (HB is covered
+    by both NAVD88 and MHW NCEI tiles).
+
+    Returns ``None`` (and logs) when the cache is missing, unreadable, has
+    no ``vertical_datum`` key, or the key is the ``"UNKNOWN"`` sentinel B2
+    writes when its own resolution failed — never substitutes a
+    plausible-looking literal. A null datum is visibly missing to the
+    dashboard (BeachProfileChart's no-datum axis label); a fabricated one
+    is not.
+    """
+    cache_path = _PROFILE_CACHE_DIR / f"{location_id}.json"
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning(
+            "beach_profile: no readable profile cache for %r — "
+            "verticalDatum unavailable (null, not a fabricated default)",
+            location_id,
+            exc_info=True,
+        )
+        return None
+    datum = cached.get("vertical_datum")
+    if not datum or datum == "UNKNOWN":
+        logger.warning(
+            "beach_profile: profile cache for %r has no resolved "
+            "vertical_datum (value=%r) — verticalDatum unavailable",
+            location_id,
+            datum,
+        )
+        return None
+    return str(datum)
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +979,11 @@ def get_beach_profile(
     )
     metadata = {
         "axisUnits": {"x": distance_symbol, "y": distance_symbol},
-        "verticalDatum": "NAVD88",
+        # F3 (2026-07-25, reopened): was hardcoded "NAVD88" — silently wrong
+        # for any spot served from a non-NAVD88 DEM tile. Now read from the
+        # per-spot profile cache B2's apply-time chain writes; null (not a
+        # fabricated literal) when that cache is absent/unreadable/unresolved.
+        "verticalDatum": _read_vertical_datum(location_id),
         "transectCount": pipeline_result.transect_count,
         "openTransectCount": pipeline_result.open_transect_count,
         "handoffDepthM": _meta_handoff_depth_m,

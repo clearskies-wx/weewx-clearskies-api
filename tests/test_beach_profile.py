@@ -17,6 +17,8 @@ constructed fixtures.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -415,7 +417,9 @@ def test_endpoint_passes_real_handoff_selection_to_pipeline(monkeypatch):
             degraded=False,
         )
 
-    monkeypatch.setattr(beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects)
+    monkeypatch.setattr(
+        beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects
+    )
     monkeypatch.setattr(beach_profile_mod, "_run_pipeline", _fake_run_pipeline)
     monkeypatch.setattr(
         "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
@@ -446,3 +450,111 @@ def test_endpoint_passes_real_handoff_selection_to_pipeline(monkeypatch):
     # 4. And the response itself reports the real value end to end.
     assert response["data"]["metadata"]["handoffDepthM"] is not None
     assert response["data"]["metadata"]["handoffDepthM"] != pytest.approx(_EP_PLACEHOLDER_DEPTH_M)
+
+
+# ---------------------------------------------------------------------------
+# 8. Endpoint-level: metadata.verticalDatum reads the real per-spot cache
+#    (F3, reopened 2026-07-25 — auditor found it by grepping the field name
+#    across the file, not by reading the change).
+#
+# Deliberately asserts a NON-"NAVD88" value. A fixture that happens to
+# contain "NAVD88" would pass whether or not the code actually reads the
+# cache or just kept the old hardcoded literal -- exactly how this defect
+# survived the first pass (per the coordinator's standard for F2).
+# ---------------------------------------------------------------------------
+
+
+def _ep_minimal_pipeline_setup(monkeypatch, beach_profile_mod):
+    """Shared minimal wiring for the verticalDatum tests below -- same
+    station/config/swan-fetch/transects/pipeline fakes as the item-g test,
+    factored out since these three tests only differ in the profile cache
+    contents.
+    """
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+
+    def _fake_run_pipeline(**kwargs):
+        tr = TransectResult(
+            transect_index=0,
+            is_structure_affected=False,
+            hs_total_profile=np.array([1.0]),
+            distances=np.array([50.0]),
+            depths=np.array([2.0]),
+            per_partition=[None],
+            best_face_height_m=0.0,
+            handoff_depth_m=_EP_REAL_HANDOFF_DEPTH_M,
+            handoff_source_level=_EP_REAL_HANDOFF_SOURCE,
+        )
+        return PipelineResult(
+            best_peak_face_height_m=0.0,
+            spot_average_face_height_m=0.0,
+            peel_angle_deg=None,
+            peel_classification=None,
+            peel_direction=None,
+            transect_count=1,
+            open_transect_count=1,
+            per_transect=[tr],
+            per_partition_breaks=[],
+            degraded=False,
+        )
+
+    monkeypatch.setattr(
+        beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects
+    )
+    monkeypatch.setattr(beach_profile_mod, "_run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
+    )
+
+
+def test_vertical_datum_reads_real_value_from_profile_cache(monkeypatch, tmp_path):
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    (tmp_path / f"{_EP_LOCATION_ID}.json").write_text(
+        json.dumps({"vertical_datum": "MHW"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(beach_profile_mod, "_PROFILE_CACHE_DIR", tmp_path)
+
+    _ep_minimal_pipeline_setup(monkeypatch, beach_profile_mod)
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    # The actual assertion this test exists for: a real, non-default datum
+    # (deliberately NOT "NAVD88") reaches the response. Pre-fix, this would
+    # have been the hardcoded "NAVD88" regardless of what the cache said.
+    assert response["data"]["metadata"]["verticalDatum"] == "MHW"
+
+
+def test_vertical_datum_null_when_cache_missing(monkeypatch, tmp_path):
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    # tmp_path is empty -- no {spot_id}.json written.
+    monkeypatch.setattr(beach_profile_mod, "_PROFILE_CACHE_DIR", tmp_path)
+
+    _ep_minimal_pipeline_setup(monkeypatch, beach_profile_mod)
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    # Null, not a fallback to "NAVD88" or any other plausible-looking literal.
+    assert response["data"]["metadata"]["verticalDatum"] is None
+
+
+def test_vertical_datum_null_when_cache_says_unknown(monkeypatch, tmp_path):
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    (tmp_path / f"{_EP_LOCATION_ID}.json").write_text(
+        json.dumps({"vertical_datum": "UNKNOWN"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(beach_profile_mod, "_PROFILE_CACHE_DIR", tmp_path)
+
+    _ep_minimal_pipeline_setup(monkeypatch, beach_profile_mod)
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    assert response["data"]["metadata"]["verticalDatum"] is None
