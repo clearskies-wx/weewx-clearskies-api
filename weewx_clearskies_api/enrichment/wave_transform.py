@@ -1,24 +1,32 @@
 """SWAN supplement processor (Phase 3, T3.1).
 
-Applies three targeted supplements to SWAN nearshore wave data, per
+Applies targeted supplements to SWAN nearshore wave data, per
 API-MANUAL.md §17 "SWAN nearshore model". Registered against the
 surf scoring pipeline: runs after SwanProvider.fetch(), before
 ``surf_scorer.py``.
 
-The three supplements, applied in this order:
+Four supplements were originally defined (numbered per API-MANUAL.md §17);
+two remain active. Numbering is preserved across removals because
+ADR-095, ADR-093 Amendment 2, and API-MANUAL §17 all cite it — do not
+renumber the survivors.
 
-1. Sub-grid spatial interpolation (bilinear) — refines the SWAN grid-cell
-   value to the exact spot coordinates. Runs first because it establishes
-   the wave height baseline the other two supplements correct.
-2. Breaker index correction (Battjes 1974 γ tuning) — replaces SWAN's
+1. Breaker index correction (Battjes 1974 γ tuning) — replaces SWAN's
    constant γ = 0.73 with a site-specific value derived from the Iribarren
    number, then re-caps wave height at the breaking depth.
-3. Topographic focusing/sheltering — a multiplicative adjustment based on
-   the spot's operator-classified topographic feature.
-
-Supplement 2 (coastal structure transmission/reflection effects) was
-removed per ADR-095; structure effects are now handled natively by the
-SWAN OBSTACLE command during wave propagation (T2.3).
+2. Coastal structure transmission/reflection effects — REMOVED per
+   ADR-095; structure effects are now handled natively by the SWAN
+   OBSTACLE command during wave propagation (T2.3).
+3. Sub-grid spatial interpolation (bilinear) — refines the SWAN grid-cell
+   value to the exact spot coordinates. Runs first in ``apply_supplements``
+   because it establishes the wave height baseline Supplement 1 corrects.
+4. Topographic wave focusing/sheltering — REMOVED per ADR-093 Amendment 2
+   §5b (2026-07-25). The multipliers (point break x1.1, headland x1.2,
+   bay break x0.9, straight beach x1.0) stood in for refraction SWAN now
+   computes; once L2 existed at 100 m it began computing that refraction
+   itself, so the multipliers had been double-counting since nesting
+   landed. The operator's topographic classification is retained in spot
+   config — its job is now the L3 enable trigger (PROVIDER-MANUAL §14.15),
+   not a wave-height adjustment.
 
 No-op when wave data is None or empty — passes through unmodified because
 ``apply_supplements`` is simply not called in that case.
@@ -48,14 +56,6 @@ G: float = 9.81
 #: Breaker index (gamma) physical bounds from literature (Battjes 1974).
 GAMMA_MIN: float = 0.5
 GAMMA_MAX: float = 1.4
-
-#: Topographic wave focusing/sheltering multipliers.
-TOPO_MULTIPLIERS: dict[str, float] = {
-    "point_break": 1.1,
-    "headland": 1.2,
-    "bay_break": 0.9,
-    "straight_beach": 1.0,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -199,22 +199,6 @@ def bilinear_interpolate(
 
 
 # ---------------------------------------------------------------------------
-# Supplement 4 — Topographic focusing/sheltering
-# ---------------------------------------------------------------------------
-
-
-def apply_topographic_adjustment(wave_height: float, topographic_feature: str) -> float:
-    """Multiply wave height by the spot's topographic feature multiplier.
-
-    Unknown/missing feature values default to 1.0 (no adjustment) rather
-    than raising — ``SurfSpotConfig.validate()`` is the trust boundary that
-    rejects invalid ``topographic_feature`` values at config-load time.
-    """
-    multiplier = TOPO_MULTIPLIERS.get(topographic_feature, 1.0)
-    return wave_height * multiplier
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -225,14 +209,16 @@ def apply_supplements(
     spot_lat: float,
     spot_lon: float,
 ) -> dict[str, Any] | None:
-    """Apply the three SWAN supplements and return corrected wave data.
+    """Apply the surviving SWAN supplements and return corrected wave data.
 
     Supplement 2 (coastal structure transmission/reflection effects) was
     removed per ADR-095; structure effects are now handled natively by the
-    SWAN OBSTACLE command during wave propagation.
+    SWAN OBSTACLE command during wave propagation. Supplement 4 (topographic
+    focusing/sheltering) was removed per ADR-093 Amendment 2 §5b
+    (2026-07-25); its multipliers double-counted refraction SWAN's nested
+    grids (L2) now compute directly.
 
-    Processing order: interpolation (3) -> breaker correction (1) ->
-    topographic adjustment (4).
+    Processing order: interpolation (3) -> breaker correction (1).
 
     Input ``wave_data`` is a dict with keys ``wave_height`` (meters, SWAN Hsig),
     ``wave_period`` (seconds), ``wave_direction`` (degrees true north), and
@@ -296,11 +282,10 @@ def apply_supplements(
     # physically correct than the post-processing approach.
     structure_applied = False
 
-    # Supplement 4 — topographic focusing/sheltering.
-    topographic_feature = getattr(spot_config, "topographic_feature", None)
-    if wave_height is not None and topographic_feature:
-        wave_height = apply_topographic_adjustment(wave_height, topographic_feature)
-        supplements_applied.append("topographic_adjustment")
+    # Supplement 4 removed — topographic multipliers double-counted refraction
+    # SWAN's nested grids (L2) now compute directly (ADR-093 Amendment 2 §5b,
+    # 2026-07-25). The operator's topographic classification is retained in
+    # spot config as the L3 enable trigger; it no longer adjusts wave height.
 
     return {
         "wave_height": wave_height,

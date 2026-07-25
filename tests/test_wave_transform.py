@@ -178,23 +178,6 @@ def test_bilinear_midpoint():
 
 
 # ---------------------------------------------------------------------------
-# Supplement 4 — topographic focusing/sheltering
-# ---------------------------------------------------------------------------
-
-
-def test_topographic_headland():
-    assert wt.apply_topographic_adjustment(2.0, "headland") == pytest.approx(2.4)
-
-
-def test_topographic_bay():
-    assert wt.apply_topographic_adjustment(2.0, "bay_break") == pytest.approx(1.8)
-
-
-def test_topographic_straight():
-    assert wt.apply_topographic_adjustment(2.0, "straight_beach") == pytest.approx(2.0)
-
-
-# ---------------------------------------------------------------------------
 # Full pipeline / apply_supplements
 # ---------------------------------------------------------------------------
 
@@ -219,7 +202,8 @@ def test_full_pipeline():
     assert result["structure_applied"] is False  # Supplement 2 removed — SWAN OBSTACLE handles structures (ADR-095)
     assert "breaker_correction" in result["supplements_applied"]
     assert "structure_effects" not in result["supplements_applied"]
-    assert "topographic_adjustment" in result["supplements_applied"]
+    # Supplement 4 removed — ADR-093 Amendment 2 §5b
+    assert "topographic_adjustment" not in result["supplements_applied"]
 
 
 def test_none_input():
@@ -270,9 +254,10 @@ def test_supplements_applied_list():
 
     result = wt.apply_supplements(wave_data, spot_config, spot_lat=34.2, spot_lon=-77.8)
 
+    # structure_effects removed (ADR-095); topographic_adjustment removed
+    # (ADR-093 Amendment 2 §5b).
     assert result is not None
     assert result["supplements_applied"] == [
         "interpolation",
         "breaker_correction",
-        "topographic_adjustment",
-    ]  # structure_effects removed — SWAN OBSTACLE (ADR-095)
+    ]
