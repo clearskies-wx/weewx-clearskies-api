@@ -1633,6 +1633,18 @@ def _run_all_spots_locked(
         cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
             "l3_enabled": spot_cfg.l3_enabled,
+            # T4B.1 — segment geometry, additive only. Threads the
+            # operator-drawn shoreline segment through to build_swan_input()
+            # so it can generate real per-transect POINTS sets via
+            # compute_spot_transects() instead of a single per-spot pin.
+            # Absent/degraded gracefully by the reader (spot_configs may lack
+            # these keys for other callers/tests) — see swan_runner.py's
+            # segment-geometry WARNING-and-skip fallback.
+            "segment_start_lat": float(spot_cfg.segment_start_lat),
+            "segment_start_lon": float(spot_cfg.segment_start_lon),
+            "segment_end_lat": float(spot_cfg.segment_end_lat),
+            "segment_end_lon": float(spot_cfg.segment_end_lon),
+            "transect_spacing_m": float(spot_cfg.transect_spacing_m),
         }
 
         cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
@@ -2094,6 +2106,13 @@ def _run_quick_update_locked(
         cfg_dict: dict[str, Any] = {
             "beach_facing_degrees": float(spot_cfg.beach_facing_degrees),
             "l3_enabled": spot_cfg.l3_enabled,
+            # T4B.1 — segment geometry, additive only (see full-run call site
+            # above for rationale).
+            "segment_start_lat": float(spot_cfg.segment_start_lat),
+            "segment_start_lon": float(spot_cfg.segment_start_lon),
+            "segment_end_lat": float(spot_cfg.segment_end_lat),
+            "segment_end_lon": float(spot_cfg.segment_end_lon),
+            "transect_spacing_m": float(spot_cfg.transect_spacing_m),
         }
         cache_path = _PROFILE_CACHE_DIR / f"{loc.id}.json"
         if cache_path.exists():

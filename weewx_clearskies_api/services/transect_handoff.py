@@ -522,6 +522,31 @@ def compute_transect_shadows(
 
 
 # ---------------------------------------------------------------------------
+# Public API — T4B.1: standalone breaking-margin depth formula
+# ---------------------------------------------------------------------------
+
+
+def breaking_margin_depth_m(
+    hs_m: float,
+    *,
+    gamma: float = _GAMMA_BREAKING,
+    margin: float = _BREAKING_MARGIN_FACTOR,
+) -> float:
+    """Return the ADR-093 Amendment 2 §2 breaking-margin target depth for a
+    given Hs: ``margin * hs_m / gamma``.
+
+    This is the exact formula ``select_hourly_handoff()`` computes internally
+    as ``target_depth_m``, exposed standalone so setup-time per-transect band
+    sizing (T4B.1) can compute the same target depth that
+    ``select_hourly_handoff()`` will later select a station against, without
+    duplicating the formula (`rules/coding.md` DRY — "search before writing a
+    new helper"). Not a new formula and not a change to the existing one —
+    only how precisely/efficiently it is reused.
+    """
+    return margin * hs_m / gamma
+
+
+# ---------------------------------------------------------------------------
 # Public API — T4A.9: per-forecast-hour handoff selection
 # ---------------------------------------------------------------------------
 
@@ -567,7 +592,7 @@ def select_hourly_handoff(
     -------
     HandoffSelection
     """
-    target_depth_m = margin * hs_m / gamma
+    target_depth_m = breaking_margin_depth_m(hs_m, gamma=gamma, margin=margin)
 
     if not station_depths_m:
         return HandoffSelection(
