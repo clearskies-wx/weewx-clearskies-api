@@ -112,6 +112,86 @@ def _compute_15m_point(
 
 
 # ---------------------------------------------------------------------------
+# T4A.11 — L2 deep-water-reference fallback for L3-disabled clusters
+# (ADR-093 Amendment 2 §4: "That spot runs L1 -> L2 -> SwellTrack from L2's
+# ~15 m reference, as an open beach does.")
+#
+# Coordinator finding (P4A Round 2, sourced from
+# docs/planning/briefs/P4A-INTENDED-VS-ACTUAL-RECONSTRUCTION.md Area 1 row
+# 1.3): the DWR SPECOUT is already parsed into self._spectral_results for
+# EVERY spot after the Level 2 run (see the "T3.3 -- Parse L2 DWR SPECOUT"
+# block above, ~1483-1519) regardless of whether that spot's cluster later
+# gets an L3 grid. Only `all_results` -- the dict that becomes the per-spot
+# "forecast"/"transect" cache entries -- was never populated for
+# L3-disabled clusters. This function builds that missing entry FROM the
+# DWR data that already exists; it does not compute anything new.
+# ---------------------------------------------------------------------------
+
+
+def _bulk_params_from_components(
+    components: list[dict[str, Any]],
+) -> tuple[float | None, float | None, float | None]:
+    """Combine decomposed swell components into bulk (Hs, Tp, Dir).
+
+    Hs combines in quadrature (independent wave systems: total variance is
+    the sum of each system's variance, and height ~ sqrt(variance)).
+    Period/direction are taken from the single largest component (the
+    "peak" system) -- the same convention SWAN's own TPEAK/PDIR bulk
+    parameters use.
+    """
+    if not components:
+        return None, None, None
+    total_hs_sq = sum(float(c.get("height", 0.0)) ** 2 for c in components)
+    if total_hs_sq <= 0:
+        return None, None, None
+    combined_hs = math.sqrt(total_hs_sq)
+    dominant = max(components, key=lambda c: float(c.get("height", 0.0)))
+    return combined_hs, dominant.get("period"), dominant.get("direction")
+
+
+def _l3_fallback_points_from_dwr(
+    spectral_entries: list[dict[str, Any]],
+) -> list[MarineForecastPoint]:
+    """Build one L2-deep-water-reference ``MarineForecastPoint`` per
+    timestep for a spot whose cluster has no L3 grid (``grid is None`` —
+    no trigger, or the T4A.11 viability test disabled it).
+
+    This is a single point per timestep (the DWR location, nominally
+    ~15 m depth by construction — see ``_compute_15m_point``), not a full
+    cross-shore transect: L2-only spots have no CURVE output to build one
+    from. ``depth``/``distanceFromShore`` are the only geometry fields
+    populated; wind fields are not parsed from SPECOUT and stay ``None``
+    (the surf endpoint's HRRR-based wind precedence is unaffected by this).
+
+    Args:
+        spectral_entries: ``self._spectral_results[spot_id]`` -- the DWR
+            baseline already populated after the Level 2 run.
+
+    Returns:
+        List of ``MarineForecastPoint``, one per timestep with usable
+        spectral data. Empty list if no entry decomposed to a non-zero Hs.
+    """
+    points: list[MarineForecastPoint] = []
+    for entry in spectral_entries:
+        time_str = entry.get("time", "")
+        if not time_str:
+            continue
+        hs, tp, direction = _bulk_params_from_components(entry.get("components", []))
+        if hs is None:
+            continue
+        points.append(
+            MarineForecastPoint(
+                time=time_str,
+                waveHeight=round(hs, 3),
+                wavePeriod=round(tp, 2) if tp is not None else None,
+                waveDirection=round(direction, 1) if direction is not None else None,
+                depth=15.0,
+            )
+        )
+    return points
+
+
+# ---------------------------------------------------------------------------
 # Exception
 # ---------------------------------------------------------------------------
 
@@ -1523,27 +1603,47 @@ class SWANRunner:
         all_results: dict[str, list[MarineForecastPoint]] = {}
 
         for idx, cluster in enumerate(domains.level3_clusters):
+            # T4A.11 (P4A Round 2, Blocker 1): `cluster.grid is None` is now
+            # the SINGLE source of truth for "this cluster does not run L3"
+            # — swan_domain.py's compute_level3_domains()/compute_domains()
+            # already decide this from the widened trigger (structure OR
+            # operator classification) AND the viability test, and already
+            # log INFO naming the reason in both cases. The former SECOND,
+            # independent gate here (`_l3_run_cluster`, structure-only via
+            # the domain-wide `structures` list, not scoped to this cluster)
+            # duplicated that decision incorrectly — it would have skipped a
+            # classification-only cluster (point break/headland/bay with no
+            # structure) that swan_domain.py had correctly sized a grid for.
+            # Deleted rather than re-pointed: once this branch is only
+            # reachable via `grid is None`, a second check against the same
+            # fact is dead code (rules/coding.md: no dead code).
             if cluster.grid is None:
-                continue
-
-            # T3.1 — Skip L3 for this cluster when all spots have l3_enabled="off",
-            # or all spots have l3_enabled="auto" and no structures are present.
-            # "on" beats everything; "auto"+structures → run L3; anything else → skip.
-            _spot_cfgs_full = self._spot_configs or {}
-            _l3_flags = [
-                _spot_cfgs_full.get(sid, {}).get("l3_enabled", "auto")
-                for sid in cluster.spot_ids
-            ]
-            _l3_any_on = any(f == "on" for f in _l3_flags)
-            _l3_all_off = all(f == "off" for f in _l3_flags)
-            _has_structures = bool(structures)
-            _l3_run_cluster = _l3_any_on or (not _l3_all_off and _has_structures)
-            if not _l3_run_cluster:
-                logger.info(
-                    "SWAN L3[%d]: skipping cluster %s "
-                    "(l3_enabled=off or auto with no structures; DWR serves as handoff)",
-                    idx, cluster.spot_ids,
-                )
+                # ADR-093 Amendment 2 §4, verbatim: a cluster with L3
+                # disabled "runs L1 -> L2 -> SwellTrack from L2's ~15 m
+                # reference, as an open beach does." Build that fallback
+                # from the L2 DWR SPECOUT baseline already parsed into
+                # self._spectral_results (T3.3 block above) instead of
+                # leaving these spots with zero forecast/transect data
+                # (P4A Round 2 coordinator finding, sourced from
+                # P4A-INTENDED-VS-ACTUAL-RECONSTRUCTION.md Area 1 row 1.3).
+                for sid in cluster.spot_ids:
+                    _dwr_entries = self._spectral_results.get(sid, [])
+                    _fallback_pts = _l3_fallback_points_from_dwr(_dwr_entries)
+                    if _fallback_pts:
+                        all_results[sid] = _fallback_pts
+                        logger.info(
+                            "SWAN L3[%d]: cluster %s has no L3 grid — spot %r "
+                            "served from L2 DWR reference (%d timestep(s), "
+                            "~15m depth, open-beach fallback)",
+                            idx, cluster.spot_ids, sid, len(_fallback_pts),
+                        )
+                    else:
+                        logger.warning(
+                            "SWAN L3[%d]: cluster %s has no L3 grid and spot "
+                            "%r has no usable L2 DWR spectral data either — "
+                            "this spot produces no forecast this cycle",
+                            idx, cluster.spot_ids, sid,
+                        )
                 continue
 
             l3_dir = workdir / f"level3_{idx}"

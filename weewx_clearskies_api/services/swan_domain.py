@@ -91,6 +91,260 @@ class DomainSizing:
         return self.total_cells * cost_per_cell
 
 
+# ---------------------------------------------------------------------------
+# T4A.11 — widened L3 trigger + viability test (ADR-093 Amendment 2 §3, §4).
+#
+# L3 enables on a discovered manmade structure OR the operator's
+# point_break/headland/bay_break topographic classification (Amendment 2 §3;
+# structure-only was Amendment 1's trigger and could never enable L3 at a
+# point break with no structure). The trigger is necessary but not
+# sufficient: once sized, the grid is tested against the feature it exists
+# for, and disabled (``grid=None``) with a mandatory INFO log when it does
+# not reach that feature (Amendment 2 §4 / C4 — a too-shallow grid announces
+# itself at runtime as breaking inside L3, but a too-seaward one is silently
+# indistinguishable from "nothing here to model" without this log).
+# ---------------------------------------------------------------------------
+
+#: topographic_feature values that trigger L3 on their own (marine_config.py
+#: _VALID_TOPOGRAPHIC_FEATURES minus "straight_beach" — a straight beach has
+#: no 2D refraction feature for L3 to add over L2).
+_TOPOGRAPHIC_L3_TRIGGERS: frozenset[str] = frozenset(
+    {"point_break", "headland", "bay_break"}
+)
+
+
+def _cluster_structures(
+    structures: list[dict] | None, cluster_spot_ids: list[str]
+) -> list[dict]:
+    """Filter *structures* to the ones belonging to this cluster.
+
+    A structure dict may carry an optional ``spot_id`` key identifying which
+    surf spot it belongs to (set by the apply-time chain in
+    ``endpoints/setup.py``, T4A.3). When at least one structure in the list
+    carries ``spot_id``, filtering is exact — a structure at one spot cannot
+    spuriously trigger or size L3 for an unrelated cluster elsewhere on the
+    coast. When NO structure carries ``spot_id`` (older caller shape, e.g. a
+    test fixture predating T4A.11), every structure is returned unfiltered —
+    this preserves prior behaviour but is imprecise: without spot
+    attribution there is no way to tell which cluster a structure actually
+    belongs to, and every cluster in the domain will see every structure.
+    """
+    if not structures:
+        return []
+    if not any("spot_id" in s for s in structures):
+        return list(structures)
+    return [s for s in structures if s.get("spot_id") in cluster_spot_ids]
+
+
+def _l3_trigger_reason(
+    cluster_structures: list[dict],
+    l3_flags: list[str],
+    classifications: list[str],
+) -> tuple[bool, str]:
+    """Decide whether L3 is triggered for one cluster, and why (for logging).
+
+    ``"on"`` on any spot in the cluster forces enable regardless of
+    structures/classification. ``"off"`` on every spot forces disable
+    regardless of structures/classification — the operator override wins
+    both ways, matching the pre-T4A.11 ``l3_enabled`` semantics. Otherwise
+    ("auto" for at least one spot, not all off): enabled when the cluster
+    has a structure OR any spot's classification is in
+    ``_TOPOGRAPHIC_L3_TRIGGERS``.
+    """
+    if any(f == "on" for f in l3_flags):
+        return True, "l3_enabled=on"
+    if l3_flags and all(f == "off" for f in l3_flags):
+        return False, "l3_enabled=off for every spot in cluster"
+
+    has_structures = bool(cluster_structures)
+    matching_features = sorted(
+        {c for c in classifications if c in _TOPOGRAPHIC_L3_TRIGGERS}
+    )
+    if has_structures and matching_features:
+        return True, f"structure(s) present + classification={matching_features}"
+    if has_structures:
+        return True, "structure(s) present"
+    if matching_features:
+        return True, f"classification={matching_features}"
+    return (
+        False,
+        "no manmade structure and no point_break/headland/bay_break classification",
+    )
+
+
+def _l3_feature_points(
+    cluster_structures: list[dict],
+    cluster: SpotCluster,
+) -> tuple[list[tuple[float, float]], str]:
+    """The point(s) L3's grid must reach for the viability test.
+
+    Structures: every structure coordinate belonging to this cluster (the
+    same points ``smart_size_l3_grid()`` sizes around) — ``(lat, lon)``.
+
+    Classification-only clusters (no structures): the cluster's own spot
+    pin(s). There is no structure geometry to check reachability against,
+    and inferring one (e.g. from shoreline curvature at a headland) is out
+    of scope per ADR-093 Amendment 2 §3's scope boundary — contour shape
+    analysis is explicitly not built. A classification-only grid is always
+    sized to include the pin today, so this is a forward-looking safety net
+    (it starts to matter once L3's shoreward edge can be tightened past the
+    pin), not a live constraint.
+    """
+    points: list[tuple[float, float]] = []
+    for struct in cluster_structures:
+        for coord in struct.get("coordinates", []):
+            if len(coord) >= 2:
+                points.append((float(coord[1]), float(coord[0])))  # (lat, lon)
+    if points:
+        return points, "structure"
+    return list(zip(cluster.lats, cluster.lons, strict=False)), "classified feature (pin)"
+
+
+def _l3_viability_check(
+    domain: GridDomain,
+    feature_points: list[tuple[float, float]],
+    feature_label: str,
+    cluster_spot_ids: list[str],
+) -> bool:
+    """ADR-093 Amendment 2 §4 / T4A.11 Do step 4: verify the sized grid
+    reaches the feature it was created for.
+
+    Returns ``True`` (viable) when every point in *feature_points* falls
+    within *domain*'s bounding box. On failure, logs INFO naming the
+    feature and the approximate shortfall distance — this log is the fix
+    for the "too far seaward" failure mode being silently indistinguishable
+    from "nothing here to model" (C4).
+    """
+    unreached: list[tuple[float, float, float]] = []
+    for lat, lon in feature_points:
+        if domain.lat_min <= lat <= domain.lat_max and domain.lon_min <= lon <= domain.lon_max:
+            continue
+        clamped_lat = min(max(lat, domain.lat_min), domain.lat_max)
+        clamped_lon = min(max(lon, domain.lon_min), domain.lon_max)
+        shortfall_m = _haversine_km(lat, lon, clamped_lat, clamped_lon) * 1000.0
+        unreached.append((lat, lon, shortfall_m))
+
+    if not unreached:
+        return True
+
+    worst = max(unreached, key=lambda t: t[2])
+    logger.info(
+        "L3 viability test FAILED for cluster %s: %s unreachable by ~%.0f m "
+        "(grid bbox [%.6f,%.6f - %.6f,%.6f]). L3 disabled for this cluster; "
+        "handoff falls back to L2 at ~15m, same as an open beach.",
+        cluster_spot_ids, feature_label, worst[2],
+        domain.lat_min, domain.lon_min, domain.lat_max, domain.lon_max,
+    )
+    return False
+
+
+def _l3_shoreward_edge_reach_m(
+    cluster: SpotCluster,
+    max_hs_m_by_spot: dict[str, float] | None,
+    gamma: float = 0.73,
+) -> float | None:
+    """PARKED pending operator decision (P4A Round 2 "Blocker 2", escalated
+    2026-07-25 — see P4A-R2-COMPLETE-PHASE-BRIEF.md).
+
+    ADR-093 Amendment 2 §2/§4, read literally, sizes L3's shoreward reach
+    FROM the breaking-depth expression ``1.3 * Hs(hour) / gamma`` — the
+    SMALLEST value it ever produces for the spot (its shallowest,
+    smallest-swell breaking depth). That "smallest Hs" has no config source
+    anywhere in this codebase (only ``max_hs_m``, the LARGEST swell, is
+    configured). A coordinator attempt to resolve that gap by inverting the
+    relationship — feature coverage drives the edge, breaking depth only
+    checks it — was a unilateral trigger-3 architectural call (grid
+    boundary/handoff point) and has been escalated to the operator rather
+    than implemented here. The two readings agree at HB (~1.8 m, which
+    happens to span the pier) but diverge at other spots, which is exactly
+    why this is live rather than settled.
+
+    Until the operator decides, this function deliberately returns
+    ``None``, meaning "no independent shoreward-edge constraint is applied."
+    The grid's shoreward reach is therefore whatever the pre-existing sizing
+    already produces — ``smart_size_l3_grid()``'s shadow-zone extent for
+    structure clusters, or the near-shore pin-based margin otherwise. This
+    intentionally leaves T4A.3's known gap (``git show 244ee08``: "sizes
+    L3's offshore edge only") open on the shoreward side for this round.
+
+    Callers: this is called from ``_compute_level3_grid`` but its return
+    value is not yet consumed (see the call site's comment) — deep parameter
+    threading was deliberately deferred because the two candidate readings
+    consume a resolved value differently enough (clamp an existing
+    feature-derived edge vs. replace the near-shore margin outright) that
+    committing to a shape now risks being the wrong shape either way. Once
+    decided, only this function's body — and the one call site — change.
+    """
+    return None
+
+
+def _size_l3_cluster(
+    cluster: SpotCluster,
+    avg_bearing: float,
+    *,
+    resolution_m: float,
+    lateral_m: float,
+    offshore_depth_m: float,
+    offshore_distance_m: float | None,
+    structures: list[dict] | None,
+    spot_l3_configs: dict[str, str] | None,
+    spot_topographic_features: dict[str, str] | None,
+) -> GridDomain | None:
+    """Trigger check → size → viability check for one L3 cluster (T4A.11).
+
+    Shared by ``compute_domains()`` and ``compute_level3_domains()`` so the
+    two public entry points cannot diverge on trigger/viability logic
+    (``rules/coding.md`` DRY).
+
+    Returns the sized ``GridDomain``, or ``None`` when the widened trigger
+    (T4A.11 Do step 1 — structure OR operator classification, subject to the
+    ``l3_enabled`` override) is not satisfied for this cluster, or the sized
+    grid fails the viability test (ADR-093 Amendment 2 §4). Both paths log
+    INFO with the reason. Callers (and ``swan_runner.py``'s L3 execution
+    loop, P4A Round 2 Blocker 1) must treat ``grid=None`` as the single
+    source of truth for "this cluster does not run L3" — do not re-derive
+    the trigger decision downstream.
+    """
+    l3_flags = (
+        [spot_l3_configs.get(sid, "auto") for sid in cluster.spot_ids]
+        if spot_l3_configs is not None
+        else []
+    )
+    cluster_structs = _cluster_structures(structures, cluster.spot_ids)
+    classifications = (
+        [spot_topographic_features.get(sid, "") for sid in cluster.spot_ids]
+        if spot_topographic_features is not None
+        else []
+    )
+
+    triggered, reason = _l3_trigger_reason(cluster_structs, l3_flags, classifications)
+    if not triggered:
+        logger.info("L3 skipped for cluster %s: %s", cluster.spot_ids, reason)
+        return None
+
+    grid = _compute_level3_grid(
+        cluster,
+        avg_bearing,
+        resolution_m=resolution_m,
+        lateral_m=lateral_m,
+        offshore_depth_m=offshore_depth_m,
+        offshore_distance_m=offshore_distance_m,
+        structures=cluster_structs or None,
+    )
+
+    # Parked (Blocker 2) — see _l3_shoreward_edge_reach_m docstring. Once the
+    # operator decides which criterion sets L3's shoreward edge, this is the
+    # one place it plugs in, ahead of the viability check below.
+    _l3_shoreward_edge_reach_m(cluster, max_hs_m_by_spot=None)
+
+    feature_points, feature_label = _l3_feature_points(cluster_structs, cluster)
+    if not _l3_viability_check(grid, feature_points, feature_label, cluster.spot_ids):
+        return None
+
+    logger.info("L3 enabled for cluster %s: %s", cluster.spot_ids, reason)
+    return grid
+
+
 def compute_domains(
     spot_locations: list[dict],
     *,
@@ -105,6 +359,7 @@ def compute_domains(
     cluster_distance_m: float = 500.0,
     structures: list[dict] | None = None,
     spot_l3_configs: dict[str, str] | None = None,
+    spot_topographic_features: dict[str, str] | None = None,
 ) -> DomainSizing:
     """Compute 3-level nested grid domains from spot locations.
 
@@ -120,14 +375,26 @@ def compute_domains(
         level3_offshore_depth_m: Offshore boundary depth for Level 3 (default 15m).
         cluster_distance_m: Max pin-to-pin distance for spot clustering (default 500m).
         structures: Optional list of coastal structure dicts (from Overpass/wizard
-            discovery).  When provided, L3 grids with structure coordinates use
-            structure-based smart sizing (T3.2) instead of pin-cluster sizing.
+            discovery).  Each dict may carry an optional ``spot_id`` key (T4A.11) so
+            a structure at one spot is not applied to an unrelated cluster.  When
+            present for a cluster, L3 uses structure-based smart sizing (T3.2)
+            instead of pin-cluster sizing.
         spot_l3_configs: Optional mapping of spot_id → l3_enabled value ("auto",
-            "on", "off").  When provided, clusters where all spots have
-            l3_enabled="off" receive ``grid=None`` (L3 skipped).
+            "on", "off").  ``"on"`` forces L3 on; ``"off"`` for every spot in a
+            cluster forces it off.  Otherwise ("auto"), T4A.11's widened trigger
+            applies — see ``spot_topographic_features``.
+        spot_topographic_features: Optional mapping of spot_id → operator
+            classification (``"point_break"``, ``"headland"``, ``"bay_break"``,
+            ``"straight_beach"``). T4A.11 (ADR-093 Amendment 2 §3): a cluster with
+            no structures but a point_break/headland/bay_break classification on
+            any of its spots still triggers L3 — structure-only was the pre-T4A.11
+            trigger and could never enable L3 at a point break.
 
     Returns:
-        DomainSizing with all three grid levels computed.
+        DomainSizing with all three grid levels computed. Each cluster's
+        ``grid`` is ``None`` when T4A.11's trigger is not satisfied, or when
+        the sized grid fails the viability test (ADR-093 Amendment 2 §4) —
+        see ``_size_l3_cluster()``.
     """
     if not spot_locations:
         raise ValueError("compute_domains: no spot locations provided")
@@ -180,17 +447,6 @@ def compute_domains(
             spot_offshore[s["id"]] = float(d)
 
     for cluster in clusters:
-        # T3.1 — skip L3 if all spots in this cluster have l3_enabled="off"
-        if spot_l3_configs is not None:
-            flags = [spot_l3_configs.get(sid, "auto") for sid in cluster.spot_ids]
-            if all(f == "off" for f in flags):
-                cluster.grid = None
-                logger.info(
-                    "L3 skipped for cluster %s: all spots have l3_enabled=off",
-                    cluster.spot_ids,
-                )
-                continue
-
         # Use the maximum offshore distance from any spot in this cluster.
         # This ensures the grid reaches the 15m contour for all spots.
         cluster_distances = [
@@ -198,7 +454,9 @@ def compute_domains(
         ]
         cluster_offshore_m = max(cluster_distances) if cluster_distances else None
 
-        cluster.grid = _compute_level3_grid(
+        # T4A.11 — trigger (structure OR classification, subject to
+        # l3_enabled) → size → viability check, all in one place.
+        cluster.grid = _size_l3_cluster(
             cluster,
             avg_bearing,
             resolution_m=level3_resolution_m,
@@ -206,6 +464,8 @@ def compute_domains(
             offshore_depth_m=level3_offshore_depth_m,
             offshore_distance_m=cluster_offshore_m,
             structures=structures,
+            spot_l3_configs=spot_l3_configs,
+            spot_topographic_features=spot_topographic_features,
         )
 
     return DomainSizing(level1=level1, level2=level2, level3_clusters=clusters)
@@ -306,9 +566,10 @@ def compute_level3_domains(
     structures: list[dict] | None = None,
     spot_l3_configs: dict[str, str] | None = None,
     contour_15m_by_spot: dict[str, float] | None = None,
+    spot_topographic_features: dict[str, str] | None = None,
 ) -> list[SpotCluster]:
     """Cluster spots and size each L3 grid from the actual 15m depth contour
-    (or the deepest configured structure, whichever is deeper) — Do steps 6-7.
+    — Do steps 6-7, gated by T4A.11's widened trigger and viability test.
 
     ``contour_15m_by_spot`` maps spot id -> 15m-contour distance found by
     searching the MEDIUM-downloaded CUDEM grid along that spot's own bearing
@@ -322,6 +583,19 @@ def compute_level3_domains(
     Args:
         spot_locations: List of dicts with keys: id, lat, lon,
             beach_facing_degrees.
+        structures: Optional list of structure dicts. Each may carry an
+            optional ``spot_id`` key (T4A.11) so a structure at one spot is
+            not applied to an unrelated cluster.
+        spot_l3_configs: Optional mapping of spot_id → l3_enabled
+            ("auto"/"on"/"off"). See ``compute_domains()`` for semantics.
+        spot_topographic_features: Optional mapping of spot_id → operator
+            classification. T4A.11's widened trigger — see
+            ``compute_domains()`` for the full explanation.
+
+    Returns:
+        List of ``SpotCluster``. Each cluster's ``grid`` is ``None`` when
+        T4A.11's trigger is not satisfied, or when the sized grid fails the
+        viability test (ADR-093 Amendment 2 §4) — see ``_size_l3_cluster()``.
     """
     if not spot_locations:
         raise ValueError("compute_level3_domains: no spot locations provided")
@@ -332,22 +606,12 @@ def compute_level3_domains(
     contour_by_spot = contour_15m_by_spot or {}
 
     for cluster in clusters:
-        if spot_l3_configs is not None:
-            flags = [spot_l3_configs.get(sid, "auto") for sid in cluster.spot_ids]
-            if all(f == "off" for f in flags):
-                cluster.grid = None
-                logger.info(
-                    "L3 skipped for cluster %s: all spots have l3_enabled=off",
-                    cluster.spot_ids,
-                )
-                continue
-
         cluster_distances = [
             contour_by_spot[sid] for sid in cluster.spot_ids if sid in contour_by_spot
         ]
         cluster_offshore_m = max(cluster_distances) if cluster_distances else None
 
-        cluster.grid = _compute_level3_grid(
+        cluster.grid = _size_l3_cluster(
             cluster,
             avg_bearing,
             resolution_m=resolution_m,
@@ -355,6 +619,8 @@ def compute_level3_domains(
             offshore_depth_m=offshore_depth_m,
             offshore_distance_m=cluster_offshore_m,
             structures=structures,
+            spot_l3_configs=spot_l3_configs,
+            spot_topographic_features=spot_topographic_features,
         )
 
     return clusters
@@ -663,6 +929,10 @@ def smart_size_l3_grid(
         max_struct_length_km = 0.020
 
     # Shadow zone: 3× structure length in the shoreward direction
+    # PARKED (Blocker 2, see _l3_shoreward_edge_reach_m): this is the smart-
+    # sized grid's entire shoreward-edge logic today. Once the operator
+    # decides which criterion sets L3's shoreward reach, this is the value
+    # that changes.
     shadow_km = 3.0 * max_struct_length_km
     pad_km = pad_m / 1000.0
 
@@ -837,6 +1107,11 @@ def _compute_level3_grid(
             "SWAN runs.",
             cluster.spot_ids, offshore_km,
         )
+    # PARKED (Blocker 2, see _l3_shoreward_edge_reach_m): this near-shore
+    # margin is the pin-based grid's entire shoreward-edge logic today. Once
+    # the operator decides which criterion sets L3's shoreward reach, this
+    # is the value that changes — either clamped by, or replaced with, the
+    # resolved criterion's output.
     landward_km = 0.1
 
     km_per_deg_lat = 111.0
