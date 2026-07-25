@@ -1864,8 +1864,342 @@ async def station(request: Request) -> StationResponse:
     )
 
 
+
+# ---------------------------------------------------------------------------
+# T4A.3 — CUDEM download + grid sizing moved to apply time.
+#
+# Same chain that used to run inside SWAN's cache-warmer trigger
+# (providers/nearshore/swan.py `_run_all_spots_locked()`), moved here so it
+# runs once, at apply time, with progress visible via logs — not blocking
+# the first SWAN run by 5-10 minutes, and not invisible to the operator.
+# `_run_all_spots_locked()` (Do step 9, same commit round) now reads the
+# caches this writes; it performs zero CUDEM downloads and zero grid sizing.
+# ---------------------------------------------------------------------------
+
+#: Grid boundary metadata cache (T4A.3 Do step 8) — DomainSizing serialized
+#: via services.swan_domain.domain_sizing_to_dict(). The SWAN runtime loads
+#: this instead of calling compute_domains()/compute_level3_domains() fresh.
+_SWAN_GRID_SIZING_CACHE_PATH = Path("/etc/weewx-clearskies/swan_grid_sizing.json")
+
+#: Per-spot variable-resolution profile cache. Same path
+#: providers/nearshore/swan.py's `_PROFILE_CACHE_DIR` reads at runtime —
+#: this function REPLACES that module's `download_bidirectional_profile()`
+#: fallback as the writer, but preserves the same top-level shape
+#: (`{"profile": [...], "coastline_lat", "coastline_lon", ...}`) so existing
+#: runtime readers (`_compute_15m_point`, transect building) keep working
+#: unchanged; the extra T4A.2/T4A.3 metadata keys are additive.
+_MARINE_PROFILE_CACHE_DIR = Path("/etc/weewx-clearskies/spot_profiles")
+
+
+def _run_marine_apply_chain(config_dir: Path) -> None:
+    """T4A.3 Do steps 1-11: size L1 -> download COARSE -> find 30m contour ->
+    size L2 -> download MEDIUM -> find 15m contour -> size L3 (T4A.11
+    trigger + viability) -> download FINE -> extract native profile -> PCHIP
+    interpolate -> cache everything.
+
+    Runs synchronously but is always invoked via ``BackgroundTasks`` from
+    ``apply()`` (same pattern as this file's existing deferred-restart task)
+    so the wizard's HTTP response is not blocked for the 5-10 minutes a full
+    CUDEM download chain can take.
+
+    Never raises past its own boundary — a background task's exception is
+    otherwise silently swallowed by the ASGI server with no operator-visible
+    trace, so every failure path here is an explicit ERROR log naming what
+    failed and what the consequence is (a stale or missing cache — the
+    runtime chain in ``providers/nearshore/swan.py`` treats that as its own
+    ERROR-and-skip condition, per T4A.3 Do step 9; it does not fall back to
+    downloading itself).
+
+    Re-entrant and idempotent: every ``/setup/apply`` call re-runs this in
+    full for the current spot configuration (Do step 10's "changed spots
+    re-trigger" requirement — trivially satisfied by always recomputing
+    everything rather than diffing; ``download_bathymetry_for_level()``'s
+    own 180-day cache keeps repeat downloads cheap when bathymetry hasn't
+    changed).
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from weewx_clearskies_api.config.marine_config import load_marine_config  # noqa: PLC0415
+    from weewx_clearskies_api.enrichment.bathymetry import (  # noqa: PLC0415
+        compute_structure_zone_depth,
+        extract_native_profile_from_grid,
+        find_depth_contour_distance,
+        find_shoreline_from_grid,
+        interpolate_profile_pchip,
+    )
+    from weewx_clearskies_api.providers.nearshore.swan import (  # noqa: PLC0415
+        build_obstacle_structures,
+        download_bathymetry_for_level,
+    )
+    from weewx_clearskies_api.services.swan_domain import (  # noqa: PLC0415
+        DomainSizing,
+        compute_level1_domain,
+        compute_level2_domain,
+        compute_level3_domains,
+        domain_sizing_to_dict,
+    )
+
+    try:
+        conf_path = config_dir / "api.conf"
+        if not conf_path.exists():
+            logger.error(
+                "Marine apply chain: api.conf not found at %s -- skipping", conf_path
+            )
+            return
+        api_cfg = configobj.ConfigObj(str(conf_path), interpolation=False)
+        marine_config = load_marine_config(api_cfg)
+        if marine_config is None or not marine_config.surf_spots:
+            logger.debug(
+                "Marine apply chain: no surf spots configured -- nothing to size"
+            )
+            return
+
+        surf_spot_ids = set(marine_config.surf_spots.keys())
+        surf_locations = [
+            loc for loc in marine_config.locations if loc.id in surf_spot_ids
+        ]
+        if not surf_locations:
+            logger.warning(
+                "Marine apply chain: surf_spots configured but no matching "
+                "locations -- skipping"
+            )
+            return
+
+        spot_locations = [
+            {
+                "id": loc.id,
+                "lat": loc.lat,
+                "lon": loc.lon,
+                "beach_facing_degrees": float(
+                    marine_config.surf_spots[loc.id].beach_facing_degrees
+                ),
+            }
+            for loc in surf_locations
+        ]
+
+        structures = build_obstacle_structures(surf_locations, marine_config)
+        spot_l3_configs = {
+            sid: cfg.l3_enabled for sid, cfg in marine_config.surf_spots.items()
+        }
+        spot_topographic_features = {
+            sid: cfg.topographic_feature
+            for sid, cfg in marine_config.surf_spots.items()
+        }
+
+        logger.info(
+            "Marine apply chain: starting for %d surf spot(s)", len(surf_locations)
+        )
+
+        # --- Do steps 1-2: size L1 (no CUDEM needed), download COARSE ---
+        level1 = compute_level1_domain(spot_locations)
+        logger.info(
+            "Marine apply chain: L1 sized (%d x %d cells)", level1.ni, level1.nj
+        )
+        coarse_grid = download_bathymetry_for_level(level1, level=1)
+        if not coarse_grid.get("depths"):
+            logger.error(
+                "Marine apply chain: COARSE (L1) bathymetry download failed -- "
+                "aborting chain (no partial cache written)"
+            )
+            return
+
+        # --- Do steps 3-4: per-spot 30m contour search (own bearing, LC-10) -> size L2 ---
+        contour_30m_by_spot: dict[str, float] = {}
+        coastline_by_spot: dict[str, tuple[float, float]] = {}
+        for loc in surf_locations:
+            bearing = float(marine_config.surf_spots[loc.id].beach_facing_degrees)
+            coast_lat, coast_lon = find_shoreline_from_grid(
+                coarse_grid, loc.lat, loc.lon, bearing
+            )
+            coastline_by_spot[loc.id] = (coast_lat, coast_lon)
+            try:
+                contour_30m_by_spot[loc.id] = find_depth_contour_distance(
+                    coarse_grid, coast_lat, coast_lon, bearing, 30.0, spot_id=loc.id,
+                )
+            except ValueError:
+                logger.error(
+                    "Marine apply chain: 30m contour search failed for spot "
+                    "%r -- this spot does not contribute to L2 sizing this cycle",
+                    loc.id, exc_info=True,
+                )
+        if not contour_30m_by_spot:
+            logger.error(
+                "Marine apply chain: no spot's 30m contour was found -- "
+                "aborting chain (no partial cache written)"
+            )
+            return
+        contour_30m_max = max(contour_30m_by_spot.values())
+
+        level2 = compute_level2_domain(
+            spot_locations, contour_30m_distance_m=contour_30m_max
+        )
+        logger.info(
+            "Marine apply chain: L2 sized from real 30m contour (%.0fm) -- "
+            "%d x %d cells", contour_30m_max, level2.ni, level2.nj,
+        )
+
+        # --- Do step 5 (medium tier): download MEDIUM over L2's bbox ---
+        medium_grid = download_bathymetry_for_level(level2, level=2)
+        if not medium_grid.get("depths"):
+            logger.error(
+                "Marine apply chain: MEDIUM (L2) bathymetry download failed -- "
+                "aborting chain (no partial cache written)"
+            )
+            return
+
+        # --- Do step 6: per-spot 15m contour search on the finer MEDIUM grid -> size L3 ---
+        contour_15m_by_spot: dict[str, float] = {}
+        for loc in surf_locations:
+            bearing = float(marine_config.surf_spots[loc.id].beach_facing_degrees)
+            coast_lat, coast_lon = find_shoreline_from_grid(
+                medium_grid, loc.lat, loc.lon, bearing
+            )
+            coastline_by_spot[loc.id] = (coast_lat, coast_lon)  # MEDIUM anchor supersedes COARSE
+            try:
+                contour_15m_by_spot[loc.id] = find_depth_contour_distance(
+                    medium_grid, coast_lat, coast_lon, bearing, 15.0, spot_id=loc.id,
+                )
+            except ValueError:
+                logger.error(
+                    "Marine apply chain: 15m contour search failed for spot "
+                    "%r -- this spot does not contribute to L3 sizing this cycle",
+                    loc.id, exc_info=True,
+                )
+
+        level3_clusters = compute_level3_domains(
+            spot_locations,
+            structures=structures,
+            spot_l3_configs=spot_l3_configs,
+            contour_15m_by_spot=contour_15m_by_spot,
+            spot_topographic_features=spot_topographic_features,
+        )
+        n_l3_enabled = sum(1 for c in level3_clusters if c.grid is not None)
+        logger.info(
+            "Marine apply chain: L3 sized -- %d of %d cluster(s) enabled "
+            "(trigger + viability test — see per-cluster INFO logs above)",
+            n_l3_enabled, len(level3_clusters),
+        )
+
+        sizing = DomainSizing(level1=level1, level2=level2, level3_clusters=level3_clusters)
+
+        # --- Do steps 7-9: FINE download per L3 cluster, native profile
+        # extraction, PCHIP interpolation. Spots outside an enabled L3
+        # cluster still get a profile (SwellTrack needs one regardless of
+        # L3) — extracted from the MEDIUM-tier grid instead of FINE.
+        _MARINE_PROFILE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        for cluster in level3_clusters:
+            fine_grid: dict | None = None
+            if cluster.grid is not None:
+                fine_grid = download_bathymetry_for_level(cluster.grid, level=3)
+                if not fine_grid.get("depths"):
+                    logger.error(
+                        "Marine apply chain: FINE (L3) bathymetry download "
+                        "failed for cluster %s -- profiles for this cluster "
+                        "use MEDIUM-tier (L2) data instead",
+                        cluster.spot_ids,
+                    )
+                    fine_grid = None
+            profile_grid = fine_grid or medium_grid
+
+            for spot_id in cluster.spot_ids:
+                spot_cfg = marine_config.surf_spots.get(spot_id)
+                if spot_cfg is None:
+                    continue
+                coast_lat, coast_lon = coastline_by_spot.get(spot_id, (None, None))
+                if coast_lat is None:
+                    logger.error(
+                        "Marine apply chain: no coastline anchor for spot %r "
+                        "-- profile cache NOT written this cycle", spot_id,
+                    )
+                    continue
+                bearing = float(spot_cfg.beach_facing_degrees)
+                max_distance_m = contour_15m_by_spot.get(spot_id) or 2500.0
+
+                raw_profile = extract_native_profile_from_grid(
+                    profile_grid, coast_lat, coast_lon, bearing, max_distance_m,
+                )
+                if not raw_profile:
+                    logger.error(
+                        "Marine apply chain: no native profile extracted for "
+                        "spot %r -- cache NOT written this cycle (any "
+                        "previous cache is preserved)", spot_id,
+                    )
+                    continue
+
+                spot_structures = [
+                    s for s in structures if s.get("spot_id") == spot_id
+                ]
+                structure_zone_depth = compute_structure_zone_depth(
+                    spot_structures, profile_grid, spot_id=spot_id,
+                )
+                max_hs_m = float(spot_cfg.max_hs_m)
+                gamma = 0.73
+                fine_zone_max_depth = max(
+                    1.3 * max_hs_m / gamma, structure_zone_depth
+                )
+
+                try:
+                    interpolated = interpolate_profile_pchip(
+                        raw_profile, max_hs_m, gamma, structure_zone_depth,
+                    )
+                except ValueError:
+                    logger.error(
+                        "Marine apply chain: PCHIP interpolation failed for "
+                        "spot %r -- cache NOT written this cycle", spot_id,
+                        exc_info=True,
+                    )
+                    continue
+
+                vertical_datum = profile_grid.get("vertical_datum", "UNKNOWN")
+                payload = {
+                    "profile": interpolated,
+                    "coastline_lat": coast_lat,
+                    "coastline_lon": coast_lon,
+                    "structure_zone_depth": structure_zone_depth,
+                    "fine_zone_max_depth": fine_zone_max_depth,
+                    "max_hs_m": max_hs_m,
+                    "gamma": gamma,
+                    "contour_30m_distance_m": contour_30m_by_spot.get(spot_id),
+                    "contour_15m_distance_m": contour_15m_by_spot.get(spot_id),
+                    "vertical_datum": vertical_datum,
+                    "generated_at": datetime.now(UTC).isoformat(),
+                    "source": "apply_time_pchip",
+                }
+                cache_path = _MARINE_PROFILE_CACHE_DIR / f"{spot_id}.json"
+                cache_path.write_text(json.dumps(payload), encoding="utf-8")
+                logger.info(
+                    "Marine apply chain: spot %r profile cached (%d points, "
+                    "datum=%s, structure_zone_depth=%.1fm, "
+                    "fine_zone_max_depth=%.1fm)",
+                    spot_id, len(interpolated), vertical_datum,
+                    structure_zone_depth, fine_zone_max_depth,
+                )
+
+        # --- Do step 8 (grid boundary metadata): persist DomainSizing ---
+        _SWAN_GRID_SIZING_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        sizing_payload = domain_sizing_to_dict(sizing)
+        sizing_payload["generated_at"] = datetime.now(UTC).isoformat()
+        _SWAN_GRID_SIZING_CACHE_PATH.write_text(
+            json.dumps(sizing_payload), encoding="utf-8"
+        )
+        logger.info(
+            "Marine apply chain: complete -- grid sizing cached to %s "
+            "(L1: %d cells, L2: %d cells, %d/%d L3 clusters enabled)",
+            _SWAN_GRID_SIZING_CACHE_PATH, sizing.level1.cell_count,
+            sizing.level2.cell_count, n_l3_enabled, len(level3_clusters),
+        )
+    except Exception:
+        logger.error(
+            "Marine apply chain: unexpected failure -- aborting "
+            "(any previously-written caches are left in place)",
+            exc_info=True,
+        )
+
+
 @router.post("/apply", response_model=ApplyResponse)
-async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
+async def apply(
+    body: ApplyRequest, request: Request, background_tasks: BackgroundTasks
+) -> ApplyResponse:
     """Write api.conf and secrets.env, then mark setup complete."""
     tm = await require_setup_session(request)
 
@@ -1883,6 +2217,19 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write api.conf during setup apply: %s", type(exc).__name__)
         raise HTTPException(500, detail="Failed to write configuration file.") from exc
+
+    # 1c. T4A.3 — kick off the marine CUDEM download / grid sizing / profile
+    # generation chain in the background, AFTER api.conf is on disk (the
+    # chain re-reads it via load_marine_config() rather than trusting
+    # `body`, so it always sizes from what was actually written). Scheduled
+    # via BackgroundTasks (same pattern as the deferred-restart task below)
+    # so the wizard's response isn't blocked for the 5-10 minutes a full
+    # CUDEM download chain can take. Runs whenever marine config with at
+    # least one surf spot is present; the chain itself no-ops otherwise.
+    if body.marine is not None and any(
+        loc.surf is not None for loc in body.marine.locations
+    ):
+        background_tasks.add_task(_run_marine_apply_chain, config_dir)
 
     # --- Step 1b: write skin.conf (ADR-043) ---
     if body.skin_conf:
