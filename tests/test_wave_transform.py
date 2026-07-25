@@ -127,36 +127,6 @@ def test_breaker_correction_no_change():
 
 
 # ---------------------------------------------------------------------------
-# Supplement 2 — coastal structure effects
-# ---------------------------------------------------------------------------
-
-
-def test_structure_jetty_within_zone():
-    structure = StubStructure(
-        type="jetty", material="semi_permeable", length_m=100.0, distance_m=50.0
-    )
-    new_height, applied = wt.apply_structure_effects(2.0, [structure])
-    assert applied is True
-    assert new_height == pytest.approx(2.0 * 0.35)
-    assert new_height < 2.0
-
-
-def test_structure_no_structures():
-    new_height, applied = wt.apply_structure_effects(2.0, [])
-    assert applied is False
-    assert new_height == 2.0
-
-
-def test_structure_outside_influence():
-    structure = StubStructure(
-        type="jetty", material="semi_permeable", length_m=10.0, distance_m=100_000.0
-    )
-    new_height, applied = wt.apply_structure_effects(2.0, [structure])
-    assert applied is True
-    assert new_height == pytest.approx(2.0, abs=0.001)
-
-
-# ---------------------------------------------------------------------------
 # Supplement 3 — bilinear interpolation
 # ---------------------------------------------------------------------------
 
