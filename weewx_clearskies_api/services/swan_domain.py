@@ -12,6 +12,7 @@ Spot clustering (14d): adjacent spots <500m apart share one Level 3 grid.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 from dataclasses import dataclass, field
@@ -1175,3 +1176,53 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     )
     return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+# ---------------------------------------------------------------------------
+# T4A.3 Do step 8 — "Grid boundary metadata" persistence.
+#
+# The apply-time chain (endpoints/setup.py) computes DomainSizing ONCE, at
+# apply time, and must persist it so the SWAN runtime (providers/nearshore/
+# swan.py, Do step 9) never calls compute_domains()/compute_level3_domains()
+# fresh — no CUDEM download, no grid sizing, at runtime. These two functions
+# are the lossless (de)serialization for that cache file.
+# ---------------------------------------------------------------------------
+
+
+def domain_sizing_to_dict(sizing: DomainSizing) -> dict:
+    """Serialize a ``DomainSizing`` to a JSON-safe dict."""
+    return {
+        "level1": dataclasses.asdict(sizing.level1),
+        "level2": dataclasses.asdict(sizing.level2),
+        "level3_clusters": [
+            {
+                "spot_ids": cluster.spot_ids,
+                "lats": cluster.lats,
+                "lons": cluster.lons,
+                "grid": dataclasses.asdict(cluster.grid) if cluster.grid else None,
+            }
+            for cluster in sizing.level3_clusters
+        ],
+    }
+
+
+def domain_sizing_from_dict(d: dict) -> DomainSizing:
+    """Reconstruct a ``DomainSizing`` from ``domain_sizing_to_dict()``'s output.
+
+    Raises ``KeyError``/``TypeError`` on a malformed cache — callers must
+    treat that as a cache-read failure (ERROR + skip run per T4A.3 Do step
+    9), not a reason to fall back to fresh computation at runtime.
+    """
+    return DomainSizing(
+        level1=GridDomain(**d["level1"]),
+        level2=GridDomain(**d["level2"]),
+        level3_clusters=[
+            SpotCluster(
+                spot_ids=c["spot_ids"],
+                lats=c["lats"],
+                lons=c["lons"],
+                grid=GridDomain(**c["grid"]) if c.get("grid") else None,
+            )
+            for c in d["level3_clusters"]
+        ],
+    )
