@@ -294,6 +294,55 @@ def _interpolate_hrrr_wind(
     return speed, direction
 
 
+def _resolve_timestep_wind(
+    *,
+    is_first_ts: bool,
+    valid_time: str,
+    wind_speed_station: float | None,
+    wind_direction_station: float | None,
+    wind_source_station: str,
+    hrrr_field: dict | None,
+    lat: float,
+    lon: float,
+) -> tuple[float | None, float | None, str]:
+    """Resolve wind speed/direction/source for a single forecast timestep (ADR-094).
+
+    ``is_first_ts`` (t=0, current conditions): station hardware -> forecast
+    provider wind, with HRRR interpolated at forecast_hour=0 as the fallback
+    when station wind is unavailable. All other timesteps: HRRR interpolated
+    at ``valid_time``.
+
+    Shared by the per-timestep loop (Step 5 below) and the SurfBeat IG-strip
+    precomputation (T2.2), which needs the wind at its own selected timestep
+    (``_best_ts``) -- a different timestep from any single per-timestep-loop
+    iteration, and evaluated *before* that loop runs. Before T4A.8 the
+    SurfBeat block referenced the per-timestep loop's ``ts_wind_speed`` /
+    ``ts_wind_direction`` variables directly, which are assigned later in
+    the same function -- a latent UnboundLocalError/F821 whenever the
+    SurfBeat path executed. Extracting the shared rule here fixes that
+    without duplicating the ADR-094 precedence.
+    """
+    if is_first_ts:
+        wind_speed = wind_speed_station
+        wind_direction = wind_direction_station
+        wind_source = wind_source_station
+        if wind_speed is None and hrrr_field is not None:
+            wind_speed, wind_direction = _interpolate_hrrr_wind(
+                hrrr_field, lat, lon, forecast_hour=0
+            )
+            if wind_speed is not None:
+                wind_source = "hrrr"
+    else:
+        wind_speed = None
+        wind_direction = None
+        wind_source = "hrrr"
+        if hrrr_field is not None:
+            wind_speed, wind_direction = _interpolate_hrrr_wind(
+                hrrr_field, lat, lon, valid_time_iso=valid_time
+            )
+    return wind_speed, wind_direction, wind_source
+
+
 # ---------------------------------------------------------------------------
 # SurfBeat bathy profile helper (T2.2)
 # ---------------------------------------------------------------------------
@@ -754,6 +803,27 @@ def get_surf(location_id: str) -> dict:
                     _surfbeat_by_hour[_sb_hr] = None
                     continue
 
+                # T4A.8: resolve wind at THIS block's own selected timestep
+                # (_best_ts), which is generally a different timestep from
+                # any single iteration of the per-timestep loop below (that
+                # loop hasn't run yet at this point in the function). Same
+                # ADR-094 rule, shared via _resolve_timestep_wind() rather
+                # than referencing the per-timestep loop's ts_wind_speed /
+                # ts_wind_direction, which are undefined until that loop runs.
+                _sb_is_t0 = _best_ts == _ordered_times[0]
+                _sb_wind_speed, _sb_wind_direction, _sb_wind_source = (
+                    _resolve_timestep_wind(
+                        is_first_ts=_sb_is_t0,
+                        valid_time=_best_ts,
+                        wind_speed_station=wind_speed_station,
+                        wind_direction_station=wind_direction_station,
+                        wind_source_station=wind_source_station,
+                        hrrr_field=hrrr_field,
+                        lat=location.lat,
+                        lon=location.lon,
+                    )
+                )
+
                 # Use the most offshore point at this timestep for boundary conditions.
                 _sb_pts = _points_by_time.get(_best_ts, [])
                 if not _sb_pts:
@@ -785,8 +855,8 @@ def get_surf(location_id: str) -> dict:
                                 tp=float(_sb_tp_raw),
                                 direction=float(_sb_dir_raw),
                                 cfjon=spot_config.friction_coefficient,
-                                wind_speed_ms=float(ts_wind_speed or 0.0),
-                                wind_direction_deg=float(ts_wind_direction or 0.0),
+                                wind_speed_ms=float(_sb_wind_speed or 0.0),
+                                wind_direction_deg=float(_sb_wind_direction or 0.0),
                             )
                         except ComputeServiceError:
                             logger.warning(
@@ -804,8 +874,8 @@ def get_surf(location_id: str) -> dict:
                                 direction=float(_sb_dir_raw),
                                 cfjon=spot_config.friction_coefficient,
                                 swan_binary=_SURFBEAT_SWAN_BINARY,
-                                wind_speed_ms=float(ts_wind_speed or 0.0),
-                                wind_direction_deg=float(ts_wind_direction or 0.0),
+                                wind_speed_ms=float(_sb_wind_speed or 0.0),
+                                wind_direction_deg=float(_sb_wind_direction or 0.0),
                             )
                     else:
                         _sb_result = run_surfbeat_strip(
@@ -816,8 +886,8 @@ def get_surf(location_id: str) -> dict:
                             direction=float(_sb_dir_raw),
                             cfjon=spot_config.friction_coefficient,
                             swan_binary=_SURFBEAT_SWAN_BINARY,
-                            wind_speed_ms=float(ts_wind_speed or 0.0),
-                            wind_direction_deg=float(ts_wind_direction or 0.0),
+                            wind_speed_ms=float(_sb_wind_speed or 0.0),
+                            wind_direction_deg=float(_sb_wind_direction or 0.0),
                         )
                     _surfbeat_by_hour[_sb_hr] = _sb_result
                     logger.debug(
@@ -998,30 +1068,16 @@ def get_surf(location_id: str) -> dict:
         # First timestep (closest to now) = t=0 (current conditions).
         # Remaining timesteps = forecast.
         is_first_ts = ts_idx == 0
-        if is_first_ts:
-            ts_wind_speed = wind_speed_station
-            ts_wind_direction = wind_direction_station
-            ts_wind_source = wind_source_station
-            if ts_wind_speed is None and hrrr_field is not None:
-                ts_wind_speed, ts_wind_direction = _interpolate_hrrr_wind(
-                    hrrr_field,
-                    location.lat,
-                    location.lon,
-                    forecast_hour=0,
-                )
-                if ts_wind_speed is not None:
-                    ts_wind_source = "hrrr"
-        else:
-            ts_wind_speed = None
-            ts_wind_direction = None
-            ts_wind_source = "hrrr"
-            if hrrr_field is not None:
-                ts_wind_speed, ts_wind_direction = _interpolate_hrrr_wind(
-                    hrrr_field,
-                    location.lat,
-                    location.lon,
-                    valid_time_iso=valid_time,
-                )
+        ts_wind_speed, ts_wind_direction, ts_wind_source = _resolve_timestep_wind(
+            is_first_ts=is_first_ts,
+            valid_time=valid_time,
+            wind_speed_station=wind_speed_station,
+            wind_direction_station=wind_direction_station,
+            wind_source_station=wind_source_station,
+            hrrr_field=hrrr_field,
+            lat=location.lat,
+            lon=location.lon,
+        )
 
         # T3.5/T4.1: Fetch SWAN SPECOUT components for this timestep.
         # Used by the scorer for swell dominance and cross-swell sub-factors
