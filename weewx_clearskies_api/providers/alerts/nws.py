@@ -161,7 +161,7 @@ class _NwsAlertProperties(BaseModel):
     effective: str
     onset: str | None = None
     expires: str | None = None
-    ends: str | None = None
+    ends: str | None = None  # NWS extension: expected event end time
     status: str | None = None
     messageType: str | None = None
     category: str | None = None
