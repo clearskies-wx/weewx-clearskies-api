@@ -20,7 +20,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocation, SurfSpotConfig
 from weewx_clearskies_api.endpoints.beach_profile import _build_transect_profile
+from weewx_clearskies_api.services import station as station_mod
+from weewx_clearskies_api.services import units as units_mod
+from weewx_clearskies_api.services.station import StationInfo
 from weewx_clearskies_api.services.surf_1d_analytical import BreakPoint
 from weewx_clearskies_api.services.surf_1d_pipeline import (
     PartitionBreakInfo,
@@ -229,3 +233,216 @@ def test_handoff_fields_degrade_to_null_when_attribute_genuinely_absent():
     depth, source = _handoff_fields(stub, "meter")
     assert depth is None
     assert source is None
+
+
+# ---------------------------------------------------------------------------
+# 7. Endpoint-level: get_beach_profile() actually BUILDS AND PASSES
+#    handoff_by_transect (T4A.6 item g, reopened 2026-07-25 — adversarial
+#    audit finding, coordinator-verified).
+#
+# The tests above only exercise _build_transect_profile()'s serialization —
+# they construct a TransectResult with handoff_depth_m already set, so they
+# pass whether or not get_beach_profile() ever builds handoff_by_transect at
+# all. That is exactly why the endpoint could silently fall back to
+# TransectInfo.handoff_depth_m (documented as a SETUP-TIME PLACEHOLDER ONLY,
+# swan_formats.py, MUST NOT be read as "the" handoff) while every test here
+# stayed green. This section calls the real get_beach_profile() route
+# function with monkeypatched provider/pipeline boundaries — mirroring the
+# pattern in tests/test_surf_endpoint.py's
+# test_surfbeat_precompute_block_runs_without_nameerror — and asserts on
+# what _run_pipeline() was actually called with.
+#
+# No live network is exercised (PROVIDER-MANUAL §11): swan.fetch(),
+# _compute_spot_transects(), and _run_pipeline() are all monkeypatched to
+# deterministic in-process fakes.
+# ---------------------------------------------------------------------------
+
+_EP_LOCATION_ID = "test-handoff-spot"
+_EP_TIME_ISO = "2026-07-25T12:00:00Z"
+
+# The real per-hour selection published on the SPECOUT entry by
+# swan_runner.py (_select_l3_handoff_spectra() -> "handoff_depth_m" /
+# "handoff_source_level", swan_runner.py:877) — what the endpoint SHOULD
+# read and pass through.
+_EP_REAL_HANDOFF_DEPTH_M = 2.47
+_EP_REAL_HANDOFF_SOURCE = "L3"
+
+# TransectInfo's setup-time placeholder (swan_formats.py's documented
+# L2_REFERENCE_DEPTH_M) — deliberately a DIFFERENT number from the real
+# value above, so a wiring bug that silently falls back to this instead of
+# the real per-hour selection is caught as a wrong number, not a
+# coincidentally-right one.
+_EP_PLACEHOLDER_DEPTH_M = 15.0
+
+
+def _ep_make_location() -> MarineLocation:
+    location = MarineLocation(
+        _EP_LOCATION_ID,
+        {
+            "name": "Test Handoff Spot",
+            "lat": "33.6534",
+            "lon": "-118.0039",
+            "activities": ["surf"],
+            "ndbc_station_ids": [],
+            "coops_station_ids": [],
+            "nws_marine_zone_id": None,
+        },
+    )
+    location.validate()
+    return location
+
+
+def _ep_make_surf_spot_config() -> SurfSpotConfig:
+    config = SurfSpotConfig({"bottom_type": "sand", "topographic_feature": "straight_beach"})
+    config.validate(_EP_LOCATION_ID)
+    return config
+
+
+def _ep_fake_swan_fetch(*, spot_id):
+    return {
+        "forecast": [
+            {
+                "time": _EP_TIME_ISO,
+                "distanceFromShore": 500.0,
+                "waveHeight": 1.2,
+                "wavePeriod": 12.0,
+                "waveDirection": 238.0,
+            }
+        ],
+        "spectral": [
+            {
+                "time": _EP_TIME_ISO,
+                # The real per-hour selection this test asserts gets read
+                # and passed through — see swan_runner.py:877.
+                "handoff_depth_m": _EP_REAL_HANDOFF_DEPTH_M,
+                "handoff_source_level": _EP_REAL_HANDOFF_SOURCE,
+            }
+        ],
+    }
+
+
+def _ep_fake_compute_spot_transects(**_kwargs):
+    return [
+        TransectInfo(
+            index=0,
+            origin_lat=33.6534,
+            origin_lon=-118.0039,
+            bearing_deg=238.0,
+            # Setup-time placeholder — must NOT be what reaches the response
+            # when a real per-hour selection is available (see module docstring).
+            handoff_depth_m=_EP_PLACEHOLDER_DEPTH_M,
+            is_structure_affected=False,
+        )
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _ep_reset_state():
+    """Reset beach_profile module state + station/units caches around each test."""
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    beach_profile_mod._marine_config = None
+    station_mod.reset_cache()
+    units_mod.reset_cache()
+    yield
+    beach_profile_mod._marine_config = None
+    station_mod.reset_cache()
+    units_mod.reset_cache()
+
+
+def _ep_wire_station() -> None:
+    station_mod.reset_cache()
+    station_mod._cached_station = StationInfo(
+        station_id="test-station",
+        name="Test Station",
+        latitude=33.6534,
+        longitude=-118.0039,
+        altitude=5.0,
+        timezone="America/Los_Angeles",
+        timezone_offset_minutes=-420,
+        unit_system="US",
+        hardware=None,
+    )
+
+
+def test_endpoint_passes_real_handoff_selection_to_pipeline(monkeypatch):
+    """The bug: get_beach_profile() built NO handoff_by_transect at any of
+    its three pipeline call sites, so run_pipeline() always fell back to
+    TransectInfo.handoff_depth_m (the setup-time placeholder). This test
+    calls the real endpoint function and would FAIL against the pre-fix
+    code (asserted below to have actually failed pre-fix, not merely
+    reasoned about) because handoff_by_transect would arrive empty and
+    _default_handoff would substitute the 15.0 m placeholder for the real
+    2.47 m per-hour selection.
+    """
+    import weewx_clearskies_api.endpoints.beach_profile as beach_profile_mod
+
+    _ep_wire_station()
+    units_mod.set_units_block({}, "US")
+
+    location = _ep_make_location()
+    surf_config = _ep_make_surf_spot_config()
+    beach_profile_mod.wire_beach_profile_config(
+        MarineConfig(locations=[location], surf_spots={_EP_LOCATION_ID: surf_config})
+    )
+
+    captured_calls: list[dict] = []
+
+    def _fake_run_pipeline(**kwargs):
+        captured_calls.append(kwargs)
+        # Minimal valid (non-degraded) result so the endpoint completes.
+        tr = TransectResult(
+            transect_index=0,
+            is_structure_affected=False,
+            hs_total_profile=np.array([1.0]),
+            distances=np.array([50.0]),
+            depths=np.array([2.0]),
+            per_partition=[None],
+            best_face_height_m=0.0,
+            handoff_depth_m=_EP_REAL_HANDOFF_DEPTH_M,
+            handoff_source_level=_EP_REAL_HANDOFF_SOURCE,
+        )
+        return PipelineResult(
+            best_peak_face_height_m=0.0,
+            spot_average_face_height_m=0.0,
+            peel_angle_deg=None,
+            peel_classification=None,
+            peel_direction=None,
+            transect_count=1,
+            open_transect_count=1,
+            per_transect=[tr],
+            per_partition_breaks=[],
+            degraded=False,
+        )
+
+    monkeypatch.setattr(beach_profile_mod, "_compute_spot_transects", _ep_fake_compute_spot_transects)
+    monkeypatch.setattr(beach_profile_mod, "_run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(
+        "weewx_clearskies_api.providers.nearshore.swan.fetch", _ep_fake_swan_fetch
+    )
+
+    response = beach_profile_mod.get_beach_profile(_EP_LOCATION_ID, transect_index="best")
+
+    # 1. The real call path was actually exercised.
+    assert len(captured_calls) == 1
+    call = captured_calls[0]
+
+    # 2. handoff_by_transect was built at all (the bug: it was never built,
+    #    so run_pipeline() received no kwarg / an empty dict and fell back
+    #    to the 15.0 m placeholder for every transect).
+    assert "handoff_by_transect" in call
+    assert call["handoff_by_transect"] == {0: (_EP_REAL_HANDOFF_DEPTH_M, _EP_REAL_HANDOFF_SOURCE)}
+
+    # 3. And the number that got there is the REAL per-hour selection, not
+    #    the setup-time placeholder — this is the assertion that catches a
+    #    "plausible-looking wrong value" (the placeholder is itself a valid
+    #    float, so only checking presence/shape would not catch a silent
+    #    fallback).
+    depth, source = call["handoff_by_transect"][0]
+    assert depth == pytest.approx(_EP_REAL_HANDOFF_DEPTH_M)
+    assert depth != pytest.approx(_EP_PLACEHOLDER_DEPTH_M)
+    assert source == _EP_REAL_HANDOFF_SOURCE
+
+    # 4. And the response itself reports the real value end to end.
+    assert response["data"]["metadata"]["handoffDepthM"] is not None
+    assert response["data"]["metadata"]["handoffDepthM"] != pytest.approx(_EP_PLACEHOLDER_DEPTH_M)

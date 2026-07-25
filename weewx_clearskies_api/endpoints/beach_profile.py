@@ -59,6 +59,10 @@ from weewx_clearskies_api.services.surf_1d_pipeline import (
 from weewx_clearskies_api.services.swan_formats import (
     compute_spot_transects as _compute_spot_transects,
 )
+from weewx_clearskies_api.services.transect_handoff import (
+    HandoffSelection,
+    select_hourly_handoff as _select_hourly_handoff,
+)
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
@@ -793,6 +797,44 @@ def get_beach_profile(
 
     # --- Run the per-partition 1D pipeline ---
     _ts_specout = _handoff_specout_by_time.get(closest_time) or {}
+
+    # T4A.9/T4A.6 item g (reopened 2026-07-25 — adversarial audit finding):
+    # this hour's handoff depth/source, per transect, mirrored from
+    # surf.py's identical block. The real per-hour selection happens
+    # upstream in swan_runner.py (_select_l3_handoff_spectra()) and is
+    # published on the SPECOUT entry as "handoff_depth_m"/
+    # "handoff_source_level" — this endpoint only reads that published
+    # choice, it does not recompute it, and it never touches grid geometry
+    # (C2). Without building and passing this dict, run_pipeline() falls
+    # back to TransectInfo.handoff_depth_m, which is documented
+    # (swan_formats.py) as a setup-time-only placeholder that MUST NOT be
+    # read as "the" handoff — that fallback previously made handoffDepthM/
+    # handoffSourceLevel report 15.0/"L2" for every request regardless of
+    # the spot's real per-hour L3 selection, defeating the entire point of
+    # item (g): distinguishing a handoff sampled from a breaking cell from
+    # genuinely small surf.
+    if "handoff_depth_m" in _ts_specout:
+        _handoff_selection = HandoffSelection(
+            handoff_depth_m=_ts_specout["handoff_depth_m"],
+            source_level=_ts_specout.get("handoff_source_level", "L3"),
+            station_index=None,
+            station_depth_m=_ts_specout["handoff_depth_m"],
+            clamped=False,
+        )
+    else:
+        _handoff_selection = _select_hourly_handoff(
+            hs_m=_bulk_hs if _bulk_hs is not None else 0.0,
+            station_depths_m=None,
+        )
+    _handoff_by_transect: dict[int, tuple[float, str]] = (
+        {
+            _idx: (_handoff_selection.handoff_depth_m, _handoff_selection.source_level)
+            for _idx in range(len(spot_transects))
+        }
+        if spot_transects
+        else {}
+    )
+
     pipeline_result: PipelineResult | None = None
     try:
         if _compute_host:
@@ -811,6 +853,7 @@ def get_beach_profile(
                     bulk_hs=_bulk_hs,
                     bulk_tp=_bulk_tp,
                     bulk_dir=_bulk_dir,
+                    handoff_by_transect=_handoff_by_transect,
                 )
             except ComputeServiceError:
                 logger.warning(
@@ -826,6 +869,7 @@ def get_beach_profile(
                     bulk_hs=_bulk_hs,
                     bulk_tp=_bulk_tp,
                     bulk_dir=_bulk_dir,
+                    handoff_by_transect=_handoff_by_transect,
                 )
         else:
             pipeline_result = _run_pipeline(
@@ -837,6 +881,7 @@ def get_beach_profile(
                 bulk_hs=_bulk_hs,
                 bulk_tp=_bulk_tp,
                 bulk_dir=_bulk_dir,
+                handoff_by_transect=_handoff_by_transect,
             )
     except Exception:
         logger.warning(
