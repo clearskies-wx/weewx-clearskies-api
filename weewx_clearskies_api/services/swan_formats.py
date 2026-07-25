@@ -36,7 +36,10 @@ from typing import Any, Callable
 # Neither of these modules imports from swan_formats, so no circular risk.
 # ---------------------------------------------------------------------------
 from weewx_clearskies_api.config.marine_config import StructureConfig
-from weewx_clearskies_api.services.transect_handoff import compute_handoff_depths
+from weewx_clearskies_api.services.transect_handoff import (
+    L2_REFERENCE_DEPTH_M,
+    compute_transect_shadows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -481,15 +484,25 @@ class TransectInfo:
         v1: perpendicular to the shoreline segment (= beach_facing_degrees).
         v2 future: isobath-normal bearing from smoothed CUDEM gradient.
     handoff_depth_m:
-        CUDEM depth (metres, positive = below MSL) at which the 1D surf
-        model receives its boundary condition from SWAN.  Determined by
-        ``compute_handoff_depths()`` (T2.3).  Clamped to [5 m, 15 m].
+        SETUP-TIME PLACEHOLDER ONLY (Phase 4A T4A.9 rewrite). The handoff is
+        no longer a fixed per-transect depth — it is selected per forecast
+        hour by ``services.transect_handoff.select_hourly_handoff()`` from
+        this hour's Hs and the transect's L3 CURVE stations (ADR-093
+        Amendment 2 §2). This field is set to
+        ``transect_handoff.L2_REFERENCE_DEPTH_M`` (15 m) uniformly at setup
+        time — before any per-hour selection exists — and MUST NOT be read
+        by any caller as "the" handoff depth. The real per-hour value is
+        carried separately as ``handoff_depth_m`` / ``handoff_source_level``
+        on the pipeline's per-transect, per-hour output (T4A.6 item g).
     is_structure_affected:
         True when one or more OBSTACLE structures cast a geometric shadow on
         this transect for at least one of the three tested wave approach
         angles (beach_facing ± 30°).  Structure-affected transects are
         excluded from headline surf metrics (best peak, spot average) but
-        are included in the quasi-2D heat map.
+        are included in the quasi-2D heat map.  Structure geometry affects
+        ONLY this classification and SwellTrack's fine-zone depth — it can
+        never move the handoff (L3-1D-BOUNDARY-DECISIONS-BRIEF settled
+        decision #7).
     shadowing_structures:
         Human-readable labels of every structure that shadows this transect,
         in the form ``"{type}({length_m:.0f}m)"``.  Empty when
@@ -545,8 +558,10 @@ def compute_spot_transects(
     (v2, when ``use_isobath_orientation=True`` and bathymetry is available).
 
     Obstacle classification uses the geometric shadow algorithm from T2.3
-    (``compute_handoff_depths()``): one computation serves both handoff depth
-    and obstacle intersection, per SURF-ZONE-MODEL-BRIEF §2.2.3 and §2.3.4.
+    (``compute_transect_shadows()``), per SURF-ZONE-MODEL-BRIEF §2.2.3 and
+    §2.3.4. Handoff depth is no longer computed at setup time (Phase 4A
+    T4A.9) — it is selected per forecast hour from the L3 CURVE stations;
+    see ``TransectInfo.handoff_depth_m`` docstring.
 
     Parameters
     ----------
@@ -679,7 +694,9 @@ def compute_spot_transects(
     transect_bearings = [transect_bearing] * n_transects
 
     # ------------------------------------------------------------------ #
-    # Obstacle intersection and handoff depths via T2.3.                    #
+    # Obstacle (geometric shadow) classification via T2.3.  Handoff depth  #
+    # is no longer computed here — Phase 4A T4A.9 moved it to a per-hour   #
+    # runtime selection (services.transect_handoff.select_hourly_handoff).#
     # ------------------------------------------------------------------ #
     resolved_structures: list[StructureConfig] = (
         structures if structures is not None else []
@@ -690,7 +707,7 @@ def compute_spot_transects(
         else lambda _lat, _lon: None
     )
 
-    handoff_results = compute_handoff_depths(
+    shadow_results = compute_transect_shadows(
         transect_origins=transect_origins,
         transect_bearings=transect_bearings,
         structures=resolved_structures,
@@ -702,15 +719,17 @@ def compute_spot_transects(
     # Build TransectInfo list.                                              #
     # ------------------------------------------------------------------ #
     result: list[TransectInfo] = []
-    for i, ((t_lat, t_lon), ho) in enumerate(zip(transect_origins, handoff_results)):
+    for i, ((t_lat, t_lon), shadow) in enumerate(zip(transect_origins, shadow_results)):
         result.append(TransectInfo(
             index=i,
             origin_lat=t_lat,
             origin_lon=t_lon,
             bearing_deg=transect_bearing,
-            handoff_depth_m=ho.handoff_depth_m,
-            is_structure_affected=ho.is_shadowed,
-            shadowing_structures=list(ho.shadowing_structures),
+            # Setup-time placeholder only — see TransectInfo.handoff_depth_m
+            # docstring.  The real per-hour value is computed at runtime.
+            handoff_depth_m=L2_REFERENCE_DEPTH_M,
+            is_structure_affected=shadow.is_shadowed,
+            shadowing_structures=list(shadow.shadowing_structures),
             # bathymetric_profile: populated later at SWAN runtime (T3.3).
         ))
 
@@ -806,9 +825,10 @@ def compute_spot_transect(
             (T23.2).
         structures: Optional list of ``StructureConfig`` objects (T2.6 pipeline
             bridge).  When provided, this function delegates to
-            ``compute_spot_transects()`` internally to obtain handoff depth and
-            obstacle flags for the primary (single-point) transect, which are
-            added to the returned dict as ``"handoff_depth_m"``,
+            ``compute_spot_transects()`` internally to obtain the geometric
+            shadow classification (and a setup-time placeholder handoff
+            depth — see caveat below) for the primary (single-point)
+            transect, added to the returned dict as ``"handoff_depth_m"``,
             ``"is_structure_affected"``, and ``"shadowing_structures"``.
             Callers that omit *structures* see no change in behaviour.
         bathymetry_profile_fn: Optional CUDEM lookup callable (T2.6 bridge).
@@ -824,6 +844,10 @@ def compute_spot_transect(
           transect_points (list[dict]): each dict has keys "lon", "lat",
             "depth_m", "distance_m"; ordered from offshore to nearshore.
           handoff_depth_m (float, T2.6): only present when *structures* provided.
+            SETUP-TIME PLACEHOLDER (Phase 4A T4A.9) — always
+            ``transect_handoff.L2_REFERENCE_DEPTH_M`` (15 m). The real
+            per-hour handoff depth is selected at runtime; do not read this
+            value as "the" handoff.
           is_structure_affected (bool, T2.6): only present when *structures* provided.
           shadowing_structures (list[str], T2.6): only present when *structures* provided.
 
@@ -1400,13 +1424,13 @@ def build_swan_input(
 
                 spot_order.append(spot_id)
                 curve_name = f"CV{n}"    # max 8 chars (CV + up to 6 digits = fine for any realistic N)
-                spec_name  = f"SP{n}"   # ditto
                 table_file = f"TABLE_{n}.txt"
+                # T4A.9: SPECOUT now names the CURVE directly (see below) —
+                # the old single-point 'SPn' POINTS name is no longer used.
                 spec_file  = f"SPEC_{n}.txt"
 
                 cx1, cy1 = lonlat_to_utm(transect['start_lon'], transect['start_lat'], _zone)
                 cx2, cy2 = lonlat_to_utm(transect['end_lon'], transect['end_lat'], _zone)
-                sx, sy   = lonlat_to_utm(transect['specout_lon'], transect['specout_lat'], _zone)
                 lines += [
                     (
                         f"CURVE '{curve_name}'"
@@ -1421,9 +1445,22 @@ def build_swan_input(
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                     ),
                     "",
-                    f"POINTS '{spec_name}' {sx:.2f} {sy:.2f}",
+                    # T4A.9: SPECOUT on the CURVE itself (all n_intervals+1
+                    # stations), not a single POINTS location. This is the
+                    # L3 per-hour handoff mechanism (ADR-093 Amendment 2 §2):
+                    # the grid/curve is frozen at setup (C2), and
+                    # select_hourly_handoff() picks which station's spectrum
+                    # to use per forecast hour — a lookup, not new geometry.
+                    # This "inner" branch is L3-only in the 3-level path
+                    # (swan_runner.py: L1/L2 run as "outer", only L3 runs as
+                    # "inner" — verified against the only live call sites).
+                    # SWAN manual Appendix D confirms SPECOUT's 'sname' may
+                    # name a CURVE as well as a POINTS set, and CURVE §4.6.1:
+                    # "values ... interpolated from the computational grid."
+                    # spec_name/spec_lon/spec_lat (the old ~10 m single
+                    # point) are no longer used for this block.
                     (
-                        f"SPECOUT '{spec_name}' SPEC2D ABS '{spec_file}'"
+                        f"SPECOUT '{curve_name}' SPEC2D ABS '{spec_file}'"
                         + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
                     ),
                     "",

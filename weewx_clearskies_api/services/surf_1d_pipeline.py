@@ -50,6 +50,7 @@ from weewx_clearskies_api.services.surf_1d_analytical import (
 )
 from weewx_clearskies_api.services.swan_formats import TransectInfo
 from weewx_clearskies_api.services.swan_spectral import decompose_spectrum
+from weewx_clearskies_api.services.transect_handoff import L2_REFERENCE_DEPTH_M
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,20 @@ class TransectResult:
     best_face_height_m: float
     """Maximum face height across all partition break points at this transect.
     Represents the best surfable wave available here.  Zero if no partition broke."""
+
+    handoff_depth_m: float
+    """T4A.9/T4A.6 item g: the per-forecast-hour handoff depth actually used for
+    this transect this timestep — ``1.3 * Hs(hour) / gamma``, or the fixed L2
+    reference depth (15 m) when this transect has no L3 grid. Comes from the
+    caller's ``handoff_by_transect`` argument to ``run_pipeline()`` (populated
+    by ``services.transect_handoff.select_hourly_handoff()`` /
+    ``refine_handoff_with_qb()``); falls back to the TransectInfo setup-time
+    placeholder when the caller does not supply per-hour selections."""
+
+    handoff_source_level: str
+    """T4A.9/T4A.6 item g: ``"L3"`` when this hour's handoff spectrum came from
+    the L3 grid, ``"L2"`` when it came from the fixed deep-water reference
+    (no L3, or the caller did not supply a per-hour selection)."""
 
 
 @dataclass
@@ -746,6 +761,7 @@ def run_pipeline(
     bulk_tp: float | None = None,
     bulk_dir: float | None = None,
     canonical_partitions: list[dict[str, Any]] | None = None,
+    handoff_by_transect: dict[int, tuple[float, str]] | None = None,
 ) -> PipelineResult:
     """Run the per-partition multi-transect 1D swell transformation pipeline.
 
@@ -791,6 +807,20 @@ def run_pipeline(
             partition indices so the card can connect each partition to its
             breaking behaviour.  ``None`` disables canonical-index logic and
             falls back to handoff partition indices.
+        handoff_by_transect: T4A.9/T4A.6 item g — maps each transect's
+            position in *transects* (0-based, matching
+            ``TransectInfo.index`` for real ``compute_spot_transects()``
+            output) to ``(handoff_depth_m, handoff_source_level)`` for THIS
+            forecast hour, as selected by
+            ``services.transect_handoff.select_hourly_handoff()`` (and
+            possibly refined by ``refine_handoff_with_qb()``) upstream of
+            this call. Surfaced unchanged on each ``TransectResult`` for the
+            beach-profile response (T4A.6 item g: ``handoffDepthM`` /
+            ``handoffSourceLevel``). ``None``, or a transect index missing
+            from the mapping, falls back to
+            ``(transect.handoff_depth_m, "L2")`` — the TransectInfo setup-time
+            placeholder, labelled conservatively as L2 since no real per-hour
+            selection was supplied.
 
     Returns:
         PipelineResult with headline metrics and full per-transect output.
@@ -986,6 +1016,22 @@ def run_pipeline(
         ]
         best_face = max(valid_face_heights) if valid_face_heights else 0.0
 
+        # T4A.9/T4A.6 item g: this hour's handoff depth/source for this
+        # transect, from the caller's per-hour selection when supplied,
+        # else the TransectInfo setup-time placeholder (labelled "L2" —
+        # conservative default when no real selection was made).
+        # Uses t_idx (this loop's own positional index, same identity
+        # TransectResult.transect_index below is built from) rather than
+        # transect.index — callers are only required to supply the fields
+        # this function actually reads elsewhere (is_structure_affected,
+        # bathymetric_profile); requiring more would be a needless coupling.
+        _default_handoff = (getattr(transect, "handoff_depth_m", L2_REFERENCE_DEPTH_M), "L2")
+        _handoff_depth_m, _handoff_source_level = (
+            handoff_by_transect.get(t_idx, _default_handoff)
+            if handoff_by_transect is not None
+            else _default_handoff
+        )
+
         per_transect_results.append(TransectResult(
             transect_index=t_idx,
             is_structure_affected=transect.is_structure_affected,
@@ -994,6 +1040,8 @@ def run_pipeline(
             depths=depths,
             per_partition=per_partition_break_results,
             best_face_height_m=best_face,
+            handoff_depth_m=_handoff_depth_m,
+            handoff_source_level=_handoff_source_level,
         ))
 
     # Check for total failure.

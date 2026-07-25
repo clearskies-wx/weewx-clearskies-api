@@ -1,59 +1,93 @@
-"""Pre-model handoff depth determination algorithm (Phase 2, T2.3).
+"""Pre-model handoff selection algorithm (Phase 2 T2.3; rewritten Phase 4A T4A.9/T4A.10).
 
-Implements the 4-step handoff depth algorithm from SURF-ZONE-MODEL-BRIEF
-§2.3.4.  Called during surf spot setup (wizard), *before* any SWAN run,
-because transect generation (T2.2) needs to know the handoff depth for each
-transect.
+Two independent jobs live in this module, split per ADR-093 Amendment 2 / the
+2026-07-25 L3-1D boundary decisions (`docs/planning/briefs/
+L3-1D-BOUNDARY-DECISIONS-BRIEF.md` D2/D2b) and coordinator constraint C1 for
+this round:
 
-Step 1  Determine structure depth extents from CUDEM.
-Step 2  Compute geometric shadow per transect — three approach angles
-        (beach_facing_degrees, beach_facing ± 30°).  Ray optics, conservative.
-Step 3  Assign handoff depth per transect:
-            open transect  →  10 m (safe default)
-            shadowed       →  max(5 m, shallowest_structure_depth − 1.5 m)
-        Clamped to [5 m, 15 m] for all transects.
-Step 4  Per-run QB refinement (optional runtime function).  When SWAN CURVE
-        output is available after a model run, ``refine_handoff_with_qb()``
-        scans outward from the configured handoff depth and moves it deeper if
-        QB > threshold.
+1. **Geometric shadow classification** (``compute_transect_shadows()``,
+   Steps 1-2 of the original algorithm) — unchanged in substance. Determines
+   whether a transect crosses an OBSTACLE structure's geometric shadow. This
+   feeds ``swan_formats.TransectInfo.is_structure_affected`` /
+   ``shadowing_structures``, which drive the multi-transect obstacle filter
+   (SURF-ZONE-MODEL-BRIEF §2.2.3): structure-affected transects are excluded
+   from headline metrics (best peak, spot average) but still rendered on the
+   heat map. This computation must survive independent of how the handoff
+   depth is determined — removing it would drop a responsibility (CLAUDE.md
+   trigger 2), which is why it is kept as its own function rather than folded
+   away.
+
+2. **Per-forecast-hour handoff selection** (T4A.9, ``select_hourly_handoff()``)
+   and **runtime QB assertion** (T4A.10, ``refine_handoff_with_qb()``) — new
+   in this round. ADR-093 Amendment 2 replaced the old fixed-at-setup handoff
+   depth (open=10 m, shadowed=structure depth - buffer, floor 5 m, ceiling
+   15 m) with a per-hour computation:
+
+       handoff depth (this hour) = 1.3 * Hs(hour) / gamma      (gamma=0.73)
+
+   applied uniformly to every transect — structure geometry no longer moves
+   the handoff (L3-1D-BOUNDARY-DECISIONS-BRIEF settled decision #7; it can
+   only deepen SwellTrack's fine zone, a separate computation in
+   ``enrichment/bathymetry.py``). The **grid is frozen at setup**
+   (`rules/clearskies-process.md` "All SWAN grid geometry is fixed at setup
+   time") — only the *station on the grid* that is read for the handoff
+   spectrum moves, hour to hour. ``select_hourly_handoff()`` is a lookup
+   against station depths that already exist; it never resizes or
+   re-requests any geometry.
+
+   The 5 m floor (``_MIN_HANDOFF_DEPTH_M``) is REMOVED per the operator's
+   2026-07-25 approval, on the explicit condition that its removal is
+   watched in testing — see the shallow-end tests in
+   ``tests/test_transect_handoff.py`` and the closeout finding filed
+   alongside this change.
 
 References
 ----------
+ADR-093 Amendment 2 §2 — the per-hour handoff formula and grid-freeze rule.
+ADR-095 Amendment 2 — "No SPECOUT may be extracted at an L3 boundary cell."
 SURF-ZONE-MODEL-BRIEF §2.3.2 — structure influence is geometric, not
-    proportional.
-SURF-ZONE-MODEL-BRIEF §2.3.4 — full algorithm with HB Pier worked example.
+    proportional (shadow classification only).
+L3-1D-BOUNDARY-DECISIONS-BRIEF.md D2/D2b — handoff-as-lookup rationale.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable
 
 from weewx_clearskies_api.config.marine_config import StructureConfig
+from weewx_clearskies_api.metrics import HANDOFF_QB_VIOLATIONS_TOTAL
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants (from SURF-ZONE-MODEL-BRIEF §2.3.4)
+# Constants
 # ---------------------------------------------------------------------------
 
-#: Default handoff depth for open (unshadowed) transects.
-#: Safe for Hs up to 7.3 m (breaking criterion: d = Hs / 0.73).
-_DEFAULT_HANDOFF_DEPTH_M: float = 10.0
+#: Reference handoff depth used when a transect has no L3 grid to sample from
+#: (open beach, or the cluster failed the L3 viability test). Per
+#: L3-1D-BOUNDARY-DECISIONS-BRIEF D3: 15 m from L2 — the same point already
+#: used as the deep-water reference SPECOUT for the swell display card
+#: (ADR-095 Amendment 2), so no separate extraction is needed for this case.
+#: Public (no leading underscore) — ``swan_formats.py`` reuses this exact
+#: value for the placeholder ``TransectInfo.handoff_depth_m`` it sets at
+#: setup time, before any per-hour selection exists (DRY: one number, not a
+#: duplicated magic constant across modules).
+L2_REFERENCE_DEPTH_M: float = 15.0
 
-#: Minimum handoff depth — shallower than this risks QB > 0 (breaking
-#: contamination) for moderate to large swells.
-_MIN_HANDOFF_DEPTH_M: float = 5.0
+#: The shoaling margin above the depth-induced breaking-onset depth
+#: (`Hs/gamma`) used to place the per-hour handoff seaward of where SWAN's
+#: Battjes-Janssen dissipation has corrupted the spectrum (ADR-093
+#: Amendment 2 §2). Not a physics constant being re-derived here — this is
+#: the same 1.3 factor already accepted for the (now-superseded) fixed-depth
+#: rule, applied per hour instead of frozen at the year's largest swell.
+_BREAKING_MARGIN_FACTOR: float = 1.3
 
-#: Maximum handoff depth — the L3 offshore boundary.
-_MAX_HANDOFF_DEPTH_M: float = 15.0
-
-#: Buffer applied shoreward of the structure's seaward tip depth.
-#: Handoff is placed *just shoreward* of the structure so the spectrum
-#: has fully passed through it before the 1D model takes over.
-_STRUCTURE_BUFFER_M: float = 1.5
+#: Depth-limited breaking parameter, matching SWAN's own Battjes-Janssen
+#: dissipation and SwellTrack's default (``surf_1d_pipeline.run_pipeline``).
+_GAMMA_BREAKING: float = 0.73
 
 #: Three wave approach angles used for shadow testing.  The middle value is
 #: the nominal beach_facing_degrees; ±30° cover realistic swell direction
@@ -64,22 +98,35 @@ _SHADOW_ANGLE_OFFSETS_DEG: tuple[float, float, float] = (-30.0, 0.0, 30.0)
 #: Metres per degree of latitude (approximately, for the coastal US).
 _M_PER_DEG_LAT: float = 111_320.0
 
+#: Default QB (SWAN breaking fraction) threshold above which a sampled
+#: station is considered contaminated by active breaking (T4A.10).
+#: SURF-ZONE-MODEL-BRIEF §2.3.3: QB ~ 0 is typical seaward of the surf zone;
+#: 0.05 is a conservative near-zero cutoff.
+_DEFAULT_QB_THRESHOLD: float = 0.05
+
+#: Greppable log-message prefix for T4A.10's runtime breaking-zone assertion.
+#: Do not change this string without updating any operator alerting that
+#: greps for it (T4A.10 Do step 2).
+_QB_VIOLATION_LOG_PREFIX: str = "SWAN handoff"
+
 
 # ---------------------------------------------------------------------------
-# Return type
+# Return types
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class TransectHandoff:
-    """Handoff depth assignment for one transect.
+class TransectShadow:
+    """Geometric shadow classification for one transect.
+
+    Split out of the old ``TransectHandoff`` (T4A.9): handoff depth is no
+    longer a fixed setup-time value, so it no longer belongs on this
+    dataclass. This is consumed by ``swan_formats.TransectInfo
+    .is_structure_affected`` / ``.shadowing_structures`` — the multi-transect
+    obstacle filter (SURF-ZONE-MODEL-BRIEF §2.2.3).
 
     Attributes
     ----------
-    handoff_depth_m:
-        CUDEM depth (metres, positive = below MSL) at which the 1D model
-        should receive its boundary condition from SWAN.  Clamped to
-        [5.0 m, 15.0 m].
     is_shadowed:
         True when one or more structures cast a geometric shadow on this
         transect for at least one of the three tested approach angles.
@@ -89,13 +136,82 @@ class TransectHandoff:
         is False.
     """
 
-    handoff_depth_m: float
     is_shadowed: bool
     shadowing_structures: list[str] = field(default_factory=list)
 
 
+@dataclass
+class HandoffSelection:
+    """Result of selecting the per-forecast-hour handoff sample for one
+    transect (T4A.9).
+
+    Attributes
+    ----------
+    handoff_depth_m:
+        The TARGET breaking-margin depth for this hour:
+        ``1.3 * Hs(hour) / gamma``, or the fixed L2 reference depth (15 m)
+        when this transect has no L3 grid to sample from. This is the value
+        surfaced to callers as ``handoffDepthM`` (T4A.6 item g contract).
+    source_level:
+        ``"L3"`` when sampled from the L3 grid's cross-shore CURVE stations,
+        ``"L2"`` when using the fixed deep-water reference (no L3, or the
+        cluster failed the viability test). Surfaced as
+        ``handoffSourceLevel``.
+    station_index:
+        Index into the transect's L3 CURVE station list that was sampled.
+        ``None`` when ``source_level == "L2"`` — the L2 reference is a
+        single fixed point, not a station on a curve.
+    station_depth_m:
+        The ACTUAL depth of the sampled station or reference point. May
+        differ from ``handoff_depth_m`` because station selection is a
+        discrete lookup against existing grid geometry, not an exact match.
+    clamped:
+        True when the target depth landed on or outside the L3 grid's
+        boundary stations and the selection was moved to the nearest
+        interior station (T4A.9 Do step 4 / ADR-095 Amendment 2 — no SPECOUT
+        may be extracted at an L3 boundary cell).
+    """
+
+    handoff_depth_m: float
+    source_level: str
+    station_index: int | None
+    station_depth_m: float
+    clamped: bool
+
+
+class HandoffBreakingError(Exception):
+    """Raised by ``refine_handoff_with_qb()`` when SWAN's own QB output shows
+    active breaking at every station reachable within the deepening cap
+    (T4A.10). The caller MUST fail the hour for this transect rather than
+    serve a sample from a breaking cell — the exact failure mode the
+    2026-07-23 incident (0.01 m Hs served during a 6-8 ft swell, HTTP 200)
+    exemplifies for a different frozen-depth defect.
+
+    Attributes mirror the ERROR log fields so callers/tests can assert on
+    structured state instead of parsing the message string
+    (`rules/coding.md` "Dispatch on exception state via attributes").
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        transect_index: int,
+        hour: int | None,
+        computed_depth_m: float,
+        actual_depth_m: float,
+        qb: float,
+    ) -> None:
+        super().__init__(message)
+        self.transect_index = transect_index
+        self.hour = hour
+        self.computed_depth_m = computed_depth_m
+        self.actual_depth_m = actual_depth_m
+        self.qb = qb
+
+
 # ---------------------------------------------------------------------------
-# Local 2-D coordinate helpers
+# Local 2-D coordinate helpers (shadow classification only)
 # ---------------------------------------------------------------------------
 
 
@@ -147,7 +263,7 @@ def _project_uv(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers — shadow classification
 # ---------------------------------------------------------------------------
 
 
@@ -250,21 +366,23 @@ def _in_shadow(
 
 
 # ---------------------------------------------------------------------------
-# Public API — Step 1-3
+# Public API — geometric shadow classification (Steps 1-2 of the original
+# algorithm; unchanged in substance, split per C1).
 # ---------------------------------------------------------------------------
 
 
-def compute_handoff_depths(
+def compute_transect_shadows(
     transect_origins: list[tuple[float, float]],
     transect_bearings: list[float],
     structures: list[StructureConfig],
     beach_facing_degrees: float,
     bathymetry_profile_fn: Callable[[float, float], float | None],
-) -> list[TransectHandoff]:
-    """Determine the pre-model handoff depth for every transect.
+) -> list[TransectShadow]:
+    """Determine the geometric structure shadow for every transect.
 
-    Implements SURF-ZONE-MODEL-BRIEF §2.3.4 Steps 1–3.  Step 4 (runtime QB
-    refinement) is a separate function: ``refine_handoff_with_qb()``.
+    Implements SURF-ZONE-MODEL-BRIEF §2.3.4 Steps 1-2 only. Handoff depth
+    assignment (the original Step 3) is no longer a setup-time computation —
+    see ``select_hourly_handoff()``.
 
     Parameters
     ----------
@@ -289,7 +407,7 @@ def compute_handoff_depths(
 
     Returns
     -------
-    list[TransectHandoff]
+    list[TransectShadow]
         One entry per transect, in the same order as *transect_origins*.
     """
     if len(transect_origins) != len(transect_bearings):
@@ -311,8 +429,6 @@ def compute_handoff_depths(
     # ------------------------------------------------------------------ #
     # Step 1: seaward tip depth for each structure.                        #
     # ------------------------------------------------------------------ #
-    # Parallel list to `structures`:  None → no usable geometry; else the
-    # CUDEM depth at the seaward tip.
     struct_depths: list[float | None] = []
     for s in structures:
         depth = _structure_seaward_tip_depth(s, bathymetry_profile_fn)
@@ -333,16 +449,12 @@ def compute_handoff_depths(
     # ------------------------------------------------------------------ #
     # Step 2 (pre-computation): shadow spans per (structure, angle).       #
     # ------------------------------------------------------------------ #
-    # Precompute the wave-direction unit vectors and shadow spans for all
-    # three approach angles to avoid recomputing them for every transect.
     approach_angles = [
         (beach_facing_degrees + offset) % 360.0
         for offset in _SHADOW_ANGLE_OFFSETS_DEG
     ]
-    # unit_vecs[angle_idx] = (ux, uy)
     unit_vecs = [_wave_travel_unit_vector(a) for a in approach_angles]
 
-    # spans[struct_idx][angle_idx] = (tip_u, v_min, v_max) or None
     spans: list[list[tuple[float, float, float] | None]] = []
     for s_idx, s in enumerate(structures):
         angle_spans: list[tuple[float, float, float] | None] = []
@@ -356,15 +468,14 @@ def compute_handoff_depths(
         spans.append(angle_spans)
 
     # ------------------------------------------------------------------ #
-    # Step 3: assign handoff depth per transect.                           #
+    # Step 2 (classification): which transects fall in whose shadow.       #
     # ------------------------------------------------------------------ #
-    results: list[TransectHandoff] = []
+    results: list[TransectShadow] = []
 
     for t_idx, (t_lat, t_lon) in enumerate(transect_origins):
         t_x, t_y = _to_local_xy(t_lat, t_lon, ref_lat, ref_lon)
 
-        # Collect every structure that shadows this transect (any angle).
-        shadowing_structs: list[tuple[str, float]] = []  # (label, depth_m)
+        shadowing_structs: list[str] = []
 
         for s_idx, s in enumerate(structures):
             if struct_depths[s_idx] is None:
@@ -377,53 +488,30 @@ def compute_handoff_depths(
                 tip_u, v_min, v_max = span
                 t_u, t_v = _project_uv(t_x, t_y, ux, uy)
                 if _in_shadow(t_u, t_v, tip_u, v_min, v_max):
-                    shadowing_structs.append(
-                        (_structure_label(s), struct_depths[s_idx])  # type: ignore[arg-type]
-                    )
+                    shadowing_structs.append(_structure_label(s))
                     break  # confirmed for this structure; check next structure
 
-        if not shadowing_structs:
-            handoff_depth = _DEFAULT_HANDOFF_DEPTH_M
-            is_shadowed = False
-            shadowing_names: list[str] = []
-        else:
-            is_shadowed = True
-            # Use the shallowest (closest to surface) structure depth that
-            # shadows this transect — the most shoreward structure that the
-            # wave spectrum must pass through.
-            shallowest = min(depth for _, depth in shadowing_structs)
-            handoff_depth = shallowest - _STRUCTURE_BUFFER_M
-            # Never shallower than 5 m (breaking contamination risk).
-            handoff_depth = max(handoff_depth, _MIN_HANDOFF_DEPTH_M)
-            shadowing_names = list(dict.fromkeys(  # deduplicate, preserve order
-                label for label, _ in shadowing_structs
-            ))
-
-        # Never deeper than the L3 offshore boundary (15 m).
-        handoff_depth = min(handoff_depth, _MAX_HANDOFF_DEPTH_M)
+        is_shadowed = bool(shadowing_structs)
+        shadowing_names = list(dict.fromkeys(shadowing_structs))  # dedupe, preserve order
 
         logger.info(
-            "Transect %d (%.5f, %.5f): handoff_depth=%.1f m, "
-            "shadowed=%s, structures=%s",
+            "Transect %d (%.5f, %.5f): shadowed=%s, structures=%s",
             t_idx,
             t_lat,
             t_lon,
-            handoff_depth,
             is_shadowed,
             shadowing_names if is_shadowed else "[]",
         )
         results.append(
-            TransectHandoff(
-                handoff_depth_m=handoff_depth,
+            TransectShadow(
                 is_shadowed=is_shadowed,
                 shadowing_structures=shadowing_names,
             )
         )
 
-    # Summary log.
     n_shadowed = sum(1 for r in results if r.is_shadowed)
     logger.info(
-        "compute_handoff_depths complete: %d transects total, "
+        "compute_transect_shadows complete: %d transects total, "
         "%d shadowed, %d open. beach_facing=%.1f°",
         len(results),
         n_shadowed,
@@ -434,148 +522,303 @@ def compute_handoff_depths(
 
 
 # ---------------------------------------------------------------------------
-# Public API — Step 4: per-run QB refinement (runtime, optional)
+# Public API — T4A.9: per-forecast-hour handoff selection
+# ---------------------------------------------------------------------------
+
+
+def select_hourly_handoff(
+    hs_m: float,
+    station_depths_m: Sequence[float] | None,
+    *,
+    gamma: float = _GAMMA_BREAKING,
+    margin: float = _BREAKING_MARGIN_FACTOR,
+    l2_reference_depth_m: float = L2_REFERENCE_DEPTH_M,
+) -> HandoffSelection:
+    """Select this forecast hour's handoff sample for one transect (T4A.9).
+
+    The grid is frozen at setup (C2 — never resized here). This function only
+    performs a lookup against station depths that already exist on the
+    transect's L3 CURVE (or falls back to the fixed L2 reference when there
+    is no L3 grid for this transect).
+
+    Parameters
+    ----------
+    hs_m:
+        Significant wave height (m) at this transect for this forecast hour
+        — the input to the breaking-onset depth formula.
+    station_depths_m:
+        Depths (m, positive = below MSL) of every station on this
+        transect's L3 CURVE, ordered offshore → nearshore (index 0 = deep/
+        seaward grid boundary, index -1 = shallow/shoreward grid boundary —
+        matching ``compute_spot_transect()``'s documented point order).
+        ``None`` or empty ⇒ this transect has no L3 grid (open beach, or the
+        cluster failed the viability test) ⇒ falls back to the L2 reference
+        depth, ``source_level="L2"``.
+    gamma:
+        Depth-limited breaking parameter (default 0.73, matching SWAN and
+        SwellTrack).
+    margin:
+        Shoaling margin factor (default 1.3, ADR-093 Amendment 2 §2).
+    l2_reference_depth_m:
+        Fallback depth used when no L3 station data is available (default
+        15 m, L3-1D-BOUNDARY-DECISIONS-BRIEF D3).
+
+    Returns
+    -------
+    HandoffSelection
+    """
+    target_depth_m = margin * hs_m / gamma
+
+    if not station_depths_m:
+        return HandoffSelection(
+            handoff_depth_m=l2_reference_depth_m,
+            source_level="L2",
+            station_index=None,
+            station_depth_m=l2_reference_depth_m,
+            clamped=False,
+        )
+
+    n = len(station_depths_m)
+
+    if n < 3:
+        # No interior station exists — honouring the no-boundary-cell rule
+        # (ADR-095 Amendment 2) leaves nothing to select from this grid.
+        logger.warning(
+            "select_hourly_handoff: L3 curve has only %d station(s) — no "
+            "interior station available; falling back to L2 reference "
+            "depth (%.1f m).",
+            n,
+            l2_reference_depth_m,
+        )
+        return HandoffSelection(
+            handoff_depth_m=l2_reference_depth_m,
+            source_level="L2",
+            station_index=None,
+            station_depth_m=l2_reference_depth_m,
+            clamped=False,
+        )
+
+    # Boundary stations (index 0 and index n-1) may never be sampled
+    # (ADR-095 Amendment 2: "No SPECOUT may be extracted at an L3 boundary
+    # cell"). Search only the interior.
+    global_best_idx = min(
+        range(n), key=lambda i: abs(station_depths_m[i] - target_depth_m)
+    )
+    interior_best_idx = min(
+        range(1, n - 1), key=lambda i: abs(station_depths_m[i] - target_depth_m)
+    )
+
+    clamped = global_best_idx in (0, n - 1)
+    if clamped:
+        logger.warning(
+            "L3 handoff selection: target depth %.2f m (Hs=%.2f m) landed on "
+            "or outside the L3 grid boundary (nearest station %d/%d, "
+            "depth=%.2f m) — clamped to nearest interior station %d "
+            "(depth=%.2f m).",
+            target_depth_m,
+            hs_m,
+            global_best_idx,
+            n - 1,
+            station_depths_m[global_best_idx],
+            interior_best_idx,
+            station_depths_m[interior_best_idx],
+        )
+
+    return HandoffSelection(
+        handoff_depth_m=target_depth_m,
+        source_level="L3",
+        station_index=interior_best_idx,
+        station_depth_m=station_depths_m[interior_best_idx],
+        clamped=clamped,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API — T4A.10: runtime breaking-zone assertion, extending the
+# original Step 4 QB scan lineage (LC-R2-5 — not a second parallel scanner).
 # ---------------------------------------------------------------------------
 
 
 def refine_handoff_with_qb(
-    handoffs: list[TransectHandoff],
-    qb_profiles: list[list[tuple[float, float]]],
+    selection: HandoffSelection,
+    station_qb: Sequence[float] | None,
+    station_depths_m: Sequence[float] | None,
     *,
-    qb_threshold: float = 0.05,
-    max_deepening_m: float = 5.0,
-) -> list[TransectHandoff]:
-    """Step 4: adjust handoff depths using SWAN QB output after a model run.
+    transect_index: int = -1,
+    hour: int | None = None,
+    qb_threshold: float = _DEFAULT_QB_THRESHOLD,
+    max_deepening_stations: int = 5,
+) -> HandoffSelection:
+    """Verify and, if necessary, refine one hour's handoff selection using
+    SWAN's own QB (breaking fraction) output (T4A.10).
 
-    Called at model *runtime* once SWAN has produced CURVE TABLE output with
-    QB values — not at setup time.  If QB at the configured handoff depth
-    exceeds *qb_threshold* (indicating active wave breaking at that depth,
-    which would contaminate the 1D model's boundary condition), the handoff
-    is moved deeper until QB ≈ 0 or the deepening cap is reached.
+    Extends ``select_hourly_handoff()``'s lineage rather than re-scanning
+    independently (LC-R2-5 / `rules/coding.md` DRY): it only ever adjusts a
+    selection this module already produced.
+
+    Asserts SWAN's QB at the selected station is ~0 (ADR-095 Amendment 2:
+    "L3 stops before the surf zone by construction, so QB should be ~0 at
+    *every* L3 point. A non-zero QB anywhere in L3 now indicates the handoff
+    is too shallow and is a failure signal"). On violation, moves the sample
+    SEAWARD (toward index 0 — deeper water, away from the shoreward grid
+    boundary) until QB is clean or the search exhausts the interior stations
+    / the deepening cap, in which case it logs ERROR with the greppable
+    pattern ``"SWAN handoff"``, increments the ``/metrics`` counter, and
+    raises ``HandoffBreakingError`` — the caller MUST fail the hour rather
+    than serve a sample from a breaking cell (Do step 4: "Never fail
+    silently and never serve a sample from a breaking cell").
 
     Parameters
     ----------
-    handoffs:
-        Pre-configured handoff depths from ``compute_handoff_depths()``.
-    qb_profiles:
-        For each transect (same order as *handoffs*), a list of
-        ``(depth_m, QB)`` pairs extracted from the SWAN CURVE TABLE at this
-        forecast cycle.  Pairs may be in any order; this function sorts them.
-        Pass an empty list for transects whose QB data is unavailable — those
-        transects are left unchanged.
+    selection:
+        The output of ``select_hourly_handoff()`` for this transect/hour.
+    station_qb:
+        SWAN QB (breaking fraction, 0-1) at every station on the same L3
+        CURVE ``selection`` was computed against, same order as
+        ``station_depths_m``. ``None`` or empty ⇒ QB data unavailable this
+        cycle — the selection is returned unchanged (matches the original
+        Step 4 behaviour: transects without QB data are left alone).
+    station_depths_m:
+        Depths (m) at each station, same order as ``station_qb`` — needed to
+        report ``actual_depth_m`` on a raised ``HandoffBreakingError`` and to
+        keep ``HandoffSelection.station_depth_m`` consistent after a move.
+    transect_index, hour:
+        Identifying context for the ERROR log and the raised exception only.
     qb_threshold:
-        QB value above which the handoff is considered contaminated by
-        breaking.  SURF-ZONE-MODEL-BRIEF §2.3.3 notes QB ~ 0 is typical down
-        to 3.7 m at HB Pier for normal conditions; default 0.05 is
-        conservative.
-    max_deepening_m:
-        Maximum additional deepening allowed (metres).  Prevents pushing the
-        handoff beyond the L3 grid outer boundary.
+        QB value above which a station is considered contaminated by active
+        breaking (default 0.05 — SURF-ZONE-MODEL-BRIEF §2.3.3).
+    max_deepening_stations:
+        Maximum number of stations to move seaward while searching for clean
+        QB before giving up and raising (default 5).
 
     Returns
     -------
-    list[TransectHandoff]
-        New list with adjusted handoff depths.  ``is_shadowed`` and
-        ``shadowing_structures`` are preserved unchanged from the input.
+    HandoffSelection
+        Unchanged when ``selection.source_level == "L2"`` (no L3 station to
+        assert QB against), when QB data is unavailable, or when QB at the
+        selected station is already clean. Otherwise a new selection at the
+        deeper station found.
+
+    Raises
+    ------
+    HandoffBreakingError
+        No clean station was found within ``max_deepening_stations`` moves,
+        or the search ran out of interior stations first.
     """
-    if len(handoffs) != len(qb_profiles):
-        raise ValueError(
-            f"handoffs ({len(handoffs)}) and qb_profiles ({len(qb_profiles)}) "
-            "must have the same length"
+    if selection.source_level != "L3" or selection.station_index is None:
+        # L2 reference is a fixed point outside any L3 grid — nothing to
+        # assert QB against.
+        return selection
+
+    if not station_qb:
+        # No QB data available this cycle — leave the selection unchanged,
+        # matching the original Step 4 contract.
+        return selection
+
+    idx = selection.station_index
+    if idx >= len(station_qb):
+        logger.debug(
+            "refine_handoff_with_qb: station_index %d out of range for "
+            "station_qb (len=%d) — leaving selection unchanged.",
+            idx,
+            len(station_qb),
         )
+        return selection
 
-    refined: list[TransectHandoff] = []
+    qb_here = station_qb[idx]
+    if qb_here <= qb_threshold:
+        return selection
 
-    for t_idx, (ho, qb_profile) in enumerate(
-        zip(handoffs, qb_profiles, strict=True)
-    ):
-        if not qb_profile:
-            # No QB data for this transect — keep pre-configured depth.
-            refined.append(ho)
-            continue
-
-        configured = ho.handoff_depth_m
-
-        # Sort by depth ascending (shallowest → deepest) so we can scan
-        # outward from the handoff toward deep water.
-        sorted_qb = sorted(qb_profile, key=lambda p: p[0])
-
-        # Find QB at the profile point closest to the configured depth.
-        nearest_depth, nearest_qb = min(
-            sorted_qb, key=lambda p: abs(p[0] - configured)
-        )
-
-        if nearest_qb <= qb_threshold:
-            # QB is clean at this depth — no adjustment needed.
-            refined.append(ho)
-            continue
-
-        # QB > threshold — scan deeper until clean or cap reached.
-        new_depth: float = configured
-        moved = False
-
-        for depth_m, qb in sorted_qb:
-            if depth_m < configured:
-                continue  # Skip points shallower than current handoff.
-            deepening = depth_m - configured
-            if deepening > max_deepening_m:
-                # Hit the cap before finding clean QB.
-                new_depth = min(configured + max_deepening_m, _MAX_HANDOFF_DEPTH_M)
-                logger.warning(
-                    "Transect %d: QB=%.3f still above %.3f at %.1f m after "
-                    "%.1f m of deepening (cap=%.1f m). "
-                    "Capping handoff at %.1f m — extreme event, handoff may "
-                    "still be contaminated by breaking.",
-                    t_idx,
-                    qb,
-                    qb_threshold,
-                    depth_m,
-                    deepening,
-                    max_deepening_m,
-                    new_depth,
-                )
-                moved = True
-                break
-            if qb <= qb_threshold:
-                new_depth = depth_m
-                moved = True
-                break
-
-        if moved and new_depth != configured:
+    # QB > threshold at the selected station — scan seaward (decreasing
+    # index) for a clean interior station, never touching index 0 (the
+    # offshore grid boundary — also off-limits per ADR-095 Amendment 2).
+    moves = 0
+    new_idx = idx
+    while new_idx > 1 and moves < max_deepening_stations:
+        new_idx -= 1
+        moves += 1
+        if station_qb[new_idx] <= qb_threshold:
+            new_depth = (
+                station_depths_m[new_idx]
+                if station_depths_m and new_idx < len(station_depths_m)
+                else selection.station_depth_m
+            )
             logger.warning(
-                "Transect %d: QB=%.3f > %.3f at configured depth %.1f m; "
-                "handoff deepened to %.1f m (delta=+%.1f m).",
-                t_idx,
-                nearest_qb,
+                "%s: transect %d hour=%s QB=%.3f > %.3f at station %d "
+                "(depth=%.2f m) — moved seaward to station %d "
+                "(depth=%.2f m, QB=%.3f).",
+                _QB_VIOLATION_LOG_PREFIX,
+                transect_index,
+                hour,
+                qb_here,
                 qb_threshold,
-                configured,
+                idx,
+                selection.station_depth_m,
+                new_idx,
                 new_depth,
-                new_depth - configured,
+                station_qb[new_idx],
             )
-            refined.append(
-                TransectHandoff(
-                    handoff_depth_m=new_depth,
-                    is_shadowed=ho.is_shadowed,
-                    shadowing_structures=ho.shadowing_structures,
-                )
+            return HandoffSelection(
+                handoff_depth_m=selection.handoff_depth_m,
+                source_level="L3",
+                station_index=new_idx,
+                station_depth_m=new_depth,
+                clamped=True,
             )
-        else:
-            refined.append(ho)
 
-    return refined
+    # Exhausted the search without finding clean QB — fail the hour rather
+    # than serve a sample from a breaking cell.
+    actual_depth_m = (
+        station_depths_m[idx]
+        if station_depths_m and idx < len(station_depths_m)
+        else selection.station_depth_m
+    )
+    final_qb = station_qb[new_idx] if new_idx < len(station_qb) else qb_here
+    logger.error(
+        "%s: transect %d hour=%s could not find a clean QB station within "
+        "%d seaward move(s) from station %d (computed depth=%.2f m, "
+        "actual depth=%.2f m, QB=%.3f > threshold %.3f). Failing this hour "
+        "for this transect — never serving a sample from a breaking cell.",
+        _QB_VIOLATION_LOG_PREFIX,
+        transect_index,
+        hour,
+        max_deepening_stations,
+        idx,
+        selection.handoff_depth_m,
+        actual_depth_m,
+        final_qb,
+        qb_threshold,
+    )
+    HANDOFF_QB_VIOLATIONS_TOTAL.labels(
+        transect_index=str(transect_index),
+    ).inc()
+    raise HandoffBreakingError(
+        f"{_QB_VIOLATION_LOG_PREFIX}: transect {transect_index} hour={hour} "
+        f"no clean QB station found (QB={final_qb:.3f} > {qb_threshold:.3f})",
+        transect_index=transect_index,
+        hour=hour,
+        computed_depth_m=selection.handoff_depth_m,
+        actual_depth_m=actual_depth_m,
+        qb=final_qb,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Self-test: HB Pier worked example (§2.3.4)
+# Self-test: HB Pier worked example
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    """Run the HB Pier worked example and verify output.
+    """Exercise both halves of this module against a synthetic HB Pier setup.
 
-    Expected result (from SURF-ZONE-MODEL-BRIEF §2.3.4):
-      - ~3-5 pier-shadowed transects with handoff depth ≈ 5.5 m
-        (pier seaward depth 7 m − 1.5 m buffer = 5.5 m).
-      - ~25-27 open transects with handoff depth = 10.0 m.
+    Expected result:
+      - Shadow classification: some transects shadowed by the pier, some
+        open (geometry-dependent count — see note in the original T2.3
+        self-test this replaces).
+      - Per-hour selection: a 1 m Hs hour resolves to ~1.8 m depth; a 4 m Hs
+        hour resolves to ~7.1 m depth (T4A.9 Accept criteria).
+      - QB assertion: an injected breaking-zone violation moves the sample
+        seaward and logs the greppable "SWAN handoff" pattern; a violation
+        with no clean station within the cap raises HandoffBreakingError.
     """
     import sys
 
@@ -586,29 +829,17 @@ if __name__ == "__main__":
     )
 
     # --- HB Pier geometry ---------------------------------------------------
-    # The pier extends SW from the shore to approximately 7 m depth.
-    # Coordinates are approximate but geometrically representative.
     PIER_SHORE_LAT = 33.6592
     PIER_SHORE_LON = -118.0027
     PIER_SEA_LAT = 33.6571
     PIER_SEA_LON = -118.0048
     PIER_DEPTH_M = 7.0
 
-    # --- Mock bathymetry function -------------------------------------------
-    # Returns PIER_DEPTH_M at the seaward tip; 0 m at the shore end;
-    # a simple linear ramp elsewhere so the function is well-behaved.
     def mock_bathy(lat: float, lon: float) -> float:
-        if (
-            abs(lat - PIER_SEA_LAT) < 1e-4
-            and abs(lon - PIER_SEA_LON) < 1e-4
-        ):
+        if abs(lat - PIER_SEA_LAT) < 1e-4 and abs(lon - PIER_SEA_LON) < 1e-4:
             return PIER_DEPTH_M
-        if (
-            abs(lat - PIER_SHORE_LAT) < 1e-4
-            and abs(lon - PIER_SHORE_LON) < 1e-4
-        ):
+        if abs(lat - PIER_SHORE_LAT) < 1e-4 and abs(lon - PIER_SHORE_LON) < 1e-4:
             return 0.5
-        # Generic linear ramp: ~20 cm/m from the shore end of the pier.
         dist_lat = (lat - PIER_SHORE_LAT) * _M_PER_DEG_LAT
         dist_lon = (
             (lon - PIER_SHORE_LON)
@@ -618,7 +849,6 @@ if __name__ == "__main__":
         dist_m = math.sqrt(dist_lat ** 2 + dist_lon ** 2)
         return min(15.0, max(0.0, dist_m * 0.02))
 
-    # --- Pier StructureConfig -----------------------------------------------
     pier = StructureConfig(
         {
             "type": "pier",
@@ -627,17 +857,14 @@ if __name__ == "__main__":
             "bearing_degrees": 225.0,
             "distance_m": 0.0,
             "coordinates": [
-                [PIER_SHORE_LON, PIER_SHORE_LAT],  # [lon, lat] — shore end
-                [PIER_SEA_LON, PIER_SEA_LAT],       # [lon, lat] — seaward tip
+                [PIER_SHORE_LON, PIER_SHORE_LAT],
+                [PIER_SEA_LON, PIER_SEA_LAT],
             ],
         }
     )
 
-    # --- 30 transects at 10 m spacing along the shoreline ------------------
-    # HB beach runs roughly NW-SE; shore bearing ~300° (NW direction).
-    # Origin placed so the pier falls within the middle of the array.
-    BEACH_FACING_DEG = 210.0   # beach faces SW (toward ocean)
-    SHORE_BEARING_DEG = 300.0  # longshore direction (NW)
+    BEACH_FACING_DEG = 210.0
+    SHORE_BEARING_DEG = 300.0
     ORIGIN_LAT = 33.6593
     ORIGIN_LON = -118.0013
 
@@ -653,87 +880,79 @@ if __name__ == "__main__":
 
     transect_bearings = [BEACH_FACING_DEG] * 30
 
-    # --- Run the algorithm --------------------------------------------------
-    print("\n=== HB Pier Worked Example (SURF-ZONE-MODEL-BRIEF §2.3.4) ===\n")
-    results = compute_handoff_depths(
+    print("\n=== HB Pier Worked Example (shadow classification) ===\n")
+    shadows = compute_transect_shadows(
         transect_origins=transect_origins,
         transect_bearings=transect_bearings,
         structures=[pier],
         beach_facing_degrees=BEACH_FACING_DEG,
         bathymetry_profile_fn=mock_bathy,
     )
+    n_shadowed = sum(1 for r in shadows if r.is_shadowed)
+    n_open = len(shadows) - n_shadowed
+    print(f"Results: {len(shadows)} transects, {n_shadowed} shadowed, {n_open} open")
 
-    n_shadowed = sum(1 for r in results if r.is_shadowed)
-    n_open = len(results) - n_shadowed
-    expected_shadow_depth = max(
-        _MIN_HANDOFF_DEPTH_M, PIER_DEPTH_M - _STRUCTURE_BUFFER_M
-    )
-
-    print(f"\nResults: {len(results)} transects, {n_shadowed} shadowed, {n_open} open")
-    print(
-        f"Shadowed indices: "
-        f"{[i for i, r in enumerate(results) if r.is_shadowed]}"
-    )
-    print(f"Expected shadowed depth: {expected_shadow_depth:.1f} m")
-    print(f"Expected open depth: {_DEFAULT_HANDOFF_DEPTH_M:.1f} m")
-
-    # --- Verify results -----------------------------------------------------
-    # Note on shadow count: the brief states "~3-5 transects in the pier's
-    # geometric shadow" for REAL HB Pier coordinates.  This self-test uses
-    # synthetic coordinates that do not precisely replicate the pier's actual
-    # geometry; the exact count is geometry-dependent and varies with the
-    # bearing between pier and wave approach angles.  The important invariants
-    # are (a) SOME transects are shadowed, (b) SOME are open, (c) the depth
-    # assignments are physically correct.
     ok = True
-
-    if not (1 <= n_shadowed <= len(results) - 1):
+    if not (1 <= n_shadowed <= len(shadows) - 1):
         print(
-            f"FAIL: expected 1–{len(results) - 1} shadowed transects, got {n_shadowed} "
-            "(algorithm either shadows none or all — geometry check needed)"
+            f"FAIL: expected 1-{len(shadows) - 1} shadowed transects, got "
+            f"{n_shadowed}"
         )
         ok = False
     else:
         print(f"OK: {n_shadowed} shadowed, {n_open} open (geometry-dependent count)")
 
-    shadow_depths = [r.handoff_depth_m for r in results if r.is_shadowed]
-    if shadow_depths and not all(
-        abs(d - expected_shadow_depth) < 0.01 for d in shadow_depths
-    ):
-        print(
-            f"FAIL: shadowed handoff depths should all be {expected_shadow_depth:.1f} m, "
-            f"got {sorted(set(shadow_depths))}"
-        )
-        ok = False
+    print("\n=== Per-hour handoff selection (T4A.9) ===\n")
+    # Synthetic L3 curve: 40 stations from 15 m (offshore) to 1.5 m (shoreward).
+    synthetic_depths = [15.0 - i * (13.5 / 39.0) for i in range(40)]
 
-    open_depths = [r.handoff_depth_m for r in results if not r.is_shadowed]
-    if not all(abs(d - _DEFAULT_HANDOFF_DEPTH_M) < 0.01 for d in open_depths):
-        print(
-            f"FAIL: open handoff depths should all be {_DEFAULT_HANDOFF_DEPTH_M:.1f} m, "
-            f"got {sorted(set(open_depths))}"
-        )
-        ok = False
-
-    # Quick QB refinement smoke-test.
-    dummy_qb: list[list[tuple[float, float]]] = [[] for _ in results]
-    # Simulate QB > 0 at 5.5 m for the first transect, clean at 7 m.
-    dummy_qb[0] = [(5.5, 0.15), (7.0, 0.01), (10.0, 0.0)]
-    refined = refine_handoff_with_qb(
-        results, dummy_qb, qb_threshold=0.05, max_deepening_m=5.0
+    sel_1m = select_hourly_handoff(1.0, synthetic_depths)
+    sel_4m = select_hourly_handoff(4.0, synthetic_depths)
+    print(
+        f"Hs=1.0 m -> target={1.3 * 1.0 / 0.73:.2f} m, "
+        f"station_depth={sel_1m.station_depth_m:.2f} m, source={sel_1m.source_level}"
     )
-    if refined[0].handoff_depth_m <= results[0].handoff_depth_m:
+    print(
+        f"Hs=4.0 m -> target={1.3 * 4.0 / 0.73:.2f} m, "
+        f"station_depth={sel_4m.station_depth_m:.2f} m, source={sel_4m.source_level}"
+    )
+    if not (1.5 <= sel_1m.station_depth_m <= 2.2):
+        print(f"FAIL: 1 m swell should resolve near 1.8 m, got {sel_1m.station_depth_m:.2f} m")
+        ok = False
+    if not (6.5 <= sel_4m.station_depth_m <= 7.6):
+        print(f"FAIL: 4 m swell should resolve near 7.1 m, got {sel_4m.station_depth_m:.2f} m")
+        ok = False
+
+    print("\n=== QB runtime assertion (T4A.10) ===\n")
+    qb_profile = [0.0] * 40
+    qb_profile[sel_1m.station_index] = 0.15  # inject a breaking-zone violation
+    qb_profile[sel_1m.station_index - 1] = 0.01  # clean one station seaward
+    refined = refine_handoff_with_qb(
+        sel_1m, qb_profile, synthetic_depths, transect_index=0, hour=6
+    )
+    if refined.station_index != sel_1m.station_index - 1:
         print(
-            "FAIL: QB refinement should have deepened transect 0 "
-            f"(was {results[0].handoff_depth_m:.1f} m, "
-            f"got {refined[0].handoff_depth_m:.1f} m)"
+            f"FAIL: expected QB refinement to move seaward to station "
+            f"{sel_1m.station_index - 1}, got {refined.station_index}"
         )
         ok = False
     else:
         print(
-            f"\nQB refinement: transect 0 deepened from "
-            f"{results[0].handoff_depth_m:.1f} m to "
-            f"{refined[0].handoff_depth_m:.1f} m (QB was 0.15 at 5.5 m)."
+            f"OK: QB refinement moved station {sel_1m.station_index} -> "
+            f"{refined.station_index} (see ERROR/WARNING log above for the "
+            "greppable pattern)."
         )
+
+    # Unrecoverable violation: contaminate every interior station.
+    qb_all_breaking = [0.5] * 40
+    try:
+        refine_handoff_with_qb(
+            sel_1m, qb_all_breaking, synthetic_depths, transect_index=0, hour=6
+        )
+        print("FAIL: expected HandoffBreakingError when no station is clean")
+        ok = False
+    except HandoffBreakingError as exc:
+        print(f"OK: HandoffBreakingError raised as expected ({exc})")
 
     if ok:
         print("\nSelf-test PASSED")

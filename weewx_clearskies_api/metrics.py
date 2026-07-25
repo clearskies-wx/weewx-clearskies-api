@@ -107,6 +107,20 @@ SWAN_LAST_RUN_VALID_FRACTION: Gauge = Gauge(
     ["level"],
 )
 
+# ---------------------------------------------------------------------------
+# Per-hour handoff QB assertion metrics (Phase 4A T4A.10)
+# ---------------------------------------------------------------------------
+
+HANDOFF_QB_VIOLATIONS_TOTAL: Counter = Counter(
+    "handoff_qb_violations_total",
+    "Total per-hour L3 handoff selections where SWAN QB indicated active "
+    "breaking at every station reachable within the deepening search cap "
+    "(services.transect_handoff.refine_handoff_with_qb). Each increment "
+    "corresponds to a failed forecast hour for one transect — the sample "
+    "was never served, per ADR-095 Amendment 2.",
+    ["transect_index"],
+)
+
 
 def metrics_response() -> tuple[bytes, str]:
     """Generate Prometheus exposition format response.
