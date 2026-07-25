@@ -41,8 +41,20 @@ _BATHY_PROFILE = [
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> TestClient:
     monkeypatch.setattr(compute_service, "_surf_compute_secret", _TEST_SECRET)
+    # Isolate compute_swelltrack()'s CUDEM profile cache lookup from the
+    # real filesystem. On the real compute host this resolves to
+    # /etc/weewx-clearskies/spot_profiles/ (correct there — matches the
+    # same convention providers/nearshore/swan.py and endpoints/setup.py
+    # use). In a test, that path exists with real production permissions on
+    # Linux (PermissionError) while resolving to a harmless nonexistent
+    # path on Windows — a platform-dependent false pass, not a real one.
+    # Pointing it at tmp_path makes every test here spot_id-agnostic and
+    # filesystem-isolated: request.spot_id never resolves to a real file,
+    # so _local_profile stays [] and each test's own bathymetric_profile
+    # (supplied directly on the transect) is what actually gets used.
+    monkeypatch.setattr(compute_service, "_PROFILE_CACHE_DIR", tmp_path)
     return TestClient(compute_service.app)
 
 

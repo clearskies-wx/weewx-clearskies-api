@@ -68,6 +68,18 @@ _SWAN_BINARY: str = "/usr/local/bin/swan"
 #: Base directory for SWAN per-run working directories.
 _SWAN_WORKDIR_BASE: str = "/var/run/weewx-clearskies/swan"
 
+#: CUDEM bathymetric profile cache on the compute host (librewxr) — SWAN
+#: downloads profiles here (bfff1f7), and compute_swelltrack() reads them
+#: locally rather than trusting the API host to have pre-populated them
+#: over the wire. Same path/convention as providers/nearshore/swan.py's
+#: _PROFILE_CACHE_DIR and endpoints/setup.py's _MARINE_PROFILE_CACHE_DIR —
+#: a module-level constant here (not inlined, as it was before) so tests
+#: can monkeypatch it instead of touching the real /etc directory
+#: (2026-07-25 reopen: the previous inline literal made
+#: tests/test_compute_service_handoff.py hit real production permissions
+#: on Linux while resolving harmlessly on Windows).
+_PROFILE_CACHE_DIR = Path("/etc/weewx-clearskies/spot_profiles")
+
 # ---------------------------------------------------------------------------
 # Module-level secret — set in __main__ before uvicorn starts.
 # The _require_auth dependency validates every protected request against this.
@@ -458,7 +470,7 @@ def compute_swelltrack(
     # but they exist here on the compute host at /etc/weewx-clearskies/spot_profiles/).
     _local_profile: list[dict[str, float]] = []
     if request.spot_id:
-        _profile_path = Path("/etc/weewx-clearskies/spot_profiles") / f"{request.spot_id}.json"
+        _profile_path = _PROFILE_CACHE_DIR / f"{request.spot_id}.json"
         if _profile_path.exists():
             try:
                 _cached = json.loads(_profile_path.read_text(encoding="utf-8"))
