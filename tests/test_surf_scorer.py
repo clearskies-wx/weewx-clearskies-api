@@ -12,6 +12,8 @@ text).
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from weewx_clearskies_api import i18n
@@ -22,13 +24,61 @@ from weewx_clearskies_api.models.responses import SurfForecast
 
 _ALL_OPEN = {d: True for d in ("N", "NE", "E", "SE", "S", "SW", "W", "NW")}
 
+# Fixed reference point + segment length for the geodesic destination-point
+# helper below (arbitrary — SoCal coast, 200 m segment).
+_SEG_START_LAT = 34.0
+_SEG_START_LON = -118.5
+_SEG_LENGTH_M = 200.0
+_EARTH_RADIUS_M = 6_371_000.0
+
+
+def _destination_point(
+    lat1: float, lon1: float, bearing_deg: float, dist_m: float
+) -> tuple[float, float]:
+    """Great-circle destination point (lat, lon) from (lat1, lon1) along bearing_deg.
+
+    Standard spherical direct geodesic formula — used to build a shoreline
+    segment whose *perpendicular* bearing (see
+    ``marine_config._perpendicular_bearing()``) comes out to a chosen
+    ``beach_facing_degrees``, since ``SurfSpotConfig.beach_facing_degrees``
+    is computed from segment geometry and cannot be set directly (T2.1).
+    """
+    lat1_r = math.radians(lat1)
+    lon1_r = math.radians(lon1)
+    bearing_r = math.radians(bearing_deg)
+    d_r = dist_m / _EARTH_RADIUS_M
+    lat2_r = math.asin(
+        math.sin(lat1_r) * math.cos(d_r) + math.cos(lat1_r) * math.sin(d_r) * math.cos(bearing_r)
+    )
+    lon2_r = lon1_r + math.atan2(
+        math.sin(bearing_r) * math.sin(d_r) * math.cos(lat1_r),
+        math.cos(d_r) - math.sin(lat1_r) * math.sin(lat2_r),
+    )
+    return math.degrees(lat2_r), math.degrees(lon2_r)
+
 
 def _make_spot_config(
     beach_facing_degrees: float, exposure: dict[str, bool] | None = None
 ) -> SurfSpotConfig:
+    """Build a SurfSpotConfig whose *computed* beach_facing_degrees matches the arg.
+
+    SurfSpotConfig derives ``beach_facing_degrees`` from
+    ``segment_start/end_lat/lon`` (perpendicular to the shoreline segment,
+    T2.1) — it is a read-only property, not a constructor field. Passing
+    ``"beach_facing_degrees"`` directly in the section dict (the previous
+    version of this helper) is silently ignored; this constructs a shoreline
+    segment whose perpendicular bearing equals *beach_facing_degrees* instead.
+    """
+    seg_bearing = (beach_facing_degrees - 90.0) % 360.0
+    end_lat, end_lon = _destination_point(
+        _SEG_START_LAT, _SEG_START_LON, seg_bearing, _SEG_LENGTH_M
+    )
     return SurfSpotConfig(
         {
-            "beach_facing_degrees": beach_facing_degrees,
+            "segment_start_lat": str(_SEG_START_LAT),
+            "segment_start_lon": str(_SEG_START_LON),
+            "segment_end_lat": str(end_lat),
+            "segment_end_lon": str(end_lon),
             "directional_exposure": dict(exposure) if exposure is not None else dict(_ALL_OPEN),
         }
     )
@@ -355,3 +405,81 @@ def test_wind_quality_labels(suffix):
 def test_wind_quality_labels_from_angle(wind_speed, wind_direction, beach_facing, expected_label):
     _, label = surf_scorer._wind_quality(wind_speed, wind_direction, beach_facing)
     assert label == expected_label
+
+
+# ---------------------------------------------------------------------------
+# 21. Null face height (T4A.4, LC-17) — model unavailable vs. genuinely flat
+#
+# wave_height=None means the 1D pipeline is unavailable (model failed/never
+# ran) — no quality rating is computable and score_surf() must not paper
+# over that with a defaulted score. wave_height=0.0 means the model ran and
+# found genuinely flat conditions — a valid "Flat"/low rating, NOT null.
+# These two must produce visibly different output.
+# ---------------------------------------------------------------------------
+
+
+def _score_with_height(wave_height: float | None) -> SurfForecast:
+    config = _make_spot_config(180.0)
+    return score_surf(
+        wave_height=wave_height,
+        wave_period=14.0,
+        wave_direction=180.0,
+        wind_speed=3.0,
+        wind_direction=0.0,
+        spectral_components=None,
+        spot_config=config,
+        multi_swell=[{
+            "period": 14.0,
+            "energy": 0.9,
+            "direction": 180.0,
+            "height": 1.8,
+            "frequencyRange": [0.05, 0.09],
+            "classification": "groundswell",
+        }],
+    )
+
+
+def test_score_surf_none_height_yields_null_rating():
+    """wave_height=None (model unavailable) — no star rating, no scoring breakdown."""
+    forecast = _score_with_height(None)
+    assert forecast.qualityStars is None
+    assert forecast.qualityLabel is None
+    assert forecast.scoring is None
+    # waveHeightAtBreak mirrors the None input — set by the caller (surf.py),
+    # but score_surf() itself must not synthesize a numeric value either.
+    assert forecast.waveHeightAtBreak is None
+
+
+def test_score_surf_none_height_conditions_text_is_not_a_lie():
+    """conditionsText must not read like a confident 0 ft / Poor rating."""
+    forecast = _score_with_height(None)
+    assert isinstance(forecast.conditionsText, str)
+    assert len(forecast.conditionsText) > 0
+    assert forecast.conditionsText == i18n.t("surf.conditions.unavailable")
+    # Must not contain a fabricated height/quality phrase from the normal
+    # wave_summary template (which always starts with a numeric range).
+    assert "ft" not in forecast.conditionsText
+    assert "0-1" not in forecast.conditionsText
+
+
+def test_score_surf_none_height_still_computes_wind_and_swell():
+    """windQuality/swellDominance are independent of face height and stay populated."""
+    forecast = _score_with_height(None)
+    assert forecast.windQuality  # non-empty — still a real wind classification
+    assert 0.0 <= forecast.swellDominance <= 1.0
+    assert forecast.multiSwell is not None  # independent of face height
+
+
+def test_score_surf_zero_height_is_a_real_rating_not_none():
+    """wave_height=0.0 (model ran, genuinely flat) is a valid low rating, not null.
+
+    This is the case that must NOT be confused with wave_height=None — a
+    model that ran and found flat water is not the same as a model that
+    failed (T4A.4/LC-16 distinction, mirrored here at the scorer level).
+    """
+    forecast = _score_with_height(0.0)
+    assert forecast.qualityStars is not None
+    assert 1 <= forecast.qualityStars <= 5
+    assert forecast.qualityLabel is not None
+    assert forecast.scoring is not None
+    assert forecast.conditionsText != i18n.t("surf.conditions.unavailable")

@@ -26,6 +26,7 @@ from weewx_clearskies_api.config.marine_config import MarineConfig, MarineLocati
 from weewx_clearskies_api.services import station as station_mod
 from weewx_clearskies_api.services import units as units_mod
 from weewx_clearskies_api.services.station import StationInfo
+from weewx_clearskies_api.services.surf_1d_pipeline import PipelineResult
 
 
 def _wire_test_station() -> None:
@@ -237,3 +238,93 @@ def test_get_surf_404_when_no_surf_spot_config():
     with pytest.raises(HTTPException) as exc_info:
         surf.get_surf("wrightsville_beach")
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 5. _determine_model_status() — the four truthful pipeline outcomes (T4A.4)
+#
+# Unit-tested directly against the extracted classifier rather than through
+# a full get_surf() call, since this test file deliberately does not
+# exercise live provider data (module docstring above) — the classifier is
+# a pure function of PipelineResult, so it is fully testable in isolation.
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_result(
+    *,
+    best_peak_face_height_m: float = 0.0,
+    degraded: bool = False,
+    has_transects: bool = True,
+) -> PipelineResult:
+    return PipelineResult(
+        best_peak_face_height_m=best_peak_face_height_m,
+        spot_average_face_height_m=best_peak_face_height_m,
+        peel_angle_deg=None,
+        peel_classification=None,
+        peel_direction=None,
+        transect_count=4,
+        open_transect_count=4 if has_transects else 0,
+        per_transect=["placeholder"] if has_transects else [],
+        per_partition_breaks=[],
+        degraded=degraded,
+    )
+
+
+def test_model_status_unavailable_when_pipeline_result_is_none():
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    assert surf._determine_model_status(None) == "unavailable"
+
+
+def test_model_status_unavailable_on_total_failure():
+    """_degraded_result() sentinel: degraded=True AND per_transect=[] (no transects succeeded)."""
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    result = _make_pipeline_result(best_peak_face_height_m=0.0, degraded=True, has_transects=False)
+    assert surf._determine_model_status(result) == "unavailable"
+
+
+def test_model_status_degraded_bulk_takes_priority_over_breaking_presence():
+    """Bulk fallback (SPECOUT missing) maps to degraded_bulk regardless of face height."""
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    flat_bulk = _make_pipeline_result(best_peak_face_height_m=0.0, degraded=True)
+    breaking_bulk = _make_pipeline_result(best_peak_face_height_m=1.5, degraded=True)
+    assert surf._determine_model_status(flat_bulk) == "degraded_bulk"
+    assert surf._determine_model_status(breaking_bulk) == "degraded_bulk"
+
+
+def test_model_status_ok_when_full_spectral_and_breaking():
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    result = _make_pipeline_result(best_peak_face_height_m=1.2, degraded=False)
+    assert surf._determine_model_status(result) == "ok"
+
+
+def test_model_status_no_breaking_when_full_spectral_and_flat():
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    result = _make_pipeline_result(best_peak_face_height_m=0.0, degraded=False)
+    assert surf._determine_model_status(result) == "no_breaking"
+
+
+# ---------------------------------------------------------------------------
+# 6. No SWAN CURVE face-height computation remains (Adversarial Audit item 3)
+# ---------------------------------------------------------------------------
+
+
+def test_no_swan_curve_face_height_call_in_surf_module():
+    """hsig_to_face_height() must not be called from endpoints/surf.py (T4A.4 Do step 1).
+
+    The 1D (SwellTrack) pipeline is the sole source of breaking wave
+    heights. Static grep-equivalent check kept as a test so a regression
+    fails CI, not just an auditor's manual grep.
+    """
+    import inspect
+
+    import weewx_clearskies_api.endpoints.surf as surf
+
+    source = inspect.getsource(surf)
+    assert "hsig_to_face_height" not in source
+    assert '"degraded"' not in source
+    assert "entry[\"degraded\"]" not in source
