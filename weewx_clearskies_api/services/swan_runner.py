@@ -185,6 +185,151 @@ def _transect_band_depths(hs_series: list[float]) -> tuple[float, float] | None:
     return deep, shallow
 
 
+# ---------------------------------------------------------------------------
+# T4B.2 — SWAN watershed (PT*) partitioning, aligned to the CURVE's own
+# SPECOUT stations
+# ---------------------------------------------------------------------------
+
+
+def _align_watershed_partitions_to_curve(
+    table_text: str,
+    specout: Any,  # swan_spectral.MultiLocationSpecout
+    utm_zone: int | None,
+    *,
+    coord_tol_m: float = 200.0,
+    coord_tol_deg: float = 0.003,
+    label: str = "",
+) -> dict[int, dict[str, list[dict[str, Any]]]]:
+    """T4B.2: parse a CURVE TABLE file's PT* watershed partitions and align
+    each row to that SAME CURVE's SPECOUT stations BY COORDINATE.
+
+    ``TABLE_{n}.txt`` and ``SPEC_{n}.txt`` are written for the identical
+    CURVE (swan_formats.py's inner-grid branch emits both from one ``CURVE``
+    command), so every TABLE row's (XP, YP) corresponds to one of
+    ``specout.station_lonlat``'s entries — but the join is verified by
+    coordinate, not assumed by row order, for the same reason
+    ``_select_l3_handoff_position_and_spectrum()``'s own station alignment
+    already requires it: a silently-wrong pairing here would be exactly as
+    plausible-looking and wrong as pairing one station's spectrum with
+    another station's depth/QB (T4A.10's concern). No index-order trust.
+
+    Returns ``{curve_station_index: {time_iso: [component dict, ...]}}``,
+    where each component dict matches the SpectralWaveComponent shape
+    (``swan_spectral.watershed_partitions_to_component_format()``). A
+    (station, time) combination absent from this mapping means PT* data was
+    not available for it this cycle — callers must treat that as an
+    explicit gap (empty components + WARNING naming spot and timestep),
+    never fall back to ``decompose_spectrum()`` (T4B.2 no-silent-fallback
+    rule).
+    """
+    from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
+        parse_table_pt_partitions,
+        watershed_partitions_to_component_format,
+    )
+
+    if not specout.station_lonlat:
+        return {}
+
+    rows = parse_table_pt_partitions(table_text)
+    if not rows:
+        return {}
+
+    curve_xy = list(specout.station_lonlat)
+    coord_tol = coord_tol_m if utm_zone is not None else coord_tol_deg
+
+    result: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    unmatched = 0
+    for row in rows:
+        rx, ry = row.get("xp"), row.get("yp")
+        time_iso = row.get("time")
+        if rx is None or ry is None or time_iso is None:
+            continue
+
+        best_idx: int | None = None
+        best_d = float("inf")
+        for ci, (cx, cy) in enumerate(curve_xy):
+            d = math.sqrt((cx - rx) ** 2 + (cy - ry) ** 2)
+            if d < best_d:
+                best_d = d
+                best_idx = ci
+        if best_idx is None or best_d > coord_tol:
+            unmatched += 1
+            continue
+
+        components = watershed_partitions_to_component_format(row.get("partitions") or [])
+        result.setdefault(best_idx, {})[time_iso] = components
+
+    if unmatched:
+        logger.warning(
+            "SWAN watershed alignment: %s → %d/%d TABLE PT* row(s) had no "
+            "CURVE station match within tolerance — discarded, not guessed.",
+            label, unmatched, len(rows),
+        )
+
+    return result
+
+
+def _watershed_by_time_for_point(
+    table_text: str,
+    point_xy: tuple[float, float],
+    utm_zone: int | None,
+    *,
+    coord_tol_m: float = 200.0,
+    coord_tol_deg: float = 0.003,
+    label: str = "",
+) -> dict[str, list[dict[str, Any]]]:
+    """T4B.2 (L2 DWR scope addition, operator-authorized 2026-07-25): parse
+    a single-POINTS-location TABLE file's PT* watershed partitions,
+    verifying each row's (XP, YP) against the known point coordinate BY
+    COORDINATE before trusting it — never assumed just because the file
+    only has one POINTS location declared (same no-index-order-trust
+    discipline as ``_align_watershed_partitions_to_curve()``, applied here
+    to the L2 deep-water-reference (DWR) and T4B.4 per-transect-cell POINTS
+    that ``run_3level()`` writes into the L2 INPUT — see the TABLE commands
+    added alongside those POINTS/SPECOUT declarations).
+
+    Returns ``{time_iso: [component dict, ...]}``. Rows whose coordinate
+    does not match *point_xy* within tolerance are discarded with a
+    WARNING — this should not occur for a genuinely single-point TABLE
+    file, but a stale/mismatched file is exactly the kind of silent-wrong-
+    pairing this check exists to catch rather than assume away.
+    """
+    from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
+        parse_table_pt_partitions,
+        watershed_partitions_to_component_format,
+    )
+
+    rows = parse_table_pt_partitions(table_text)
+    if not rows:
+        return {}
+
+    coord_tol = coord_tol_m if utm_zone is not None else coord_tol_deg
+    px, py = point_xy
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    unmatched = 0
+    for row in rows:
+        rx, ry = row.get("xp"), row.get("yp")
+        time_iso = row.get("time")
+        if rx is None or ry is None or time_iso is None:
+            continue
+        d = math.sqrt((rx - px) ** 2 + (ry - py) ** 2)
+        if d > coord_tol:
+            unmatched += 1
+            continue
+        result[time_iso] = watershed_partitions_to_component_format(row.get("partitions") or [])
+
+    if unmatched:
+        logger.warning(
+            "SWAN watershed alignment: %s → %d/%d TABLE PT* row(s) did not "
+            "match the expected DWR point coordinate within tolerance — "
+            "discarded, not guessed.",
+            label, unmatched, len(rows),
+        )
+
+    return result
+
+
 def _select_l3_handoff_position_and_spectrum(
     band_points_parsed: list[MarineForecastPoint],
     band_geometry: list[dict[str, Any]],
@@ -195,6 +340,7 @@ def _select_l3_handoff_position_and_spectrum(
     coord_tol_deg: float = 0.003,
     transect_index: int = 0,
     label: str = "",
+    curve_table_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """T4B.3 (2026-07-25 correction): select the handoff POSITION from this
     transect's OWN 10 m T4B.1 band, then read the SPECTRUM from the shared
@@ -214,8 +360,9 @@ def _select_l3_handoff_position_and_spectrum(
     transect's own band, own DEPTH, own QB, own HSIGN. Only once a band
     STATION is chosen do we ask "which CURVE station is physically nearest
     that chosen position" (coordinate-based, never index order — Do step 2)
-    and read ITS spectrum, because SPECOUT exists nowhere but the CURVE
-    (T4B.2's per-transect watershed alternative is unapproved, trigger 1).
+    and read ITS spectrum, because SPECOUT exists nowhere but the CURVE.
+    The COMPONENTS carried on that spectrum entry are SWAN's own watershed
+    (PT*) partitions (T4B.2, approved 2026-07-25) — see below.
 
     Returns entries shaped like ``_select_l3_handoff_spectra()``'s, so
     callers can attach them to ``self._spectral_results`` the same way.
@@ -223,9 +370,20 @@ def _select_l3_handoff_position_and_spectrum(
     the fine-band, real per-transect selection. The spectrum they carry is
     still the coarser CURVE's — callers must log this mismatch (the lead's
     "condition 3" — one clear honest statement, not two competing claims).
+
+    T4B.2: the components carried on each returned entry are SWAN's own
+    watershed (PT*) partitions, read from *curve_table_text* (the CURVE's
+    own TABLE file — same TABLE this run already parsed for Hs/QB) and
+    aligned to the selected CURVE station BY COORDINATE
+    (``_align_watershed_partitions_to_curve()``), never index order.
+    ``decompose_spectrum()`` is NOT called on this path. When
+    *curve_table_text* is ``None``, or PT* data is unavailable for the
+    selected station/timestep, the entry's ``"components"`` is an explicit
+    empty list with a WARNING naming the spot and timestep — never a
+    silent fallback to ``decompose_spectrum()`` (T4B.2 no-silent-fallback
+    rule).
     """
     from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
-    from weewx_clearskies_api.services.swan_spectral import decompose_spectrum  # noqa: PLC0415
     from weewx_clearskies_api.services.transect_handoff import (  # noqa: PLC0415
         HandoffBreakingError,
         refine_handoff_with_qb,
@@ -234,6 +392,14 @@ def _select_l3_handoff_position_and_spectrum(
 
     if not band_geometry or not specout.station_lonlat:
         return []
+
+    pt_by_curve_idx: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    if curve_table_text:
+        pt_by_curve_idx = _align_watershed_partitions_to_curve(
+            curve_table_text, specout, utm_zone,
+            coord_tol_m=coord_tol_m, coord_tol_deg=coord_tol_deg,
+            label=label,
+        )
 
     band_depths_m = [float(p.get("depth_m", 0.0)) for p in band_geometry]
     band_distances_m = [round(float(p.get("distance_m", 0.0)), 1) for p in band_geometry]
@@ -314,11 +480,20 @@ def _select_l3_handoff_position_and_spectrum(
             continue
 
         spectrum_entry = specout.station_timesteps[curve_idx][t_idx]
-        components = decompose_spectrum(
-            freqs_hz=spectrum_entry["freqs_hz"],
-            dirs_deg=spectrum_entry["dirs_deg"],
-            energy=spectrum_entry["energy"],
-        )
+
+        # T4B.2: watershed (PT*) partitions, not decompose_spectrum(). A
+        # missing station/time in the alignment is an explicit gap — not a
+        # trigger to recompute via decompose_spectrum().
+        components = pt_by_curve_idx.get(curve_idx, {}).get(time_iso)
+        if components is None:
+            logger.warning(
+                "SWAN watershed: %s @ %s — no PT* partitions available for "
+                "the selected CURVE station (idx %d); components empty for "
+                "this timestep (T4B.2 no-silent-fallback rule).",
+                label, time_iso, curve_idx,
+            )
+            components = []
+
         results.append({
             "time": time_iso,
             "components": components,
@@ -894,6 +1069,7 @@ def _select_l3_handoff_spectra(
     coord_tol_deg: float = 0.003,
     label: str | None = None,
     transect_index: int = 0,
+    curve_table_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """T4A.9/T4A.10: select, per forecast hour, which L3 CURVE station's
     spectrum is this spot's handoff spectrum.
@@ -984,9 +1160,19 @@ def _select_l3_handoff_spectra(
     any boundary — no CLAUDE.md trigger is implicated. Flagged for the
     coordinator's explicit review per the 2026-07-25 reopen; not changed
     without an operator decision.
+
+    T4B.2: the components carried on each returned entry are SWAN's own
+    watershed (PT*) partitions, read from *curve_table_text* (this spot's
+    CURVE TABLE file — the same file this function already used
+    ``table_points`` from) and aligned to the selected station BY
+    COORDINATE (``_align_watershed_partitions_to_curve()``), never index
+    order. ``decompose_spectrum()`` is NOT called on this path. When
+    *curve_table_text* is ``None``, or PT* data is unavailable for the
+    selected station/timestep, ``"components"`` is an explicit empty list
+    with a WARNING naming the spot and timestep — never a silent fallback
+    to ``decompose_spectrum()`` (T4B.2 no-silent-fallback rule).
     """
     from weewx_clearskies_api.services.swan_formats import lonlat_to_utm  # noqa: PLC0415
-    from weewx_clearskies_api.services.swan_spectral import decompose_spectrum  # noqa: PLC0415
     from weewx_clearskies_api.services.transect_handoff import (  # noqa: PLC0415
         HandoffBreakingError,
         refine_handoff_with_qb,
@@ -997,6 +1183,14 @@ def _select_l3_handoff_spectra(
 
     if not specout.station_lonlat or not transect_points:
         return []
+
+    pt_by_curve_idx: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    if curve_table_text:
+        pt_by_curve_idx = _align_watershed_partitions_to_curve(
+            curve_table_text, specout, utm_zone,
+            coord_tol_m=coord_tol_m, coord_tol_deg=coord_tol_deg,
+            label=_log_id,
+        )
 
     # ---- Step 1: align SPECOUT stations to transect_points BY COORDINATE ----
     # Tolerance must be in the SAME unit as the coordinates being compared —
@@ -1105,11 +1299,20 @@ def _select_l3_handoff_spectra(
             continue
 
         spectrum_entry = specout.station_timesteps[selection.station_index][t_idx]
-        components = decompose_spectrum(
-            freqs_hz=spectrum_entry["freqs_hz"],
-            dirs_deg=spectrum_entry["dirs_deg"],
-            energy=spectrum_entry["energy"],
-        )
+
+        # T4B.2: watershed (PT*) partitions, not decompose_spectrum(). A
+        # missing station/time in the alignment is an explicit gap — not a
+        # trigger to recompute via decompose_spectrum().
+        components = pt_by_curve_idx.get(selection.station_index, {}).get(time_iso)
+        if components is None:
+            logger.warning(
+                "SWAN watershed: %s @ %s — no PT* partitions available for "
+                "the selected CURVE station (idx %d); components empty for "
+                "this timestep (T4B.2 no-silent-fallback rule).",
+                _log_id, time_iso, selection.station_index,
+            )
+            components = []
+
         results.append({
             "time": time_iso,
             "components": components,
@@ -2008,12 +2211,23 @@ class SWANRunner:
             }
             self._t4b4_transect_dwr_name = {}
 
+            # T4B.2 (operator-authorized 2026-07-25 scope addition): per-spot
+            # UTM/lonlat coordinates for each DWR POINTS set, retained so the
+            # T3.3 parse block further down this same function can align its
+            # new PT* TABLE output back to the right point BY COORDINATE
+            # (never index order — same discipline as the L3 CURVE alignment
+            # above). Keyed by spot_id (baseline point) and by cell_name
+            # (T4B.4 per-transect-cell points).
+            _dwr_point_xy: dict[str, tuple[float, float]] = {}
+            _cell_point_xy: dict[str, tuple[float, float]] = {}
+
             _dwr_lines: list[str] = []
             for _n, (_sid, (_slon, _slat)) in enumerate(
                 self._surf_spots.items(), start=1
             ):
                 _dwr_name = f"DWR{_n}"  # max 8 chars; supports up to DWR9999
                 _spec_file = f"SPEC_DWR_{_n}.txt"
+                _table_file = f"TABLE_DWR_{_n}.txt"
                 _cfg = (self._spot_configs or {}).get(_sid, {})
                 _bfacing = float(_cfg.get("beach_facing_degrees", 270.0))
                 _profile = _cfg.get("bathymetric_profile") or _cfg.get("runtime_profile")
@@ -2021,11 +2235,24 @@ class SWANRunner:
                     _slon, _slat, _bfacing, _profile
                 )
                 _sx, _sy = lonlat_to_utm(_p_lon, _p_lat, _l2_utm_zone)
+                _dwr_point_xy[_sid] = (_sx, _sy)
                 _dwr_lines.append(f"POINTS '{_dwr_name}' {_sx:.2f} {_sy:.2f}")
                 _specout = f"SPECOUT '{_dwr_name}' SPEC2D ABS '{_spec_file}'"
                 if _dwr_is_nonstat and _dwr_tbeg:
                     _specout += f" OUTPUT {_dwr_tbeg} {_output_dt_min} MIN"
                 _dwr_lines.append(_specout)
+                _dwr_lines.append("")
+                # T4B.2: SWAN's own watershed (PT*) partitioning for this DWR
+                # point, so L2-only spots stop relying on decompose_spectrum()
+                # too (the whole point of this round). Additive output only —
+                # does not touch the SPECOUT line above or the nesting.
+                _dwr_table_cmd = (
+                    f"TABLE '{_dwr_name}' HEAD '{_table_file}'"
+                    f" TIME XP YP PTHSIGN PTRTP PTDIR PTDSPR"
+                )
+                if _dwr_is_nonstat and _dwr_tbeg:
+                    _dwr_table_cmd += f" OUTPUT {_dwr_tbeg} {_output_dt_min} MIN"
+                _dwr_lines.append(_dwr_table_cmd)
                 _dwr_lines.append("")
 
                 # ---- T4B.4: extra per-transect DWR points, L3-disabled only ----
@@ -2084,12 +2311,24 @@ class SWANRunner:
                             _dedup_overflow = True
                             break
                         _cell_to_name[_cell_key] = _cell_name
+                        _cell_point_xy[_cell_name] = (_tx, _ty)
                         _cell_spec_file = f"SPEC_{_cell_name}.txt"
+                        _cell_table_file = f"TABLE_{_cell_name}.txt"
                         _dwr_lines.append(f"POINTS '{_cell_name}' {_tx:.2f} {_ty:.2f}")
                         _cell_specout = f"SPECOUT '{_cell_name}' SPEC2D ABS '{_cell_spec_file}'"
                         if _dwr_is_nonstat and _dwr_tbeg:
                             _cell_specout += f" OUTPUT {_dwr_tbeg} {_output_dt_min} MIN"
                         _dwr_lines.append(_cell_specout)
+                        _dwr_lines.append("")
+                        # T4B.2: same additive PT* TABLE as the spot baseline,
+                        # for this T4B.4 per-transect-cell point.
+                        _cell_table_cmd = (
+                            f"TABLE '{_cell_name}' HEAD '{_cell_table_file}'"
+                            f" TIME XP YP PTHSIGN PTRTP PTDIR PTDSPR"
+                        )
+                        if _dwr_is_nonstat and _dwr_tbeg:
+                            _cell_table_cmd += f" OUTPUT {_dwr_tbeg} {_output_dt_min} MIN"
+                        _dwr_lines.append(_cell_table_cmd)
                         _dwr_lines.append("")
                     _assignment[_t.index] = _cell_name
 
@@ -2145,7 +2384,6 @@ class SWANRunner:
         # with L3 handoff SPECOUT data; spots that skip L3 keep the DWR entry.
         if self._surf_spots:
             from weewx_clearskies_api.services.swan_spectral import (  # noqa: PLC0415
-                parse_and_decompose,
                 parse_specout_file,
             )
             for _n, _sid in enumerate(self._surf_spots.keys(), start=1):
@@ -2153,21 +2391,56 @@ class SWANRunner:
                 if _dwr_path.exists():
                     _dwr_text = _dwr_path.read_text(encoding="utf-8", errors="replace")
                     _raw_spectra = parse_specout_file(_dwr_text)
-                    _decomposed = parse_and_decompose(_dwr_path)
-                    _decomp_by_t = {
-                        e.get("time", ""): e.get("components", [])
-                        for e in _decomposed
-                    }
-                    _entries: list[dict] = [
-                        {
-                            "time": _sp.get("time", ""),
+
+                    # T4B.2 (L2 DWR scope addition): SWAN's own watershed
+                    # (PT*) partitions for this baseline point, NOT
+                    # decompose_spectrum()/parse_and_decompose() — that
+                    # function remains in swan_spectral.py for
+                    # scripts/compare_partitioning.py, but this is no longer
+                    # its production caller.
+                    _dwr_watershed_by_time: dict[str, list[dict[str, Any]]] = {}
+                    _dwr_table_path = l2_dir / f"TABLE_DWR_{_n}.txt"
+                    _dwr_table_existed = _dwr_table_path.exists()
+                    if _dwr_table_existed:
+                        _dwr_table_text = _dwr_table_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        _spot_xy = _dwr_point_xy.get(_sid)
+                        if _spot_xy is not None:
+                            _dwr_watershed_by_time = _watershed_by_time_for_point(
+                                _dwr_table_text, _spot_xy, _l2_utm_zone, label=_sid,
+                            )
+                    else:
+                        logger.warning(
+                            "SWAN watershed: %s not found for spot %r L2 DWR "
+                            "baseline — watershed partitions unavailable for "
+                            "every timestep this cycle (T4B.2 "
+                            "no-silent-fallback rule: components will be "
+                            "empty, not recomputed via decompose_spectrum()).",
+                            _dwr_table_path.name, _sid,
+                        )
+
+                    _entries: list[dict] = []
+                    for _sp in _raw_spectra:
+                        _sp_time = _sp.get("time", "")
+                        _components = _dwr_watershed_by_time.get(_sp_time)
+                        if _components is None:
+                            _components = []
+                            if _dwr_table_existed:
+                                logger.warning(
+                                    "SWAN watershed: %s @ %s — no PT* "
+                                    "partitions available for the L2 DWR "
+                                    "baseline; components empty for this "
+                                    "timestep (T4B.2 no-silent-fallback rule).",
+                                    _sid, _sp_time,
+                                )
+                        _entries.append({
+                            "time": _sp_time,
                             "freqs_hz": _sp.get("freqs_hz", []),
                             "dirs_deg": _sp.get("dirs_deg", []),
                             "energy": _sp.get("energy", []),
-                            "components": _decomp_by_t.get(_sp.get("time", ""), []),
-                        }
-                        for _sp in _raw_spectra
-                    ]
+                            "components": _components,
+                        })
                     if _entries:
                         self._spectral_results[_sid] = _entries
                         logger.debug(
@@ -2208,21 +2481,55 @@ class SWANRunner:
                         continue
                     _cell_text = _cell_path.read_text(encoding="utf-8", errors="replace")
                     _cell_raw = parse_specout_file(_cell_text)
-                    _cell_decomp = parse_and_decompose(_cell_path)
-                    _cell_decomp_by_t = {
-                        e.get("time", ""): e.get("components", []) for e in _cell_decomp
-                    }
-                    _cell_entries_by_time[_cell_name] = {
-                        _sp.get("time", ""): {
+
+                    # T4B.2 (L2 DWR scope addition): same watershed-not-
+                    # decompose_spectrum() treatment as the spot baseline
+                    # above, for this T4B.4 per-transect-cell point.
+                    _cell_watershed_by_time: dict[str, list[dict[str, Any]]] = {}
+                    _cell_table_path = l2_dir / f"TABLE_{_cell_name}.txt"
+                    _cell_table_existed = _cell_table_path.exists()
+                    if _cell_table_existed:
+                        _cell_table_text = _cell_table_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        _cell_xy = _cell_point_xy.get(_cell_name)
+                        if _cell_xy is not None:
+                            _cell_watershed_by_time = _watershed_by_time_for_point(
+                                _cell_table_text, _cell_xy, _l2_utm_zone,
+                                label=f"{_sid}#{_cell_name}",
+                            )
+                    else:
+                        logger.warning(
+                            "SWAN watershed: %s not found for spot %r cell %r "
+                            "— watershed partitions unavailable for every "
+                            "timestep this cycle (T4B.2 no-silent-fallback "
+                            "rule).",
+                            _cell_table_path.name, _sid, _cell_name,
+                        )
+
+                    _cell_entries_by_time[_cell_name] = {}
+                    for _sp in _cell_raw:
+                        _sp_time = _sp.get("time", "")
+                        _cell_components = _cell_watershed_by_time.get(_sp_time)
+                        if _cell_components is None:
+                            _cell_components = []
+                            if _cell_table_existed:
+                                logger.warning(
+                                    "SWAN watershed: %s#%s @ %s — no PT* "
+                                    "partitions available for this "
+                                    "per-transect-cell point; components "
+                                    "empty for this timestep (T4B.2 "
+                                    "no-silent-fallback rule).",
+                                    _sid, _cell_name, _sp_time,
+                                )
+                        _cell_entries_by_time[_cell_name][_sp_time] = {
                             "freqs_hz": _sp.get("freqs_hz", []),
                             "dirs_deg": _sp.get("dirs_deg", []),
                             "energy": _sp.get("energy", []),
-                            "components": _cell_decomp_by_t.get(_sp.get("time", ""), []),
+                            "components": _cell_components,
                             "handoff_depth_m": L2_REFERENCE_DEPTH_M,
                             "handoff_source_level": "L2",
                         }
-                        for _sp in _cell_raw
-                    }
 
                 if not _cell_entries_by_time:
                     continue
@@ -3446,6 +3753,12 @@ class SWANRunner:
         # ---- SPECOUT can select a per-hour station — see _select_l3_       ----
         # ---- handoff_spectra()'s docstring on why the join must be exact). ----
         table_result: dict[str, list[MarineForecastPoint]] | None = None
+        # T4B.2: raw TABLE text per spot, retained so the SPECOUT loop below
+        # can also parse this same file's PT* (watershed) columns — the CURVE
+        # TABLE and CURVE SPECOUT are written from the identical CURVE
+        # command, so this is the natural, already-open data source; no need
+        # to re-read the file a second time.
+        table_text_result: dict[str, str] = {}
         if transect_spot_order:
             # T3.1 path: read per-spot TABLE files (CURVE output)
             result: dict[str, list[MarineForecastPoint]] = {
@@ -3462,6 +3775,7 @@ class SWANRunner:
                     continue
                 all_found = True
                 table_text = table_path.read_text(encoding="utf-8", errors="replace")
+                table_text_result[spot_id] = table_text
                 pts = _parse_transect_table(
                     table_text,
                     spot_id,
@@ -3516,6 +3830,7 @@ class SWANRunner:
                 (table_result or {}).get(spot_id) or [],
                 transect_points_map.get(spot_id) or [],
                 grid_info.get("_utm_zone"),
+                curve_table_text=table_text_result.get(spot_id),
             )
             if merged_entries:
                 # Override DWR baseline with L3 handoff data for this spot
@@ -3587,6 +3902,12 @@ class SWANRunner:
                     grid_info.get("_utm_zone"),
                     transect_index=_t_entry["transect_index"],
                     label=_t_label,
+                    # T4B.2: the SPECTRUM still comes from the shared per-spot
+                    # CURVE (LC-4B-1) — so its watershed partitions come from
+                    # that SAME CURVE's TABLE text, not the per-transect table
+                    # (_t_table_text) that only supplies this transect's own
+                    # depth/QB for POSITION selection above.
+                    curve_table_text=table_text_result.get(spot_id),
                 )
                 _run_clamp_total += len(_t_merged)
                 _run_clamp_count += sum(1 for e in _t_merged if e.get("clamped"))
@@ -3614,15 +3935,18 @@ class SWANRunner:
                     "per-transect handoff data. LIMIT (log honestly): the "
                     "handoff DEPTH is selected at 10 m resolution from each "
                     "transect's own local band (captures that transect's own "
-                    "Hs/shadowing) — but the SPECTRUM backing it is still read "
-                    "from the ONE shared diagnostic CURVE at ~50 m spacing "
-                    "(LC-4B-1), at whichever CURVE station is nearest the "
-                    "selected depth. Two transects landing on the same nearest "
-                    "CURVE station receive the IDENTICAL spectrum even though "
-                    "their selected depths can differ. Independent alongshore "
-                    "spectral content at full resolution requires the "
-                    "watershed PT* partitioning path (T4B.2) — an unapproved "
-                    "trigger-1 decision, not engineered around here.",
+                    "Hs/shadowing) — but the SPECTRUM (and its T4B.2 watershed "
+                    "components) is still read from the ONE shared diagnostic "
+                    "CURVE at ~50 m spacing (LC-4B-1), at whichever CURVE "
+                    "station is nearest the selected depth. Two transects "
+                    "landing on the same nearest CURVE station receive the "
+                    "IDENTICAL spectrum/components even though their selected "
+                    "depths can differ. Independent alongshore spectral "
+                    "content at full resolution would require reading each "
+                    "transect's OWN per-transect TABLE PT* columns (already "
+                    "emitted per T4B.1) instead of the shared CURVE's — not "
+                    "engineered here; this round only replaced the shared "
+                    "CURVE's partitioning algorithm, not its granularity.",
                     spot_id, len(_by_transect_by_time), len(_spot_transects),
                 )
 

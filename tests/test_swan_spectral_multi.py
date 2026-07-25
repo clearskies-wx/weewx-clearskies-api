@@ -23,6 +23,7 @@ from weewx_clearskies_api.services.swan_spectral import (
     parse_specout_file,
     parse_specout_file_multi,
     parse_table_pt_partitions,
+    watershed_partitions_to_component_format,
 )
 
 _HEADER = """SWAN   1                                Swan standard spectral file, version
@@ -311,3 +312,190 @@ def test_compute_total_m0_matches_manual_integration():
 def test_compute_total_m0_zero_for_degenerate_spectrum():
     assert compute_total_m0([0.1], [30.0], [[1.0]]) == 0.0
     assert compute_total_m0([], [], []) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# parse_table_pt_partitions() zero-based absence detection — T4B.2 (a)
+#
+# Real SWAN TABLE output signals an absent partition with HsPT0k == 0.00000,
+# NOT the documented -9/-999 sentinel (measured directly against a real
+# TABLE run: 1273 rows, 24 PT columns, zero sentinels observed — see
+# MARINE-SERVICE-SEPARATION-PLAN.md T4B.2 pre-round verification). These
+# tests use that real encoding; the sentinel-based fixtures above continue
+# to exercise the belt-and-braces sentinel check.
+# ---------------------------------------------------------------------------
+
+
+def test_absent_partitions_encoded_as_zero_are_omitted():
+    """The primary absence signal: HsPT0k written as an exact 0.00000 (the
+    real SWAN encoding), not the documented sentinel."""
+    hs = [0.62] + [0.0] * 9
+    tp = [11.0] + [0.0] * 9
+    dr = [190.0] + [0.0] * 9
+    ds = [10.0] + [0.0] * 9
+    text = _pt_header() + _pt_row("20260101.000000", 50.0, 60.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    assert len(rows[0]["partitions"]) == 1
+    assert rows[0]["partitions"][0]["height"] == 0.62
+
+
+def test_one_real_partition_among_zero_encoded_absences_yields_exactly_one():
+    """The wind-sea slot (partition 1) itself can be legitimately absent
+    (zero) while a swell (partition 2) is present — SWAN numbering is
+    preserved (partition_index stays 2, not renumbered to 1)."""
+    hs = [0.0, 1.42] + [0.0] * 8
+    tp = [0.0, 9.5] + [0.0] * 8
+    dr = [0.0, 205.0] + [0.0] * 8
+    ds = [0.0, 18.0] + [0.0] * 8
+    text = _pt_header() + _pt_row("20260101.000000", 10.0, 20.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    partitions = rows[0]["partitions"]
+    assert len(partitions) == 1
+    assert partitions[0]["partition_index"] == 2
+    assert partitions[0]["is_wind_sea"] is False
+    assert partitions[0]["height"] == 1.42
+
+
+def test_zero_encoded_wind_sea_and_swell_both_present():
+    """Deliverable (d): the wind-sea partition is index 1 and flagged,
+    using the real zero encoding rather than the documented sentinel."""
+    hs = [0.35, 2.10] + [0.0] * 8
+    tp = [5.5, 13.0] + [0.0] * 8
+    dr = [280.0, 200.0] + [0.0] * 8
+    ds = [28.0, 9.0] + [0.0] * 8
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    partitions = rows[0]["partitions"]
+    assert len(partitions) == 2
+    assert partitions[0]["partition_index"] == 1
+    assert partitions[0]["is_wind_sea"] is True
+    assert partitions[1]["partition_index"] == 2
+    assert partitions[1]["is_wind_sea"] is False
+
+
+def test_no_partitions_row_omitted_zero_encoded():
+    hs = [0.0] * 10
+    tp = [0.0] * 10
+    dr = [0.0] * 10
+    ds = [0.0] * 10
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert rows == []
+
+
+def test_watershed_partitions_energy_closure_not_duplicated():
+    """T4B.2: unlike decompose_spectrum()'s +/-4-bin windows (measured
+    energy-closure ratio up to 227% across 65/65 multi-component real
+    timesteps — see MARINE-SERVICE-SEPARATION-PLAN.md T4B.2 "EVIDENCE
+    2026-07-25"), SWAN's own PT* partitions assign every energy-containing
+    spectral bin to exactly one partition — no bin is double-counted.
+
+    This builds a full 2-D spectrum with two well-separated single-cell
+    energy peaks, uses compute_total_m0() to derive each peak's own exact
+    m0 contribution (so the fixture is internally self-consistent, not
+    hand-tuned), and asserts the parsed partitions' back-solved m0 sums to
+    the spectrum's actual total — the property decompose_spectrum() was
+    measured to violate (closure > 100%, sometimes > 200%).
+    """
+    freqs_hz = [0.05, 0.10, 0.15]
+    dirs_deg = [0.0, 120.0, 240.0]
+
+    energy_a = [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    m0_a = compute_total_m0(freqs_hz, dirs_deg, energy_a)
+    hs_a = 4.0 * m0_a ** 0.5
+
+    energy_b = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    m0_b = compute_total_m0(freqs_hz, dirs_deg, energy_b)
+    hs_b = 4.0 * m0_b ** 0.5
+
+    energy_total = [
+        [a + b for a, b in zip(row_a, row_b)]
+        for row_a, row_b in zip(energy_a, energy_b)
+    ]
+    total_m0 = compute_total_m0(freqs_hz, dirs_deg, energy_total)
+
+    hs = [hs_a, hs_b] + [0.0] * 8
+    tp = [8.0, 12.0] + [0.0] * 8
+    dr = [10.0, 250.0] + [0.0] * 8
+    ds = [15.0, 15.0] + [0.0] * 8
+    text = _pt_header() + _pt_row("20260101.000000", 0.0, 0.0, hs, tp, dr, ds)
+
+    rows = parse_table_pt_partitions(text)
+
+    assert len(rows) == 1
+    partitions = rows[0]["partitions"]
+    assert len(partitions) == 2
+
+    summed_m0 = sum(p["energy"] for p in partitions)
+    assert summed_m0 == pytest.approx(total_m0, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# watershed_partitions_to_component_format() — T4B.2
+# ---------------------------------------------------------------------------
+
+
+def test_watershed_partitions_to_component_format_sorts_and_drops_wind_sea_flag():
+    partitions = [
+        {
+            "partition_index": 1,
+            "is_wind_sea": True,
+            "height": 0.4,
+            "period": 5.0,
+            "direction": 270.0,
+            "spread": 30.0,
+            "energy": (0.4 / 4.0) ** 2,
+            "classification": "wind_swell",
+        },
+        {
+            "partition_index": 2,
+            "is_wind_sea": False,
+            "height": 2.9,
+            "period": 12.0,
+            "direction": 184.0,
+            "spread": 20.0,
+            "energy": (2.9 / 4.0) ** 2,
+            "classification": "swell",
+        },
+    ]
+
+    components = watershed_partitions_to_component_format(partitions)
+
+    assert len(components) == 2
+    # Re-sorted by descending height (decompose_spectrum()'s own contract) —
+    # the input order above was wind-sea-first, not height-descending.
+    assert components[0]["height"] == 2.9
+    assert components[1]["height"] == 0.4
+    for c in components:
+        assert set(c.keys()) == {
+            "height", "period", "direction", "energy", "frequencyRange", "classification",
+        }
+        assert c["frequencyRange"] == [0.0, 0.0]
+
+
+def test_watershed_partitions_to_component_format_drops_incomplete_partitions():
+    partitions = [
+        {
+            "partition_index": 1,
+            "is_wind_sea": True,
+            "height": 0.4,
+            "period": None,
+            "direction": None,
+            "spread": None,
+            "energy": 0.01,
+            "classification": "wind_swell",
+        },
+    ]
+
+    assert watershed_partitions_to_component_format(partitions) == []

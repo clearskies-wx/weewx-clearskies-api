@@ -49,7 +49,9 @@ from weewx_clearskies_api.services.surf_1d_analytical import (
     run_1d_analytical,
 )
 from weewx_clearskies_api.services.swan_formats import TransectInfo
-from weewx_clearskies_api.services.swan_spectral import decompose_spectrum
+from weewx_clearskies_api.services.swan_spectral import (
+    watershed_partitions_to_component_format,
+)
 from weewx_clearskies_api.services.transect_handoff import L2_REFERENCE_DEPTH_M
 
 logger = logging.getLogger(__name__)
@@ -745,54 +747,6 @@ def _degraded_result(
     )
 
 
-def _watershed_partitions_to_pipeline_format(
-    watershed_partitions: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Convert SWAN TABLE PT* watershed partitions into the same partition
-    dict shape ``decompose_spectrum()`` produces (T4B.2 — build-and-measure
-    only; NOT the default path, see ``run_pipeline()``'s ``partition_source``
-    parameter).
-
-    Input rows come from ``swan_spectral.parse_table_pt_partitions()``: one
-    row's ``"partitions"`` list, ordered per SWAN's own convention —
-    partition 1 is the wind sea, partitions 2-10 are swells in descending
-    Hs — and carrying a ``is_wind_sea`` flag that ``decompose_spectrum()``'s
-    output has no equivalent for.
-
-    ``decompose_spectrum()``'s consumers below (the per-partition
-    SwellTrack loop and ``_aggregate_partition_breaks()``) assume the
-    existing height-descending, no-wind-sea-concept ordering contract.
-    Rather than silently re-sorting without comment (the coordinator
-    flagged this exact contract mismatch as a real finding, not a sorting
-    nit — see T4B.2 closeout), this function explicitly re-sorts by
-    descending Hs to match that contract, AND explicitly documents, at this
-    exact point, that the wind-sea/swell distinction watershed partitioning
-    carries is discarded here because the existing consumer has no concept
-    of it. Consuming that distinction would be a separate, not-yet-approved
-    change.
-
-    Partitions with no period or direction (should not occur — SWAN emits
-    all PT* quantities for a given partition simultaneously — but handled
-    defensively since a partial TABLE emission is a plausible operator
-    misconfiguration) are dropped rather than fed through with a bogus 0.
-    """
-    converted = [
-        {
-            "height": p["height"],
-            "period": p["period"],
-            "direction": p["direction"],
-            "energy": p["energy"],
-            "frequencyRange": [0.0, 0.0],  # not derivable from TABLE bulk PT* output
-            "classification": p["classification"],
-        }
-        for p in watershed_partitions
-        if p.get("period") is not None and p.get("direction") is not None
-    ]
-    # Wind-sea/swell distinction discarded here — see docstring above.
-    converted.sort(key=lambda c: c["height"], reverse=True)
-    return converted
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -827,17 +781,23 @@ def run_pipeline(
 
     Args:
         specout_data: Parsed SPECOUT spectrum for one forecast timestep —
-            output of ``parse_specout_file()`` for a single timestep:
+            shaped like one entry of ``SWANRunner._spectral_results``:
             {
                 "time":       ISO-8601 UTC string,
                 "freqs_hz":   list[float],
                 "dirs_deg":   list[float],
                 "energy":     list[list[float]],   # E[i_freq][i_dir]
+                "components": list[dict] | None,   # SpectralWaveComponent-shaped
             }
             This is the HANDOFF SPECOUT (from L3 when available, L2 otherwise).
             The DEEP-WATER SPECOUT for the swell display card is consumed
             separately upstream (T3.3 / T4.2 step a).
             ``None`` or an empty dict triggers T4.5 bulk-fallback behaviour.
+            T4B.2: when ``"components"`` is present and non-empty, this
+            function uses it AS THE PARTITION LIST directly rather than
+            recomputing anything from ``freqs_hz``/``dirs_deg``/``energy``
+            — see ``partition_source``'s docstring for why this is the
+            production path, not just an optimisation.
         transects: List of TransectInfo objects from compute_spot_transects().
             The ``bathymetric_profile`` field must be populated (done at SWAN
             runtime per T3.3) — transects with empty profiles are skipped.
@@ -871,20 +831,31 @@ def run_pipeline(
             ``(transect.handoff_depth_m, "L2")`` — the TransectInfo setup-time
             placeholder, labelled conservatively as L2 since no real per-hour
             selection was supplied.
-        partition_source: T4B.2 — build-and-measure only, NOT a production
-            selector. ``"neighbourhood"`` (default) is the existing
-            ``decompose_spectrum()`` ±4-bin path and reproduces prior
-            behaviour byte-for-byte; every existing caller is unaffected by
-            this parameter's addition. ``"watershed"`` uses
-            *watershed_partitions* instead (SWAN's own Hanson & Phillips
-            partitioning, parsed from TABLE PT* columns) — exercised only by
-            ``scripts/compare_partitioning.py`` in this round. This
-            parameter is in-process only; it must never be threaded across
-            the compute-service HTTP boundary (``services/compute_client.py``
-            / ``services/compute_service.py``) — doing so would be a data
-            contract change (trigger 4) and is not approved.
-        watershed_partitions: T4B.2 — pre-parsed watershed partitions for
-            THIS forecast hour/station, from
+        partition_source: ``"neighbourhood"`` (default) reads partitions
+            from ``specout_data["components"]`` when that key is present
+            and non-empty (T4B.2 production path — ``components`` is
+            whatever partition source built ``specout_data`` upstream:
+            SWAN's own watershed partitioning, read from PT* TABLE output at
+            both the L3 CURVE call sites AND the L2 deep-water-reference
+            baseline in ``swan_runner.py``). ``specout_data`` lacking a
+            usable ``"components"`` key is a genuine gap, not a
+            decomposition failure to paper over: this function does NOT
+            recompute from ``freqs_hz``/``dirs_deg``/``energy`` in that
+            case (T4B.2 no-silent-fallback rule) — it logs a WARNING and
+            falls through to the pre-existing bulk-parameter degradation
+            below. ``"watershed"`` is an explicit opt-in used only by
+            ``scripts/compare_partitioning.py`` to measure the two
+            algorithms directly against each other on the SAME
+            ``specout_data``; it sources *watershed_partitions* instead of
+            ``specout_data["components"]``. Both values are in-process
+            only; must never be threaded across the compute-service HTTP
+            boundary (``services/compute_client.py`` /
+            ``services/compute_service.py``) — doing so would be a data
+            contract change (trigger 4) and is not approved. (``components``
+            itself is not a new addition to that boundary — it already
+            crosses it as part of ``specout_data``.)
+        watershed_partitions: pre-parsed watershed partitions for THIS
+            forecast hour/station, from
             ``swan_spectral.parse_table_pt_partitions()``'s per-row
             ``"partitions"`` list. Required (and used) only when
             *partition_source* is ``"watershed"``; ignored otherwise.
@@ -909,16 +880,32 @@ def run_pipeline(
         specout_data = {}
 
     if partition_source == "watershed":
-        # T4B.2 — build-and-measure only. decompose_spectrum() is NOT
-        # called on this path; it remains the only path any production
-        # caller exercises (partition_source defaults to "neighbourhood").
-        partitions = _watershed_partitions_to_pipeline_format(watershed_partitions or [])
+        # Explicit opt-in (scripts/compare_partitioning.py only) — sources
+        # watershed_partitions directly rather than specout_data["components"].
+        partitions = watershed_partitions_to_component_format(watershed_partitions or [])
     else:
-        partitions = decompose_spectrum(
-            freqs_hz=specout_data.get("freqs_hz", []),
-            dirs_deg=specout_data.get("dirs_deg", []),
-            energy=specout_data.get("energy", []),
-        )
+        # T4B.2 production path: read partitions from specout_data
+        # directly rather than recomputing them. "components" already
+        # carries whatever partition source built specout_data upstream —
+        # duplicating that computation here (and risking it disagreeing
+        # with what the dashboard displays for the same timestep) is
+        # exactly the defect this round exists to close.
+        _components = specout_data.get("components")
+        if _components:
+            partitions = list(_components)
+        else:
+            # Present-but-empty or entirely absent: a genuine gap in the
+            # upstream data, not a decomposition failure to recompute our
+            # way out of (T4B.2 no-silent-fallback rule — do NOT call
+            # decompose_spectrum() here). Falls through to the pre-existing
+            # bulk-parameter degradation path below, unchanged.
+            if _components is not None:
+                logger.warning(
+                    "run_pipeline: specout_data['components'] is present "
+                    "but empty at this timestep — treating as a model gap, "
+                    "not recomputing via decompose_spectrum()."
+                )
+            partitions = []
 
     # T4.5: track whether we degraded due to missing SPECOUT.
     _specout_degraded: bool = False

@@ -857,7 +857,22 @@ _PT_PREFIX_EXCEPTION_VALUES: dict[str, float] = {
 # generous tolerance guards against any formatting rounding in the ASCII
 # TABLE file without ever risking a real reading (Hs/Tp/Wl/Dspr/Wfrac/Steep
 # are always >= 0; Dir is always in [0, 360)) being mistaken for absent.
+#
+# NOTE (T4B.2, LC-4B-4 correction): this sentinel check is belt-and-braces
+# only. Measured against a real SWAN TABLE run (1273 rows, 24 PT columns,
+# /home/claude/p4b/TABLE_1_20260725T1014Z.txt) the documented -9/-999
+# exception values never appeared — every absent partition was written as
+# an exact 0.00000. ``_PT_HS_ZERO_TOLERANCE`` below is the PRIMARY absence
+# signal for real data; this sentinel exists only for a SWAN build/config
+# that might emit it instead.
 _PT_EXCEPTION_TOLERANCE = 0.5
+
+# Primary absence signal (T4B.2): a partition is absent when its HsPT0k is
+# (numerically) zero. SWAN's own HSPMIN = 0.05 m floor (SwanSpectPart.ftn:96)
+# means any real partition has Hs >= 0.05 m, so this tolerance has a wide,
+# safe margin below that floor while still absorbing ASCII formatting
+# rounding in the TABLE file's fixed-width float columns.
+_PT_HS_ZERO_TOLERANCE = 0.0005
 
 _PT_MAX_PARTITIONS = 10
 
@@ -944,10 +959,18 @@ def parse_table_pt_partitions(table_text: str) -> list[dict[str, Any]]:
     padded in as a fabricated 0.
 
     A TABLE row's ``HsPT0k`` column is treated as the presence signal for
-    partition *k*: SWAN writes the exception value to every PT* quantity for
-    an absent partition simultaneously, so anchoring on Hs (always present
-    when any PT* quantity was requested) avoids depending on which of the
-    optional quantities were actually emitted.
+    partition *k*. **Real SWAN output signals an absent partition with
+    ``HsPT0k`` written as an exact 0.00000, not the documented -9/-999
+    exception value** — measured directly against a real TABLE run (1273
+    rows, 24 PT columns, zero sentinels observed; see
+    ``docs/planning/MARINE-SERVICE-SEPARATION-PLAN.md`` Phase 4B T4B.2 for
+    the measurement). Zero (within ``_PT_HS_ZERO_TOLERANCE``) is therefore
+    the PRIMARY absence test this parser applies to ``HsPT0k``; the
+    documented exception-value sentinel (``_is_pt_exception``) is checked
+    too, belt-and-braces, in case some other SWAN build/config does emit
+    it, but it is never the only signal relied on. Anchoring on Hs (always
+    present when any PT* quantity was requested) avoids depending on which
+    of the optional quantities were actually emitted.
 
     Per SWAN convention (docs/reference/swan-commands-extract.md,
     docs/planning/MARINE-SERVICE-SEPARATION-PLAN.md Phase 4B "Verified SWAN
@@ -979,10 +1002,10 @@ def parse_table_pt_partitions(table_text: str) -> list[dict[str, Any]]:
               ...
             ],
           }
-        Rows with no header match, or with a missing/exception-valued HsPT
-        column across all 10 slots (no partitions at all — dry point or zero
-        energy), are omitted entirely. Never returns a row with a fabricated
-        partition.
+        Rows with no header match, or with a missing/zero/exception-valued
+        HsPT column across all 10 slots (no partitions at all — dry point or
+        zero energy), are omitted entirely. Never returns a row with a
+        fabricated partition.
     """
     lines = [ln.rstrip("\r\n") for ln in table_text.splitlines()]
 
@@ -1079,11 +1102,28 @@ def parse_table_pt_partitions(table_text: str) -> list[dict[str, Any]]:
         row_partitions: list[dict[str, Any]] = []
         for k in range(1, _PT_MAX_PARTITIONS + 1):
             k0 = k - 1
-            hs = _value_at("HSPT", k0)
-            if hs is None:
-                # Absent partition — HsPT0k carries the exception value.
-                # Do NOT treat this slot as height 0; it does not exist.
+            # HsPT0k drives presence. Fetch the raw parsed value (bypassing
+            # _value_at's exception-only filtering) so the zero check below
+            # sees the real number, not an already-None'd sentinel match.
+            cols = prefix_cols.get("HSPT")
+            hs_idx = cols[k0] if cols is not None else None
+            if hs_idx is None or hs_idx >= len(parts):
+                continue  # column absent from this file's header
+            try:
+                hs_raw = float(parts[hs_idx])
+            except (ValueError, TypeError):
                 continue
+
+            # T4B.2 (LC-4B-4 correction): zero is the PRIMARY absence
+            # signal for real SWAN output — the documented -9/-999
+            # exception value is checked too, belt-and-braces, but never
+            # relied on alone (see module-level note by
+            # _PT_HS_ZERO_TOLERANCE and this function's docstring).
+            if abs(hs_raw) < _PT_HS_ZERO_TOLERANCE or _is_pt_exception(hs_raw, "HSPT"):
+                # Absent partition. Do NOT treat this slot as height 0 in
+                # the OUTPUT — it does not exist, so we never append it.
+                continue
+            hs = hs_raw
 
             tp = _value_at("TPPT", k0)
             direction = _value_at("DRPT", k0)
@@ -1115,6 +1155,59 @@ def parse_table_pt_partitions(table_text: str) -> list[dict[str, Any]]:
     return results
 
 
+def watershed_partitions_to_component_format(
+    watershed_partitions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert one row's SWAN TABLE PT* watershed partitions into the same
+    SpectralWaveComponent-shaped dict list ``decompose_spectrum()`` produces
+    (T4B.2 — the production conversion used at the live L3 CURVE call sites
+    in ``swan_runner.py`` and by ``surf_1d_pipeline.run_pipeline()``'s
+    explicit ``partition_source="watershed"`` opt-in).
+
+    Input is one row's ``"partitions"`` list from
+    ``parse_table_pt_partitions()``: ordered per SWAN's own convention —
+    partition 1 is the wind sea, partitions 2-10 are swells in descending
+    Hs — and carrying an ``is_wind_sea`` flag that
+    ``decompose_spectrum()``'s output has no equivalent for.
+
+    Every existing consumer of ``decompose_spectrum()``'s output (the
+    dashboard multi-swell card, the per-partition SwellTrack loop in
+    ``surf_1d_pipeline.py``, ``_aggregate_partition_breaks()``) assumes that
+    output's own contract: sorted by descending height, no wind-sea concept.
+    Rather than silently re-sorting without comment, this function
+    explicitly re-sorts by descending Hs to match that contract, AND
+    explicitly documents, at this exact point, that the wind-sea/swell
+    distinction watershed partitioning carries is discarded here because the
+    existing consumers have no concept of it. Consuming that distinction is
+    a separate, not-yet-approved change.
+
+    ``frequencyRange`` is not derivable from TABLE bulk PT* output (SWAN's
+    TABLE only emits the partition's bulk Hs/Tp/Dir/Dspr, not its frequency
+    bin bounds) — set to ``[0.0, 0.0]`` for every partition produced this
+    way.
+
+    Partitions with no period or direction (should not occur — SWAN emits
+    all PT* quantities for a given partition simultaneously — but handled
+    defensively since a partial TABLE emission is a plausible operator
+    misconfiguration) are dropped rather than fed through with a bogus 0.
+    """
+    converted = [
+        {
+            "height": p["height"],
+            "period": p["period"],
+            "direction": p["direction"],
+            "energy": p["energy"],
+            "frequencyRange": [0.0, 0.0],  # not derivable from TABLE bulk PT* output
+            "classification": p["classification"],
+        }
+        for p in watershed_partitions
+        if p.get("period") is not None and p.get("direction") is not None
+    ]
+    # Wind-sea/swell distinction discarded here — see docstring above.
+    converted.sort(key=lambda c: c["height"], reverse=True)
+    return converted
+
+
 # ---------------------------------------------------------------------------
 # Top-level: parse file + decompose all timesteps
 # ---------------------------------------------------------------------------
@@ -1124,6 +1217,18 @@ def parse_and_decompose(
     file_path: Path,
 ) -> list[dict[str, Any]]:
     """Parse a SWAN SPECOUT file and decompose each timestep into swell systems.
+
+    T4B.2 (2026-07-25): this function's own ``decompose_spectrum()`` call is
+    no longer the production path anywhere in ``swan_runner.py`` — the L2
+    deep-water-reference (DWR) baseline and its T4B.4 per-transect-cell
+    variant now read SWAN's own watershed (PT*) partitions instead (see
+    ``run_3level()``'s DWR TABLE output and
+    ``_watershed_by_time_for_point()``), closing the gap this whole round
+    exists to close. This function is retained, unchanged, as a general
+    SPECOUT-decomposition utility and for
+    ``scripts/compare_partitioning.py``'s direct measurement of the two
+    algorithms against each other — it is not dead code, just no longer a
+    production caller.
 
     Args:
         file_path: Path to the SWAN SPECOUT ASCII file.

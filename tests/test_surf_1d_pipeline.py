@@ -217,3 +217,127 @@ def test_watershed_partition_source_empty_list_degrades_like_no_specout():
 
     assert result.degraded
     assert result.per_transect == []
+
+
+# ---------------------------------------------------------------------------
+# specout_data["components"] as the default partition source — T4B.2
+# ruling (2). components already crosses every boundary (it's inside
+# specout_data, which every caller already passes) — the physics
+# (run_pipeline) and the display (dashboard multi-swell card) must read the
+# SAME list, never independently recomputed values that can silently
+# disagree.
+# ---------------------------------------------------------------------------
+
+_COMPONENTS = [
+    {
+        "height": 2.9,
+        "period": 12.0,
+        "direction": 184.0,
+        "energy": (2.9 / 4.0) ** 2,
+        "frequencyRange": [0.09, 0.11],
+        "classification": "swell",
+    },
+    {
+        "height": 0.4,
+        "period": 5.0,
+        "direction": 270.0,
+        "energy": (0.4 / 4.0) ** 2,
+        "frequencyRange": [0.18, 0.22],
+        "classification": "wind_swell",
+    },
+]
+
+
+def test_physics_partitions_match_specout_data_components_exactly():
+    """The regression that matters (coordinator's explicit ask): the
+    per-partition 1D physics and the dashboard's displayed component list
+    must resolve to the SAME partitions for a given timestep — not two
+    independent computations that can silently diverge. specout_data here
+    carries freqs_hz/dirs_deg/energy that, if this function mistakenly
+    recomputed via decompose_spectrum() instead of reading "components"
+    directly, would decompose to a DIFFERENT single broad peak (energy is
+    entirely zero except one flat plateau) — proving the physics actually
+    used "components" as-is rather than silently recomputing from the raw
+    arrays.
+    """
+    transects = [_transect(0)]
+    specout_data = {
+        "time": "2026-07-25T10:00:00Z",
+        "freqs_hz": [0.05, 0.10, 0.15],
+        "dirs_deg": [0.0, 120.0, 240.0],
+        "energy": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        "components": _COMPONENTS,
+    }
+
+    result = run_pipeline(
+        specout_data=specout_data,
+        transects=transects,
+        tide_level=0.0,
+        beach_facing=210.0,
+    )
+
+    assert not result.degraded
+    assert len(result.per_partition_breaks) == len(_COMPONENTS)
+    # Same order, same values as specout_data["components"] — not a
+    # recomputed decomposition of the flat energy array above (which would
+    # not reproduce these specific heights/periods/directions).
+    for expected, actual in zip(_COMPONENTS, result.per_partition_breaks):
+        assert actual.height_m == expected["height"]
+        assert actual.period_s == expected["period"]
+        assert actual.direction_deg == expected["direction"]
+        assert actual.classification == expected["classification"]
+
+
+def test_components_present_but_empty_degrades_without_recomputing():
+    """A model gap (components present but empty) must NOT trigger a
+    recompute via decompose_spectrum() — even though freqs_hz/dirs_deg/
+    energy below contain real energy that WOULD decompose to at least one
+    partition if decompose_spectrum() were mistakenly called. No bulk
+    fallback is supplied, so the only correct outcome is a degraded result
+    with zero partitions.
+    """
+    transects = [_transect(0)]
+    specout_data = {
+        "freqs_hz": [0.05, 0.10, 0.15],
+        "dirs_deg": [0.0, 120.0, 240.0],
+        "energy": [[0.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 0.0]],
+        "components": [],
+    }
+
+    result = run_pipeline(
+        specout_data=specout_data,
+        transects=transects,
+        tide_level=0.0,
+        beach_facing=210.0,
+    )
+
+    assert result.degraded
+    assert result.per_transect == []
+    assert result.per_partition_breaks == []
+
+
+def test_components_missing_key_falls_through_to_bulk_fallback():
+    """specout_data with no 'components' key at all (legacy/older shape)
+    still reaches the pre-existing bulk-fallback degradation path when bulk
+    params are supplied — unchanged pre-existing behaviour, not touched by
+    this round's fix."""
+    transects = [_transect(0)]
+    specout_data = {
+        "freqs_hz": [],
+        "dirs_deg": [],
+        "energy": [],
+    }
+
+    result = run_pipeline(
+        specout_data=specout_data,
+        transects=transects,
+        tide_level=0.0,
+        beach_facing=210.0,
+        bulk_hs=1.5,
+        bulk_tp=12.0,
+        bulk_dir=210.0,
+    )
+
+    assert result.degraded
+    assert len(result.per_partition_breaks) == 1
+    assert result.per_partition_breaks[0].height_m == 1.5

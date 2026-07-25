@@ -17,9 +17,11 @@ from __future__ import annotations
 
 from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_runner import (
+    _align_watershed_partitions_to_curve,
     _select_l3_handoff_position_and_spectrum,
     _select_l3_handoff_spectra,
     _transect_band_depths,
+    _watershed_by_time_for_point,
 )
 from weewx_clearskies_api.services.swan_spectral import MultiLocationSpecout
 
@@ -350,3 +352,193 @@ def test_transect_band_depths_brackets_generously_above_and_below():
     assert shallow < (1.3 * 0.5 / 0.73)
     assert deep > (1.3 * 2.0 / 0.73)
     assert shallow >= 0.1
+
+
+# ---------------------------------------------------------------------------
+# T4B.2: watershed (PT*) partitions replace decompose_spectrum() at both
+# live L3 CURVE call sites. _align_watershed_partitions_to_curve() aligns
+# TABLE PT* rows to CURVE/SPECOUT stations BY COORDINATE — reusing
+# _select_l3_handoff_spectra()'s own alignment discipline — and both
+# _select_l3_handoff_spectra()/_select_l3_handoff_position_and_spectrum()
+# must degrade explicitly (empty components + WARNING), never fall back to
+# decompose_spectrum(), when PT* data is unavailable for the selected
+# station/timestep.
+# ---------------------------------------------------------------------------
+
+_PT_COLUMNS = (
+    ["TIME", "XP", "YP"]
+    + [f"HsPT{k:02d}" for k in range(1, 11)]
+    + [f"TpPT{k:02d}" for k in range(1, 11)]
+    + [f"DrPT{k:02d}" for k in range(1, 11)]
+    + [f"DsPT{k:02d}" for k in range(1, 11)]
+)
+
+
+# SWAN's own raw TABLE time encoding (YYYYMMDD.HHmmss) — parse_table_pt_
+# partitions() converts this to ISO-8601, which must equal _TIME for the
+# (time_iso) keys below to line up with the SPECOUT-derived _TIME.
+_TIME_RAW = "20260101.000000"
+
+
+def _pt_header() -> str:
+    return "%" + " ".join(_PT_COLUMNS) + "\n"
+
+
+def _pt_row(time: str, xp: float, yp: float, hs: list[float], tp: list[float],
+            dr: list[float], ds: list[float]) -> str:
+    assert len(hs) == len(tp) == len(dr) == len(ds) == 10
+    values = [time, str(xp), str(yp)] + [str(v) for v in hs + tp + dr + ds]
+    return " ".join(values) + "\n"
+
+
+def _one_partition_row(time: str, xp: float, yp: float, height: float,
+                        period: float, direction: float) -> str:
+    """One real partition (slot 1, wind sea) at (xp, yp); slots 2-10 absent
+    via the real zero encoding (T4B.2 (a))."""
+    hs = [height] + [0.0] * 9
+    tp = [period] + [0.0] * 9
+    dr = [direction] + [0.0] * 9
+    ds = [10.0] + [0.0] * 9
+    return _pt_row(time, xp, yp, hs, tp, dr, ds)
+
+
+def test_align_watershed_partitions_to_curve_matches_by_coordinate():
+    specout = _specout()
+    table_text = _pt_header() + "".join(
+        _one_partition_row(_TIME_RAW,p["lon"], p["lat"], height=float(i) + 1.0,
+                            period=10.0, direction=200.0)
+        for i, p in enumerate(_TRANSECT_POINTS)
+    )
+
+    result = _align_watershed_partitions_to_curve(table_text, specout, utm_zone=None, label="t")
+
+    assert set(result.keys()) == {0, 1, 2, 3, 4}
+    for i in range(5):
+        components = result[i][_TIME]
+        assert len(components) == 1
+        assert components[0]["height"] == float(i) + 1.0
+
+
+def test_align_watershed_partitions_to_curve_discards_unmatched_row():
+    specout = _specout()
+    table_text = _pt_header() + _one_partition_row(_TIME_RAW,999.0, 999.0, height=2.0, period=10.0, direction=200.0)
+
+    result = _align_watershed_partitions_to_curve(table_text, specout, utm_zone=None, label="t")
+
+    assert result == {}
+
+
+def test_select_l3_handoff_spectra_uses_watershed_not_decompose_spectrum():
+    """The station selection is unchanged (station 2, per the existing
+    off-by-one guard fixtures); the components now come from the PT* TABLE
+    text, not from decomposing _STATION_ENERGY[2]."""
+    table_text = _pt_header() + "".join(
+        _one_partition_row(_TIME_RAW,p["lon"], p["lat"], height=9.0, period=14.0, direction=210.0)
+        for p in _TRANSECT_POINTS
+    )
+
+    results = _select_l3_handoff_spectra(
+        "test_spot", _specout(), _table_points(), _TRANSECT_POINTS,
+        utm_zone=None, curve_table_text=table_text,
+    )
+
+    assert len(results) == 1
+    entry = results[0]
+    assert entry["energy"] == [[42.0]]  # station 2's raw spectrum, unchanged
+    assert len(entry["components"]) == 1
+    assert entry["components"][0]["height"] == 9.0
+    assert entry["components"][0]["period"] == 14.0
+    assert entry["components"][0]["direction"] == 210.0
+
+
+def test_select_l3_handoff_spectra_degrades_explicitly_when_pt_unavailable():
+    """No curve_table_text supplied at all — must NOT fall back to
+    decomposing _STATION_ENERGY[2] (which is nonzero and would produce a
+    real component if decompose_spectrum() were mistakenly still called).
+    components must be an explicit empty list."""
+    results = _select_l3_handoff_spectra(
+        "test_spot", _specout(), _table_points(), _TRANSECT_POINTS,
+        utm_zone=None, curve_table_text=None,
+    )
+
+    assert len(results) == 1
+    assert results[0]["components"] == []
+
+
+def test_select_l3_handoff_spectra_degrades_when_selected_station_missing_from_table():
+    """curve_table_text exists and has data for OTHER stations, but not for
+    the one actually selected (station 2) — still an explicit empty list,
+    not a silent recompute."""
+    table_text = _pt_header() + "".join(
+        _one_partition_row(_TIME_RAW,p["lon"], p["lat"], height=9.0, period=14.0, direction=210.0)
+        for i, p in enumerate(_TRANSECT_POINTS) if i != 2
+    )
+
+    results = _select_l3_handoff_spectra(
+        "test_spot", _specout(), _table_points(), _TRANSECT_POINTS,
+        utm_zone=None, curve_table_text=table_text,
+    )
+
+    assert len(results) == 1
+    assert results[0]["components"] == []
+
+
+def test_select_l3_handoff_position_and_spectrum_uses_watershed():
+    curve_table_text = _pt_header() + "".join(
+        _one_partition_row(_TIME_RAW,lon, lat, height=7.0, period=11.0, direction=195.0)
+        for lon, lat in _CURVE_SPARSE
+    )
+
+    results = _select_l3_handoff_position_and_spectrum(
+        _band_points(hs_proxy=1.0),
+        _BAND_GEOMETRY,
+        _sparse_curve_specout(),
+        utm_zone=None,
+        transect_index=3,
+        label="test_spot#T3",
+        curve_table_text=curve_table_text,
+    )
+
+    assert len(results) == 1
+    assert results[0]["energy"] == [[42.0]]  # unchanged station selection
+    assert len(results[0]["components"]) == 1
+    assert results[0]["components"][0]["height"] == 7.0
+
+
+def test_select_l3_handoff_position_and_spectrum_degrades_without_table_text():
+    results = _select_l3_handoff_position_and_spectrum(
+        _band_points(hs_proxy=1.0),
+        _BAND_GEOMETRY,
+        _sparse_curve_specout(),
+        utm_zone=None,
+        transect_index=3,
+        label="test_spot#T3",
+        curve_table_text=None,
+    )
+
+    assert len(results) == 1
+    assert results[0]["components"] == []
+
+
+# ---------------------------------------------------------------------------
+# _watershed_by_time_for_point() — T4B.2 L2 DWR scope addition
+# ---------------------------------------------------------------------------
+
+
+def test_watershed_by_time_for_point_matches_known_coordinate():
+    table_text = _pt_header() + _one_partition_row(_TIME_RAW,-118.05, 33.65, height=1.2, period=9.0, direction=220.0)
+
+    result = _watershed_by_time_for_point(table_text, (-118.05, 33.65), utm_zone=None, label="dwr")
+
+    assert set(result.keys()) == {_TIME}
+    assert result[_TIME][0]["height"] == 1.2
+
+
+def test_watershed_by_time_for_point_discards_coordinate_mismatch():
+    """A stale/mismatched TABLE file (wrong point's data) must be discarded,
+    not trusted just because the file only declares one POINTS location."""
+    table_text = _pt_header() + _one_partition_row(_TIME_RAW,-117.00, 33.00, height=1.2, period=9.0, direction=220.0)
+
+    result = _watershed_by_time_for_point(table_text, (-118.05, 33.65), utm_zone=None, label="dwr")
+
+    assert result == {}
