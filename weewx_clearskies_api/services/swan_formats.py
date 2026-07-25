@@ -1070,6 +1070,7 @@ def build_swan_input(
     has_current: bool = False,
     structures: list[dict] | None = None,
     spot_configs: dict[str, dict] | None = None,
+    transects_by_spot: dict[str, list[dict[str, Any]]] | None = None,
 ) -> str:
     """Render the SWAN ASCII INPUT command file for a given grid level.
 
@@ -1133,6 +1134,19 @@ def build_swan_input(
             block is replaced with per-spot CURVE + expanded TABLE (HSIGN HSWELL
             TM01 DIR DEPTH QB DISSURF DSPR) + SPECOUT commands (T3.1).
             When None, the existing POINTS + TABLE approach is used unchanged.
+        transects_by_spot: Optional dict mapping spot_id -> list of per-transect
+            point-set descriptors (T4B.1). Each descriptor is a dict with keys
+            "name" (POINTS/TABLE sname, <=8 chars), "points_file" (coordinate
+            file the caller has written or will write — this function only
+            references it, never writes it; swan_formats.py does no file I/O
+            by design), "table_file", "transect_index", and "points" (list of
+            {"lon","lat","depth_m","distance_m"} dicts, used only to log the
+            point count — Accept criterion). LC-4B-1: this is emitted
+            ALONGSIDE the per-spot CURVE/TABLE/SPECOUT above, never in place
+            of it — the CURVE stays the diagnostic/validation output and the
+            live input to decompose_spectrum(); the handoff itself stops
+            being read from it. Empty/None for a spot -> no per-transect
+            POINTS emitted for that spot (today's pre-4B behaviour).
 
     Returns:
         String content of the SWAN INPUT command file.
@@ -1466,6 +1480,43 @@ def build_swan_input(
                     ),
                     "",
                 ]
+
+                # T4B.1 — per-transect POINTS + TABLE, emitted ALONGSIDE the
+                # diagnostic CURVE above (LC-4B-1: "Replace" means the
+                # handoff stops being read from the CURVE, not that the
+                # CURVE goes away). One POINTS/TABLE pair per transect the
+                # caller has already computed a coordinate band for
+                # (swan_runner.py — grid geometry frozen at setup; this
+                # function only emits commands from data given to it, it
+                # does not compute transect geometry or write any files).
+                # PT* carried per LC-4B-3/T4B.1 step 4, gated on nothing
+                # consuming it yet (T4B.2 watershed partitioning is a
+                # separate, unapproved trigger-1 decision).
+                _spot_transects = (transects_by_spot or {}).get(spot_id) or []
+                _spot_transect_points_total = 0
+                for _t_entry in _spot_transects:
+                    _t_name = _t_entry["name"]
+                    _t_points_file = _t_entry["points_file"]
+                    _t_table_file = _t_entry["table_file"]
+                    _t_points = _t_entry.get("points") or []
+                    _spot_transect_points_total += len(_t_points)
+                    lines += [
+                        f"POINTS '{_t_name}' FILE '{_t_points_file}'",
+                        "",
+                        (
+                            f"TABLE '{_t_name}' HEAD '{_t_table_file}'"
+                            f" TIME XP YP HSIGN HSWELL TM01 DIR DEPTH QB DISSURF DSPR"
+                            f" PTHSIGN PTRTP PTDIR PTDSPR"
+                            + (f" OUTPUT {swan_t_start} {output_dt_min} MIN" if not stationary else "")
+                        ),
+                        "",
+                    ]
+                if _spot_transects:
+                    logger.info(
+                        "SWAN T4B.1 per-transect POINTS: spot %r -> %d transect(s), "
+                        "%d total points declared across them.",
+                        spot_id, len(_spot_transects), _spot_transect_points_total,
+                    )
         else:
             logger.info(
                 "SWAN TABLE output columns: %s",

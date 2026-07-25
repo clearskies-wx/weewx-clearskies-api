@@ -45,6 +45,7 @@ from weewx_clearskies_api.models.responses import MarineForecastPoint
 from weewx_clearskies_api.services.swan_formats import (
     build_swan_input,
     compute_spot_transect,
+    compute_spot_transects,
     cudem_to_swan_bottom,
     hrrr_to_swan_wind,
     ww3_to_swan_boundary,
@@ -149,6 +150,41 @@ def _bulk_params_from_components(
     return combined_hs, dominant.get("period"), dominant.get("direction")
 
 
+def _transect_band_depths(hs_series: list[float]) -> tuple[float, float] | None:
+    """Return ``(target_deep_m, target_shallow_m)`` bracketing every plausible
+    per-hour handoff depth for a spot, from its L2 Hs series (T4B.1 Do step 3).
+
+    ``target_depth_m = breaking_margin_depth_m(hs)`` is evaluated at both the
+    minimum and maximum Hs seen in this run's L2 output, then padded by
+    ``_TRANSECT_BAND_PAD_FRACTION`` on both ends — a generous bracket,
+    because L2's Hs (measured at ~15 m) is systematically lower than the true
+    nearshore Hs the per-hour handoff will actually see (shoaling continues
+    shoreward of the DWR point). Returns ``None`` when *hs_series* is empty
+    (no L2 data yet this cycle) — the caller must skip per-transect POINTS
+    for that spot this cycle rather than guess a band (rules/coding.md:
+    "Never silently fall back ... fail explicitly" — here, "fail" means
+    degrade to the pre-4B single-CURVE behaviour with a logged WARNING, not
+    an exception, since a missing L2 baseline is an expected transient state
+    on a spot's first cycle).
+    """
+    from weewx_clearskies_api.services.transect_handoff import (  # noqa: PLC0415
+        breaking_margin_depth_m,
+    )
+
+    if not hs_series:
+        return None
+    hs_min = min(hs_series)
+    hs_max = max(hs_series)
+    deep = breaking_margin_depth_m(hs_max) * (1.0 + _TRANSECT_BAND_PAD_FRACTION)
+    shallow = max(
+        breaking_margin_depth_m(hs_min) * (1.0 - _TRANSECT_BAND_PAD_FRACTION),
+        0.1,  # SWAN DEPMIN floor (T23.2 convention, matches compute_spot_transect())
+    )
+    if deep <= shallow:
+        deep = shallow + _TRANSECT_BAND_SPACING_M  # degenerate guard (e.g. hs_min==hs_max==0)
+    return deep, shallow
+
+
 def _l3_fallback_points_from_dwr(
     spectral_entries: list[dict[str, Any]],
 ) -> list[MarineForecastPoint]:
@@ -224,6 +260,27 @@ _SWAN_EXCEPTION_VALUE = -9.0
 # produces very small Hs and short Tm01 for weak wind-sea conditions.
 _HS_MAX_M = 25.0
 _TM_MAX_S = 35.0
+
+# ---------------------------------------------------------------------------
+# T4B.1 — per-transect POINTS band sizing (ADR-093 Amendment 2 §2 formula,
+# reused via transect_handoff.breaking_margin_depth_m(); LC-4B-2: 10 m
+# spacing applies only to this band, NOT the diagnostic CURVE, which stays
+# at compute_spot_transect()'s 50 m default).
+# ---------------------------------------------------------------------------
+_TRANSECT_BAND_SPACING_M = 10.0
+_TRANSECT_BAND_MIN_POINTS = 3   # select_hourly_handoff() needs >=3 for an interior station
+_TRANSECT_BAND_MAX_POINTS = 60  # safety cap — plan's own cost math assumes tens, not hundreds
+#: L2's Hs is measured at ~15 m and the wave shoals shoreward of that, so it
+#: systematically UNDERSTATES the true nearshore Hs (T4B.1 Do step 3: "the
+#: estimate is systematically low and must not be treated as exact" — Q1
+#: disposition). Padding the band by this fraction on both ends is a
+#: generous-bracket ENGINEERING margin for where to declare output points,
+#: not a physics formula — the actual handoff depth is still computed later,
+#: per hour, by the unmodified select_hourly_handoff() formula. Any point
+#: this band under- or over-shoots is silently clipped to the frozen L3 grid
+#: by compute_spot_transect()'s existing grid_bbox logic (already logged
+#: there), so an aggressive pad is safe, not just convenient.
+_TRANSECT_BAND_PAD_FRACTION = 0.5
 
 
 def _is_valid_point(hs: float, tm01: float, mwd: float) -> bool:
@@ -1826,6 +1883,25 @@ class SWANRunner:
                         _dwr_path.name, _sid,
                     )
 
+        # T4B.1 Do step 3 / open question 1 — L2's per-hour Hs, needed to
+        # bound the per-transect POINTS band, IS available here: this block
+        # runs before the L3 cluster loop below writes any L3 INPUT file.
+        # Stash it on self._spot_configs (surviving the per-cluster
+        # scoping/restoring of that dict later) so _write_input_files() can
+        # read it when it builds each cluster's L3 "inner" INPUT.
+        if self._spot_configs:
+            for _sid, _entries in self._spectral_results.items():
+                _cfg = self._spot_configs.get(_sid)
+                if _cfg is None:
+                    continue
+                _hs_series: list[float] = []
+                for _e in _entries:
+                    _hs, _, _ = _bulk_params_from_components(_e.get("components", []))
+                    if _hs is not None:
+                        _hs_series.append(_hs)
+                if _hs_series:
+                    _cfg["l2_hs_series"] = _hs_series
+
         logger.info("SWAN Level 2 complete")
 
         # --- Level 3: Surf zone grids (10 m) — per cluster ---
@@ -2324,8 +2400,22 @@ class SWANRunner:
         # and transect-aware parsing in _parse_output.
         transect_spot_order: list[str] = []
         transect_points_map: dict[str, list[dict]] = {}
+        # T4B.1 — per-transect POINTS bands, keyed by spot_id -> list of
+        # descriptors (see build_swan_input()'s transects_by_spot docstring).
+        transects_by_spot: dict[str, list[dict[str, Any]]] = {}
 
         if grid_level == "inner" and self._spot_configs:
+            from weewx_clearskies_api.services.swan_formats import lonlat_to_utm, utm_zone  # noqa: PLC0415
+
+            _grid_bbox_lonlat = (
+                bottom_dims["lon_sw"],
+                bottom_dims["lat_sw"],
+                bottom_dims["lon_sw"] + bottom_dims["mxc"] * bottom_dims["dlon"],
+                bottom_dims["lat_sw"] + bottom_dims["myc"] * bottom_dims["dlat"],
+            )
+            _center_lon = (_grid_bbox_lonlat[0] + _grid_bbox_lonlat[2]) / 2
+            _t4b1_utm_zone = utm_zone(_center_lon)
+
             for n, (spot_id, (spot_lon, spot_lat)) in enumerate(self._surf_spots.items(), start=1):
                 cfg = self._spot_configs.get(spot_id)
                 if cfg is None:
@@ -2356,6 +2446,111 @@ class SWANRunner:
                 transect_spot_order.append(spot_id)
                 transect_points_map[spot_id] = tr["transect_points"]
 
+                # ------------------------------------------------------------
+                # T4B.1 — per-transect POINTS band, alongside the diagnostic
+                # CURVE computed just above (LC-4B-1). Guard on the segment
+                # geometry being USABLE, not merely present: SurfSpotConfig's
+                # fields are plain floats defaulting to 0.0, not None/absent,
+                # so an unconfigured spot silently carries (0.0, 0.0) — a
+                # valid-looking coordinate in the Gulf of Guinea. Emitting
+                # POINTS there would produce plausible-looking exception-value
+                # output with no error anywhere (the same silent-substitution
+                # shape as the 2026-07-23 0.01 m Hs incident and the
+                # 2026-07-19 VDatum 0.0 m fallback — rules/clearskies-process.md
+                # "Never silently fall back to 0.0"). Loud fallback instead:
+                # WARNING naming the spot and the failed check, then degrade
+                # to today's single-CURVE-only behaviour for this spot.
+                # ------------------------------------------------------------
+                _seg_start_lat = float(cfg.get("segment_start_lat", 0.0))
+                _seg_start_lon = float(cfg.get("segment_start_lon", 0.0))
+                _seg_end_lat = float(cfg.get("segment_end_lat", 0.0))
+                _seg_end_lon = float(cfg.get("segment_end_lon", 0.0))
+                _spacing_m = float(cfg.get("transect_spacing_m", 0.0))
+
+                _geom_issue: str | None = None
+                if (_seg_start_lat, _seg_start_lon) == (0.0, 0.0) or (
+                    _seg_end_lat, _seg_end_lon
+                ) == (0.0, 0.0):
+                    _geom_issue = "segment endpoint at (0.0, 0.0) — unconfigured"
+                elif _seg_start_lat == _seg_end_lat and _seg_start_lon == _seg_end_lon:
+                    _geom_issue = "degenerate segment — start and end coincide"
+                elif _spacing_m <= 0.0:
+                    _geom_issue = f"non-positive transect_spacing_m ({_spacing_m!r})"
+
+                if _geom_issue is not None:
+                    logger.warning(
+                        "SWAN T4B.1: spot %r skipping per-transect POINTS — %s. "
+                        "Falling back to the single diagnostic CURVE only "
+                        "(pre-4B behaviour) for this spot this cycle.",
+                        spot_id, _geom_issue,
+                    )
+                    continue
+
+                _hs_series = cfg.get("l2_hs_series") or []
+                _band = _transect_band_depths(_hs_series)
+                if _band is None:
+                    logger.warning(
+                        "SWAN T4B.1: spot %r has no L2 Hs data yet — "
+                        "per-transect POINTS skipped this cycle (needs at "
+                        "least one L2 DWR timestep before a handoff band can "
+                        "be sized). Falling back to the single diagnostic "
+                        "CURVE only for this spot this cycle.",
+                        spot_id,
+                    )
+                    continue
+                _target_deep_m, _target_shallow_m = _band
+
+                _spot_transect_infos = compute_spot_transects(
+                    segment_start_lat=_seg_start_lat,
+                    segment_start_lon=_seg_start_lon,
+                    segment_end_lat=_seg_end_lat,
+                    segment_end_lon=_seg_end_lon,
+                    transect_spacing_m=_spacing_m,
+                    beach_facing_degrees=float(cfg.get("beach_facing_degrees", 0.0)),
+                )
+
+                _entries: list[dict[str, Any]] = []
+                for _t in _spot_transect_infos:
+                    _band_result = compute_spot_transect(
+                        _t.origin_lon,
+                        _t.origin_lat,
+                        _t.bearing_deg,
+                        _profile_list,
+                        target_deep_m=_target_deep_m,
+                        target_shallow_m=_target_shallow_m,
+                        spacing_m=_TRANSECT_BAND_SPACING_M,
+                        min_points=_TRANSECT_BAND_MIN_POINTS,
+                        max_points=_TRANSECT_BAND_MAX_POINTS,
+                        coastline_lat=_t.origin_lat,
+                        coastline_lon=_t.origin_lon,
+                        grid_bbox=_grid_bbox_lonlat,
+                    )
+                    _band_points = _band_result["transect_points"]
+                    if not _band_points:
+                        continue
+                    _pt_name = f"PT{n}_{_t.index}"
+                    _points_file = f"POINTS_{n}_{_t.index}.txt"
+                    _table_file = f"TABLE_PT_{n}_{_t.index}.txt"
+
+                    _coord_lines = []
+                    for _p in _band_points:
+                        _x, _y = lonlat_to_utm(_p["lon"], _p["lat"], _t4b1_utm_zone)
+                        _coord_lines.append(f"{_x:.2f}   {_y:.2f}")
+                    (run_dir / _points_file).write_text(
+                        "\n".join(_coord_lines) + "\n", encoding="ascii"
+                    )
+
+                    _entries.append({
+                        "name": _pt_name,
+                        "points_file": _points_file,
+                        "table_file": _table_file,
+                        "transect_index": _t.index,
+                        "points": _band_points,
+                    })
+
+                if _entries:
+                    transects_by_spot[spot_id] = _entries
+
         # Merge grid info — wind_dims has valid_times; bottom_dims has geometry
         grid_info: dict[str, Any] = {**bottom_dims, **wind_dims}
 
@@ -2376,6 +2571,8 @@ class SWANRunner:
         if transect_spot_order:
             grid_info["transect_spot_order"] = transect_spot_order
             grid_info["transect_points"] = transect_points_map
+        if transects_by_spot:
+            grid_info["transects_by_spot"] = transects_by_spot
 
         # Compute inner_dims for outer NESTOUT command
         inner_dims_for_input: dict[str, Any] | None = None
@@ -2415,6 +2612,7 @@ class SWANRunner:
             has_current=has_current,
             structures=structures,
             spot_configs=self._spot_configs if grid_level == "inner" else None,
+            transects_by_spot=transects_by_spot if grid_level == "inner" else None,
         )
         (run_dir / "INPUT").write_text(input_text, encoding="ascii")
 
