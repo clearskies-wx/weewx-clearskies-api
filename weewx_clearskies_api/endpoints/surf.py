@@ -86,15 +86,15 @@ from weewx_clearskies_api.services.station import build_station_clock, get_stati
 from weewx_clearskies_api.services.compute_client import (
     ComputeServiceError,
     remote_surfbeat as _remote_surfbeat,
-    remote_swelltrack as _remote_swelltrack,
 )
-from weewx_clearskies_api.services.surf_1d_pipeline import (
-    PipelineResult,
-    run_pipeline as _run_surf_pipeline,
+from weewx_clearskies_api.services.surf_1d_pipeline import PipelineResult
+from weewx_clearskies_api.services.surf_pipeline_timestep import (
+    compute_pipeline_for_timestep as _compute_pipeline_for_timestep,
+    resolve_handoff_by_transect as _resolve_handoff_by_transect,
+    select_reference_point as _select_reference_point,
 )
-from weewx_clearskies_api.services.transect_handoff import (
-    HandoffSelection,
-    select_hourly_handoff as _select_hourly_handoff,
+from weewx_clearskies_api.services.swelltrack_cache import (
+    deserialize_pipeline_result_from_cache as _deserialize_swelltrack_cache,
 )
 from weewx_clearskies_api.services.surfbeat_runner import (
     SurfBeatResult,
@@ -935,77 +935,27 @@ def get_surf(location_id: str) -> dict:
         if not pts_at_time:
             continue
 
-        # T3.4+T7.2: Scan for QB peaks (break points) along the transect FIRST,
-        # so the reference point can be selected just offshore of the biggest break.
-        # Sort transect points deepest-to-shallowest (offshore → onshore).
-        # A QB peak is a local maximum >= 0.25 (threshold for meaningful breaking).
-        # Multiple peaks identify outer bar + inner bar break zones.
-        break_points: list[dict] = []
-        _break_src_pts: list[dict] = []         # parallel: full transect pt at each break
-        _break_offshore_pts: list[dict | None] = []  # parallel: just-offshore pt per break
-        if len(pts_at_time) > 1:
-            sorted_pts = sorted(
-                pts_at_time,
-                key=lambda p: p.get("distanceFromShore") or 0,
-                reverse=True,
-            )
-            for _bp_idx, _bp_pt in enumerate(sorted_pts):
-                _qb = _bp_pt.get("breakingFraction")
-                if _qb is None or _qb < 0.25:
-                    continue
-                _prev_qb = (
-                    (sorted_pts[_bp_idx - 1].get("breakingFraction") or 0.0)
-                    if _bp_idx > 0
-                    else 0.0
-                )
-                _next_qb = (
-                    (sorted_pts[_bp_idx + 1].get("breakingFraction") or 0.0)
-                    if _bp_idx < len(sorted_pts) - 1
-                    else 0.0
-                )
-                if _qb >= _prev_qb and _qb >= _next_qb:
-                    _bp_wh = _bp_pt.get("waveHeight")
-                    break_points.append({
-                        # T4A.1: model vocabulary (distance/depth/hs) — matches
-                        # beach_profile.py's transect/breakPoints field names.
-                        "distance": _bp_pt.get("distanceFromShore"),
-                        "depth": _bp_pt.get("depth"),
-                        # Convert raw SWAN Hs (meters) to display unit — same
-                        # conversion applied to the other height fields below.
-                        "hs": (
-                            _convert_unit(float(_bp_wh), "meter", wave_height_internal)
-                            if _bp_wh is not None
-                            else None
-                        ),
-                    })
-                    _break_src_pts.append(_bp_pt)
-                    _break_offshore_pts.append(
-                        sorted_pts[_bp_idx - 1] if _bp_idx > 0 else None
-                    )
-
-        # T3.4+T7.2: Select the reference point.
-        # If breaks detected: use the transect point just offshore of the biggest
-        # break (highest waveHeight × breakingFraction product). Falls back to
-        # closest-to-10m when no breaking is detected (flat/no-break conditions)
-        # or when the biggest break is already the most offshore point available.
-        def _depth_of(pt: dict) -> float:
-            d = pt.get("depth")
-            return float(d) if d is not None else 9999.0
-
-        ref_point = pts_at_time[0]
-        if break_points:
-            _biggest_idx = max(
-                range(len(break_points)),
-                key=lambda i: (_break_src_pts[i].get("waveHeight") or 0)
-                              * (_break_src_pts[i].get("breakingFraction") or 0),
-            )
-            _offshore_ref = _break_offshore_pts[_biggest_idx]
-            if _offshore_ref is not None:
-                ref_point = _offshore_ref
-            elif len(pts_at_time) > 1:
-                ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
-        elif len(pts_at_time) > 1:
-            ref_point = min(pts_at_time, key=lambda pt: abs(_depth_of(pt) - 10.0))
+        # T3.4+T7.2: Scan for QB peaks (break points) along the transect and
+        # select the reference point (T4B — extracted to
+        # services/surf_pipeline_timestep.py so the SWAN precompute in
+        # providers/nearshore/swan.py can build the identical bulk-fallback
+        # Hs/Tp/Dir a cache-hit for this timestep must have been computed
+        # with; see that module's docstring). Break points come back in raw
+        # (meters) units — converted to the operator's display unit here,
+        # same as before extraction.
+        ref_point, _break_points_raw = _select_reference_point(pts_at_time)
+        break_points: list[dict] = [
+            {
+                "distance": _bp["distance"],
+                "depth": _bp["depth"],
+                "hs": (
+                    _convert_unit(float(_bp["waveHeight"]), "meter", wave_height_internal)
+                    if _bp["waveHeight"] is not None
+                    else None
+                ),
+            }
+            for _bp in _break_points_raw
+        ]
 
         raw_hsig = ref_point.get("waveHeight")
         if raw_hsig is None:
@@ -1072,116 +1022,58 @@ def get_surf(location_id: str) -> dict:
         # (see _determine_model_status()), not a formula-based substitute.
         _ts_handoff_specout = _handoff_specout_by_time.get(valid_time) or {}
 
-        # T4A.9/T4A.6 item g: this hour's handoff depth/source, per transect.
-        # The real per-hour selection happens upstream in swan_runner.py
-        # (_select_l3_handoff_spectra(), which has direct access to the L3
-        # CURVE's per-station depths/QB) and is published on the SPECOUT
-        # entry as "handoff_depth_m"/"handoff_source_level". This endpoint
-        # only reads that published choice — it does not recompute it, and
-        # it never touches grid geometry (C2). A spot with no L3 grid (or a
-        # timestep T4A.10 rejected as unrecoverable breaking) has no
-        # published value here; select_hourly_handoff() with no station data
-        # falls back to the same L2 reference depth every source in this
-        # pipeline agrees on.
-        if "handoff_depth_m" in _ts_handoff_specout:
-            _handoff_selection = HandoffSelection(
-                handoff_depth_m=_ts_handoff_specout["handoff_depth_m"],
-                source_level=_ts_handoff_specout.get("handoff_source_level", "L3"),
-                station_index=None,
-                station_depth_m=_ts_handoff_specout["handoff_depth_m"],
-                clamped=False,
-            )
-        else:
-            _handoff_selection = _select_hourly_handoff(
-                hs_m=float(raw_hsig) if raw_hsig is not None else 0.0,
-                station_depths_m=None,
-            )
-        _handoff_by_transect: dict[int, tuple[float, str]] = (
-            {
-                _idx: (_handoff_selection.handoff_depth_m, _handoff_selection.source_level)
-                for _idx in range(len(_spot_transects))
-            }
-            if _spot_transects
-            else {}
-        )
-
-        _pipeline_result = None
-        if _spot_transects:
+        # T4B: cache-lookup-first. The 1D pipeline is precomputed once per
+        # forecast timestep per spot at the end of a successful SWAN cycle
+        # (providers/nearshore/swan.py's _precompute_swelltrack_for_spot())
+        # and cached under swan_result["swelltrack"][valid_time] — this is
+        # what avoids re-running the pipeline for all ~67-72 timesteps on
+        # every GET /surf request. Falls back to the on-demand call
+        # (unchanged, still fully functional) whenever the cache is absent,
+        # this timestep isn't in it, or the cached entry is malformed.
+        _pipeline_result: PipelineResult | None = None
+        _swelltrack_cache: dict = swan_result.get("swelltrack") or {}
+        _cached_swelltrack_entry = _swelltrack_cache.get(valid_time)
+        if _cached_swelltrack_entry is not None:
             try:
-                if _compute_host:
-                    try:
-                        _pipeline_result = _remote_swelltrack(
-                            _compute_host,
-                            _compute_secret,
-                            _compute_verify_tls,
-                            spot_id=location_id,
-                            specout_data=_ts_handoff_specout,
-                            transects=_spot_transects,
-                            tide_level=0.0,
-                            beach_facing=spot_config.beach_facing_degrees,
-                            gamma=0.73,
-                            cfjon=spot_config.friction_coefficient,
-                            # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
-                            bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
-                            bulk_tp=wave_period_pt if wave_period_pt else None,
-                            bulk_dir=wave_direction_pt if wave_direction_pt else None,
-                            # T4.5b: canonical partitions from deep-water SPECOUT
-                            # so per_partition_breaks uses indices the swell card knows.
-                            canonical_partitions=ts_spectral or None,
-                            # T4A.9/T4A.10 fix (2026-07-25, reopened): thread this
-                            # hour's per-hour handoff onto the wire — compute
-                            # offloading is the live production path, so without
-                            # this the remote service computes with a stale
-                            # placeholder instead of the real per-hour selection.
-                            handoff_by_transect=_handoff_by_transect,
-                        )
-                    except ComputeServiceError:
-                        logger.warning(
-                            "surf endpoint: compute service unavailable for SwellTrack"
-                            " (%s @ %s) — falling back to in-process",
-                            location_id,
-                            valid_time,
-                            exc_info=True,
-                        )
-                        _pipeline_result = _run_surf_pipeline(
-                            specout_data=_ts_handoff_specout,
-                            transects=_spot_transects,
-                            tide_level=0.0,
-                            beach_facing=spot_config.beach_facing_degrees,
-                            cfjon=spot_config.friction_coefficient,
-                            # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
-                            bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
-                            bulk_tp=wave_period_pt if wave_period_pt else None,
-                            bulk_dir=wave_direction_pt if wave_direction_pt else None,
-                            # T4.5b: canonical partitions from deep-water SPECOUT
-                            # so per_partition_breaks uses indices the swell card knows.
-                            canonical_partitions=ts_spectral or None,
-                            handoff_by_transect=_handoff_by_transect,
-                        )
-                else:
-                    _pipeline_result = _run_surf_pipeline(
-                        specout_data=_ts_handoff_specout,
-                        transects=_spot_transects,
-                        tide_level=0.0,
-                        beach_facing=spot_config.beach_facing_degrees,
-                        cfjon=spot_config.friction_coefficient,
-                        # T4.5: bulk fallback when SPECOUT freqs/dirs/energy absent.
-                        bulk_hs=float(raw_hsig) if raw_hsig is not None else None,
-                        bulk_tp=wave_period_pt if wave_period_pt else None,
-                        bulk_dir=wave_direction_pt if wave_direction_pt else None,
-                        # T4.5b: canonical partitions from deep-water SPECOUT
-                        # so per_partition_breaks uses indices the swell card knows.
-                        canonical_partitions=ts_spectral or None,
-                        handoff_by_transect=_handoff_by_transect,
-                    )
-            except Exception:
+                _pipeline_result = _deserialize_swelltrack_cache(_cached_swelltrack_entry)
+            except (KeyError, TypeError, ValueError):
                 logger.warning(
-                    "surf endpoint: 1D pipeline raised for %s @ %s — modelStatus will be "
-                    "'unavailable' for this timestep",
+                    "surf endpoint: malformed swelltrack cache entry for %s @ %s"
+                    " — falling back to on-demand pipeline",
                     location_id,
                     valid_time,
                     exc_info=True,
                 )
+                _pipeline_result = None
+
+        if _pipeline_result is None:
+            # T4A.9/T4A.6 item g: this hour's handoff depth/source, per
+            # transect (extracted to surf_pipeline_timestep.py — see that
+            # module for the full rationale, unchanged from before
+            # extraction).
+            _handoff_by_transect = _resolve_handoff_by_transect(
+                _ts_handoff_specout, _spot_transects, raw_hsig
+            )
+            # T4.4: Run the per-partition 1D swell transformation pipeline
+            # (remote-with-in-process-fallback cascade, extracted to
+            # surf_pipeline_timestep.py). Degrades gracefully when SPECOUT
+            # is unavailable or transects have no bathymetric profiles.
+            _pipeline_result = _compute_pipeline_for_timestep(
+                ts_handoff_specout=_ts_handoff_specout,
+                spot_transects=_spot_transects,
+                beach_facing_degrees=spot_config.beach_facing_degrees,
+                friction_coefficient=spot_config.friction_coefficient,
+                raw_hsig=raw_hsig,
+                wave_period_pt=wave_period_pt,
+                wave_direction_pt=wave_direction_pt,
+                canonical_partitions=ts_spectral or None,
+                handoff_by_transect=_handoff_by_transect,
+                spot_id=location_id,
+                valid_time=valid_time,
+                compute_host=_compute_host,
+                compute_secret=_compute_secret,
+                compute_verify_tls=_compute_verify_tls,
+            )
 
         # T4A.4: classify the 1D pipeline outcome BEFORE scoring, so the
         # scorer receives the SwellTrack face height (or None) directly —

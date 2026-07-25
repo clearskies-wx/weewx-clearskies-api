@@ -1060,6 +1060,12 @@ def _remote_health_loop(service_url: str, spot_ids: list[str], verify_tls: bool 
                                 "forecast": data.get("forecast", []),
                                 "spectral": data.get("spectral", []),
                                 "transect": data.get("transect", {}),
+                                # T4B — precomputed swelltrack cache (see
+                                # fetch()'s matching whitelist comment above;
+                                # both must be kept in sync with whatever
+                                # keys the remote service's own
+                                # _run_all_spots_locked() writes).
+                                "swelltrack": data.get("swelltrack", {}),
                                 "run_time": data.get("run_time"),
                                 "hrrr_cycle_time": data.get("hrrr_cycle_time", ""),
                             },
@@ -1245,6 +1251,14 @@ def fetch(spot_id: str) -> dict[str, Any] | None:
         "spectral": last_good.get("spectral", []),
         # T3.4 — full cross-shore transect per timestep (keyed by ISO time string)
         "transect": last_good.get("transect", {}),
+        # T4B — precomputed 1D (SwellTrack) pipeline result, keyed by ISO
+        # time string (services/swelltrack_cache.py trimmed encoding). This
+        # key list is a whitelist, not a passthrough — a key written to the
+        # cache payload (see the per-spot loop in _run_all_spots_locked())
+        # that is not also read out here is silently dropped. Keep both in
+        # sync; ``_remote_health_loop()`` below has the same whitelist for
+        # the separated-service sync path.
+        "swelltrack": last_good.get("swelltrack", {}),
         "run_time": run_time_str,
         "data_age_seconds": data_age_seconds,
     }
@@ -1363,6 +1377,197 @@ def run_all_spots(
         )
     finally:
         _swan_run_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# T4B — precompute the 1D (SwellTrack) pipeline once per SWAN cycle
+# ---------------------------------------------------------------------------
+
+
+def _precompute_swelltrack_for_spot(
+    spot_id: str,
+    forecast_dicts: list[dict[str, Any]],
+    spectral_entries: list[dict[str, Any]],
+    spot_cfg: Any,
+    runtime_profile: dict | None,
+    marine_config: Any,
+) -> dict[str, dict[str, Any]]:
+    """Precompute the 1D (SwellTrack) pipeline once per forecast timestep, for one spot.
+
+    Caching change: the pipeline used to run once per timestep PER REQUEST
+    inside endpoints/surf.py's per-timestep loop — ~67-72 calls for every
+    ``GET /surf`` request (evidenced at ~18 calls/min sustained load with no
+    caller-side caching). This runs it once per timestep HERE, at the end of
+    a successful SWAN cycle (every ~6 hours, see run_all_spots()), and
+    returns a dict keyed by ISO-8601 timestep string for
+    endpoints/surf.py to read straight out of the cache on a hit.
+
+    Builds the EXACT same inputs endpoints/surf.py's on-demand path would
+    have built for the same timestep — reference-point selection, handoff
+    selection, and the pipeline invocation itself all come from
+    ``services/surf_pipeline_timestep.py``, the same functions surf.py calls
+    on a cache miss — so a cached result cannot silently diverge from what
+    on-demand would have produced for that timestep.
+
+    Never raises: any failure here must not prevent the forecast/spectral/
+    transect data (the pre-existing, load-bearing cache payload) from being
+    cached. Returns ``{}`` on any failure, in which case surf.py
+    transparently falls back to its on-demand path for every timestep of
+    this spot — identical behavior to before this precompute step existed.
+
+    The returned dict is encoded with ``services/swelltrack_cache.py``'s
+    TRIMMED codec (drops the three heavy per-transect arrays) — see that
+    module's docstring for the measured size tradeoff. beach_profile.py
+    deliberately does not read this cache (see that module's docstring for
+    why) — do not wire it up without re-measuring.
+    """
+    if not forecast_dicts or spot_cfg is None:
+        return {}
+
+    try:
+        from weewx_clearskies_api.services.swan_formats import (  # noqa: PLC0415
+            compute_spot_transects as _compute_spot_transects_local,
+        )
+        from weewx_clearskies_api.services.surf_pipeline_timestep import (  # noqa: PLC0415
+            compute_pipeline_for_timestep,
+            resolve_handoff_by_transect,
+            select_reference_point,
+        )
+        from weewx_clearskies_api.services.swelltrack_cache import (  # noqa: PLC0415
+            serialize_pipeline_result_for_cache,
+        )
+
+        spot_transects = _compute_spot_transects_local(
+            segment_start_lat=spot_cfg.segment_start_lat,
+            segment_start_lon=spot_cfg.segment_start_lon,
+            segment_end_lat=spot_cfg.segment_end_lat,
+            segment_end_lon=spot_cfg.segment_end_lon,
+            transect_spacing_m=spot_cfg.transect_spacing_m,
+            beach_facing_degrees=spot_cfg.beach_facing_degrees,
+            structures=spot_cfg.structures or None,
+        )
+    except Exception:
+        logger.warning(
+            "SWAN precompute: compute_spot_transects failed for %r — "
+            "swelltrack cache will be empty; surf endpoint falls back to "
+            "on-demand computation for every timestep of this spot",
+            spot_id,
+            exc_info=True,
+        )
+        return {}
+
+    if not spot_transects:
+        return {}
+
+    # T4A.9's per-transect bathymetric_profile is otherwise populated only
+    # by the remote compute service (compute_service.py's _local_profile
+    # fallback), which reads the SAME per-spot PCHIP profile this function
+    # is given as runtime_profile (already loaded from the apply-time cache
+    # by the caller). Mirrored here so the in-process precompute matches
+    # what surf.py's own in-process fallback (no compute host configured)
+    # would itself produce — same fallback, not a second implementation.
+    _local_profile: list[dict[str, float]] = []
+    _profile_pts = (runtime_profile or {}).get("profile", [])
+    if _profile_pts:
+        _local_profile = sorted(
+            [
+                p for p in _profile_pts
+                if p.get("depth_m") is not None and p.get("depth_m", 0) > 0
+            ],
+            key=lambda p: p["distance_m"],
+        )
+    if _local_profile:
+        for _t in spot_transects:
+            if not _t.bathymetric_profile:
+                _t.bathymetric_profile = _local_profile
+
+    # Group this spot's forecast points by timestep — same grouping
+    # endpoints/surf.py's _points_by_time performs on the identical
+    # MarineForecastPoint.model_dump() dicts (forecast_dicts IS what becomes
+    # payload["forecast"], just not yet grouped by time).
+    points_by_time: dict[str, list[dict]] = defaultdict(list)
+    for d in forecast_dicts:
+        _t_key = d.get("time")
+        if _t_key:
+            points_by_time[_t_key].append(d)
+
+    spectral_by_time: dict[str, list[dict]] = {}
+    handoff_specout_by_time: dict[str, dict] = {}
+    for entry in spectral_entries:
+        _t_key = entry.get("time", "")
+        if _t_key:
+            spectral_by_time[_t_key] = entry.get("components", [])
+            handoff_specout_by_time[_t_key] = entry
+
+    compute_host = getattr(marine_config, "surf_compute_host", None)
+    compute_secret = os.environ.get("SURF_COMPUTE_SECRET", "") if compute_host else ""
+    compute_verify_tls = getattr(marine_config, "surf_compute_verify_tls", True)
+    friction_coefficient = getattr(spot_cfg, "friction_coefficient", 0.038)
+    beach_facing_degrees = spot_cfg.beach_facing_degrees
+
+    swelltrack: dict[str, dict[str, Any]] = {}
+    for valid_time, pts_at_time in points_by_time.items():
+        if not pts_at_time:
+            continue
+        try:
+            ref_point, _ = select_reference_point(pts_at_time)
+            raw_hsig = ref_point.get("waveHeight")
+            if raw_hsig is None:
+                continue
+            wave_period_pt = float(ref_point.get("wavePeriod") or 0.0)
+            wave_direction_pt = float(ref_point.get("waveDirection") or 0.0)
+
+            ts_handoff_specout = handoff_specout_by_time.get(valid_time) or {}
+            handoff_by_transect = resolve_handoff_by_transect(
+                ts_handoff_specout, spot_transects, raw_hsig
+            )
+            ts_spectral = spectral_by_time.get(valid_time)
+
+            pipeline_result = compute_pipeline_for_timestep(
+                ts_handoff_specout=ts_handoff_specout,
+                spot_transects=spot_transects,
+                beach_facing_degrees=beach_facing_degrees,
+                friction_coefficient=friction_coefficient,
+                raw_hsig=raw_hsig,
+                wave_period_pt=wave_period_pt,
+                wave_direction_pt=wave_direction_pt,
+                canonical_partitions=ts_spectral or None,
+                handoff_by_transect=handoff_by_transect,
+                spot_id=spot_id,
+                valid_time=valid_time,
+                compute_host=compute_host,
+                compute_secret=compute_secret,
+                compute_verify_tls=compute_verify_tls,
+                log_prefix="SWAN precompute",
+            )
+        except Exception:
+            logger.warning(
+                "SWAN precompute: 1D pipeline raised for %r @ %s — this "
+                "timestep will be absent from the swelltrack cache; surf "
+                "endpoint falls back to on-demand computation for it",
+                spot_id,
+                valid_time,
+                exc_info=True,
+            )
+            continue
+
+        if pipeline_result is None:
+            continue
+
+        try:
+            swelltrack[valid_time] = serialize_pipeline_result_for_cache(pipeline_result)
+        except Exception:
+            logger.warning(
+                "SWAN precompute: failed to serialize pipeline result for "
+                "%r @ %s — this timestep will be absent from the "
+                "swelltrack cache",
+                spot_id,
+                valid_time,
+                exc_info=True,
+            )
+            continue
+
+    return swelltrack
 
 
 def _run_all_spots_locked(
@@ -1927,6 +2132,26 @@ def _run_all_spots_locked(
             "run_time": run_time_iso,
             "hrrr_cycle_time": hrrr_cycle_time,
         }
+
+        # T4B (caching) — precompute the 1D (SwellTrack) pipeline once per
+        # forecast timestep for this spot instead of leaving every GET /surf
+        # request to re-run it ~67-72 times (PROVIDER-MANUAL §14.15
+        # "Precomputed SwellTrack cache"). Best-effort: any failure inside
+        # _precompute_swelltrack_for_spot() returns {} rather than raising,
+        # so it can never block caching forecast/spectral/transect above.
+        # Key MUST be kept in sync with the two read-side whitelists that
+        # reconstruct this payload dict from a subset of keys — fetch()
+        # (below) and _remote_health_loop() (separated-service sync) — or a
+        # future key added here will be silently dropped on read.
+        payload["swelltrack"] = _precompute_swelltrack_for_spot(
+            spot_id,
+            forecast_dicts,
+            spectral_results.get(spot_id, []),
+            marine_config.surf_spots.get(spot_id),
+            spot_configs_for_runner.get(spot_id, {}).get("runtime_profile"),
+            marine_config,
+        )
+
         cache.set(
             _build_last_good_key(spot_id),
             payload,
