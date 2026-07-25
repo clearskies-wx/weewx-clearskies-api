@@ -1454,6 +1454,73 @@ def extract_native_profile_from_grid(
     return profile
 
 
+def compute_structure_zone_depth(
+    structures: list[dict[str, Any]] | None,
+    grid: dict[str, Any],
+    *,
+    margin_m: float = 2.0,
+    spot_id: str = "",
+) -> float:
+    """``structure_zone_depth`` — T4A.2/T4A.3 Do step 5.
+
+    **LC-R2-8 (P4A Round 2): two conflicting definitions exist in the
+    governing documents.** Plan T4A.2 and API-MANUAL §17 both say "the depth
+    of the deepest structure affecting this spot, plus margin" — that is
+    what this function implements. ``L3-1D-BOUNDARY-DECISIONS-BRIEF.md`` §4
+    quotes SURF-ZONE-MODEL-BRIEF §6.1 as "maximum depth at the L3 SWAN grid
+    boundary for this spot's cluster" — a DIFFERENT quantity (a property of
+    the sized grid, not of the structures themselves) that is NOT
+    implemented here. T4A.3 Do step 5's own instruction and T4A.2's two
+    worked examples (HB: no structures → 0.0; Newport: breakwater at 8m →
+    ``10.0`` = 8 + 2 margin) both support the deepest-structure reading, so
+    that is the one built. Flagged, not silently resolved — see the P4A
+    Round 2 closeout for B2's explicit answer on this.
+
+    Queries *grid* (a downloaded bathymetry grid — the same MEDIUM or FINE
+    tier the caller already has from the apply-time chain) at every
+    structure coordinate and returns the deepest depth found, plus
+    *margin_m*. Structures whose coordinates fall outside *grid*'s coverage
+    are skipped with a WARNING (per "Silent skipping of configured inputs
+    is a bug pattern") rather than silently ignored.
+
+    Returns ``0.0`` when *structures* is empty/``None``, or when none of
+    the supplied structures have coordinate data reachable in *grid* — this
+    matches T4A.2's documented default (fine zone covers only the breaking
+    zone, no structure interaction).
+    """
+    if not structures:
+        return 0.0
+
+    deepest_m = 0.0
+    any_reachable = False
+    for struct in structures:
+        coords = struct.get("coordinates") or []
+        for coord in coords:
+            if len(coord) < 2:
+                continue
+            lon, lat = float(coord[0]), float(coord[1])
+            depth = _grid_depth_below_msl(grid, lat, lon)
+            if depth is None:
+                continue
+            any_reachable = True
+            deepest_m = max(deepest_m, depth)
+
+    if not any_reachable:
+        if structures:
+            logger.warning(
+                "compute_structure_zone_depth: spot=%r has %d structure(s) "
+                "configured but none has a coordinate reachable in the "
+                "supplied bathymetry grid — structure_zone_depth defaults "
+                "to 0.0 (fine zone will NOT be extended for these "
+                "structures). Check structure coordinates against the grid "
+                "bbox.",
+                spot_id, len(structures),
+            )
+        return 0.0
+
+    return round(deepest_m + margin_m, 3)
+
+
 # ---------------------------------------------------------------------------
 # Beach slope computation (used by wave_transform.py's Battjes gamma formula)
 # ---------------------------------------------------------------------------

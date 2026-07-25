@@ -489,3 +489,107 @@ def test_interpolate_profile_pchip_accepts_real_hb_native_spacing(caplog):
         result = bathymetry.interpolate_profile_pchip(raw, max_hs_m=4.0, gamma=0.73)
     assert len(result) > 0
     assert not any("native spacing" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# T4A.3 (extended, P4A Round 2) — downloaded-grid contour search, shoreline
+# location, native-resolution profile extraction, structure_zone_depth.
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_grid(
+    *,
+    lat_first: float = 33.60,
+    lon_first: float = -118.05,
+    lat_last: float = 33.70,
+    lon_last: float = -117.95,
+    n: int = 101,
+    max_depth_m: float = 60.0,
+) -> dict:
+    """A 101x101 synthetic bathymetry grid, depth increasing linearly with
+    longitude (west = deep ocean, east = shore), matching the CUDEM sign
+    convention (negative = underwater)."""
+    depths = []
+    for _ in range(n):
+        row = [-max_depth_m * (1.0 - i / (n - 1)) for i in range(n)]
+        depths.append(row)
+    return {
+        "lat_first": lat_first, "lon_first": lon_first,
+        "lat_last": lat_last, "lon_last": lon_last,
+        "ni": n, "nj": n, "depths": depths,
+    }
+
+
+class TestGridDepthBelowMSL:
+    def test_returns_positive_depth_underwater(self):
+        grid = _synthetic_grid()
+        depth = bathymetry._grid_depth_below_msl(grid, 33.65, -118.0)
+        assert depth is not None
+        assert depth > 0
+
+    def test_returns_none_outside_grid_coverage(self):
+        grid = _synthetic_grid()
+        assert bathymetry._grid_depth_below_msl(grid, 10.0, -100.0) is None
+
+    def test_clamps_land_to_zero(self):
+        grid = _synthetic_grid(max_depth_m=0.0)
+        depth = bathymetry._grid_depth_below_msl(grid, 33.65, -117.96)
+        assert depth == 0.0
+
+
+class TestFindDepthContourDistance:
+    def test_finds_contour_within_search_range(self):
+        grid = _synthetic_grid(max_depth_m=60.0)
+        dist = bathymetry.find_depth_contour_distance(
+            grid, 33.65, -118.049, 90.0, 15.0, spot_id="test",
+        )
+        assert dist > 0
+
+    def test_raises_value_error_when_contour_never_reached(self):
+        # Grid never reaches 15m depth -> must raise, not fall back to a guess.
+        grid = _synthetic_grid(max_depth_m=2.0)
+        with pytest.raises(ValueError, match="never reached"):
+            bathymetry.find_depth_contour_distance(
+                grid, 33.65, -118.049, 90.0, 15.0, spot_id="test",
+                max_search_m=1000.0,
+            )
+
+
+class TestExtractNativeProfileFromGrid:
+    def test_returns_ascending_distance_depth_pairs(self):
+        grid = _synthetic_grid()
+        profile = bathymetry.extract_native_profile_from_grid(
+            grid, 33.65, -118.049, 90.0, max_distance_m=500.0,
+        )
+        assert len(profile) > 1
+        distances = [p["distance_m"] for p in profile]
+        assert distances == sorted(distances)
+
+
+class TestComputeStructureZoneDepth:
+    def test_no_structures_returns_zero(self):
+        grid = _synthetic_grid()
+        assert bathymetry.compute_structure_zone_depth([], grid) == 0.0
+        assert bathymetry.compute_structure_zone_depth(None, grid) == 0.0
+
+    def test_deepest_structure_plus_margin(self):
+        grid = _synthetic_grid()
+        structures = [
+            {"type": "pier", "coordinates": [[-118.01, 33.65]]},
+            {"type": "breakwater", "coordinates": [[-118.03, 33.65]]},  # deeper (further west)
+        ]
+        result = bathymetry.compute_structure_zone_depth(
+            structures, grid, margin_m=2.0,
+        )
+        deepest = bathymetry._grid_depth_below_msl(grid, 33.65, -118.03)
+        assert result == round(deepest + 2.0, 3)
+
+    def test_structure_outside_grid_coverage_warns_and_returns_zero(self, caplog):
+        grid = _synthetic_grid()
+        structures = [{"type": "pier", "coordinates": [[-100.0, 10.0]]}]
+        with caplog.at_level(logging.WARNING):
+            result = bathymetry.compute_structure_zone_depth(
+                structures, grid, spot_id="test",
+            )
+        assert result == 0.0
+        assert any("none has a coordinate reachable" in r.message for r in caplog.records)
