@@ -185,6 +185,32 @@ def _transect_band_depths(hs_series: list[float]) -> tuple[float, float] | None:
     return deep, shallow
 
 
+def _transect_hs_override_by_time(
+    points: list[MarineForecastPoint],
+) -> dict[str, float]:
+    """Per-timestep Hs estimate for one transect's own T4B.1 POINTS band
+    (T4B.3): the MAXIMUM Hs among the transect's own TABLE points at that
+    hour — the least-shoaled/least-dissipated (typically deepest) reading
+    available on this transect's own local band. Used as the ``hs_m`` input
+    to ``select_hourly_handoff()`` via ``_select_l3_handoff_spectra()``'s
+    ``hs_override_by_time`` so the target depth reflects THIS transect's own
+    local conditions (captures shadowing at its own alongshore location)
+    rather than the shared CURVE's single-location proxy. Max (not a fixed
+    index) is used because the per-transect band, unlike the CURVE, has no
+    established offshore-most-interior-station convention — it is sized per
+    spot per cycle from the L2 Hs bracket, so its point count and ordering
+    are not stable across cycles the way the CURVE's is.
+    """
+    out: dict[str, float] = {}
+    for p in points:
+        if p.waveHeight is None:
+            continue
+        prev = out.get(p.time)
+        if prev is None or p.waveHeight > prev:
+            out[p.time] = p.waveHeight
+    return out
+
+
 def _l3_fallback_points_from_dwr(
     spectral_entries: list[dict[str, Any]],
 ) -> list[MarineForecastPoint]:
@@ -724,9 +750,29 @@ def _select_l3_handoff_spectra(
     *,
     coord_tol_m: float = 200.0,
     coord_tol_deg: float = 0.003,
+    hs_override_by_time: dict[str, float] | None = None,
+    label: str | None = None,
+    transect_index: int = 0,
 ) -> list[dict[str, Any]]:
     """T4A.9/T4A.10: select, per forecast hour, which L3 CURVE station's
     spectrum is this spot's handoff spectrum.
+
+    T4B.3: ``hs_override_by_time``, when provided, replaces the Hs(hour)
+    proxy this function would otherwise read from ``table_points`` at the
+    shared CURVE's own offshore-most interior station. This is how per-
+    transect selection is layered on top of the *same* shared CURVE
+    specout/table without duplicating the coordinate-alignment or QB-
+    refinement logic: station alignment, QB, and the actual spectrum
+    returned all still come from the one diagnostic CURVE (LC-4B-1); only
+    the *target depth* driving which station gets picked varies, using
+    each transect's OWN local Hs (from its own T4B.1 POINTS band, which
+    does capture shadowing at that transect's own alongshore location).
+    Two transects landing on the same target depth therefore receive the
+    IDENTICAL spectrum — real depth variation, not independent alongshore
+    spectral content (that requires T4B.2's watershed partitioning, an
+    unapproved trigger-1 decision — see the caller's log for the explicit
+    ceiling statement). ``label`` overrides ``spot_id`` in log messages
+    only, for per-transect call sites (e.g. ``"spot#T3"``).
 
     Replaces the pre-Phase-4A fixed single ~10 m SPECOUT point with a
     per-hour lookup (ADR-093 Amendment 2 §2): ``handoff depth (this hour) =
@@ -810,6 +856,8 @@ def _select_l3_handoff_spectra(
         select_hourly_handoff,
     )
 
+    _log_id = label or spot_id
+
     if not specout.station_lonlat or not transect_points:
         return []
 
@@ -845,7 +893,7 @@ def _select_l3_handoff_spectra(
                 "transect_points match within %.4g (nearest=%.4g) — "
                 "discarding this run's L3 handoff data for this spot "
                 "(falling back to L2 baseline for every timestep).",
-                spot_id, sx, sy, coord_tol, best_d,
+                _log_id, sx, sy, coord_tol, best_d,
             )
             return []
         station_records.append({
@@ -881,13 +929,18 @@ def _select_l3_handoff_spectra(
     for t_idx in range(n_timesteps):
         time_iso = specout.station_timesteps[0][t_idx]["time"]
 
-        hs_key = (time_iso, station_records[_hs_proxy_idx]["distance_m"])
-        hs_this_hour = hs_by_time_dist.get(hs_key)
+        if hs_override_by_time is not None:
+            # T4B.3: this transect's OWN local Hs (from its T4B.1 POINTS
+            # band), not the shared CURVE's proxy station.
+            hs_this_hour = hs_override_by_time.get(time_iso)
+        else:
+            hs_key = (time_iso, station_records[_hs_proxy_idx]["distance_m"])
+            hs_this_hour = hs_by_time_dist.get(hs_key)
         if hs_this_hour is None:
             logger.debug(
-                "SWAN handoff: spot %r %s: no HSIGN match for the Hs(hour) "
-                "proxy station — skipping this timestep's L3 handoff.",
-                spot_id, time_iso,
+                "SWAN handoff: %s %s: no Hs(hour) proxy value available — "
+                "skipping this timestep's L3 handoff.",
+                _log_id, time_iso,
             )
             continue
 
@@ -907,7 +960,7 @@ def _select_l3_handoff_spectra(
                 selection,
                 station_qb_arg,
                 station_depths_m,
-                transect_index=0,
+                transect_index=transect_index,
                 hour=t_idx,
             )
         except HandoffBreakingError:
@@ -933,12 +986,16 @@ def _select_l3_handoff_spectra(
             "energy": spectrum_entry["energy"],
             "handoff_depth_m": selection.handoff_depth_m,
             "handoff_source_level": selection.source_level,
+            # T4B.3 Do step 3 — carried through so callers can log the clamp
+            # rate rather than recomputing it (rules/coding.md: "Silent
+            # skipping ... always log what was skipped and why").
+            "clamped": selection.clamped,
         })
 
     logger.info(
-        "SWAN handoff: spot %r → %d/%d timestep(s) resolved a per-hour L3 "
-        "station (T4A.9).",
-        spot_id, len(results), n_timesteps,
+        "SWAN handoff: %s → %d/%d timestep(s) resolved a per-hour L3 "
+        "station (T4A.9/T4B.3).",
+        _log_id, len(results), n_timesteps,
     )
     return results
 
@@ -2510,6 +2567,7 @@ class SWANRunner:
                 )
 
                 _entries: list[dict[str, Any]] = []
+                _name_overflow = False
                 for _t in _spot_transect_infos:
                     _band_result = compute_spot_transect(
                         _t.origin_lon,
@@ -2529,6 +2587,28 @@ class SWANRunner:
                     if not _band_points:
                         continue
                     _pt_name = f"PT{n}_{_t.index}"
+                    # SWAN 'sname' is capped at 8 characters (see the existing
+                    # CURVE naming comment above: "max 8 chars"). This scheme
+                    # splits digits across TWO counters (spot ordinal + transect
+                    # index), so a long segment (e.g. 200 transects at 10 m
+                    # spacing on a 2 km segment) or a multi-spot install can
+                    # overflow it. A silently truncated name would collide two
+                    # transects onto one SWAN output set — loud failure instead:
+                    # abandon per-transect POINTS for this WHOLE spot (a partial
+                    # set with one transect silently missing is its own silent-
+                    # wrong-result shape) and fall back to CURVE-only.
+                    if len(_pt_name) > 8:
+                        logger.error(
+                            "SWAN T4B.1: spot %r transect %d generates POINTS "
+                            "name %r (%d chars) exceeding SWAN's 8-char 'sname' "
+                            "limit — abandoning per-transect POINTS for this "
+                            "spot entirely (falling back to the single "
+                            "diagnostic CURVE only) rather than risk two "
+                            "transects colliding on a truncated name.",
+                            spot_id, _t.index, _pt_name, len(_pt_name),
+                        )
+                        _name_overflow = True
+                        break
                     _points_file = f"POINTS_{n}_{_t.index}.txt"
                     _table_file = f"TABLE_PT_{n}_{_t.index}.txt"
 
@@ -2548,6 +2628,8 @@ class SWANRunner:
                         "points": _band_points,
                     })
 
+                if _name_overflow:
+                    _entries = []
                 if _entries:
                     transects_by_spot[spot_id] = _entries
 
@@ -3079,6 +3161,11 @@ class SWANRunner:
         # to _parse_output() then overrides per-spot entries with L3 handoff data.
         # Resetting here would erase the DWR baseline for already-processed spots
         # and, for multi-cluster runs, erase previous clusters' results.
+        transects_by_spot: dict[str, list[dict[str, Any]]] = grid_info.get("transects_by_spot") or {}
+        _run_clamp_total = 0
+        _run_clamp_count = 0
+        _run_transect_table_bytes = 0
+
         for n, spot_id in enumerate(transect_spot_order, start=1):
             spec_path = tmpdir / f"SPEC_{n}.txt"
             if not spec_path.exists():
@@ -3118,6 +3205,108 @@ class SWANRunner:
                     "timesteps — leaving the L2 DWR baseline in place.",
                     spot_id,
                 )
+                # No station alignment succeeded against this spot's own
+                # specout/CURVE — a per-transect call below would fail
+                # identically (same specout, same coordinate space), so
+                # there is nothing to gain from trying.
+                continue
+
+            # ---- T4B.3: per-transect selection, same shared specout/CURVE ----
+            # ---- (LC-4B-1) as the spot-level call above, but each transect ----
+            # ---- supplies its OWN local Hs (T4B.1 band) as the target-depth ----
+            # ---- driver — see _select_l3_handoff_spectra()'s hs_override_by_time. ----
+            _spot_transects = transects_by_spot.get(spot_id) or []
+            if not _spot_transects:
+                continue
+            _by_transect_by_time: dict[int, dict[str, dict[str, Any]]] = {}
+            for _t_entry in _spot_transects:
+                _t_table_path = tmpdir / _t_entry["table_file"]
+                if not _t_table_path.exists():
+                    logger.warning(
+                        "SWAN T4B.3: per-transect table %s not found for spot "
+                        "%r transect %d — skipping this transect's per-hour "
+                        "handoff this cycle.",
+                        _t_entry["table_file"], spot_id, _t_entry["transect_index"],
+                    )
+                    continue
+                _run_transect_table_bytes += _t_table_path.stat().st_size
+                _t_table_text = _t_table_path.read_text(encoding="utf-8", errors="replace")
+                _t_label = f"{spot_id}#T{_t_entry['transect_index']}"
+                _t_points_parsed = _parse_transect_table(
+                    _t_table_text,
+                    _t_label,
+                    _t_entry["points"],
+                    utm_zone=grid_info.get("_utm_zone"),
+                )
+                _hs_override = _transect_hs_override_by_time(_t_points_parsed)
+                if not _hs_override:
+                    logger.debug(
+                        "SWAN T4B.3: spot %r transect %d has no usable Hs "
+                        "this cycle — skipping.",
+                        spot_id, _t_entry["transect_index"],
+                    )
+                    continue
+
+                _t_merged = _select_l3_handoff_spectra(
+                    spot_id,
+                    specout,
+                    (table_result or {}).get(spot_id) or [],
+                    transect_points_map.get(spot_id) or [],
+                    grid_info.get("_utm_zone"),
+                    hs_override_by_time=_hs_override,
+                    label=_t_label,
+                    transect_index=_t_entry["transect_index"],
+                )
+                _run_clamp_total += len(_t_merged)
+                _run_clamp_count += sum(1 for e in _t_merged if e.get("clamped"))
+                if _t_merged:
+                    _by_transect_by_time[_t_entry["transect_index"]] = {
+                        e["time"]: e for e in _t_merged
+                    }
+
+            if _by_transect_by_time:
+                # Additive-only: attach handoff_by_transect to the entries
+                # already published above (self._spectral_results[spot_id]),
+                # never replacing the existing top-level fields — those keep
+                # serving today's (pre-T4B.6) consumers unchanged.
+                for _base in self._spectral_results.get(spot_id) or []:
+                    _time = _base.get("time")
+                    _tb: dict[int, dict[str, Any]] = {}
+                    for _t_idx, _by_time in _by_transect_by_time.items():
+                        _e = _by_time.get(_time)
+                        if _e is not None:
+                            _tb[_t_idx] = {k: v for k, v in _e.items() if k != "time"}
+                    if _tb:
+                        _base["handoff_by_transect"] = _tb
+                logger.info(
+                    "SWAN T4B.3: spot %r → %d/%d transect(s) resolved per-hour "
+                    "per-transect handoff data. LIMIT (log honestly, per lead "
+                    "condition 1): all transects still draw their spectrum from "
+                    "the ONE shared diagnostic CURVE (LC-4B-1) — handoff DEPTH "
+                    "genuinely varies per transect (captures each transect's own "
+                    "local Hs/shadowing), but two transects whose target depth "
+                    "lands on the same CURVE station receive the IDENTICAL "
+                    "spectrum. Independent alongshore spectral content requires "
+                    "the watershed PT* partitioning path (T4B.2) — an unapproved "
+                    "trigger-1 decision, not engineered around here.",
+                    spot_id, len(_by_transect_by_time), len(_spot_transects),
+                )
+
+        if _run_clamp_total:
+            logger.info(
+                "SWAN handoff clamp rate (T4B.3 Do step 3): %d/%d per-transect "
+                "selections clamped to a boundary station (%.1f%%) in this L3 "
+                "cluster this cycle.",
+                _run_clamp_count, _run_clamp_total,
+                100.0 * _run_clamp_count / _run_clamp_total,
+            )
+        if _run_transect_table_bytes:
+            logger.info(
+                "SWAN T4B.1 per-transect TABLE output (Accept criterion, "
+                "measured post-run): %.1f KB total across this L3 cluster's "
+                "per-transect TABLE files.",
+                _run_transect_table_bytes / 1024.0,
+            )
 
         if table_result is not None:
             return table_result
