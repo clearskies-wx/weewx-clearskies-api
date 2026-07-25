@@ -1191,6 +1191,270 @@ def interpolate_profile_pchip(
 
 
 # ---------------------------------------------------------------------------
+# Downloaded-grid contour search + native-resolution profile extraction
+# (Phase 4A, T4A.3; MARINE-SERVICE-SEPARATION-PLAN.md §T4A.3 Do steps 3-4,
+# 7-8; lead calls LC-10, LC-11).
+#
+# These functions operate on an already-downloaded 2-D bathymetry grid dict
+# — the same ``{"lat_first", "lon_first", "lat_last", "lon_last", "ni", "nj",
+# "depths"}`` shape produced by ``bathymetry_resolver.fetch_opendap_grid()``/
+# ``fetch_great_lake_grid()``/``get_operator_grid()`` and by
+# ``download_swan_depth_grid()``.  They do NOT make any network request —
+# the apply-time chain (``services/marine_setup.py``) downloads the COARSE/
+# MEDIUM/FINE grids first, then calls these to locate depth contours and
+# extract raw transects from that already-downloaded data.  Per-spot bearing
+# (never an averaged bearing — LC-10) so a single transect through a
+# submarine canyon cannot mislocate the contour for every other spot.
+# ---------------------------------------------------------------------------
+
+
+def _bilinear_grid_depth(grid: dict[str, Any], lat: float, lon: float) -> float | None:
+    """Bilinearly interpolate depth at *(lat, lon)* from a downloaded 2-D grid.
+
+    Returns ``None`` when the point falls outside the grid's coverage.
+    Sign convention matches the grid's own (CUDEM: negative = ocean); this
+    helper returns the RAW cell value(s), not a depth-in-meters conversion —
+    callers that need non-negative "depth below MSL" must negate/clamp
+    themselves (see ``_grid_depth_below_msl`` below).
+    """
+    lat_first = grid["lat_first"]
+    lon_first = grid["lon_first"]
+    lat_last = grid["lat_last"]
+    lon_last = grid["lon_last"]
+    nj = grid["nj"]
+    ni = grid["ni"]
+    depths_2d = grid["depths"]
+
+    if nj < 2 or ni < 2 or not depths_2d:
+        return None
+    if lat_last == lat_first or lon_last == lon_first:
+        return None
+
+    fj = (lat - lat_first) / (lat_last - lat_first) * (nj - 1)
+    fi = (lon - lon_first) / (lon_last - lon_first) * (ni - 1)
+    if fj < 0 or fj >= nj - 1 or fi < 0 or fi >= ni - 1:
+        return None
+
+    j0 = int(fj)
+    i0 = int(fi)
+    dj = fj - j0
+    di = fi - i0
+    v00 = depths_2d[j0][i0]
+    v01 = depths_2d[j0][i0 + 1]
+    v10 = depths_2d[j0 + 1][i0]
+    v11 = depths_2d[j0 + 1][i0 + 1]
+    return float(
+        v00 * (1 - dj) * (1 - di)
+        + v01 * (1 - dj) * di
+        + v10 * dj * (1 - di)
+        + v11 * dj * di
+    )
+
+
+def _grid_depth_below_msl(grid: dict[str, Any], lat: float, lon: float) -> float | None:
+    """Non-negative depth below MSL at *(lat, lon)*, or ``None`` off-grid.
+
+    CUDEM/regional-DEM convention: negative elevation = underwater.  Positive
+    (land) clamps to 0.0, matching ``_query_depths_m``'s convention elsewhere
+    in this module.
+    """
+    elev = _bilinear_grid_depth(grid, lat, lon)
+    if elev is None:
+        return None
+    return max(0.0, -elev)
+
+
+def find_shoreline_from_grid(
+    grid: dict[str, Any],
+    pin_lat: float,
+    pin_lon: float,
+    bearing_degrees: float,
+    *,
+    step_m: float = 10.0,
+    max_search_m: float = 2000.0,
+) -> tuple[float, float]:
+    """Locate the coastline (depth crossing 0) shoreward of *(pin_lat, pin_lon)*.
+
+    Walks shoreward (``bearing_degrees + 180``) at ``step_m`` intervals through
+    the downloaded *grid*.  If the pin itself is already on land / outside
+    grid coverage, the pin is treated as the shoreline.  If no crossing is
+    found within ``max_search_m``, logs a WARNING and returns the pin
+    unchanged — this is a best-effort geometric anchor, not itself a depth
+    contour subject to LC-10's "no fallback" rule (that rule applies to the
+    30 m/15 m sizing contours in ``find_depth_contour_distance``, not to
+    shoreline location).
+
+    Returns:
+        ``(coastline_lat, coastline_lon)``.
+    """
+    shoreward_bearing = (bearing_degrees + 180.0) % 360.0
+    pin_depth = _grid_depth_below_msl(grid, pin_lat, pin_lon)
+
+    if pin_depth is None or pin_depth <= 0.0:
+        return pin_lat, pin_lon
+
+    dist = step_m
+    while dist <= max_search_m:
+        pt_lat, pt_lon = point_along_bearing(pin_lat, pin_lon, shoreward_bearing, dist)
+        depth = _grid_depth_below_msl(grid, pt_lat, pt_lon)
+        if depth is not None and depth <= 0.0:
+            return pt_lat, pt_lon
+        dist += step_m
+
+    logger.warning(
+        "find_shoreline_from_grid: no land found within %.0f m shoreward of "
+        "pin (%.6f, %.6f) at bearing=%.1f°; using pin as coastline.",
+        max_search_m, pin_lat, pin_lon, shoreward_bearing,
+    )
+    return pin_lat, pin_lon
+
+
+def find_depth_contour_distance(
+    grid: dict[str, Any],
+    coastline_lat: float,
+    coastline_lon: float,
+    bearing_degrees: float,
+    target_depth_m: float,
+    *,
+    spot_id: str = "",
+    step_m: float = 50.0,
+    max_search_m: float = 60_000.0,
+) -> float:
+    """Distance (m) from the coastline to *target_depth_m* along *bearing_degrees*.
+
+    Walks OFFSHORE from ``(coastline_lat, coastline_lon)`` through the
+    downloaded *grid*, sampling every ``step_m``, and linearly interpolates
+    the distance at which depth first reaches ``target_depth_m``.
+
+    Per LC-10: a contour not found within ``max_search_m`` (either because
+    the grid coverage ends first, or the target depth is never reached) is
+    an ERROR, not a fallback — callers must NOT substitute a hardcoded
+    distance.  Raises ``ValueError`` naming the spot, bearing, target depth,
+    and the maximum depth actually reached so the operator can diagnose
+    (grid too small, wrong DEM, target depth unreasonable for this coast).
+
+    Args:
+        grid: Downloaded 2-D bathymetry grid (COARSE for the 30 m contour,
+            MEDIUM for the 15 m contour — Do steps 3-4/6).
+        coastline_lat, coastline_lon: Shoreline anchor (from
+            ``find_shoreline_from_grid`` or the spot's own pin).
+        bearing_degrees: THIS SPOT's own offshore bearing — never an
+            averaged bearing across spots (LC-10).
+        target_depth_m: Target contour depth (30.0 for L2, 15.0 for L3).
+        spot_id: Included in the raised error message for diagnostics.
+        step_m: Search step size (m).
+        max_search_m: Maximum search distance (m) before raising.
+
+    Returns:
+        Distance in meters from the coastline to the target depth contour.
+
+    Raises:
+        ValueError: The contour was not reached within ``max_search_m``.
+    """
+    max_depth_reached = 0.0
+    dist = step_m
+    while dist <= max_search_m:
+        pt_lat, pt_lon = point_along_bearing(
+            coastline_lat, coastline_lon, bearing_degrees, dist
+        )
+        depth = _grid_depth_below_msl(grid, pt_lat, pt_lon)
+        if depth is not None:
+            if depth >= target_depth_m:
+                # Linear back-interpolation between this sample and the
+                # previous one for a smoother distance estimate.
+                prev_dist = dist - step_m
+                prev_lat, prev_lon = point_along_bearing(
+                    coastline_lat, coastline_lon, bearing_degrees, max(prev_dist, 0.0)
+                )
+                prev_depth = _grid_depth_below_msl(grid, prev_lat, prev_lon) or 0.0
+                if depth == prev_depth or prev_dist < 0.0:
+                    result_dist = dist
+                else:
+                    frac = (target_depth_m - prev_depth) / (depth - prev_depth)
+                    result_dist = prev_dist + frac * step_m
+                logger.info(
+                    "find_depth_contour_distance: spot=%r bearing=%.1f° "
+                    "target=%.1fm reached at %.0fm offshore of coastline "
+                    "(%.6f, %.6f)",
+                    spot_id, bearing_degrees, target_depth_m, result_dist,
+                    coastline_lat, coastline_lon,
+                )
+                return result_dist
+            max_depth_reached = max(max_depth_reached, depth)
+        dist += step_m
+
+    raise ValueError(
+        f"find_depth_contour_distance: spot={spot_id!r} bearing="
+        f"{bearing_degrees:.1f}° target_depth_m={target_depth_m:.1f} was "
+        f"never reached within max_search_m={max_search_m:.0f} from coastline "
+        f"({coastline_lat:.6f}, {coastline_lon:.6f}) — deepest depth actually "
+        f"reached in the search was {max_depth_reached:.1f}m. This is an error, "
+        "not a fallback (T4A.3 LC-10): the caller must NOT substitute a "
+        "hardcoded distance. Check the downloaded grid's coverage/resolution "
+        "for this location and bearing."
+    )
+
+
+def extract_native_profile_from_grid(
+    grid: dict[str, Any],
+    coastline_lat: float,
+    coastline_lon: float,
+    bearing_degrees: float,
+    max_distance_m: float,
+) -> list[dict[str, float]]:
+    """Extract a raw depth transect from *grid* at the grid's OWN native spacing.
+
+    T4A.3 Do step 8: the raw profile fed to ``interpolate_profile_pchip``
+    must be sampled at native DEM resolution (~3-10 m) — NOT the 50 m
+    ``download_bidirectional_profile`` stepper.  This function derives the
+    native cell spacing directly from *grid*'s own lat/lon extent and cell
+    count, so the returned profile's spacing always matches whatever DEM
+    actually backed the download (T4A.2's ``interpolate_profile_pchip``
+    itself re-validates this — a grid degraded to CRM (~90 m) would raise
+    there, not here).
+
+    Args:
+        grid: Downloaded FINE-tier 2-D bathymetry grid for this spot's L3
+            cluster (Do step 7).
+        coastline_lat, coastline_lon: Shoreline anchor.
+        bearing_degrees: this spot's own offshore bearing.
+        max_distance_m: Extent of the returned profile (typically the L3
+            grid's own offshore boundary distance for this spot/cluster).
+
+    Returns:
+        List of ``{"distance_m": float, "depth_m": float}`` dicts, sorted
+        ascending by distance, sampled at the grid's native cell spacing.
+        Points outside the grid's coverage are omitted (never a gap-filled
+        guess).
+    """
+    lat_first = grid["lat_first"]
+    lon_first = grid["lon_first"]
+    lat_last = grid["lat_last"]
+    lon_last = grid["lon_last"]
+    nj = grid["nj"]
+    ni = grid["ni"]
+
+    mean_lat = (lat_first + lat_last) / 2.0
+    dlat_deg = abs(lat_last - lat_first) / max(nj - 1, 1)
+    dlon_deg = abs(lon_last - lon_first) / max(ni - 1, 1)
+    dlat_m = dlat_deg * 111_320.0
+    dlon_m = dlon_deg * 111_320.0 * math.cos(math.radians(mean_lat))
+    native_spacing_m = max(min(v for v in (dlat_m, dlon_m) if v > 0.0), 0.5)
+
+    num_pts = max(2, int(round(max_distance_m / native_spacing_m)) + 1)
+    distances_m = _linspace(0.0, max_distance_m, num_pts)
+
+    profile: list[dict[str, float]] = []
+    for d in distances_m:
+        pt_lat, pt_lon = point_along_bearing(coastline_lat, coastline_lon, bearing_degrees, d)
+        depth = _grid_depth_below_msl(grid, pt_lat, pt_lon)
+        if depth is not None:
+            profile.append({"distance_m": round(d, 2), "depth_m": round(depth, 3)})
+
+    return profile
+
+
+# ---------------------------------------------------------------------------
 # Beach slope computation (used by wave_transform.py's Battjes gamma formula)
 # ---------------------------------------------------------------------------
 

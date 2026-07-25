@@ -145,11 +145,25 @@ def compute_domains(
     )
 
     # --- Level 2: Nearshore grid (100 m) ---
+    # T4A.3: size from the actual 30m depth contour when the caller supplies
+    # per-spot contour distances (real apply-time chain via marine_setup.py).
+    # Falls back to an ESTIMATE-only distance (clearly logged as such) when
+    # no contour data is available — the only legitimate caller of that path
+    # is the pre-apply /marine/compute-estimate preview, before any CUDEM
+    # download has happened.
+    spot_contour_30m: dict[str, float] = {}
+    for s in spot_locations:
+        d = s.get("contour_30m_distance_m")
+        if d is not None and d > 0:
+            spot_contour_30m[s["id"]] = float(d)
+    contour_30m_max = max(spot_contour_30m.values()) if spot_contour_30m else None
+
     level2 = _compute_level2(
         lats, lons, bearings,
         resolution_m=level2_resolution_m,
         margin_km=level2_margin_km,
         offshore_depth_m=level2_offshore_depth_m,
+        contour_distance_m=contour_30m_max,
     )
 
     # --- Level 3: Surf zone grids (10 m) — per cluster ---
@@ -195,6 +209,155 @@ def compute_domains(
         )
 
     return DomainSizing(level1=level1, level2=level2, level3_clusters=clusters)
+
+
+# ---------------------------------------------------------------------------
+# Public staged entry points (Phase 4A, T4A.3; lead call LC-3/LC-11).
+#
+# ``compute_domains()`` above sizes all three levels in one call from
+# per-spot data the CALLER must already have (``offshore_distance_m`` for
+# L3, ``contour_30m_distance_m`` for L2). That single-call shape is correct
+# for its one remaining caller (the pre-apply ``/marine/compute-estimate``
+# preview, which has no CUDEM data at all and accepts ESTIMATE fallbacks).
+#
+# The REAL apply-time chain (``services/marine_setup.py``) cannot supply
+# those distances up front — it must size L1 first (no CUDEM needed), THEN
+# download COARSE bathymetry for L1's bbox, THEN search it for the 30m
+# contour, THEN size L2, THEN download MEDIUM bathymetry for L2's bbox,
+# THEN search it for the 15m contour, THEN cluster + size L3. These public
+# functions expose each stage independently so marine_setup.py can
+# interleave sizing and downloading in the correct order — WITHOUT ever
+# resizing a grid after it's been computed (LC-11: all inputs that affect
+# sizing are passed in at computation time, nothing is applied after the
+# fact).
+# ---------------------------------------------------------------------------
+
+
+def compute_level1_domain(
+    spot_locations: list[dict],
+    *,
+    resolution_m: float = 1000.0,
+    margin_km: float = 5.0,
+) -> GridDomain:
+    """Size the L1 grid alone, from spot locations + GSFM shelf data only.
+
+    No CUDEM download is needed for this stage (Do step 1-2) — L1's bbox
+    IS the COARSE download's target area, so this must run before any
+    bathymetry download happens.
+
+    Args:
+        spot_locations: List of dicts with keys: id, lat, lon,
+            beach_facing_degrees.
+    """
+    if not spot_locations:
+        raise ValueError("compute_level1_domain: no spot locations provided")
+    lats = [s["lat"] for s in spot_locations]
+    lons = [s["lon"] for s in spot_locations]
+    return _compute_level1(
+        lats, lons,
+        resolution_m=resolution_m,
+        margin_km=margin_km,
+        spot_locations=spot_locations,
+    )
+
+
+def compute_level2_domain(
+    spot_locations: list[dict],
+    *,
+    resolution_m: float = 100.0,
+    margin_km: float = 2.0,
+    offshore_depth_m: float = 30.0,
+    contour_30m_distance_m: float | None = None,
+) -> GridDomain:
+    """Size the L2 grid from the actual 30m depth contour (Do step 4).
+
+    ``contour_30m_distance_m`` must be the MAX per-spot 30m-contour distance
+    found by searching the COARSE-downloaded CUDEM grid along each spot's
+    own bearing (LC-10) — computed by the caller (marine_setup.py) via
+    ``enrichment.bathymetry.find_depth_contour_distance()`` BEFORE calling
+    this function. Passing ``None`` produces an ESTIMATE-only grid (see
+    ``_compute_level2`` docstring) — never valid for a real SWAN run.
+
+    Args:
+        spot_locations: List of dicts with keys: id, lat, lon,
+            beach_facing_degrees.
+    """
+    if not spot_locations:
+        raise ValueError("compute_level2_domain: no spot locations provided")
+    lats = [s["lat"] for s in spot_locations]
+    lons = [s["lon"] for s in spot_locations]
+    bearings = [float(s.get("beach_facing_degrees", 270.0)) for s in spot_locations]
+    return _compute_level2(
+        lats, lons, bearings,
+        resolution_m=resolution_m,
+        margin_km=margin_km,
+        offshore_depth_m=offshore_depth_m,
+        contour_distance_m=contour_30m_distance_m,
+    )
+
+
+def compute_level3_domains(
+    spot_locations: list[dict],
+    *,
+    resolution_m: float = 10.0,
+    lateral_m: float = 250.0,
+    offshore_depth_m: float = 15.0,
+    cluster_distance_m: float = 500.0,
+    structures: list[dict] | None = None,
+    spot_l3_configs: dict[str, str] | None = None,
+    contour_15m_by_spot: dict[str, float] | None = None,
+) -> list[SpotCluster]:
+    """Cluster spots and size each L3 grid from the actual 15m depth contour
+    (or the deepest configured structure, whichever is deeper) — Do steps 6-7.
+
+    ``contour_15m_by_spot`` maps spot id -> 15m-contour distance found by
+    searching the MEDIUM-downloaded CUDEM grid along that spot's own bearing
+    (LC-10) — computed by the caller (marine_setup.py) BEFORE calling this
+    function. Each cluster uses the MAX distance across its member spots.
+    Spots absent from the mapping do not contribute to the max (but are
+    still part of the cluster/grid extent via pin position) — the caller is
+    responsible for logging a WARNING when a spot's contour search failed
+    (per "Silent skipping of configured inputs is a bug pattern").
+
+    Args:
+        spot_locations: List of dicts with keys: id, lat, lon,
+            beach_facing_degrees.
+    """
+    if not spot_locations:
+        raise ValueError("compute_level3_domains: no spot locations provided")
+
+    clusters = _cluster_spots(spot_locations, cluster_distance_m)
+    bearings = [float(s.get("beach_facing_degrees", 270.0)) for s in spot_locations]
+    avg_bearing = sum(bearings) / len(bearings)
+    contour_by_spot = contour_15m_by_spot or {}
+
+    for cluster in clusters:
+        if spot_l3_configs is not None:
+            flags = [spot_l3_configs.get(sid, "auto") for sid in cluster.spot_ids]
+            if all(f == "off" for f in flags):
+                cluster.grid = None
+                logger.info(
+                    "L3 skipped for cluster %s: all spots have l3_enabled=off",
+                    cluster.spot_ids,
+                )
+                continue
+
+        cluster_distances = [
+            contour_by_spot[sid] for sid in cluster.spot_ids if sid in contour_by_spot
+        ]
+        cluster_offshore_m = max(cluster_distances) if cluster_distances else None
+
+        cluster.grid = _compute_level3_grid(
+            cluster,
+            avg_bearing,
+            resolution_m=resolution_m,
+            lateral_m=lateral_m,
+            offshore_depth_m=offshore_depth_m,
+            offshore_distance_m=cluster_offshore_m,
+            structures=structures,
+        )
+
+    return clusters
 
 
 def _compute_level1(
@@ -274,12 +437,26 @@ def _compute_level2(
     resolution_m: float,
     margin_km: float,
     offshore_depth_m: float,
+    contour_distance_m: float | None = None,
 ) -> GridDomain:
-    """Level 2: extends OFFSHORE from spots to 30m depth, with small land margin.
+    """Level 2: extends OFFSHORE from spots to the actual 30m depth contour.
 
     Uses beach_facing_degrees to determine which direction is offshore.
-    The grid extends 4-6 km in the offshore direction and only 0.5 km
-    on the land side.
+
+    T4A.3 fix: previously hardcoded ``offshore_km = 6.0`` regardless of
+    ``offshore_depth_m`` — wrong by a wide margin on both steep Pacific
+    shelves (~2km to 30m) and gentle Gulf shelves (~30km to 30m). Now sized
+    from ``contour_distance_m`` — the MAX real 30m-contour distance across
+    all configured spots (per-spot bearing search on downloaded CUDEM data,
+    computed by ``services/marine_setup.py`` before calling this function;
+    see ``rules/clearskies-process.md`` "Grid sizing must come from actual
+    data, not illustrative estimates").
+
+    When ``contour_distance_m`` is ``None`` (no CUDEM download has happened
+    yet — the only legitimate caller is the pre-apply
+    ``/marine/compute-estimate`` preview), falls back to a clearly-logged
+    ESTIMATE distance. This estimate must NEVER be used to size a real SWAN
+    grid — the apply-time chain (T4A.3) always supplies real contour data.
     """
     center_lat = sum(lats) / len(lats)
     center_lon = sum(lons) / len(lons)
@@ -288,8 +465,17 @@ def _compute_level2(
     avg_bearing = sum(beach_facing_degrees) / len(beach_facing_degrees)
     bearing_rad = math.radians(avg_bearing)
 
-    # Cross-shore: 6 km offshore (to ~30m depth), 0.5 km landward
-    offshore_km = 6.0
+    if contour_distance_m is not None and contour_distance_m > 0:
+        offshore_km = contour_distance_m / 1000.0 + 0.5  # +500m margin past the 30m contour
+    else:
+        offshore_km = 6.0  # ESTIMATE fallback only — see docstring
+        logger.warning(
+            "Level 2 grid: no actual %.0fm depth contour distance available — "
+            "using ESTIMATE fallback %.1f km offshore. This is only valid for "
+            "the pre-apply compute-estimate preview; the T4A.3 apply-time "
+            "chain always supplies contour_distance_m for real SWAN runs.",
+            offshore_depth_m, offshore_km,
+        )
     landward_km = 0.5
 
     # Lateral: spots spread + margin each side
@@ -534,6 +720,42 @@ def smart_size_l3_grid(
     )
 
 
+def _assert_grid_contains_points(
+    domain: GridDomain,
+    points: list[tuple[float, float]],
+    cluster_spot_ids: list[str],
+) -> None:
+    """Log an ERROR (never raise — this is a post-construction invariant check,
+    not a request-path failure) for any ``(lat, lon)`` in *points* that falls
+    outside *domain*'s bounding box.
+
+    T4A.3 (coordinator finding, 2026-07-25 librewxr diagnostic): a live SWAN
+    run showed ``compute_spot_transect`` clipping a spot's deep transect
+    endpoint from 2440m to 950m because the L3 grid didn't reach far enough
+    — a silent 60% data loss logged only at WARNING inside a different file
+    (``swan_formats.py``, not owned by this task). Per
+    ``rules/clearskies-process.md`` "Silent skipping of configured inputs is
+    a bug pattern", grid geometry is fixed at setup time (LC-11), so THIS is
+    where containment must be verified — not detected later at runtime.
+    Callers (``_compute_level3_grid``/``smart_size_l3_grid``) already fold
+    every supplied deep-transect point into the bbox corner set, so this
+    should never fire; it exists as defense-in-depth against a future
+    regression that omits a point from that corner set.
+    """
+    for spot_id, (lat, lon) in zip(cluster_spot_ids, points, strict=False):
+        if not (domain.lat_min <= lat <= domain.lat_max and domain.lon_min <= lon <= domain.lon_max):
+            logger.error(
+                "L3 grid for cluster %s does NOT contain spot %r's deep "
+                "transect endpoint (%.6f, %.6f) — grid bbox is "
+                "[%.6f,%.6f – %.6f,%.6f]. This means compute_spot_transect() "
+                "will silently clip this spot's transect at runtime (data "
+                "loss). Grid geometry is fixed at setup time — this is a "
+                "sizing bug, not a runtime condition to tolerate.",
+                cluster_spot_ids, spot_id, lat, lon,
+                domain.lat_min, domain.lon_min, domain.lat_max, domain.lon_max,
+            )
+
+
 def _compute_level3_grid(
     cluster: SpotCluster,
     beach_facing_degrees: float,
@@ -543,6 +765,7 @@ def _compute_level3_grid(
     offshore_depth_m: float,
     offshore_distance_m: float | None = None,
     structures: list[dict] | None = None,
+    spot_deep_points: list[tuple[float, float]] | None = None,
 ) -> GridDomain:
     """Compute one Level 3 grid for a spot cluster.
 
@@ -557,9 +780,23 @@ def _compute_level3_grid(
 
     Uses beach_facing_degrees to orient the grid offshore.
     Lateral: 250m each side along coast.
+
+    Args:
+        spot_deep_points: T4A.3 — each spot's OWN transect deep endpoint
+            ``(lat, lon)``, computed from that spot's actual coastline along
+            its own bearing at its own real 15m-contour distance (+ margin).
+            When supplied, these points are folded directly into the bbox's
+            corner-point set so the grid is GUARANTEED to contain every
+            spot's transect — not just the cluster-centroid-derived offshore
+            point, which can miss individual spots when the coastline is
+            offset from the pin or multiple spots have different bearings.
+            A containment assertion (ERROR-logged, not raised) runs
+            afterward as defense-in-depth.
     """
     # T3.2 — when structures with coordinates are provided, delegate to
-    # structure-based smart sizing (shadow zone extent).
+    # structure-based smart sizing (shadow zone extent), then union in the
+    # per-spot deep transect points so structure-based sizing can't clip a
+    # transect either.
     if structures:
         smart = smart_size_l3_grid(
             cluster,
@@ -569,6 +806,18 @@ def _compute_level3_grid(
             pad_m=100.0,
         )
         if smart is not None:
+            if spot_deep_points:
+                deep_lats = [p[0] for p in spot_deep_points]
+                deep_lons = [p[1] for p in spot_deep_points]
+                smart = GridDomain(
+                    lat_min=min(smart.lat_min, *deep_lats),
+                    lat_max=max(smart.lat_max, *deep_lats),
+                    lon_min=min(smart.lon_min, *deep_lons),
+                    lon_max=max(smart.lon_max, *deep_lons),
+                    resolution_m=smart.resolution_m,
+                    level=smart.level,
+                )
+                _assert_grid_contains_points(smart, spot_deep_points, cluster.spot_ids)
             return smart
 
     center_lat = sum(cluster.lats) / len(cluster.lats)
@@ -579,9 +828,13 @@ def _compute_level3_grid(
     if offshore_distance_m is not None and offshore_distance_m > 0:
         offshore_km = offshore_distance_m / 1000.0 + 0.1  # +100m margin past 15m contour
     else:
-        offshore_km = 2.5  # fallback when no profile data
+        offshore_km = 2.5  # ESTIMATE fallback only — see _compute_level2 docstring
         logger.warning(
-            "Level 3 grid for cluster %s: no profile data, using fallback %.1f km offshore",
+            "Level 3 grid for cluster %s: no actual 15m depth contour distance "
+            "available — using ESTIMATE fallback %.1f km offshore. This is only "
+            "valid for the pre-apply compute-estimate preview; the T4A.3 "
+            "apply-time chain always supplies offshore_distance_m for real "
+            "SWAN runs.",
             cluster.spot_ids, offshore_km,
         )
     landward_km = 0.1
@@ -609,16 +862,31 @@ def _compute_level3_grid(
     all_lats = cluster.lats + [offshore_lat, landward_lat]
     all_lons = cluster.lons + [offshore_lon, landward_lon]
 
+    # T4A.3 (coordinator finding, 2026-07-25): fold each spot's OWN actual
+    # deep transect endpoint into the corner-point set. The single
+    # cluster-centroid offshore point above is not guaranteed to be as far
+    # (in every individual spot's own bearing direction) as that spot's own
+    # coastline-anchored transect needs — this is what was silently clipping
+    # compute_spot_transect() at runtime.
+    if spot_deep_points:
+        all_lats = all_lats + [p[0] for p in spot_deep_points]
+        all_lons = all_lons + [p[1] for p in spot_deep_points]
+
     lat_min = min(all_lats) - lateral_dlat
     lat_max = max(all_lats) + lateral_dlat
     lon_min = min(all_lons) - lateral_dlon
     lon_max = max(all_lons) + lateral_dlon
 
-    return GridDomain(
+    domain = GridDomain(
         lat_min=lat_min, lat_max=lat_max,
         lon_min=lon_min, lon_max=lon_max,
         resolution_m=resolution_m, level=3,
     )
+
+    if spot_deep_points:
+        _assert_grid_contains_points(domain, spot_deep_points, cluster.spot_ids)
+
+    return domain
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
