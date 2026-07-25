@@ -547,9 +547,20 @@ def get_surf(location_id: str) -> dict:
     # Fallback: current cache → last-good cache (any age) → empty list.
     # Never falls to WaveWatch III for surf data.
     swan_result: dict | None = None
+    # SURF-PUBLISH-RESULTS-ONLY §2/§3.5: bundled mode (SWAN runs in-process
+    # on this host) keeps the on-demand pipeline below — that IS the model,
+    # not a fallback. Remote mode (a separate model host produced the
+    # last-good cache) must not recompute; a missing/malformed swelltrack
+    # entry becomes modelStatus="unavailable", never a local recompute.
+    # Defaults to bundled-mode behavior (False) if the import itself fails,
+    # matching this block's pre-existing all-exceptions-degrade-gracefully
+    # posture.
+    swan = None
+    _is_remote_mode: bool = False
     try:
         from weewx_clearskies_api.providers.nearshore import swan  # noqa: PLC0415
 
+        _is_remote_mode = swan.is_remote_mode()
         swan_result = swan.fetch(spot_id=location_id)
     except Exception:
         logger.warning(
@@ -1047,33 +1058,64 @@ def get_surf(location_id: str) -> dict:
                 _pipeline_result = None
 
         if _pipeline_result is None:
-            # T4A.9/T4A.6 item g: this hour's handoff depth/source, per
-            # transect (extracted to surf_pipeline_timestep.py — see that
-            # module for the full rationale, unchanged from before
-            # extraction).
-            _handoff_by_transect = _resolve_handoff_by_transect(
-                _ts_handoff_specout, _spot_transects, raw_hsig
-            )
-            # T4.4: Run the per-partition 1D swell transformation pipeline
-            # (remote-with-in-process-fallback cascade, extracted to
-            # surf_pipeline_timestep.py). Degrades gracefully when SPECOUT
-            # is unavailable or transects have no bathymetric profiles.
-            _pipeline_result = _compute_pipeline_for_timestep(
-                ts_handoff_specout=_ts_handoff_specout,
-                spot_transects=_spot_transects,
-                beach_facing_degrees=spot_config.beach_facing_degrees,
-                friction_coefficient=spot_config.friction_coefficient,
-                raw_hsig=raw_hsig,
-                wave_period_pt=wave_period_pt,
-                wave_direction_pt=wave_direction_pt,
-                canonical_partitions=ts_spectral or None,
-                handoff_by_transect=_handoff_by_transect,
-                spot_id=location_id,
-                valid_time=valid_time,
-                compute_host=_compute_host,
-                compute_secret=_compute_secret,
-                compute_verify_tls=_compute_verify_tls,
-            )
+            if _is_remote_mode:
+                # SURF-PUBLISH-RESULTS-ONLY §3.5/§2: a separate model host
+                # owns computation in this topology. This host does not
+                # recompute from spectra it doesn't have (the trimmed
+                # published payload no longer carries energy/freqs_hz/
+                # dirs_deg/handoff_by_transect — see swan.py fetch()'s
+                # whitelist). A missing or malformed swelltrack entry is a
+                # genuine model gap: log it, report it, and let
+                # modelStatus="unavailable" (_determine_model_status(None))
+                # carry the truth downstream — never a formula-based or
+                # locally-recomputed substitute.
+                logger.warning(
+                    "surf endpoint: no swelltrack entry for %s @ %s "
+                    "(remote SWAN mode) — modelStatus=unavailable, no "
+                    "recompute (SURF-PUBLISH-RESULTS-ONLY §3.5)",
+                    location_id,
+                    valid_time,
+                )
+                if swan is not None:
+                    swan.report_gap(
+                        spot_id=location_id,
+                        valid_time=valid_time,
+                        endpoint="forecast",
+                        run_time=last_run_time,
+                    )
+            else:
+                # Bundled mode (SURF-PUBLISH-RESULTS-ONLY §2): SWAN runs
+                # in-process on this host — the on-demand pipeline below IS
+                # the model, not a fallback, and stays exactly as before.
+                #
+                # T4A.9/T4A.6 item g: this hour's handoff depth/source, per
+                # transect (extracted to surf_pipeline_timestep.py — see
+                # that module for the full rationale, unchanged from before
+                # extraction).
+                _handoff_by_transect = _resolve_handoff_by_transect(
+                    _ts_handoff_specout, _spot_transects, raw_hsig
+                )
+                # T4.4: Run the per-partition 1D swell transformation
+                # pipeline (remote-with-in-process-fallback cascade,
+                # extracted to surf_pipeline_timestep.py). Degrades
+                # gracefully when SPECOUT is unavailable or transects have
+                # no bathymetric profiles.
+                _pipeline_result = _compute_pipeline_for_timestep(
+                    ts_handoff_specout=_ts_handoff_specout,
+                    spot_transects=_spot_transects,
+                    beach_facing_degrees=spot_config.beach_facing_degrees,
+                    friction_coefficient=spot_config.friction_coefficient,
+                    raw_hsig=raw_hsig,
+                    wave_period_pt=wave_period_pt,
+                    wave_direction_pt=wave_direction_pt,
+                    canonical_partitions=ts_spectral or None,
+                    handoff_by_transect=_handoff_by_transect,
+                    spot_id=location_id,
+                    valid_time=valid_time,
+                    compute_host=_compute_host,
+                    compute_secret=_compute_secret,
+                    compute_verify_tls=_compute_verify_tls,
+                )
 
         # T4A.4: classify the 1D pipeline outcome BEFORE scoring, so the
         # scorer receives the SwellTrack face height (or None) directly —
