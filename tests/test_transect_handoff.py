@@ -396,3 +396,32 @@ def test_compute_domains_byte_identical_across_simulated_cycle():
     after = compute_domains(spot_locations)
 
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# T4B.1: breaking_margin_depth_m() — the formula lifted out of
+# select_hourly_handoff() for setup-time per-transect band sizing.
+# ---------------------------------------------------------------------------
+
+
+def test_breaking_margin_depth_m_matches_select_hourly_handoff_formula():
+    """Same equation, same constants, same result as the inline expression
+    select_hourly_handoff() used before this extraction — not a new formula
+    (rules/coding.md DRY; CLAUDE.md trigger 1 test: same equation, only how
+    it's reused)."""
+    for hs in (0.5, 1.0, 2.0, 4.0):
+        assert th.breaking_margin_depth_m(hs) == pytest.approx(1.3 * hs / 0.73)
+
+
+def test_breaking_margin_depth_m_respects_custom_gamma_and_margin():
+    assert th.breaking_margin_depth_m(2.0, gamma=0.5, margin=1.0) == pytest.approx(4.0)
+
+
+def test_select_hourly_handoff_still_uses_breaking_margin_depth_m():
+    """select_hourly_handoff()'s target depth (when it has stations to
+    select among) must equal breaking_margin_depth_m()'s output for the
+    same Hs — proving the internal call wasn't left inconsistent after the
+    extraction."""
+    hs = 1.7
+    sel = select_hourly_handoff(hs, _SYNTHETIC_STATIONS)
+    assert sel.handoff_depth_m == pytest.approx(th.breaking_margin_depth_m(hs))
