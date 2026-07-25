@@ -1921,6 +1921,7 @@ def _run_marine_apply_chain(config_dir: Path) -> None:
 
     from weewx_clearskies_api.config.marine_config import load_marine_config  # noqa: PLC0415
     from weewx_clearskies_api.enrichment.bathymetry import (  # noqa: PLC0415
+        compute_fine_zone_max_depth,
         compute_structure_zone_depth,
         extract_native_profile_from_grid,
         find_depth_contour_distance,
@@ -2134,8 +2135,12 @@ def _run_marine_apply_chain(config_dir: Path) -> None:
                 )
                 max_hs_m = float(spot_cfg.max_hs_m)
                 gamma = 0.73
-                fine_zone_max_depth = max(
-                    1.3 * max_hs_m / gamma, structure_zone_depth
+                # Single source of truth (T4A.2) -- do not reimplement this
+                # formula inline. interpolate_profile_pchip() below already
+                # calls the same function for the profile's own fine-zone
+                # sizing; two independently-maintained copies would drift.
+                fine_zone_max_depth = compute_fine_zone_max_depth(
+                    max_hs_m, gamma, structure_zone_depth
                 )
 
                 try:
