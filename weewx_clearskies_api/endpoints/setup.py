@@ -793,15 +793,18 @@ class MarineApplyConfig(BaseModel):
 
 
 class SwanApplyConfig(BaseModel):
-    """``[swan]`` section for api.conf (T4.2 / T4.4 / T7.3 wizard).
+    """``[swan]`` section for api.conf (T4.2 / T4.4 wizard).
 
     Written by the wizard's SWAN step.  All fields have defaults
     so existing wizard clients that don't send this block are unaffected.
 
-    service_url:
-      URL of the standalone SWAN service.  None (the default) means
-      bundled mode — SWAN runs as a subprocess inside the API process.
-      Set to ``http://<host>:8767`` for the separated service deployment.
+    ``service_url`` is REMOVED (T7.2, LC-P7-3): ``marine_service_url`` +
+    ``marine_verify_tls`` (top-level ``ApplyRequest`` fields, below) are
+    the single connection the wizard now configures, replacing both the
+    legacy ``surf_compute_host`` and this section's old ``service_url``.
+    The rest of ``[swan]`` stays — the marine service's ported config
+    loader still reads it today (API-MANUAL §19.5); folding it away
+    entirely is a later phase.
 
     omp_num_threads:
       Number of OpenMP threads for SWAN.  0 = all available cores (default).
@@ -820,7 +823,6 @@ class SwanApplyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    service_url: str | None = None  # None = bundled mode
     omp_num_threads: int = Field(default=0, ge=0)
     outer_grid_resolution_km: float = Field(default=3.0, ge=1.0, le=10.0)
     inner_nest_resolution_m: int = Field(default=200, ge=50, le=1000)
@@ -900,6 +902,40 @@ class ApplyRequest(BaseModel):
     # T6.8: surf_compute_host / surf_compute_secret / surf_compute_verify_tls
     # removed — marine_service_url is the single key that replaces the legacy
     # compute-offload connection (API-MANUAL §19.2).
+    #: Base URL of the marine service (T7.2, LC-P7-3), e.g.
+    #: ``https://localhost:8780``.  Written to api.conf [providers]
+    #: marine_service_url.  None (the default) means no marine service is
+    #: connected — replaces both the legacy surf_compute_host and the old
+    #: [swan] service_url (API-MANUAL §19.2).
+    marine_service_url: str | None = None
+    #: Verify TLS certificate on marine service requests.  Written to
+    #: api.conf [providers] marine_verify_tls.  Default True (secure
+    #: default); set False for a self-signed cert on the same VLAN.
+    marine_verify_tls: bool = True
+    #: Bearer secret shared with the marine service.  Written to
+    #: secrets.env as MARINE_SERVICE_SECRET — never to api.conf.  None →
+    #: skip (leaves any existing secret unchanged, same "None means don't
+    #: touch this credential" convention as openaq_api_key/proxy_secret
+    #: below).
+    marine_service_secret: str | None = None
+
+
+class MarineConfigPushResult(BaseModel):
+    """Outcome of the marine config push attempted at the end of /setup/apply
+    (T7.6). Surfaced to the wizard/admin so a push failure is visible in the
+    UI instead of only living in the API's own ERROR log — API-MANUAL §19.5's
+    failure handling is unchanged by this: the push never fails the apply
+    itself, this field only reports what happened."""
+
+    #: False when marine_service_url is not configured — nothing was
+    #: attempted, and ok/error are not meaningful.
+    attempted: bool
+    #: True when the marine service accepted the push (2xx). Only
+    #: meaningful when attempted is True.
+    ok: bool
+    #: Human-readable failure reason when attempted is True and ok is
+    #: False (unreachable, non-2xx, or MARINE_SERVICE_SECRET unset).
+    error: str | None = None
 
 
 class ApplyResponse(BaseModel):
@@ -910,6 +946,11 @@ class ApplyResponse(BaseModel):
     #: before WEEWX_CLEARSKIES_PROXY_SECRET is loaded into the running process's
     #: environment (the secret was just written to secrets.env by this call).
     restart_token: str | None = None
+    #: Outcome of the marine config push (T7.6). Always present —
+    #: attempted=False (ok/error not meaningful) when no marine_service_url
+    #: is configured, so the wizard doesn't need a separate "was it even
+    #: attempted" check beyond that field.
+    marine_config_push: MarineConfigPushResult
 
 
 class RestartResponse(BaseModel):
@@ -1010,6 +1051,14 @@ class CurrentConfigResponse(BaseModel):
     column_units: dict[str, str] | None = None
     openaq_api_key: str | None = None
     marine: dict[str, Any] | None = None
+    #: Marine service connection (T7.2, LC-P7-3), so a wizard re-run
+    #: pre-fills the operator's existing settings without re-entry. Same
+    #: round-trip convention as openaq_api_key above — the raw secret is
+    #: returned unmasked (CLAUDE.md "never hide operator secrets from the
+    #: operator"; this endpoint already requires proxy auth to reach).
+    marine_service_url: str | None = None
+    marine_verify_tls: bool = True
+    marine_service_secret: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1505,9 +1554,18 @@ def _serialize_swan_section(swan_section: dict[str, Any]) -> dict[str, Any]:
     section — every field ``config/marine_config.py``'s ``SwanConfig``
     reads on the marine side (still a live consumer today; ADR-099's
     replacement of this section with ``marine_service_url`` alone is a
-    later Phase 7 task, not this one)."""
+    later Phase 7 task, not this one).
+
+    ``service_url`` is REMOVED from this payload (T7.2, LC-P7-3):
+    ``marine_service_url`` (top-level, ``_build_marine_service_config_payload``
+    does not carry it either — it is a connection detail the marine service
+    doesn't need to know about itself) is the single connection key now.
+    Verified safe on the marine side: ``SwanConfig.service_url`` defaults to
+    the bundled sentinel when the key is absent, and ``is_remote`` has no
+    consumer anywhere in the marine service beyond its own ``validate()`` —
+    so an absent key is the correct "SWAN runs here" state.
+    """
     payload: dict[str, Any] = {
-        "service_url": str(swan_section.get("service_url", "")).strip(),
         "omp_num_threads": _cfg_int(swan_section, "omp_num_threads", 0),
         "outer_grid_resolution_km": _cfg_float(swan_section, "outer_grid_resolution_km", 3.0),
         "inner_nest_resolution_m": _cfg_float(swan_section, "inner_nest_resolution_m", 200.0),
@@ -1606,26 +1664,38 @@ def _read_marine_service_connection(config_dir: Path) -> tuple[str | None, bool]
     return url, verify_tls
 
 
-async def _push_marine_service_config(config_dir: Path) -> None:
+async def _push_marine_service_config(config_dir: Path) -> MarineConfigPushResult:
     """POST the marine config subset to the marine service (T6.4).
 
-    Called from /setup/apply after api.conf has been written. Never raises:
-    an unreachable or erroring marine service logs ERROR and the apply
-    still succeeds (API-MANUAL.md §19.5 "config push failure handling" —
-    the marine service picks the config up on the next apply, or via its
-    own startup recovery pull, T6.4b).
+    Called from /setup/apply after api.conf AND secrets.env have both been
+    written (T7.6 reordered this call to run after the secrets.env write —
+    previously it ran first, which meant a MARINE_SERVICE_SECRET supplied
+    in the *same* apply request via ``marine_service_secret`` was not yet
+    in ``os.environ`` when the push fired, making the wizard's first-ever
+    apply always report "secret not set" even though it had just sent one.
+    This is a same-request-visibility ordering fix, not a new capability —
+    the secret still only ever lands in secrets.env / os.environ, never
+    api.conf).
+
+    Never raises: an unreachable or erroring marine service logs ERROR and
+    the apply still succeeds (API-MANUAL.md §19.5 "config push failure
+    handling" — the marine service picks the config up on the next apply,
+    or via its own startup recovery pull, T6.4b). The outcome is returned
+    (T7.6, not just logged) so /setup/apply can surface it to the wizard —
+    see ``ApplyResponse.marine_config_push``.
     """
     marine_service_url, verify_tls = _read_marine_service_connection(config_dir)
     if not marine_service_url:
-        return
+        return MarineConfigPushResult(attempted=False, ok=False)
 
     secret = os.environ.get("MARINE_SERVICE_SECRET", "").strip()
     if not secret:
-        logger.error(
+        error = (
             "marine_service_url is configured but MARINE_SERVICE_SECRET is not set "
             "in the environment; cannot push marine config"
         )
-        return
+        logger.error(error)
+        return MarineConfigPushResult(attempted=True, ok=False, error=error)
 
     payload = _build_marine_service_config_payload(config_dir)
     push_url = marine_service_url.rstrip("/") + "/config"
@@ -1640,16 +1710,19 @@ async def _push_marine_service_config(config_dir: Path) -> None:
                 headers={"Authorization": f"Bearer {secret}"},
             )
     except httpx.HTTPError as exc:
-        logger.error(
-            "Failed to push marine config to %s: %s", push_url, type(exc).__name__
-        )
-        return
+        error = f"Failed to reach {push_url}: {type(exc).__name__}"
+        logger.error("Failed to push marine config to %s: %s", push_url, type(exc).__name__)
+        return MarineConfigPushResult(attempted=True, ok=False, error=error)
 
     if resp.status_code >= 400:
+        error = f"Marine service rejected config push (HTTP {resp.status_code})"
         logger.error(
             "Marine service rejected config push to %s (HTTP %d)",
             push_url, resp.status_code,
         )
+        return MarineConfigPushResult(attempted=True, ok=False, error=error)
+
+    return MarineConfigPushResult(attempted=True, ok=True)
 
 
 def _write_api_conf(
@@ -1863,24 +1936,30 @@ def _write_api_conf(
 
     # [swan] — optional; written when the wizard's SWAN step sends
     # this block (T4.2 / T4.4).  None → skip (existing values unchanged).
+    # service_url is REMOVED (T7.2, LC-P7-3) — marine_service_url below is
+    # the single connection key now; [swan] no longer carries a URL.
     if apply.swan is not None:
         ts = apply.swan
         if "swan" not in cfg:
             cfg["swan"] = {}
-        if ts.service_url is not None:
-            cfg["swan"]["service_url"] = ts.service_url
-        else:
-            # None means bundled mode — write the sentinel so the section is
-            # explicit and operators can see what's configured.
-            from weewx_clearskies_api.config.marine_config import _SWAN_BUNDLED_SENTINEL
-            cfg["swan"]["service_url"] = _SWAN_BUNDLED_SENTINEL
         cfg["swan"]["omp_num_threads"] = str(ts.omp_num_threads)
         cfg["swan"]["outer_grid_resolution_km"] = str(ts.outer_grid_resolution_km)
         cfg["swan"]["inner_nest_resolution_m"] = str(ts.inner_nest_resolution_m)
 
-    # T6.8: the legacy [providers] surf_compute_host / surf_compute_verify_tls
-    # compute-offload keys are no longer written — marine_service_url is the
-    # single key that replaces them (API-MANUAL §19.2).
+    # [providers] marine_service_url / marine_verify_tls — the single
+    # marine-service connection (T7.2, LC-P7-3), replacing the legacy
+    # surf_compute_host/surf_compute_verify_tls (T6.8) and [swan]
+    # service_url (removed above). Both keys are already READ by
+    # _read_marine_service_connection() and config/settings.py; this is
+    # the write path that was previously missing (marine_service_url could
+    # be hand-edited into api.conf but never set by the wizard).
+    # None → write nothing, leaving any existing value on disk unchanged —
+    # same "don't touch what wasn't sent" convention as [swan] above.
+    if apply.marine_service_url is not None:
+        if "providers" not in cfg:
+            cfg["providers"] = {}
+        cfg["providers"]["marine_service_url"] = apply.marine_service_url
+        cfg["providers"]["marine_verify_tls"] = str(apply.marine_verify_tls)
 
     if conf_path.exists():
         shutil.copy2(conf_path, conf_path.with_suffix(conf_path.suffix + ".bak"))
@@ -2362,11 +2441,6 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
     # It is purely an internal SWAN/marine-service function; it sat here
     # only because SWAN itself used to run inside the API process.
 
-    # 1d. T6.4 — push the marine config subset to the marine service, if
-    # marine_service_url is configured. Failure logs ERROR but does not
-    # fail the apply (API-MANUAL.md §19.5).
-    await _push_marine_service_config(config_dir)
-
     # --- Step 1b: write skin.conf (ADR-043) ---
     if body.skin_conf:
         try:
@@ -2401,6 +2475,10 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
 
         # T6.8: SURF_COMPUTE_SECRET removed — MARINE_SERVICE_SECRET
         # (companion_proxy.py) is the single secret that replaces it.
+        # T7.2/LC-P7-3: the wizard can now write it via apply, same
+        # None-means-don't-touch convention as the OpenAQ key above.
+        if body.marine_service_secret:
+            existing["MARINE_SERVICE_SECRET"] = body.marine_service_secret
 
         _write_secrets_env(secrets_path, existing)
     except Exception as exc:  # noqa: BLE001
@@ -2414,6 +2492,20 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
     # were just persisted to disk.
     if body.proxy_secret:
         os.environ["WEEWX_CLEARSKIES_PROXY_SECRET"] = body.proxy_secret
+    # T7.6: mirror MARINE_SERVICE_SECRET too, and BEFORE the push below —
+    # otherwise a secret supplied for the first time in this same apply
+    # request would not yet be visible to _push_marine_service_config()'s
+    # os.environ read, and the wizard's very first apply would always
+    # report "secret not set" even though it just sent one.
+    if body.marine_service_secret:
+        os.environ["MARINE_SERVICE_SECRET"] = body.marine_service_secret
+
+    # 1d. T6.4 — push the marine config subset to the marine service, if
+    # marine_service_url is configured. Failure logs ERROR but does not
+    # fail the apply (API-MANUAL.md §19.5). Runs after secrets.env has
+    # been written and mirrored (T7.6 reorder, see _push_marine_service_
+    # config()'s docstring) so a same-request secret is actually usable.
+    marine_config_push = await _push_marine_service_config(config_dir)
 
     # 3. Mark setup complete — consumes trust token and invalidates session.
     # Skip on re-run (setup already complete) to avoid redundant file writes and
@@ -2433,6 +2525,7 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         success=True,
         message="Configuration saved. Restart the API to apply.",
         restart_token=restart_token,
+        marine_config_push=marine_config_push,
     )
 
 
@@ -2716,6 +2809,12 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     # T6.8: surf_compute_host / surf_compute_verify_tls removed — superseded
     # by marine_service_url (API-MANUAL §19.2).
 
+    # --- Marine service connection (T7.2, LC-P7-3) ---
+    # Read via the same helper _push_marine_service_config() uses, so the
+    # wizard's re-run pre-fill and the actual push read the same source.
+    marine_service_url, marine_verify_tls = _read_marine_service_connection(config_dir)
+    marine_service_secret = secrets.get("MARINE_SERVICE_SECRET") or None
+
     return CurrentConfigResponse(
         database=database,
         providers=providers,
@@ -2728,6 +2827,9 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         column_units=col_units,
         openaq_api_key=openaq_key,
         marine=marine_config,
+        marine_service_url=marine_service_url,
+        marine_verify_tls=marine_verify_tls,
+        marine_service_secret=marine_service_secret,
     )
 
 
