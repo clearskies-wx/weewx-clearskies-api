@@ -162,8 +162,17 @@ class CompanionProxyState:
     one (marine, via ``marine_service_url``).
     """
 
-    def __init__(self, *, service_url: str) -> None:
+    def __init__(self, *, service_url: str, verify_tls: bool = True) -> None:
         self.service_url = service_url.rstrip("/")
+        #: Verify the marine service's TLS certificate on every request made
+        #: through this state (manifest fetch, discovery, proxied GETs, gap
+        #: report POST). Sourced from ``[providers] marine_verify_tls``
+        #: (config/settings.py) at ``register_companion_proxy()`` time and
+        #: carried here — not re-read from global Settings at each call
+        #: site — so the gap-report worker thread (a daemon, not a request
+        #: handler) can honour it without reaching for module-global config.
+        #: Defaults to True (secure default; API-MANUAL §19.2).
+        self.verify_tls = verify_tls
         #: path (manifest "path", e.g. "/surf/{location_id}") -> manifest entry.
         #: Guarded by _lock; read under lock, replaced wholesale on each
         #: successful reconciliation (never mutated in place).
@@ -254,7 +263,7 @@ def _fetch_manifest(state: CompanionProxyState) -> dict[str, Any] | None:
     reason. Never raises.
     """
     try:
-        with httpx.Client(timeout=_MANIFEST_FETCH_TIMEOUT_S, verify=True) as client:
+        with httpx.Client(timeout=_MANIFEST_FETCH_TIMEOUT_S, verify=state.verify_tls) as client:
             response = client.get(f"{state.service_url}/manifest")
     except httpx.HTTPError as exc:
         logger.error(
@@ -336,8 +345,9 @@ def _auth_headers() -> dict[str, str]:
 # GRIB2 backend availability) are one-off setup-time calls made directly by
 # endpoints/setup.py's own /setup/* handlers — they were never manifest
 # entries and don't need a cache TTL. This is a separate, smaller call path
-# that reuses the same auth header and TLS-verified httpx.Client as
-# _fetch_upstream() (rules/coding.md DRY) rather than a second HTTP client.
+# that reuses the same auth header and same verify_tls-honouring httpx.Client
+# construction as _fetch_upstream() (rules/coding.md DRY) rather than a
+# second HTTP client.
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +406,7 @@ def marine_discovery_get(path: str, params: dict[str, Any]) -> Any:
     url = f"{state.service_url}{path}"
 
     try:
-        with httpx.Client(timeout=_DISCOVERY_REQUEST_TIMEOUT_S, verify=True) as client:
+        with httpx.Client(timeout=_DISCOVERY_REQUEST_TIMEOUT_S, verify=state.verify_tls) as client:
             response = client.get(url, params=params, headers=_auth_headers())
     except httpx.HTTPError as exc:
         raise MarineDiscoveryUnavailableError(
@@ -430,7 +440,7 @@ def _fetch_upstream(
     """
     url = f"{state.service_url}{resolved_upstream}"
     try:
-        with httpx.Client(timeout=_PROXY_REQUEST_TIMEOUT_S, verify=True) as client:
+        with httpx.Client(timeout=_PROXY_REQUEST_TIMEOUT_S, verify=state.verify_tls) as client:
             response = client.get(url, params=dict(query_params), headers=_auth_headers())
     except httpx.HTTPError as exc:
         logger.warning("Companion proxy: request to %s failed: %s", url, exc)
@@ -678,7 +688,20 @@ def register_companion_proxy(app: FastAPI, settings: Settings) -> None:
         )
         return
 
-    state = CompanionProxyState(service_url=marine_url)
+    verify_tls = settings.providers.marine_verify_tls
+    if not verify_tls:
+        # One unambiguous WARNING at startup, naming the host — not
+        # per-request (rules/coding.md; API-MANUAL §19.2 / OPERATIONS-MANUAL
+        # "Marine service TLS"). TLS encryption itself is unaffected; only
+        # certificate verification is skipped.
+        logger.warning(
+            "Companion proxy: marine_verify_tls=false — TLS certificate "
+            "verification is DISABLED for requests to %s (encryption stays "
+            "active; only certificate verification is skipped)",
+            marine_url,
+        )
+
+    state = CompanionProxyState(service_url=marine_url, verify_tls=verify_tls)
     _active_state = state
 
     manifest = _fetch_manifest(state)
@@ -764,7 +787,7 @@ def _gap_report_worker() -> None:
                         "run_time": run_time,
                     },
                     headers=_auth_headers(),
-                    verify=True,
+                    verify=state.verify_tls,
                     timeout=_GAP_REPORT_TIMEOUT_S,
                 )
         except Exception:

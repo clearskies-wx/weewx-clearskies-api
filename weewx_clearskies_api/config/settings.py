@@ -1299,12 +1299,16 @@ class ProvidersSettings:
     itself (pushed via ``POST /config``, T6.4) rather than the API's own
     ``api.conf``.
 
-    No TLS-verification knob here: ARCHITECTURE.md's port table states the
-    marine service is "TLS always" (port 8780) — unlike the legacy
-    per-remote-host ``verify_tls`` knobs on ``[swan]``/``surf_compute_*``,
-    there is no documented opt-out for the marine service, so the companion
-    proxy always verifies (rules/coding.md §1: never disable TLS
-    verification without an explicit, documented config key).
+    ``marine_verify_tls`` (API-MANUAL §19.2 / OPERATIONS-MANUAL "Marine
+    service TLS") is the documented opt-out for certificate verification on
+    marine service requests — defaults to ``True`` (secure default).
+    ARCHITECTURE.md's port table "TLS always" (port 8780) is a statement
+    about encryption being mandatory, a different axis from certificate
+    verification; the manuals are explicit that TLS encryption stays active
+    either way and only certificate verification is skippable, for a
+    self-signed cert on the same VLAN (rules/coding.md §1's "explicit,
+    documented config key" bar is met by this key). Threaded through to
+    every marine-bound request site in ``services/companion_proxy.py``.
 
     The Bearer secret (``MARINE_SERVICE_SECRET``) is never stored here —
     per ADR-027 §3 it lives in ``secrets.env`` and is read directly from
@@ -1318,9 +1322,17 @@ class ProvidersSettings:
     #: connected; no marine routes are mounted (API-MANUAL §19.2).
     marine_service_url: str | None
 
+    #: Verify the marine service's TLS certificate on every marine-bound
+    #: request (manifest fetch, discovery pass-throughs, proxied GETs, gap
+    #: report POST). Defaults to ``True``; set ``False`` for a self-signed
+    #: cert on the same VLAN (API-MANUAL §19.2 / OPERATIONS-MANUAL "Marine
+    #: service TLS"). TLS encryption itself is unaffected either way.
+    marine_verify_tls: bool
+
     def __init__(self, section: dict[str, Any]) -> None:
         raw_url = str(section.get("marine_service_url", "")).strip()
         self.marine_service_url = raw_url if raw_url else None
+        self.marine_verify_tls = _bool(section.get("marine_verify_tls", True))
 
     def validate(self) -> None:
         """Raise ValueError on a malformed marine_service_url."""
