@@ -58,14 +58,8 @@ from weewx_clearskies_api.endpoints.pages import router as pages_router
 from weewx_clearskies_api.endpoints.radar import router as radar_router
 from weewx_clearskies_api.endpoints.records import router as records_router
 from weewx_clearskies_api.endpoints.reports import router as reports_router
-from weewx_clearskies_api.endpoints.beach_safety import router as beach_safety_router
-from weewx_clearskies_api.endpoints.fishing import router as fishing_router
-from weewx_clearskies_api.endpoints.marine import router as marine_router
 from weewx_clearskies_api.endpoints.seeing import router as seeing_router
 from weewx_clearskies_api.endpoints.setup import router as setup_router
-from weewx_clearskies_api.endpoints.beach_profile import router as beach_profile_router
-from weewx_clearskies_api.endpoints.surf import router as surf_router
-from weewx_clearskies_api.endpoints.tides import router as tides_router
 from weewx_clearskies_api.endpoints.sse import router as sse_router
 from weewx_clearskies_api.endpoints.station import router as station_router
 from weewx_clearskies_api.errors import register_error_handlers
@@ -198,13 +192,6 @@ def create_app(settings: Settings) -> FastAPI:
         # ADR-078: geographic features PMTiles data endpoints.
         app.include_router(geographic_features_router, prefix="/api/v1")
 
-        app.include_router(marine_router, prefix="/api/v1")
-        app.include_router(tides_router, prefix="/api/v1")
-        app.include_router(surf_router, prefix="/api/v1")
-        app.include_router(beach_profile_router, prefix="/api/v1")
-        app.include_router(fishing_router, prefix="/api/v1")
-        app.include_router(beach_safety_router, prefix="/api/v1")
-
         # ADR-058: SSE stream — no /api/v1 prefix; endpoint lives at /sse.
         # Dashboard connects to /sse via Caddy proxy; prefix must match.
         app.include_router(sse_router)
@@ -215,10 +202,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(geographic_features_setup_router)
 
         # T6.1: companion proxy — no-op unless [providers] marine_service_url
-        # is configured. Registered last so its manifest-driven routes never
-        # shadow a native router above (native marine routers are deleted in
-        # T6.5-T6.8; until then both can coexist on disjoint paths per
-        # operator config).
+        # is configured. Native marine routers were deleted in T6.5-T6.8;
+        # the companion proxy is now the only source of marine routes.
         register_companion_proxy(app, settings)
 
         logger.info(
