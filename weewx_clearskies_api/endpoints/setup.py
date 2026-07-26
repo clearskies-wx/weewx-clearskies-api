@@ -21,10 +21,14 @@ Endpoints:
                                             pygrib) is installed, before the wizard lets
                                             the operator enable marine features
                                             (Marine Remediation Plan T3.6)
-  GET  /setup/marine/swan-check          — probe whether the SWAN Fortran binary is on
-                                            PATH; returns version, path, and host CPU
+  GET  /setup/marine/swan-check          — probe whether the SWAN Fortran binary is
+                                            installed; returns version, path, and CPU
                                             core count for the wizard's SWAN step
-                                            (T4.4 / SWAN-CORRECTIONS-PLAN T4.1)
+                                            (T4.4 / SWAN-CORRECTIONS-PLAN T4.1); C-54
+                                            pass-through to
+                                            {marine_service_url}/discovery/swan-check
+                                            — SWAN runs on the marine service host,
+                                            not this one
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
   GET  /setup/marine/species             — species checklist for a coordinate + fishing
                                             target category, keyed by biogeographic region
@@ -72,7 +76,6 @@ import re
 import secrets
 import shutil
 import signal
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -2959,88 +2962,65 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
 
 
 class MarineSwanCheckResponse(BaseModel):
-    """Response shape for ``GET /setup/marine/swan-check`` (T4.4 / T4.1).
+    """Response shape for ``GET /setup/marine/swan-check`` (T4.4 / T4.1; C-54).
 
     The wizard's SWAN step calls this endpoint on load to determine
     whether the SWAN Fortran binary is installed and to show the operator how
     many CPU cores are available for the ``omp_num_threads`` slider.
     """
 
-    #: True when ``swan`` is found on PATH and can be executed.
+    #: True when the SWAN binary is found on the marine service host and
+    #: can be executed there.
     available: bool
     #: SWAN version string (e.g. ``"41.45"``), or None when the binary is
     #: unavailable or version detection fails.
     version: str | None = None
-    #: Absolute path of the ``swan`` binary, or None when unavailable.
+    #: Absolute path of the ``swan`` binary on the marine service host, or
+    #: None when unavailable.
     path: str | None = None
-    #: Number of logical CPU cores on this host (from os.cpu_count()).
+    #: Number of logical CPU cores on the marine service host (from
+    #: os.cpu_count() there, not this API process).
     cpu_cores: int
 
 
 @router.get("/marine/swan-check", response_model=MarineSwanCheckResponse)
 async def marine_swan_check(request: Request) -> MarineSwanCheckResponse:
-    """Probe whether the SWAN Fortran binary is installed and return core count (T4.4).
+    """Pass-through to the marine service's SWAN binary probe (C-54).
+
+    GET {marine_service_url}/discovery/swan-check ->
+    {available, version, path, cpu_cores} (pinned contract, LC-P7-1/C-54
+    pattern). SWAN runs on the marine service host, never on this API
+    host — the endpoint's former implementation ran ``shutil.which("swan")``
+    locally, which meant a correctly-deployed system reported SWAN missing
+    when it was installed and running on the marine service. The marine
+    service is now the only place that can answer this question honestly,
+    including the CPU core count (that host's cores, not this one's, and
+    never the configured ``omp_num_threads`` thread budget in its place).
 
     Called by the wizard's SWAN setup step to:
       - Determine whether SWAN is available (blocks the step with install
         instructions when ``available`` is False).
-      - Show the operator the host's CPU core count for the ``omp_num_threads``
-        configuration slider.
+      - Show the operator the marine service host's CPU core count for the
+        ``omp_num_threads`` configuration slider.
       - Display the installed SWAN version for information/debugging.
 
-    Version detection:
-      SWAN does not have a standard ``--version`` flag.  The binary is invoked
-      with empty stdin; SWAN typically prints a version header to stdout before
-      exiting with a non-zero code due to missing input.  The first line
-      containing a numeric token is taken as the version.  Version detection
-      is best-effort — a failure does not affect the ``available`` field.
+    Hard 503 on ``MarineDiscoveryError`` (LC-P7-2) — this is a live wizard
+    query, same policy as ``/setup/marine/compute-estimate`` and
+    ``/setup/marine/discover-stations``: an unreachable marine service must
+    say so, never be reported as "SWAN not installed."
     """
     await require_setup_session(request)
 
-    cpu_cores = os.cpu_count() or 1
-    swan_path = shutil.which("swan")
-
-    if swan_path is None:
-        return MarineSwanCheckResponse(
-            available=False,
-            version=None,
-            path=None,
-            cpu_cores=cpu_cores,
-        )
-
-    # Best-effort SWAN version detection.  SWAN prints its version to stdout
-    # or stderr on startup even when given no valid input.
-    version: str | None = None
     try:
-        probe = subprocess.run(
-            [swan_path],
-            input="STOP\n",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        combined = probe.stdout + probe.stderr
-        for line in combined.splitlines():
-            line_lower = line.lower()
-            if "swan" in line_lower and any(c.isdigit() for c in line):
-                # Typical SWAN header: "SWAN version 41.45  ..."
-                parts = line.split()
-                for i, token in enumerate(parts):
-                    if token.lower() in ("version", "v") and i + 1 < len(parts):
-                        candidate = parts[i + 1].rstrip(".,;")
-                        if candidate and candidate[0].isdigit():
-                            version = candidate
-                            break
-                if version:
-                    break
-    except Exception:
-        pass  # version is non-critical; leave as None
+        body = marine_discovery_get("/discovery/swan-check", {})
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
 
     return MarineSwanCheckResponse(
-        available=True,
-        version=version,
-        path=swan_path,
-        cpu_cores=cpu_cores,
+        available=bool(body.get("available")),
+        version=body.get("version"),
+        path=body.get("path"),
+        cpu_cores=body.get("cpu_cores", 1),
     )
 
 
