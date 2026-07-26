@@ -60,6 +60,17 @@ is treated the same as "unreachable" — cache fallback, else 503 — because
 none of those are one of the three states this manifest/route contract
 defines; the proxy does not invent a fourth meaning for them.
 
+**Wizard discovery pass-throughs (C-42).** ``marine_discovery_get()`` is a
+second, smaller call path alongside the manifest proxy above — a direct
+authenticated GET for the four wizard discovery lookups
+(``/discovery/buoy-stations``, ``/discovery/tide-stations``,
+``/discovery/ofs-model``, ``/discovery/grib-availability``), which are
+one-off setup-time calls from ``endpoints/setup.py``, not cacheable
+``/api/v1/*`` resources. It raises ``MarineDiscoveryUnconfiguredError`` /
+``MarineDiscoveryUnavailableError`` instead of building a ``JSONResponse``
+so callers can produce wizard-appropriate error text — see those classes'
+docstrings for why the two must never share one message.
+
 **Gap reporting (C-10).** ``POST /report/gap`` is intentionally NOT in the
 marine service's manifest (see ``weewx-clearskies-marine``'s
 ``endpoints/gap.py`` docstring — it is a fire-and-forget POST with no TTL
@@ -314,6 +325,97 @@ def _valid_manifest_entries(manifest: dict[str, Any]) -> dict[str, dict[str, Any
 def _auth_headers() -> dict[str, str]:
     secret = os.environ.get(MARINE_SERVICE_SECRET_ENV_VAR, "")
     return {"Authorization": f"Bearer {secret}"} if secret else {}
+
+
+# ---------------------------------------------------------------------------
+# Wizard discovery pass-throughs (C-42, MARINE-SEP-CONCERNS.md).
+#
+# The manifest/_proxy_request() machinery above exists for cacheable
+# /api/v1/* dashboard resources. The wizard's four discovery lookups
+# (nearby NDBC buoys, nearby CO-OPS tide stations, the covering OFS model,
+# GRIB2 backend availability) are one-off setup-time calls made directly by
+# endpoints/setup.py's own /setup/* handlers — they were never manifest
+# entries and don't need a cache TTL. This is a separate, smaller call path
+# that reuses the same auth header and TLS-verified httpx.Client as
+# _fetch_upstream() (rules/coding.md DRY) rather than a second HTTP client.
+# ---------------------------------------------------------------------------
+
+
+class MarineDiscoveryError(Exception):
+    """Base for wizard discovery pass-through failures (C-42).
+
+    Per the operator ruling, the wizard must never see an empty result
+    silently standing in for "the marine service couldn't be reached" —
+    that reads as "there are no buoys near you," which is a wrong answer
+    wearing a valid response's clothes. Callers in endpoints/setup.py must
+    catch this (or a subclass) and surface an honest error to the wizard,
+    never swallow it into an empty list/None.
+    """
+
+
+class MarineDiscoveryUnconfiguredError(MarineDiscoveryError):
+    """``[providers] marine_service_url`` is not set.
+
+    A legitimate operator state, not a fault — the operator has not
+    installed/enabled the marine service. Message text must say so, not
+    imply something is broken.
+    """
+
+
+class MarineDiscoveryUnavailableError(MarineDiscoveryError):
+    """The marine service is configured but the discovery request failed
+    (network error, non-JSON body, or a non-200 status). A genuine outage —
+    message text is distinct from MarineDiscoveryUnconfiguredError's.
+    """
+
+
+_DISCOVERY_REQUEST_TIMEOUT_S = 15.0
+
+
+def marine_discovery_get(path: str, params: dict[str, Any]) -> Any:
+    """Direct (non-manifest) authenticated GET to the marine service.
+
+    Used by endpoints/setup.py's wizard discovery pass-throughs:
+    ``/discovery/buoy-stations``, ``/discovery/tide-stations``,
+    ``/discovery/ofs-model``, ``/discovery/grib-availability`` (pinned
+    contract, C-42). Returns the parsed JSON body on HTTP 200.
+
+    Raises:
+        MarineDiscoveryUnconfiguredError: ``marine_service_url`` is not
+            configured (``register_companion_proxy()`` was a no-op).
+        MarineDiscoveryUnavailableError: the marine service is configured
+            but the request failed — network error, non-JSON body, or any
+            non-200 status. The exception message names the reason for
+            operator logs; callers decide the wizard-facing text.
+    """
+    if _active_state is None:
+        raise MarineDiscoveryUnconfiguredError(
+            "marine_service_url is not configured; marine features require the marine service."
+        )
+    state = _active_state
+    url = f"{state.service_url}{path}"
+
+    try:
+        with httpx.Client(timeout=_DISCOVERY_REQUEST_TIMEOUT_S, verify=True) as client:
+            response = client.get(url, params=params, headers=_auth_headers())
+    except httpx.HTTPError as exc:
+        raise MarineDiscoveryUnavailableError(
+            f"The marine service at {state.service_url} is unreachable: {exc}"
+        ) from exc
+
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise MarineDiscoveryUnavailableError(
+            f"The marine service returned a non-JSON response for {path}"
+        ) from exc
+
+    if response.status_code != 200:
+        raise MarineDiscoveryUnavailableError(
+            f"The marine service returned HTTP {response.status_code} for {path}"
+        )
+
+    return body
 
 
 def _fetch_upstream(

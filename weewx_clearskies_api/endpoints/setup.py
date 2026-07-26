@@ -105,14 +105,12 @@ from weewx_clearskies_api.enrichment.fishing_species import (
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
-from weewx_clearskies_api.providers.ocean.ofs import find_ofs_model as _find_ofs_model
 from weewx_clearskies_api.providers._common.rate_limiter import RateLimiter
-from weewx_clearskies_api.providers.buoy.ndbc import discover_stations as _ndbc_discover_stations
-from weewx_clearskies_api.providers.marine.grib_processor import (
-    GRIB_AVAILABLE,
-    check_grib_available,
+from weewx_clearskies_api.services.companion_proxy import (
+    MarineDiscoveryError,
+    MarineDiscoveryUnconfiguredError,
+    marine_discovery_get,
 )
-from weewx_clearskies_api.providers.tides.coops import discover_stations as _coops_discover_stations
 from weewx_clearskies_api.services.station import _get_str_field, _parse_altitude
 from weewx_clearskies_api.services.weewx_conf import WeewxConfLoadError, get_weewx_conf, load_weewx_conf
 from weewx_clearskies_api.services.weewx_metadata import get_unit_for_group
@@ -122,6 +120,87 @@ from weewx_clearskies_api.units.conversion import convert
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/setup", tags=["setup"])
+
+# ---------------------------------------------------------------------------
+# Marine discovery pass-throughs (C-42, MARINE-SEP-CONCERNS.md).
+#
+# The wizard used to import providers/{ocean,buoy,tides,marine}/ directly to
+# answer four setup-time questions. Per the operator ruling, the API is the
+# marine service's only client — these are now proxied lookups via
+# services/companion_proxy.py's marine_discovery_get() rather than provider
+# imports. Response shapes below match the deleted provider functions'
+# return values field-for-field (same names, same nullability) so every
+# caller in this file needed zero changes beyond the call site itself.
+# ---------------------------------------------------------------------------
+
+
+def _marine_discovery_http_exception(exc: MarineDiscoveryError) -> HTTPException:
+    """Convert a marine discovery failure into the wizard-facing 503.
+
+    Both branches are 503 (the marine service is not currently able to
+    answer), but the ``detail`` text is deliberately different — an
+    operator who hasn't installed the marine service needs "marine
+    features require the marine service," not a message implying an
+    outage. Never returns 200 with an empty result for either case.
+    """
+    if isinstance(exc, MarineDiscoveryUnconfiguredError):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=503, detail=f"Marine service discovery failed: {exc}")
+
+
+def _discover_ofs_model(lat: float, lon: float) -> tuple[str | None, str | None]:
+    """C-42 pass-through for the deleted ``providers.ocean.ofs.find_ofs_model``.
+
+    GET {marine_service_url}/discovery/ofs-model?lat&lon -> a bare 2-element
+    JSON array ``[primary, fallback]`` (pinned contract, positional — the
+    underlying ``find_ofs_model()`` returned an unnamed tuple, so there were
+    no field names to preserve; consumed positionally, NOT as
+    ``{"primary": ..., "fallback": ...}``). Example live responses: ``[null,
+    null]`` (no OFS coverage), ``["SFBOFS", "WCOFS"]`` (San Francisco Bay).
+    """
+    body = marine_discovery_get("/discovery/ofs-model", {"lat": lat, "lon": lon})
+    primary, fallback = body
+    return primary, fallback
+
+
+def _discover_ndbc_stations(lat: float, lon: float, radius_km: float) -> list[dict[str, Any]]:
+    """C-42 pass-through for the deleted ``providers.buoy.ndbc.discover_stations``.
+
+    GET {marine_service_url}/discovery/buoy-stations?lat&lon&radius_km ->
+    list[{stationId, name, lat, lon, type, capabilityGuess, distanceKm}]
+    (pinned contract — same shape ``ndbc.discover_stations`` returned).
+    """
+    body = marine_discovery_get(
+        "/discovery/buoy-stations", {"lat": lat, "lon": lon, "radius_km": radius_km}
+    )
+    return body if isinstance(body, list) else []
+
+
+def _discover_coops_stations(lat: float, lon: float, radius_km: float) -> list[dict[str, Any]]:
+    """C-42 pass-through for the deleted ``providers.tides.coops.discover_stations``.
+
+    GET {marine_service_url}/discovery/tide-stations?lat&lon&radius_km ->
+    list[{id, name, lat, lon, distance_km, products}] (pinned contract —
+    same shape ``coops.discover_stations`` returned).
+    """
+    body = marine_discovery_get(
+        "/discovery/tide-stations", {"lat": lat, "lon": lon, "radius_km": radius_km}
+    )
+    return body if isinstance(body, list) else []
+
+
+def _discover_grib_availability() -> tuple[bool, str | None]:
+    """C-42 pass-through for the deleted ``providers.marine.grib_processor``
+    GRIB2-backend probe (``GRIB_AVAILABLE`` / ``check_grib_available()``).
+
+    GET {marine_service_url}/discovery/grib-availability -> {"available":
+    bool, "install_instructions": str|null}. GRIB2 processing now happens
+    entirely in the marine service's process, so the availability question
+    is inherently about that process, not this one.
+    """
+    body = marine_discovery_get("/discovery/grib-availability", {})
+    return bool(body.get("available")), body.get("install_instructions")
+
 
 # ---------------------------------------------------------------------------
 # Forecast correction module-level state (wired at startup by __main__.py)
@@ -1101,7 +1180,22 @@ def _build_marine_conf_section(
         if loc.nws_marine_zone_id:
             loc_section["nws_marine_zone_id"] = loc.nws_marine_zone_id
 
-        ofs_primary, ofs_fallback = _find_ofs_model(loc.lat, loc.lon)
+        # C-42: OFS model annotation is config-write-time, not a live
+        # wizard query the operator is looking at — a marine-service outage
+        # here must not abort the whole /setup/apply (matches
+        # _push_marine_service_config()'s "a marine outage never blocks
+        # setup" contract). Left unset on failure, same effective result as
+        # "no OFS coverage" before this was a network call; the marine
+        # service can resolve OFS coverage itself from lat/lon when it
+        # actually needs ocean data.
+        try:
+            ofs_primary, ofs_fallback = _discover_ofs_model(loc.lat, loc.lon)
+        except MarineDiscoveryError as exc:
+            logger.warning(
+                "Marine config build: OFS model discovery failed for location %r: %s",
+                loc.name, exc,
+            )
+            ofs_primary, ofs_fallback = None, None
         if ofs_primary:
             loc_section["ofs_model"] = ofs_primary
         if ofs_fallback:
@@ -3098,12 +3192,11 @@ async def get_marine_service_config(request: Request) -> dict[str, Any]:
 
 class MarineEccodesCheckResponse(BaseModel):
     #: True when a GRIB2 backend (eccodes or the pygrib fallback) is
-    #: importable in this process. Required by HRRR wind provider
-    #: (providers/marine/grib_processor.py) for SWAN boundary forcing.
+    #: importable in the marine service's process. Required for HRRR wind
+    #: field ingestion that drives the SWAN nearshore model.
     available: bool
-    #: Platform-agnostic install instructions (matches
-    #: grib_processor.check_grib_available()'s RuntimeError message).
-    #: None when available is True.
+    #: Platform-agnostic install instructions targeting the marine service
+    #: host. None when available is True.
     install_instructions: str | None = None
 
 
@@ -3114,25 +3207,26 @@ async def marine_eccodes_check(request: Request) -> MarineEccodesCheckResponse:
     Called by the wizard's marine step on load, before the operator is
     allowed to enable marine features — GRIB2 processing (eccodes or the
     pygrib fallback) is required for HRRR wind field ingestion that drives
-    the SWAN nearshore model (ADR-093). Reuses the same
-    backend-detection state (``GRIB_AVAILABLE``, set once at process start
-    when ``providers/marine/grib_processor.py`` is imported) and the same
-    install-instructions text that the provider registration path already
-    raises with, rather than re-probing ``import eccodes`` / ``import
-    pygrib`` here — one source of truth for GRIB backend detection.
+    the SWAN nearshore model (ADR-093). C-42: this used to probe
+    ``providers/marine/grib_processor.py``'s process-local ``GRIB_AVAILABLE``
+    state directly; GRIB2 processing now happens entirely in the marine
+    service's process, so this is a pass-through to
+    ``GET {marine_service_url}/discovery/grib-availability``.
+
+    A marine-service outage or missing configuration must not be reported
+    as ``available: false`` with eccodes install instructions — that would
+    tell the operator to install a library on the wrong host for the wrong
+    reason. Both cases raise 503 instead (distinct detail text — see
+    ``_marine_discovery_http_exception()``).
     """
     await require_setup_session(request)
 
-    if GRIB_AVAILABLE:
-        return MarineEccodesCheckResponse(available=True, install_instructions=None)
-
     try:
-        check_grib_available()
-    except RuntimeError as exc:
-        return MarineEccodesCheckResponse(available=False, install_instructions=str(exc))
+        available, install_instructions = _discover_grib_availability()
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
 
-    # Unreachable: GRIB_AVAILABLE is False iff check_grib_available() raises.
-    return MarineEccodesCheckResponse(available=False, install_instructions=None)
+    return MarineEccodesCheckResponse(available=available, install_instructions=install_instructions)
 
 
 class MarineSwanCheckResponse(BaseModel):
@@ -3288,19 +3382,25 @@ async def marine_discover_stations(
     marine location setup (OPERATIONS-MANUAL.md "Marine location setup
     procedure" steps 3-4; PROVIDER-MANUAL §14.1, §14.2).
 
-    Delegates entirely to the existing provider discovery functions
-    (ndbc.discover_stations / coops.discover_stations, both already
-    implemented and radius_km-based) — this endpoint only converts units and
-    applies the quality-tier scoring. Any ProviderError raised by either
-    provider call propagates unmodified to the RFC 9457 error handler
-    (ADR-018) — never re-wrapped, per the ProviderHTTPClient contract.
+    C-42: this used to delegate directly to the provider discovery
+    functions (ndbc.discover_stations / coops.discover_stations). Both are
+    now pass-throughs to the marine service's
+    ``/discovery/buoy-stations`` / ``/discovery/tide-stations`` — this
+    endpoint only converts units and applies the quality-tier scoring, same
+    as before. This is the wizard's live "nearby stations" query, so a
+    marine-service outage or missing configuration must surface as an
+    honest 503 (``_marine_discovery_http_exception()``) — never as an empty
+    station list, which would read as "there are no buoys near you."
     """
     await require_setup_session(request)
 
     radius_km = convert(radius_miles, "mile", "km") or 0.0
 
-    ndbc_raw = _ndbc_discover_stations(lat, lon, radius_km)
-    coops_raw = _coops_discover_stations(lat, lon, radius_km)
+    try:
+        ndbc_raw = _discover_ndbc_stations(lat, lon, radius_km)
+        coops_raw = _discover_coops_stations(lat, lon, radius_km)
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
 
     ndbc_stations: list[MarineNdbcStationEntry] = []
     for s in ndbc_raw:
@@ -4210,15 +4310,32 @@ async def marine_coverage(
     Checks OFS model assignment, nearest stations, NWS zone, and
     on-premises sensor proximity. Used by the wizard and admin to show what
     data sources are available at a given coordinate before/after configuration.
+
+    C-42: OFS assignment, NDBC discovery, and CO-OPS discovery are now
+    pass-throughs to the marine service (``services/companion_proxy.py``'s
+    ``marine_discovery_get()``) instead of direct provider imports. OFS
+    assignment determines this response's ``coverage_tier`` (the primary
+    signal this endpoint exists to report), so a marine-service failure
+    there fails the whole request honestly (503) rather than silently
+    defaulting to "mur_sst" coverage — the same "no wrong answer dressed as
+    valid" principle C-42 requires for the station-list endpoint above.
+    Nearest-station lookups keep their pre-existing tolerant degrade
+    behaviour (log + leave the field null) — that was already the contract
+    for any discovery failure here, not a new relaxation introduced by this
+    pass-through.
     """
     await require_setup_session(request)
 
     # --- OFS model assignment ---
-    ofs_primary, ofs_fallback = _find_ofs_model(lat, lon)
+    try:
+        ofs_primary, ofs_fallback = _discover_ofs_model(lat, lon)
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
+    # Model-resolution metadata (providers/ocean/ofs.py's _MODEL_RESOLUTION_DEG)
+    # moved to the marine service with the rest of the OFS provider code.
+    # Best-effort: read it back if the marine service's discovery response
+    # includes it; None (the response field's existing default) otherwise.
     ofs_resolution = None
-    if ofs_primary:
-        from weewx_clearskies_api.providers.ocean.ofs import _MODEL_RESOLUTION_DEG  # noqa: PLC0415
-        ofs_resolution = _MODEL_RESOLUTION_DEG.get(ofs_primary)
 
     # --- Coverage tier ---
     if ofs_primary:
@@ -4231,7 +4348,7 @@ async def marine_coverage(
     # --- Nearest NDBC buoy ---
     nearest_ndbc: _CoverageNearestStation | None = None
     try:
-        ndbc_raw = _ndbc_discover_stations(lat, lon, radius_km=80.5)
+        ndbc_raw = _discover_ndbc_stations(lat, lon, radius_km=80.5)
         if ndbc_raw:
             s = ndbc_raw[0]
             distance_miles = round(convert(float(s["distanceKm"]), "km", "mile") or 0.0, 1)
@@ -4242,12 +4359,18 @@ async def marine_coverage(
                 capabilities=_ndbc_capabilities(str(s["capabilityGuess"])),
             )
     except Exception:
+        # Broad on purpose (rules/coding.md notwithstanding): this block
+        # tolerates both MarineDiscoveryError (service outage) and a
+        # malformed response body the same way it always tolerated a
+        # malformed ProviderError-adjacent payload — nearest-station is a
+        # bonus field on this response, not its primary signal (see OFS
+        # handling above, which does fail the request).
         logger.warning("Coverage: NDBC discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True)
 
     # --- Nearest CO-OPS station ---
     nearest_coops: _CoverageNearestStation | None = None
     try:
-        coops_raw = _coops_discover_stations(lat, lon, radius_km=80.5)
+        coops_raw = _discover_coops_stations(lat, lon, radius_km=80.5)
         if coops_raw:
             s = coops_raw[0]
             distance_miles = round(convert(float(s["distance_km"]), "km", "mile") or 0.0, 1)
