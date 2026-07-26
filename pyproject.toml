@@ -210,28 +210,28 @@ no_implicit_reexport = true
 
 [[tool.mypy.overrides]]
 module = ["configobj.*", "cachetools.*"]
-ignore_missing_stubs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # SQLAlchemy ships its own type stubs (sqlalchemy-stubs is bundled since 2.x).
 # pymysql does not ship stubs — ignore missing stubs for it only.
 module = ["pymysql.*"]
-ignore_missing_stubs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # skyfield does not ship type stubs.
 module = ["skyfield.*"]
-ignore_missing_stubs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # defusedxml does not ship type stubs (3b-14).
 module = ["defusedxml.*"]
-ignore_missing_stubs = true
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # prometheus-client does not ship PEP 561 type stubs (ADR-031).
 module = ["prometheus_client.*"]
-ignore_missing_stubs = true
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # pytest
