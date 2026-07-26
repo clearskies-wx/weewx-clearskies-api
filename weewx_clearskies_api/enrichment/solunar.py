@@ -183,6 +183,34 @@ def compute_solunar(
     moonrise_str = _to_utc_z(moonrise_t) if moonrise_t is not None else None
     moonset_str = _to_utc_z(moonset_t) if moonset_t is not None else None
 
+    # --- Sunrise / sunset (C-47, 2026-07-25): for THIS function's own
+    # lat/lon (a fishing spot's coordinates), not the station's — the only
+    # existing sun-event computation, services/almanac.py's
+    # _compute_sun_for_date(), is station-scoped by every current caller
+    # and also computes civil twilight/transit/next-equinox-solstice, none
+    # of which solunar needs; duplicating that overhead across up to 30
+    # days per request (SolunarQueryParams.days) is worse than applying
+    # the exact same lightweight risings_and_settings/find_discrete
+    # pattern already used for moonrise/moonset two blocks up, to the sun
+    # instead of the moon — same technique, not a second implementation of
+    # it. Same station-local day window (t0, t1) as moonrise/moonset and
+    # the same null-on-polar-day/night handling (Skyfield returns an empty
+    # events array, not an exception, when the sun does not rise or set —
+    # matches services/almanac.py's own F3 fix note).
+    f_sun_rise = almanac.risings_and_settings(eph, sun, location)  # type: ignore[arg-type]
+    t_sun_rise, e_sun_rise = almanac.find_discrete(t0, t1, f_sun_rise)  # type: ignore[arg-type]
+
+    sunrise_t: Time | None = None
+    sunset_t: Time | None = None
+    for t, e in zip(t_sun_rise, e_sun_rise, strict=False):
+        if e == 1 and sunrise_t is None:
+            sunrise_t = t
+        elif e == 0 and sunset_t is None:
+            sunset_t = t
+
+    sunrise_str = _to_utc_z(sunrise_t) if sunrise_t is not None else None
+    sunset_str = _to_utc_z(sunset_t) if sunset_t is not None else None
+
     # --- Moon phase + illumination (ecliptic frame at transit time, same
     # formula as services/almanac.py._compute_moon_for_date) ---
     sun_ecl = earth.at(transit_t).observe(sun).apparent().frame_latlon(ecliptic_frame)  # type: ignore[attr-defined]
@@ -236,6 +264,8 @@ def compute_solunar(
         moonset=moonset_str,
         moonTransit=moon_transit_str,
         moonUnderfoot=moon_underfoot_str,
+        sunrise=sunrise_str,
+        sunset=sunset_str,
         majorPeriods=major_periods,
         minorPeriods=minor_periods,
         intensity=intensity,

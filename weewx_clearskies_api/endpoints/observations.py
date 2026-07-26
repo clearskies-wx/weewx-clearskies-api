@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from weewx_clearskies_api.db.registry import get_registry
 from weewx_clearskies_api.db.session import get_db_session
-from weewx_clearskies_api.models.params import ArchiveQueryParams
+from weewx_clearskies_api.models.params import ArchiveQueryParams, CurrentQueryParams
 from weewx_clearskies_api.models.responses import (
     ArchiveResponse,
     Observation,
@@ -47,10 +47,14 @@ from weewx_clearskies_api.services.archive import (
     decode_cursor,
     get_archive,
     get_current,
+    get_current_us_units,
 )
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_target_unit, get_units_block
+from weewx_clearskies_api.units.conversion import convert as convert_unit
+from weewx_clearskies_api.units.groups import get_source_unit
+from weewx_clearskies_api.units.labels import get_label
 
 # Alias kept for backwards-compatibility with tests that import ArchiveParams
 # from this module (test_archive_params.py).  The class is defined in
@@ -258,6 +262,104 @@ def _get_archive_params(request: Request) -> ArchiveQueryParams:
         raise RequestValidationError(exc.errors()) from exc
 
 
+def _get_current_params(request: Request) -> CurrentQueryParams:
+    """Dependency: parse and validate /current query params from the raw dict.
+
+    Same pattern as ``_get_archive_params()`` above — passes every HTTP key
+    to Pydantic so ``extra="forbid"`` actually fires (security-baseline §3.5).
+    """
+    try:
+        return CurrentQueryParams.model_validate(dict(request.query_params))
+    except ValidationError as exc:
+        from fastapi.exceptions import RequestValidationError
+        raise RequestValidationError(exc.errors()) from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /current?units=si — canonical SI mode (C-47, 2026-07-25)
+#
+# Operator ruling: when the marine service needs data the API owns (surf
+# scoring's t=0 station observation), it queries the API — never a second,
+# parallel provider path. The marine service works in canonical SI only
+# (C-29 deliberately stripped every unit-conversion path out of that repo),
+# so it cannot consume the default /current response, which is always in
+# the operator's configured display units with no way to ask for anything
+# else. This mode is purely additive: absent the "units=si" query
+# parameter, /current is byte-for-byte unchanged from before this existed.
+#
+# Scoped to exactly the fields a caller has asked for (windSpeed, windDir,
+# windGust, windGustDir, outTemp, the pressure field) rather than every
+# possible archive field — extending this to the full Observation shape
+# would require a canonical-SI target for every weewx unit group (rain,
+# humidity, radiation, ...), which nothing has asked for yet and which
+# risks half-mapped, misleadingly-labelled fields if guessed at. Barometer
+# (sea-level-reduced pressure) was chosen over the station-level `pressure`
+# field or `altimeter` — it is the field every other current-conditions
+# consumer in this codebase treats as "the" pressure reading, and matches
+# what a buoy/marine reading is comparable against.
+#
+# Shape: raw scalars, not the default {value, label, formatted} wrapper.
+# The marine service's own response models never wrap values (its own
+# module docstring: "no envelope") — a machine client already coded
+# against bare SI scalars everywhere else in this API's marine surface
+# gains nothing from an indirection layer whose "formatted" string and
+# operator-overridable "label" only make sense for a value meant for
+# on-screen display, which this is explicitly not.
+# ---------------------------------------------------------------------------
+
+#: field -> canonical SI unit. windDir/windGustDir are degree_compass,
+#: which has exactly one unit regardless of system — passed through
+#: unconverted, not listed here.
+_SI_CONVERTIBLE_FIELDS: dict[str, str] = {
+    "windSpeed": "meter_per_second",
+    "windGust": "meter_per_second",
+    "outTemp": "degree_C",
+    "barometer": "hPa",
+}
+_SI_DIRECTION_FIELDS: tuple[str, ...] = ("windDir", "windGustDir")
+
+
+def _si_unit_label(unit: str) -> str:
+    return get_label(unit).strip()
+
+
+def _build_si_current_response(
+    observation: Observation | None, us_units: int | None
+) -> JSONResponse:
+    data: dict[str, float | str | None] | None = None
+    units_block: dict[str, str] = {
+        field: _si_unit_label(unit) for field, unit in _SI_CONVERTIBLE_FIELDS.items()
+    }
+    units_block.update({field: _si_unit_label("degree_compass") for field in _SI_DIRECTION_FIELDS})
+
+    if observation is not None:
+        data = {"timestamp": observation.timestamp}
+        for field, si_unit in _SI_CONVERTIBLE_FIELDS.items():
+            raw_value = getattr(observation, field, None)
+            if raw_value is None or us_units is None:
+                data[field] = None
+                continue
+            source_unit = get_source_unit(field, us_units)
+            data[field] = (
+                convert_unit(float(raw_value), source_unit, si_unit)
+                if source_unit is not None
+                else None
+            )
+        for field in _SI_DIRECTION_FIELDS:
+            # degree_compass: single unit system-wide, no conversion needed.
+            data[field] = getattr(observation, field, None)
+
+    response_dict = {
+        "data": data,
+        "units": units_block,
+        "source": "weewx",
+        "generatedAt": _now_utc_z(),
+        "stationClock": build_station_clock().model_dump(by_alias=True),
+        "freshness": build_freshness("current_observation").model_dump(by_alias=True),
+    }
+    return JSONResponse(content=response_dict)
+
+
 # ---------------------------------------------------------------------------
 # GET /current
 # ---------------------------------------------------------------------------
@@ -271,6 +373,7 @@ def _get_archive_params(request: Request) -> ArchiveQueryParams:
 )
 def get_current_endpoint(
     db: Annotated[Session, Depends(get_db_session)],
+    params: Annotated[CurrentQueryParams, Depends(_get_current_params)],
 ) -> ObservationResponse:
     """Return the most-recent archive row.
 
@@ -278,11 +381,22 @@ def get_current_endpoint(
 
     weatherText is always null here; the BFF enrichment pipeline populates
     it per ADR-041 before serving the dashboard.
+
+    ``?units=si`` (C-47): returns canonical SI values for a fixed field set
+    (see ``_build_si_current_response()``) instead of the operator's display
+    units — see that function's docstring for the response shape and why.
+    Every other aspect of this endpoint (registry lookup, freshness,
+    stationClock) is shared with the default path; only the value
+    conversion and response shape differ.
     """
     registry = get_registry()
-    units = get_units_block()
-
     observation = get_current(db, registry)
+
+    if params.units == "si":
+        us_units = get_current_us_units(db) if observation is not None else None
+        return _build_si_current_response(observation, us_units)
+
+    units = get_units_block()
 
     # Blend cloudcover, snow, snowRate, and precipType from the forecast
     # provider when the archive row lacks the hardware to supply those fields.

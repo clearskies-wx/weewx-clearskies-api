@@ -1700,6 +1700,16 @@ class SolunarTimes(BaseModel):
     moonset: str | None = None   # UTC ISO-8601 with Z; None if moon doesn't set
     moonTransit: str      # UTC ISO-8601 with Z; highest point
     moonUnderfoot: str    # UTC ISO-8601 with Z; opposite transit
+    # C-47 (2026-07-25): sunrise/sunset for THIS request's lat/lon (e.g. a
+    # fishing spot), not the operator's weewx station — added so a caller
+    # (the marine service's fishing period/scoring math) never has to
+    # substitute the station's sun times for a spot that may be far away.
+    # Same nullability convention as moonrise/moonset: None at latitudes
+    # where the sun does not rise/set that day (polar day/night) — matches
+    # services/almanac.py's SunInfo.rise/.set, the existing convention for
+    # every other sun-event field in this API.
+    sunrise: str | None = None  # UTC ISO-8601 with Z; None on polar day/night
+    sunset: str | None = None   # UTC ISO-8601 with Z; None on polar day/night
     majorPeriods: list[dict[str, str]]  # 2/day, on transit/underfoot: [{start, end}, ...]
     minorPeriods: list[dict[str, str]]  # 2/day, on moonrise/moonset: [{start, end}, ...]
     intensity: float  # 0.0-1.0; driven by moon phase (new/full = 1.0, quarter = 0.7, between = 0.5)

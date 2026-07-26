@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as _datetime_mod
 import re
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -97,6 +98,26 @@ class ArchiveQueryParams(BaseModel):
         if self.cursor is not None and self.page is not None:
             raise ValueError("cursor and page are mutually exclusive")
         return self
+
+
+# ---------------------------------------------------------------------------
+# /current query params
+# ---------------------------------------------------------------------------
+
+
+class CurrentQueryParams(BaseModel):
+    """Validated query parameters for GET /current.
+
+    ``units=si`` (C-47, 2026-07-25 operator ruling): returns canonical SI
+    values instead of the operator's configured display units, for
+    companion services (the marine service) that work in SI only and must
+    not round-trip through a display unit. Absent (the default): behaviour
+    is completely unchanged from before this parameter existed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    units: Literal["si"] | None = None
 
 
 # ---------------------------------------------------------------------------

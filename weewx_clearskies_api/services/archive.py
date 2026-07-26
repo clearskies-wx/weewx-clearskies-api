@@ -317,6 +317,40 @@ def get_current(
     return _row_to_observation(row, registry)
 
 
+def get_current_us_units(db: Session) -> int | None:
+    """Return the ``usUnits`` value of the most recent archive row, or None.
+
+    C-47 (2026-07-25): used only by ``GET /current?units=si`` to convert the
+    archive's native weewx unit system (1=US, 16=Metric, 17=MetricWX — the
+    system every raw archive value is actually stored in) to canonical SI,
+    without going through the display-unit pipeline (``UnitTransformer`` /
+    ``apply_conversion()``), which converts to the *operator's configured
+    target* rather than SI. ``_row_to_observation()`` deliberately excludes
+    ``usUnits`` from the ``Observation`` model (it is a `_META_COLS` entry,
+    like ``dateTime``/``interval``), so this is a second, tiny, separate
+    query rather than a change to that function's return contract — the
+    default (non-SI) `/current` path never calls this and pays nothing for
+    it.
+
+    Same empty-archive/fresh-install handling as ``get_current()``: returns
+    None (not an error) when the archive is empty or does not exist yet.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    sql = text("SELECT usUnits FROM archive ORDER BY dateTime DESC LIMIT 1")
+    try:
+        row = db.execute(sql).fetchone()
+    except OperationalError as exc:
+        orig_msg = str(exc.orig).lower() if exc.orig is not None else str(exc).lower()
+        if "no such table" in orig_msg:
+            return None
+        raise
+    if row is None:
+        return None
+    raw = row._mapping.get("usUnits")  # noqa: SLF001
+    return int(raw) if raw is not None else None
+
+
 def get_archive(
     db: Session,
     registry: ColumnRegistry,
