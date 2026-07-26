@@ -75,6 +75,7 @@ from weewx_clearskies_api.middleware.metrics import MetricsMiddleware
 from weewx_clearskies_api.middleware.proxy_auth import ProxyAuthMiddleware
 from weewx_clearskies_api.middleware.request_id import RequestIdMiddleware
 from weewx_clearskies_api.middleware.security_headers import SecurityHeadersMiddleware
+from weewx_clearskies_api.services.companion_proxy import register_companion_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,13 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(setup_router)
         # ADR-078: geographic features setup endpoint (download PMTiles).
         app.include_router(geographic_features_setup_router)
+
+        # T6.1: companion proxy — no-op unless [providers] marine_service_url
+        # is configured. Registered last so its manifest-driven routes never
+        # shadow a native router above (native marine routers are deleted in
+        # T6.5-T6.8; until then both can coexist on disjoint paths per
+        # operator config).
+        register_companion_proxy(app, settings)
 
         logger.info(
             "Public API app created",

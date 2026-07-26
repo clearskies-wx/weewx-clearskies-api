@@ -1284,6 +1284,55 @@ class ChartsSettings:
         self.config_path = raw if raw else None
 
 
+class ProvidersSettings:
+    """[providers] section settings.
+
+    T6.1 / API-MANUAL §19.2: ``marine_service_url`` is the single config key
+    that activates the companion proxy (``services/companion_proxy.py``).
+    Per ARCHITECTURE.md "Configuration", it replaces both the legacy
+    ``surf_compute_host`` key and ``[swan] service_url`` in the target
+    architecture — those two keys are parsed independently by
+    ``config/marine_config.py`` (only when a ``[marine]`` section is
+    present) and are untouched by this class; ``marine_service_url`` must
+    be readable even when no ``[marine]`` section exists at all, since in
+    the target architecture the marine service holds location config
+    itself (pushed via ``POST /config``, T6.4) rather than the API's own
+    ``api.conf``.
+
+    No TLS-verification knob here: ARCHITECTURE.md's port table states the
+    marine service is "TLS always" (port 8780) — unlike the legacy
+    per-remote-host ``verify_tls`` knobs on ``[swan]``/``surf_compute_*``,
+    there is no documented opt-out for the marine service, so the companion
+    proxy always verifies (rules/coding.md §1: never disable TLS
+    verification without an explicit, documented config key).
+
+    The Bearer secret (``MARINE_SERVICE_SECRET``) is never stored here —
+    per ADR-027 §3 it lives in ``secrets.env`` and is read directly from
+    the process environment at the call site (matches the marine service's
+    own ``auth.py`` and the existing ``SURF_COMPUTE_SECRET`` precedent in
+    ``providers/nearshore/swan.py``).
+    """
+
+    #: Base URL of the marine companion service, e.g. ``https://localhost:8780``
+    #: or ``https://[2001:db8::1]:8780``. ``None`` = marine service not
+    #: connected; no marine routes are mounted (API-MANUAL §19.2).
+    marine_service_url: str | None
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_url = str(section.get("marine_service_url", "")).strip()
+        self.marine_service_url = raw_url if raw_url else None
+
+    def validate(self) -> None:
+        """Raise ValueError on a malformed marine_service_url."""
+        if self.marine_service_url is not None and not self.marine_service_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError(
+                f"[providers] marine_service_url must start with http:// or "
+                f"https://, got {self.marine_service_url!r}"
+            )
+
+
 def _bool(value: object) -> bool:
     """Parse a boolean from a string or bool value (INI-safe)."""
     if isinstance(value, bool):
@@ -1463,6 +1512,7 @@ class Settings:
     units: UnitsSettings
     freshness: FreshnessSettings
     forecast_correction: ForecastCorrectionSettings
+    providers: ProvidersSettings
     column_mapping: dict[str, str]
     #: Operator-confirmed unit for each mapped column, parsed from the
     #: ``[column_units]`` section of api.conf.  Written by ``/setup/apply``
@@ -1499,6 +1549,7 @@ class Settings:
         units: UnitsSettings | None = None,
         freshness: FreshnessSettings | None = None,
         forecast_correction: ForecastCorrectionSettings | None = None,
+        providers: ProvidersSettings | None = None,
         column_mapping: dict[str, str] | None = None,
         column_units: dict[str, str] | None = None,
         marine_config: "MarineConfig | None" = None,
@@ -1537,6 +1588,7 @@ class Settings:
             forecast_correction if forecast_correction is not None
             else ForecastCorrectionSettings({})
         )
+        self.providers = providers if providers is not None else ProvidersSettings({})
         self.column_mapping = column_mapping if column_mapping is not None else {}
         self.column_units = column_units if column_units is not None else {}
         self.marine_config = marine_config
@@ -1561,6 +1613,7 @@ class Settings:
         self.input.validate()
         self.freshness.validate()
         self.forecast_correction.validate()
+        self.providers.validate()
 
 
 # ---------------------------------------------------------------------------
@@ -1675,6 +1728,11 @@ def load_settings(config_path: Path | None = None) -> Settings:
     forecast_correction_cfg = ForecastCorrectionSettings(
         dict(cfg.get("forecast_correction", {}))
     )
+    # [providers] marine_service_url — read unconditionally (T6.1). Unlike
+    # surf_compute_host (config/marine_config.py), this must be readable
+    # even when no [marine] section exists at all — see ProvidersSettings
+    # docstring.
+    providers_cfg = ProvidersSettings(dict(cfg.get("providers", {})))
 
     from weewx_clearskies_api.config.marine_config import load_marine_config  # noqa: PLC0415
 
@@ -1711,6 +1769,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         units=units_cfg,
         freshness=freshness_cfg,
         forecast_correction=forecast_correction_cfg,
+        providers=providers_cfg,
         column_mapping=column_mapping_cfg,
         column_units=column_units_cfg,
         marine_config=marine_cfg,
