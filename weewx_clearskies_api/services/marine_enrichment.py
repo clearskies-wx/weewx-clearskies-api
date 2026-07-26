@@ -108,6 +108,23 @@ from weewx_clearskies_api.config.marine_config import (
     MarineLocation,
     load_marine_config,
 )
+
+# _unit_label is the single canonical marine-display-label resolver
+# (lead directive, 2026-07-25): it already combines the marine-only
+# compact-symbol overrides (knot->"kt", foot->"ft", ...) with
+# units/labels.py's get_label() fallback for everything else, and T6.2's
+# conversion step already resolves every OTHER marine unit label through
+# it. Importing it here (rather than a second local table) means a unit
+# added to that table is picked up everywhere in one place, including the
+# labels this module composes into conditionsText/description -- the
+# deliberate fix for the drift the lead flagged. Named-private on the
+# defining module (services/marine_response_conversion.py) because it is
+# an internal helper there; imported here as this module's single
+# unit-label dependency, same as convert_marine_payload() is companion_
+# proxy.py's.
+from weewx_clearskies_api.services.marine_response_conversion import (
+    _unit_label as _marine_unit_label,
+)
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
@@ -476,19 +493,13 @@ def _compose_surf_conditions_text(
     return f"{wave_part} {wind_part} {summary_part}"
 
 
-# Marine-only display labels for group_ocean_speed target units -- same
-# table marine_response_conversion.py uses (its _MARINE_UNIT_LABELS),
-# duplicated here because this module converts windSpeedMps itself (see
-# the section docstring above) and needs the matching label.
-_OCEAN_SPEED_UNIT_LABELS: dict[str, str] = {
-    "knot": "kt",
-    "meter_per_second": "m/s",
-    "mile_per_hour": "mph",
-    "km_per_hour": "km/h",
-}
-
-
 def _height_target_and_label() -> tuple[str, str]:
+    # NOTE (flagged, not fixed — out of the scope of the lead's requested
+    # change): this ternary is the same local-label-table pattern the lead
+    # asked to be removed from the ocean-speed and water-level helpers
+    # below. Left as-is here because it was not named in that request;
+    # surfaced in the closeout for a decision on whether to route it
+    # through _marine_unit_label() too.
     is_us = get_target_unit() == "US"
     target = get_group_unit("group_wave_height", "foot" if is_us else "meter")
     return target, ("ft" if target == "foot" else "m")
@@ -496,7 +507,7 @@ def _height_target_and_label() -> tuple[str, str]:
 
 def _ocean_speed_target_and_label() -> tuple[str, str]:
     target = get_group_unit("group_ocean_speed", "knot")
-    return target, _OCEAN_SPEED_UNIT_LABELS.get(target, target)
+    return target, _marine_unit_label(target)
 
 
 def _enrich_surf_entry(entry: dict[str, Any], locale: str) -> None:
@@ -702,9 +713,6 @@ def _walk_fishing_entries(node: Any, locale: str) -> None:
 # after separation; deleted from the API in a later Phase 6 task) -- a pure
 # unit-label lookup, not a scoring threshold, so relocating it duplicates
 # nothing that must stay single-sourced.
-_RESIDUAL_UNIT_LABEL: dict[str, str] = {"foot": "ft", "meter": "m"}
-
-
 def _residual_target_unit() -> str:
     return get_group_unit("group_water_level", "foot" if get_target_unit() == "US" else "meter")
 
@@ -717,7 +725,7 @@ def _enrich_current_residual(node: dict[str, Any]) -> None:
     value_display = _convert_unit(float(value_m), "meter", target_unit)
     if value_display is None:
         return
-    unit_label = _RESIDUAL_UNIT_LABEL.get(target_unit, target_unit)
+    unit_label = _marine_unit_label(target_unit)
     sign = "+" if value_display >= 0 else ""
     node["value"] = round(value_display, 2)
     node["description"] = f"{sign}{value_display:.2f} {unit_label} vs prediction"
