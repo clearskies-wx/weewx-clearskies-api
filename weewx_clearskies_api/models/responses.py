@@ -1683,36 +1683,6 @@ class SurfForecast(BaseModel):
     setup: float | None = None              # SETUP — wave-induced water level rise (meters)
 
 
-class FishingForecast(BaseModel):
-    """Fishing conditions forecast for one spot for one period (API-MANUAL §16).
-
-    Produced by enrichment/fishing_scorer.py.  Wind/swell fields are
-    informational only — not inputs to overallScore.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    periodStart: str  # UTC ISO-8601 with Z
-    periodEnd: str     # UTC ISO-8601 with Z
-    periodLabel: str   # e.g. "Early Morning", "Late Afternoon"
-    overallScore: int         # composite score 0-100
-    pressureScore: int        # pressure component sub-score 0-100
-    tideScore: int             # tide component sub-score 0-100
-    solunarScore: int          # solunar component sub-score 0-100
-    waterTempScore: int | None = None  # always None (T6.2): temperature is scored
-    # purely per-species (speciesScores) since 2026-07-11, not as a shared
-    # component of overallScore — see enrichment/fishing_scorer.py module
-    # docstring for why the category-level component was removed.
-    timeofdayScore: int        # time-of-day component sub-score 0-100
-    speciesScores: list[dict[str, Any]] | None = None  # per-species score adjustments
-    conditionsText: str        # natural-language conditions summary
-    windSpeed: float | None = None      # group_ocean_speed; informational, not scored
-    windDirection: float | None = None  # degrees true north; informational
-    windGust: float | None = None       # group_ocean_speed; informational
-    swellHeight: float | None = None    # group_wave_height; informational, not scored
-    swellPeriod: float | None = None    # group_wave_period; informational
-
-
 class SolunarTimes(BaseModel):
     """Solunar major/minor feeding periods for one date at one location (API-MANUAL §16).
 

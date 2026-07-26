@@ -216,6 +216,16 @@ _FIELD_GROUPS: dict[str, str] = {
     "windGust": "group_ocean_speed",
     # --- group_water_level (base meter) ---
     "tideLevel": "group_water_level",
+    # C-44 (audit finding F1, 2026-07-25): totalWaterLevelForecast[] items
+    # are {time, height, residual} (services/water_level_compositor.py,
+    # weewx-clearskies-marine) — "residual" is the non-tidal (storm
+    # surge/wind setup) component of the same total-water-level reading
+    # "height" carries in that same object, always canonical meters, no
+    # collision anywhere else in the marine response models (grep-verified:
+    # every other "residual" occurrence is English prose, not a field key).
+    # Unlike "height" it needs no contextual container check — a bare key
+    # is correct here.
+    "residual": "group_water_level",
     # "height" handled contextually — see _resolve_group().
     # --- group_visibility (base nautical_mile) ---
     "visibility": "group_visibility",

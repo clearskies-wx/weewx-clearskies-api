@@ -4,9 +4,12 @@
 utility for surf-spot configuration and runtime SWAN bidirectional profiles.
 
 ``download_bathymetric_profile`` produces a 1-D depth transect (list of
-``BathymetryPoint``) used by the fishing habitat-annotation pipeline
-(``enrichment/fishing_scorer.py``) and available to operator-configured
-setups. ``download_bidirectional_profile`` produces a bidirectional
+``BathymetryPoint``) available to operator-configured setups (the fishing
+habitat-annotation consumer, ``enrichment/fishing_scorer.py``, was deleted
+as orphaned dead code — audit finding F2, 2026-07-25; nothing in this repo
+calls this function today, but it is kept as it is still exercised by
+``services/swan_domain.py``'s import of this module).
+``download_bidirectional_profile`` produces a bidirectional
 coastline-anchored CUDEM transect cached at
 ``/etc/weewx-clearskies/spot_profiles/`` and consumed by SWAN runs.
 

@@ -50,7 +50,9 @@ Scope, one function group per concern:
     ``i18n.t()`` and assembles sentences from already-converted
     display-unit ingredients via the relocated ``_compose_conditions_text()``
     helpers below (essentially unchanged from ``enrichment/surf_scorer.py``
-    / ``enrichment/fishing_scorer.py``, which T6.7 deletes). No scoring or
+    / ``enrichment/fishing_scorer.py`` -- the latter deleted as orphaned
+    dead code, audit finding F2, 2026-07-25; its only caller,
+    ``endpoints/fishing.py``, was already gone since T6.5). No scoring or
     classification logic is reproduced here -- only presentation.
 
   C-37 -- ``currentResidual``. The marine service emits
@@ -428,12 +430,19 @@ def _restore_beach_safety_detail(data: dict[str, Any]) -> dict[str, Any]:
 #                                         whether a face height exists)
 #   conditionsTextParts: {
 #     unavailable: bool,
-#     heightM, periodS, directionDeg, windSpeedMps: float | None -- SI,
-#         NOT walked by marine_response_conversion.py's generic converter
-#         (these field names don't match its _FIELD_GROUPS table) -- this
-#         module converts heightM/windSpeedMps itself; periodS needs no
-#         conversion (single-unit group); directionDeg is unused (compass
-#         below is already resolved).
+#     heightM, periodS: float | None -- ALREADY display-unit converted by
+#         marine_response_conversion.py's generic converter before this
+#         module runs ("heightM" IS a group_wave_height _FIELD_GROUPS
+#         entry, "periodS" a group_wave_period one -- corrected 2026-07-25,
+#         C-44 sweep; an earlier version of this comment claimed the
+#         opposite and this module used to re-convert heightM a second
+#         time as a result -- a real double-conversion bug, fixed in the
+#         same change). Used directly below, no further conversion.
+#     directionDeg: float | None -- SI degrees; unused (compass below is
+#         already resolved).
+#     windSpeedMps: float | None -- SI m/s; genuinely NOT walked by the
+#         generic converter (no _FIELD_GROUPS entry for this name) --
+#         this module converts it, correctly, exactly once.
 #     compass: str | None,
 #     swellSummaryKey: str | None,    -- already-selected locale key
 #         (swell_clean/swell_mixed/swell_chop) -- the marine service does
@@ -553,11 +562,16 @@ def _enrich_surf_entry(entry: dict[str, Any], locale: str) -> None:
 
     wind_speed_mps = parts.get("windSpeedMps")
 
-    height_target, height_label = _height_target_and_label()
+    _height_target, height_label = _height_target_and_label()
     wind_target, wind_label = _ocean_speed_target_and_label()
 
     entry["conditionsText"] = _compose_surf_conditions_text(
-        height_display=float(_convert_unit(float(height_m), "meter", height_target) or 0.0),
+        # height_m is ALREADY display-unit converted -- marine_response_
+        # conversion.py's generic walker converts "heightM" (a
+        # group_wave_height _FIELD_GROUPS entry) before this function ever
+        # sees it. Converting it again here was a double-conversion bug
+        # (C-44 sweep, 2026-07-25) -- use it directly.
+        height_display=float(height_m),
         height_unit_label=height_label,
         period_s=float(period_s),
         compass=compass,
