@@ -343,15 +343,12 @@ path = /var/lib/weewx/weewx.sdb
 #           url = https://ncdeq.gov/beach-water-quality
 
 [swan]
-# SWAN nearshore wave model configuration (ADR-093).
-# This section is OPTIONAL — only relevant when the [nearshore] pip extra is
-# installed. Controls how the SWAN wave model runs.
-#
-# service_url: URL of a standalone SWAN service. Leave as default
-#   (http://localhost:swan — bundled mode sentinel) to run SWAN as a subprocess
-#   inside the API process. Set to http://<host>:8767 to read from a separated
-#   SWAN service on dedicated hardware.
-# service_url = http://localhost:swan
+# SWAN nearshore wave model configuration for the marine service (ADR-093).
+# This section is pushed to the marine service as part of the marine config
+# (API-MANUAL §19.5) — it has no effect unless [providers] marine_service_url
+# below is also set. It no longer carries a connection URL of its own
+# (removed T7.2, 2026-07-25) — marine_service_url is the single connection
+# key for the marine service, this section only tunes SWAN's grid.
 #
 # omp_num_threads: Number of OpenMP threads for SWAN. 0 (default) = all
 #   available CPU cores. Set to a positive integer to limit SWAN's CPU usage
@@ -360,16 +357,22 @@ omp_num_threads = 0
 
 
 [providers]
-# External service providers the API connects to for computation.
-# This section is OPTIONAL — all fields default to in-process operation.
+# External service providers the API connects to.
+# This section is OPTIONAL — all fields default to "not connected".
 #
-# surf_compute_host: URL of the remote wave modeling compute service.
-#   Offloads SwellTrack and SurfBeat computations to a more powerful machine.
-#   Leave blank/unset to compute on the API host (works but slower on limited
-#   hardware). Example: https://librewxr.shaneburkhardt.com:8770
-#   Authentication: SURF_COMPUTE_SECRET env var in secrets.env (Bearer token).
-# surf_compute_host =
+# marine_service_url: Base URL of the standalone weewx-clearskies-marine
+#   service (surf/tides/fishing/beach-safety computation, SWAN wave
+#   modeling). Same-host example: https://localhost:8780. Separate-host
+#   example: https://192.0.2.10:8780 or https://[2001:db8::1]:8780 (IPv6
+#   literals need brackets when paired with a port). Leave blank/unset if
+#   the marine service isn't installed — no marine endpoints are mounted.
+#   Authentication: MARINE_SERVICE_SECRET env var in secrets.env (Bearer
+#   token, shared with the marine service host's own secrets.env).
+#   Replaces the removed surf_compute_host (T6.8) and [swan] service_url
+#   (T7.2) — this is the single marine-service connection key now.
+# marine_service_url =
 #
-# surf_compute_verify_tls: Verify TLS certificate on the compute service.
-#   Default true. Set to false for self-signed certificates on the same VLAN.
-# surf_compute_verify_tls = true
+# marine_verify_tls: Verify TLS certificate on marine service requests.
+#   Default true. Set to false for a self-signed certificate on the same
+#   VLAN — TLS encryption itself stays active either way.
+# marine_verify_tls = true
