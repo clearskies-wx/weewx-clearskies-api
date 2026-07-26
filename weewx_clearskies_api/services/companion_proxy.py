@@ -68,10 +68,11 @@ The API calls it directly via ``report_gap()`` below, which is a straight
 port of ``providers/nearshore/swan.py``'s ``report_gap()`` /
 ``_gap_report_worker()`` (same dedup LRU bound, same bounded queue, same
 single background worker, same fire-and-forget contract — a broken client
-here would fail silently, exactly like the original). ``swan.py`` itself is
-left untouched; T6.6 deletes it later in Phase 6, at which point its call
-sites move to this module's ``report_gap()``. No caller wires this function
-yet — that wiring is T6.6's job, not this task's.
+here would fail silently, exactly like the original). ``swan.py`` was
+deleted by T6.6; its call sites are ported to ``_report_model_gaps_from_
+response()`` below, which inspects every proxied 200 body for a
+``modelStatus: "unavailable"`` signal and calls ``report_gap()`` — see that
+function's docstring for the two response shapes it recognizes.
 
 **Auth.** Every authenticated call to the marine service (proxied GETs and
 ``report_gap()``) attaches ``Authorization: Bearer {MARINE_SERVICE_SECRET}``,
@@ -434,8 +435,12 @@ def _proxy_request(
         )
 
     # State 2: HTTP 200 — including a null payload carrying
-    # modelStatus: "unavailable". No modelStatus-specific branch exists:
-    # a 200 is a successful proxied response and is cached like any other.
+    # modelStatus: "unavailable". No modelStatus-specific branch exists for
+    # caching/response purposes: a 200 is a successful proxied response and
+    # is cached like any other. C-10: still scan the raw body for a model
+    # gap and forward it (see _report_model_gaps_from_response() below) —
+    # this does not affect what is cached or returned.
+    _report_model_gaps_from_response(body, manifest_entry=manifest_entry)
     transformed = _apply_response_transform(body, manifest_entry=manifest_entry)
     cache.set(cache_key, {"body": transformed, "status_code": 200}, ttl_seconds)
     return JSONResponse(content=transformed, status_code=200)
@@ -618,9 +623,10 @@ def reset_companion_proxy_for_tests() -> None:
 
 # ---------------------------------------------------------------------------
 # Gap reporting (C-10) — ported from providers/nearshore/swan.py's
-# report_gap()/_gap_report_worker() (~line 1277). swan.py is untouched;
-# T6.6 deletes it later in Phase 6 and moves its call sites here. See
-# module docstring "Gap reporting (C-10)".
+# report_gap()/_gap_report_worker(). swan.py was deleted by T6.6; its call
+# sites (endpoints/surf.py, endpoints/beach_profile.py — also deleted) are
+# ported to _report_model_gaps_from_response() below. See module docstring
+# "Gap reporting (C-10)".
 # ---------------------------------------------------------------------------
 
 #: Same bounds as the ported reference — neither a single large gap burst
@@ -717,3 +723,66 @@ def report_gap(spot_id: str, valid_time: str, endpoint: str, run_time: str | Non
             "for %r @ %s (%s)",
             _GAP_REPORT_QUEUE_MAXSIZE, spot_id, valid_time, endpoint,
         )
+
+
+def _report_model_gaps_from_response(body: Any, *, manifest_entry: dict[str, Any]) -> None:
+    """C-10: the call site ``report_gap()`` above was missing until T6.6.
+
+    Detects a model gap in a raw (pre-conversion) marine-service response
+    and forwards it via ``report_gap()`` to the marine service's own
+    ``POST /report/gap`` (``weewx-clearskies-marine``'s ``endpoints/gap.py``).
+    A duplicate of what the marine service already logged in-process
+    (``endpoints/surf.py``'s ``_report_forecast_gap()``, ``endpoints/
+    beach_profile.py``'s equivalent) is harmless — both land in the same
+    ``_record_gap_report()`` dedup keyed on (spot_id, valid_time, endpoint,
+    run_time), so this never double-logs. What it does add: visibility for
+    gaps the API observes on a proxied request that the marine service's
+    own request handler already returned (e.g. a stale/cached 200 the API
+    is re-serving would not re-trigger this, since only a fresh upstream
+    200 reaches this function) and, more importantly, keeps the API-side
+    ``report_gap()`` machinery ported in T6.1 from being permanently
+    unwired dead code.
+
+    Only two manifest paths ever carry a "modelStatus" signal — grep-
+    verified against ``weewx_clearskies_marine/endpoints/*.py``; marine,
+    tides, fishing, and beach-safety responses never set it:
+
+      - ``/surf/{location_id}/profile``: a single dict with top-level
+        ``modelStatus``/``locationId``/``timestep`` (mirrors the deleted
+        ``endpoints/beach_profile.py``'s ``_unavailable_profile_response()``
+        call site).
+      - ``/surf/{location_id}``: a dict with a ``forecast`` list of
+        entries, each carrying its own ``modelStatus``/``time`` (mirrors
+        the deleted ``endpoints/surf.py``'s per-timestep
+        ``swan.report_gap(endpoint="forecast", ...)`` call site).
+
+    Deliberately not a generic JSON walk — this is a one-for-one port of
+    the two specific call sites the old in-process endpoints had, not a
+    new detection strategy.
+    """
+    if not isinstance(body, dict):
+        return
+
+    path = manifest_entry.get("path", "")
+
+    if path.endswith("/profile"):
+        if body.get("modelStatus") == "unavailable":
+            report_gap(
+                spot_id=body.get("locationId") or "",
+                valid_time=body.get("timestep") or "",
+                endpoint="profile",
+                run_time=body.get("lastRunTime"),
+            )
+        return
+
+    if path == "/surf/{location_id}":
+        spot_id = body.get("locationId") or ""
+        run_time = body.get("lastRunTime")
+        for entry in body.get("forecast") or []:
+            if isinstance(entry, dict) and entry.get("modelStatus") == "unavailable":
+                report_gap(
+                    spot_id=spot_id,
+                    valid_time=entry.get("time") or "",
+                    endpoint="forecast",
+                    run_time=run_time,
+                )
