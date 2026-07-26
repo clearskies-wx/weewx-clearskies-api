@@ -81,20 +81,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-marine = [
-    # ADR-085: eccodes Python binding for GRIB2 processing (marine GRIB2 data).
-    # Requires the eccodes C library to be installed on the system first
-    # (apt install libeccodes-dev / dnf install eccodes-devel / brew install eccodes).
-    # Docker images include it by default; native installs need the system library.
-    "eccodes>=1.5",
-    # ADR-091: OFS ocean data via THREDDS/OPeNDAP (xarray + netCDF4).
-    "xarray>=2024.1",
-    "netCDF4>=1.6",
-]
 # T6.7/T6.8 (2026-07-25): [nearshore] extra removed — SWAN, TruShore, and all
 # wave-physics computation moved to the weewx-clearskies-marine service.
 # The SWAN binary, cfgrib, shapely, and coastalmodeling-vdatum dependencies
 # it pulled in have no remaining consumer in this repo.
+# C-49/C-48 (2026-07-25): [marine] extra removed. eccodes (ADR-085, GRIB2
+# processing) had zero importers left after T6.6's provider-module deletion;
+# xarray/netCDF4 (ADR-091, OFS ocean data) were kept alive only by
+# services/bathymetry_resolver.py, deleted this round as the last of the
+# four marine-physics modules held by the two wizard endpoints reworked
+# into marine-service pass-throughs (C-48). Census (grep for import
+# statements across weewx_clearskies_api/) confirms zero remaining
+# importers of eccodes, xarray, or netCDF4 in this repo.
+#
+# NOTE, found but not fixed this round: endpoints/setup.py's surviving
+# POST /setup/marine/bathymetry/upload lazily imports `rasterio` (GeoTIFF
+# validation) — a fourth geo library that was never declared in this
+# extra, and whose own error message still points at the already-removed
+# [nearshore] extra ("Install rasterio (add to [nearshore] extra)"). This
+# predates this round (the message went stale when [nearshore] was
+# deleted in Phase 6) and is out of C-49's named scope (pruning [marine],
+# not fixing a different endpoint's undeclared dependency). Flagged to
+# the lead rather than resolved unilaterally — adding rasterio to an
+# extra, or reviving one for it, is a dependency change beyond what this
+# round's lead calls authorised.
 dev = [
     "ruff==0.11.9",
     "mypy==1.15.0",
