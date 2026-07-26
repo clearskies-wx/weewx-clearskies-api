@@ -34,7 +34,12 @@ Endpoints:
                                             profiles, seasonal behavior) for admin/wizard
                                             reference (T8.2 — data externalized to
                                             data/species.yaml)
-  GET  /setup/marine/coverage             — data source coverage panel for a coordinate (T3.6)
+  GET  /setup/marine/coverage             — data source coverage panel for a coordinate
+                                            (T3.6); bathymetry block is a C-48 pass-through
+                                            to {marine_service_url}/discovery/bathymetry-coverage
+  GET  /setup/marine/compute-estimate    — runtime estimate for the current spot
+                                            configuration (Phase 16); C-48 pass-through to
+                                            {marine_service_url}/discovery/compute-estimate
   GET  /setup/marine/discover-structures — discover nearby coastal structures (jetties,
                                             piers, breakwaters, seawalls, groins) via the
                                             OpenStreetMap Overpass API, for surf spot
@@ -42,10 +47,12 @@ Endpoints:
   POST /setup/marine/bathymetry/upload      — accept operator-supplied GeoTIFF bathymetry
                                             file; validate, save, return per-level coverage
                                             (SWAN-FIXES-PLAN Phase 24, T24.1)
-  POST /setup/providers/test-compute        — test connectivity to the remote wave modeling
-                                            compute service (SURF-MODEL-FIX-PLAN T5.2):
-                                            makes authenticated GET /health request and
-                                            returns {ok, version, error}
+  POST /setup/providers/test-marine         — test connectivity to the marine service
+                                            (T7.3, LC-P7-4): authenticated GET /health,
+                                            plus GET /discovery/grib-availability when a
+                                            secret is supplied (proves the secret, since
+                                            /health is auth-exempt); returns {ok, version,
+                                            spots, last_run, status, error}
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -3282,8 +3289,9 @@ def _build_overpass_structure_query(
 
     When *bbox* is provided (south, west, north, east), uses a bbox filter
     instead of a radius-around filter. The bbox aligns with the Level 3 grid
-    domain computed by swan_domain.py, ensuring structure discovery covers
-    the exact area SWAN will model.
+    domain computed by the marine service's ``swan_domain.py`` (C-48, moved
+    out of this repo), ensuring structure discovery covers the exact area
+    SWAN will model.
     """
     if bbox is not None:
         south, west, north, east = bbox
@@ -4036,85 +4044,32 @@ async def marine_coverage(
     except Exception:
         on_premises = "not_configured"
 
-    # --- Bathymetry coverage (T22.1) ---
-    # Locale keys exist in locales/*.json under marine.bathymetry.* for future i18n.
-    # setup.py has no locale key lookup function; plain English strings are used here.
+    # --- Bathymetry coverage (T22.1; C-48 pass-through) ---
+    # GET {marine_service_url}/discovery/bathymetry-coverage?lat&lon ->
+    # {overall_quality, levels, warning, datum_warning} (pinned contract,
+    # LC-P7-1 — field names, nullability, and the source/quality/warning
+    # string constants are lifted verbatim from this endpoint's former
+    # in-API computation, so this response deserialises into the same
+    # _BathymetryLevelCoverage / _BathymetryCoverage models unchanged).
+    # Tolerant degrade (log WARNING, leave bathymetry null) — this was
+    # already the contract for this bonus field before the pass-through
+    # (see the OFS-assignment handling above, which fails the whole
+    # request instead, because it is the primary signal this endpoint
+    # exists to report; LC-P7-2 keeps that split).
     bathymetry: _BathymetryCoverage | None = None
     try:
-        from weewx_clearskies_api.services.bathymetry_resolver import (  # noqa: PLC0415
-            find_best_dem,
-            is_great_lake,
+        body = marine_discovery_get(
+            "/discovery/bathymetry-coverage", {"lat": lat, "lon": lon}
         )
-
-        _BATHYMETRY_SOURCE_NAMES: dict[str, str] = {
-            "ncei_regional": "NCEI Regional Coastal DEM",
-            "usgs_great_lakes": "USGS Great Lakes DEM",
-            "crm": "NOAA Coastal Relief Model",
-            "operator": "Operator-supplied bathymetry",
-        }
-        _BATHYMETRY_QUALITY_LABELS: dict[str, str] = {
-            "high": "High-resolution bathymetry available",
-            "degraded": "Using lower-resolution bathymetry",
-        }
-        _BATHYMETRY_WARNING_DEGRADED = (
-            "Surf zone features like sandbars and break points may not be resolved "
-            "with the available bathymetry data."
-        )
-
-        # Level 2 (100 m nearshore): ~10 km bbox around the point
-        l2_bbox = (lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05)
-        l2_dem = find_best_dem(l2_bbox)
-        l2_lake = is_great_lake(lat, lon)
-
-        # Level 3 (10 m surf zone): ~2 km bbox around the point
-        l3_bbox = (lon - 0.01, lat - 0.01, lon + 0.01, lat + 0.01)
-        l3_dem = find_best_dem(l3_bbox)
-
-        levels: list[_BathymetryLevelCoverage] = []
-        for level, dem, lake in [(2, l2_dem, l2_lake), (3, l3_dem, None)]:
-            if dem is not None:
-                source = "ncei_regional"
-                resolution = dem["resolution_m"]
-                quality = "high"
-                level_datum_warning = False
-            elif lake is not None:
-                source = "usgs_great_lakes"
-                resolution = 5.0
-                quality = "high"
-                level_datum_warning = False
-            else:
-                source = "crm"
-                resolution = 90.0
-                quality = "degraded"
-                # T4.2 — CRM has mixed/unknown datums; flag datum uncertainty.
-                # Warning text: "Bathymetry data source has unknown vertical datum.
-                #   Wave model depth calculations may have reduced accuracy."
-                # i18n key (deferred): marine.bathymetry.warning.datum_unknown
-                level_datum_warning = True
-
-            levels.append(
-                _BathymetryLevelCoverage(
-                    level=level,
-                    source=source,
-                    source_name=_BATHYMETRY_SOURCE_NAMES[source],
-                    resolution_m=resolution,
-                    quality=quality,
-                    quality_label=_BATHYMETRY_QUALITY_LABELS[quality],
-                    datum_warning=level_datum_warning,
-                )
-            )
-
-        overall_quality = (
-            "degraded" if any(lvl.quality == "degraded" for lvl in levels) else "high"
-        )
-        warning = _BATHYMETRY_WARNING_DEGRADED if overall_quality == "degraded" else None
-        overall_datum_warning = any(lvl.datum_warning for lvl in levels)
-
         bathymetry = _BathymetryCoverage(
-            overall_quality=overall_quality,
-            levels=levels,
-            warning=warning,
-            datum_warning=overall_datum_warning,
+            overall_quality=body["overall_quality"],
+            levels=[_BathymetryLevelCoverage(**lvl) for lvl in body.get("levels", [])],
+            warning=body.get("warning"),
+            datum_warning=body.get("datum_warning", False),
+        )
+    except MarineDiscoveryError:
+        logger.warning(
+            "Coverage: bathymetry discovery failed at (%.4f, %.4f)", lat, lon, exc_info=True
         )
     except Exception:
         logger.warning(
@@ -4166,82 +4121,41 @@ async def marine_compute_estimate(
     request: Request,
     cores: int = Query(6, ge=1, le=128, description="Available CPU cores for SWAN"),
 ) -> ComputeEstimateResponse:
-    """Compute runtime estimate for the current spot configuration.
+    """Pass-through to the marine service's compute-runtime estimate (C-48).
 
-    Uses the domain sizing algorithm to determine grid dimensions for all
-    3 nesting levels, then estimates wall-clock runtime based on empirical
-    per-cell cost (0.05 sec/cell at 6 cores, linear scaling).
+    GET {marine_service_url}/discovery/compute-estimate?cores= ->
+    {levels, clusters, total_cells, total_estimated_seconds, cores}
+    (pinned contract, LC-P7-1). The marine service owns the domain-sizing
+    algorithm (``swan_domain.compute_domains``, moved there in Phase 5/6)
+    and the current spot configuration (pushed via ``POST /config``), so
+    it is the only place that can answer this question now.
 
-    Called by the wizard/admin marine page to show before/after compute cost
-    as the operator adds, removes, or moves surf spots.
+    Called by the wizard/admin marine page to show before/after compute
+    cost as the operator adds, removes, or moves surf spots. Hard 503 on
+    ``MarineDiscoveryError`` (LC-P7-2) — this is a live wizard query, same
+    policy as ``/setup/marine/discover-stations``, never a silently empty
+    estimate standing in for "the marine service is unreachable."
+
+    **Pre-existing bug fixed by this rework, not before:** this endpoint
+    called ``get_settings()`` without importing it anywhere in this module —
+    a ``NameError`` on every request. Confirmed via ``git show`` that the
+    endpoint has never worked in its current (pre-rework) form (C-48). The
+    rework replaces the whole body, so the dead call is simply gone rather
+    than patched.
     """
     await require_setup_session(request)
 
-    from weewx_clearskies_api.services.swan_domain import compute_domains
-
-    settings = get_settings()
-    marine_config = getattr(settings, "marine", None)
-    if marine_config is None:
-        return ComputeEstimateResponse(
-            levels=[], clusters=[], total_cells=0,
-            total_estimated_seconds=0.0, cores=cores,
-        )
-
-    surf_spots = getattr(marine_config, "surf_spots", {})
-    locations = getattr(marine_config, "locations", [])
-    spot_locations = []
-    for loc in locations:
-        if loc.id in surf_spots:
-            cfg = surf_spots[loc.id]
-            spot_locations.append({
-                "id": loc.id,
-                "lat": loc.lat,
-                "lon": loc.lon,
-                "beach_facing_degrees": getattr(cfg, "beach_facing_degrees", 0.0),
-            })
-
-    if not spot_locations:
-        return ComputeEstimateResponse(
-            levels=[], clusters=[], total_cells=0,
-            total_estimated_seconds=0.0, cores=cores,
-        )
-
-    domains = compute_domains(spot_locations)
-    cost_per_cell = 0.05 / (cores / 6)
-
-    levels = [
-        _ComputeEstimateLevel(
-            level=1,
-            resolution_m=domains.level1.resolution_m,
-            cells=domains.level1.cell_count,
-            estimated_seconds=round(domains.level1.cell_count * cost_per_cell, 1),
-        ),
-        _ComputeEstimateLevel(
-            level=2,
-            resolution_m=domains.level2.resolution_m,
-            cells=domains.level2.cell_count,
-            estimated_seconds=round(domains.level2.cell_count * cost_per_cell, 1),
-        ),
-    ]
-
-    clusters = []
-    for cluster in domains.level3_clusters:
-        if cluster.grid:
-            clusters.append(_ComputeEstimateCluster(
-                spot_ids=cluster.spot_ids,
-                cells=cluster.grid.cell_count,
-                estimated_seconds=round(cluster.grid.cell_count * cost_per_cell, 1),
-            ))
-
-    total_cells = domains.total_cells
-    total_seconds = round(total_cells * cost_per_cell, 1)
+    try:
+        body = marine_discovery_get("/discovery/compute-estimate", {"cores": cores})
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
 
     return ComputeEstimateResponse(
-        levels=levels,
-        clusters=clusters,
-        total_cells=total_cells,
-        total_estimated_seconds=total_seconds,
-        cores=cores,
+        levels=[_ComputeEstimateLevel(**lvl) for lvl in body.get("levels", [])],
+        clusters=[_ComputeEstimateCluster(**c) for c in body.get("clusters", [])],
+        total_cells=body.get("total_cells", 0),
+        total_estimated_seconds=body.get("total_estimated_seconds", 0.0),
+        cores=body.get("cores", cores),
     )
 
 
