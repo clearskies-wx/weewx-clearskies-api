@@ -1523,6 +1523,10 @@ def _build_marine_service_config_payload(config_dir: Path) -> dict[str, Any]:
     Returns an empty dict when api.conf does not exist yet, or has neither
     a ``[marine]`` nor a ``[swan]`` nor a ``[providers]`` compute-offload
     section — i.e. nothing marine-relevant has ever been configured.
+
+    When ``[marine]`` locations exist, also attaches ``"station": {"lat",
+    "lon"}`` from the weewx station's own metadata (C-51) — best-effort,
+    omitted rather than defaulted when station metadata isn't loaded.
     """
     conf_path = config_dir / "api.conf"
     if not conf_path.exists():
@@ -1538,6 +1542,30 @@ def _build_marine_service_config_payload(config_dir: Path) -> dict[str, Any]:
     marine_section = cfg.get("marine")
     if isinstance(marine_section, dict):
         payload["marine"] = _serialize_marine_locations_section(marine_section)
+
+        # C-51: the marine service's is_station_served() spatial test (used
+        # by C-47's t=0 station-wind fetch) needs the weewx station's own
+        # coordinates to know which marine locations fall within
+        # dedup_radius_km. Best-effort — station metadata is normally
+        # loaded at API startup and this call happens well after that, but
+        # this serializer must not assume it (it is also invoked from
+        # GET /setup/marine/config, a plain request handler). Absence is a
+        # normal state, never an error and never a substituted default
+        # (0,0 is a real ocean coordinate): the marine side treats a
+        # missing "station" key exactly like every location being outside
+        # dedup_radius_km — every location takes the forecast-provider
+        # path, same as before this change.
+        try:
+            from weewx_clearskies_api.services.station import get_station_info  # noqa: PLC0415
+
+            station_info = get_station_info()
+            payload["station"] = {"lat": station_info.latitude, "lon": station_info.longitude}
+        except RuntimeError:
+            logger.warning(
+                "Station metadata not loaded while building marine service config "
+                "payload — omitting station coordinates (is_station_served() will "
+                "treat every location as not station-served until the next push)"
+            )
 
     swan_section = cfg.get("swan")
     if isinstance(swan_section, dict):
