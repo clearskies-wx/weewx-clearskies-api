@@ -66,8 +66,7 @@ dependencies = [
     "scikit-learn>=1.5.0",
     # Phase 4A T4A.2/T4A.2b: scipy.interpolate.PchipInterpolator for
     # variable-resolution bathymetric profile interpolation
-    # (enrichment/bathymetry.py), scipy.special.ellipj/ellipk for cnoidal
-    # wave shape computation (services/surf_1d_analytical.py). Previously
+    # (enrichment/bathymetry.py). Previously
     # only present transitively via scikit-learn's own scipy dependency —
     # pinned explicitly per rules/coding.md §1 "Pin dependency versions"
     # (a lockfile alone does not satisfy that rule). Pinned at the version
@@ -92,49 +91,10 @@ marine = [
     "xarray>=2024.1",
     "netCDF4>=1.6",
 ]
-nearshore = [
-    # T2.1 (ADR-093): SWAN+TruShore nearshore wave model dependencies.
-    # [nearshore] depends on [marine] — pulls in eccodes (GRIB2 C library),
-    # xarray, and netCDF4. Install the [marine] system prerequisites before
-    # this extra (libeccodes-dev / eccodes-devel / brew install eccodes).
-    "weewx-clearskies-api[marine]",
-    # cfgrib: reads GRIB2 files via the eccodes C library. Used for HRRR
-    # wind field ingest in providers/wind/hrrr.py. Lighter alternative to
-    # raw eccodes Python bindings for structured variable access.
-    # Requires the eccodes system library — already required by [marine].
-    "cfgrib>=0.9.10",
-    # xarray: n-dimensional labelled array handling for HRRR grid operations
-    # (interpolation, slicing, coordinate transforms). Already pulled in by
-    # [marine]; listed explicitly here so [nearshore] remains self-documenting
-    # when installed without [marine] in a future split scenario.
-    "xarray>=2024.1",
-    # shapely: computational geometry for GSFM shelf boundary queries
-    # (nearest-point-on-polyline) used in domain sizing (Phase 13/14).
-    "shapely>=2.0",
-    # coastalmodeling-vdatum: NOAA Ocean Modeling vertical datum conversion
-    # using official VDatum separation GeoTIFF grids via PROJ.  Converts
-    # between NAVD88/MLLW/MHW/MHHW/IGLD85 and LMSL (local MSL) for
-    # bathymetry datum normalization.  US coastal coverage only — international
-    # operators supply manual MSL offsets.
-    "coastalmodeling-vdatum>=0.1",
-    # ---------------------------------------------------------------------------
-    # SWAN binary — NOT a pip package; must be installed separately.
-    # SWAN 41.45 (Simulating WAves Nearshore, Delft University of Technology)
-    # is a compiled Fortran binary. It is the computational core of TruShore.
-    #
-    # Prerequisites (Debian/Ubuntu):
-    #   sudo apt install gfortran libopenmpi-dev
-    #
-    # Installation:
-    #   sudo bash scripts/install_swan.sh
-    #
-    # This script downloads SWAN 41.45 from SourceForge, compiles with
-    # gfortran + OpenMP, and installs the binary to /usr/local/bin/swan.
-    #
-    # Without SWAN on PATH, the API logs CRITICAL at startup and the surf
-    # endpoint returns null surf data (no fallback model). See T2.2.
-    # ---------------------------------------------------------------------------
-]
+# T6.7/T6.8 (2026-07-25): [nearshore] extra removed — SWAN, TruShore, and all
+# wave-physics computation moved to the weewx-clearskies-marine service.
+# The SWAN binary, cfgrib, shapely, and coastalmodeling-vdatum dependencies
+# it pulled in have no remaining consumer in this repo.
 dev = [
     "ruff==0.11.9",
     "mypy==1.15.0",

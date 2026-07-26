@@ -22,23 +22,19 @@ Radar domain:
   Keyless + Caddy-proxied tile (T1.2): librewxr (configurable endpoint; no get_tile()).
   mapbox_jma deferred per ADR-015 2026-05-11 amendment (raster-array shape;
     requires Mapbox GL JS, incompatible with Leaflet).
-Marine domains (Phase 1–2 — Marine Plan):
-  Buoy: ndbc (NDBC flat-file observations, keyless).
-  Marine: wavewatch (WaveWatch III ERDDAP, keyless), nws_marine (NWS zone text forecast, keyless),
-    nws_srf (NWS Surf Zone Forecast text product, keyless).
-  Tides: coops (CO-OPS predictions + water levels, keyless).
-  Nearshore: swan (SWAN locally-run model, keyless — see ADR-093).
+
+Marine domains (buoy/marine/tides/ocean/wind/nearshore) REMOVED (Phase 6,
+C-41/C-42, 2026-07-25). All marine provider logic — including the ndbc,
+wavewatch/nws_marine/nws_srf, coops, ofs/erddap_ocean, hrrr/gfs, and swan
+modules previously registered here — moved to the weewx-clearskies-marine
+service per the "marine service is an add-on reached only through the API"
+invariant (ARCHITECTURE.md). The API no longer imports or dispatches any
+marine provider module.
 """
 
 from __future__ import annotations
 
 from types import ModuleType
-
-from weewx_clearskies_api.providers.buoy import ndbc as buoy_ndbc
-from weewx_clearskies_api.providers.marine import nws_marine as marine_nws_marine
-from weewx_clearskies_api.providers.marine import nws_srf as marine_nws_srf
-from weewx_clearskies_api.providers.marine import wavewatch as marine_wavewatch
-from weewx_clearskies_api.providers.tides import coops as tides_coops
 
 from weewx_clearskies_api.providers.alerts import aeris as alerts_aeris
 from weewx_clearskies_api.providers.alerts import nws as alerts_nws
@@ -65,11 +61,6 @@ from weewx_clearskies_api.providers.radar import openweathermap as radar_openwea
 from weewx_clearskies_api.providers.radar import rainviewer as radar_rainviewer
 
 PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
-    ("buoy", "ndbc"): buoy_ndbc,
-    ("marine", "nws_marine"): marine_nws_marine,
-    ("marine", "nws_srf"): marine_nws_srf,
-    ("marine", "wavewatch"): marine_wavewatch,
-    ("tides", "coops"): tides_coops,
     ("alerts", "aeris"): alerts_aeris,
     ("alerts", "nws"): alerts_nws,
     ("alerts", "openweathermap"): alerts_openweathermap,

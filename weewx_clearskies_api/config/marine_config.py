@@ -226,8 +226,7 @@ class SwanConfig:
         else:
             self.inner_nest_resolution_m = 200.0  # metres — matches current behaviour
 
-        # T2.1 — TLS verification for remote SWAN service (same pattern as
-        # surf_compute_verify_tls in _parse_marine_config).  Default True
+        # T2.1 — TLS verification for remote SWAN service. Default True
         # (secure default — self-signed cert skip is opt-in).
         raw_verify = section.get("verify_tls")
         if raw_verify is not None and str(raw_verify).strip():
@@ -812,13 +811,6 @@ class MarineConfig:
     #: SWAN computational domain — tighter ±0.5° around surf locations only.
     #: None when no surf spots configured.
     swan_domain_bbox: tuple[float, float, float, float] | None
-    #: URL of the remote compute service for SwellTrack/SurfBeat offloading
-    #: (SURF-MODEL-FIX-PLAN T3.2).  Loaded from ``[providers]
-    #: surf_compute_host``.  ``None`` = run in-process on the weewx host.
-    surf_compute_host: str | None
-    #: Verify TLS certificate when connecting to the compute service.
-    #: Default ``True``.  Set ``False`` for self-signed certs on same VLAN.
-    surf_compute_verify_tls: bool
 
     def __init__(
         self,
@@ -828,8 +820,6 @@ class MarineConfig:
         beach_safety: dict[str, BeachSafetyConfig] | None = None,
         weather: MarineWeatherConfig | None = None,
         swan: SwanConfig | None = None,
-        surf_compute_host: str | None = None,
-        surf_compute_verify_tls: bool = True,
     ) -> None:
         self.locations = locations if locations is not None else []
         self.surf_spots = surf_spots if surf_spots is not None else {}
@@ -837,8 +827,6 @@ class MarineConfig:
         self.beach_safety = beach_safety if beach_safety is not None else {}
         self.weather = weather if weather is not None else MarineWeatherConfig()
         self.swan = swan if swan is not None else SwanConfig({})
-        self.surf_compute_host = surf_compute_host
-        self.surf_compute_verify_tls = surf_compute_verify_tls
 
         all_lats = [loc.lat for loc in self.locations]
         all_lons = [loc.lon for loc in self.locations]
@@ -933,12 +921,9 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
     # [swan] — optional top-level section alongside [marine] (T4.2).
     swan_config = load_swan_config(config)
 
-    # [providers] — compute offloading config (SURF-MODEL-FIX-PLAN T3.2).
-    providers_section = _as_dict(config.get("providers", {}))
-    raw_compute_host = str(providers_section.get("surf_compute_host", "")).strip()
-    surf_compute_host = raw_compute_host if raw_compute_host else None
-    raw_verify = providers_section.get("surf_compute_verify_tls", "true")
-    surf_compute_verify_tls = str(raw_verify).strip().lower() not in ("false", "0", "no")
+    # T6.8: the legacy [providers] surf_compute_host / surf_compute_verify_tls
+    # compute-offload keys are removed — marine_service_url (config/settings.py
+    # ProvidersSettings) is the single key that replaces them (API-MANUAL §19.2).
 
     return MarineConfig(
         locations=locations,
@@ -947,8 +932,6 @@ def load_marine_config(config: configobj.ConfigObj) -> MarineConfig | None:
         beach_safety=beach_safety,
         weather=weather,
         swan=swan_config,
-        surf_compute_host=surf_compute_host,
-        surf_compute_verify_tls=surf_compute_verify_tls,
     )
 
 
