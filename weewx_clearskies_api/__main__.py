@@ -84,13 +84,7 @@ from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_f
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
 from weewx_clearskies_api.endpoints.setup import wire_forecast_correction_settings
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
-from weewx_clearskies_api.endpoints.beach_profile import wire_beach_profile_config
-from weewx_clearskies_api.endpoints.beach_safety import wire_beach_safety_config
-from weewx_clearskies_api.endpoints.fishing import wire_fishing_config
-from weewx_clearskies_api.endpoints.marine import wire_marine_config
 from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
-from weewx_clearskies_api.endpoints.surf import wire_surf_config
-from weewx_clearskies_api.endpoints.tides import wire_tides_config
 from weewx_clearskies_api.health import create_health_app
 from weewx_clearskies_api.services.marine_enrichment import wire_marine_enrichment_config
 from weewx_clearskies_api.logging.setup import setup_logging
@@ -878,16 +872,18 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # Step 6g½: Wire marine location resolver and weather cache (Marine
-    # Remediation Plan T2.2). Must run before Step 6h½'s cache warmer
-    # construction/initial_warm() so that marine_location_resolver's grid
-    # groups are available when BackgroundCacheWarmer._warm_marine() runs
-    # its WaveWatch III dedup loop on the very first (synchronous) warm --
-    # otherwise get_grid_group() returns None for every location until the
-    # resolver runs, silently skipping WaveWatch III on cold start.
+    # Step 6g½: Wire marine location resolver (Marine Remediation Plan
+    # T2.2). HELD (C-41/C-42, pending ruling): services/marine_
+    # location_resolver.py is a live dependency of services/
+    # marine_enrichment.py's is_station_served() (companion-proxy
+    # enrichment seam, T6.2), so it is not part of this round's deletion
+    # even though it is listed in plan §0.6 "Marine config and services".
+    # services/marine_weather_cache.py (the other half of this step) WAS
+    # deleted at T6.7 -- its only caller (BackgroundCacheWarmer._warm_
+    # marine_weather(), removed at T6.6) is gone, so nothing populates or
+    # reads it anymore.
     if settings.marine_config is not None and settings.marine_config.locations:
         from weewx_clearskies_api.services import marine_location_resolver  # noqa: PLC0415
-        from weewx_clearskies_api.services import marine_weather_cache  # noqa: PLC0415
 
         _station_info = get_station_info()
         marine_location_resolver.resolve_grid_groups(
@@ -900,12 +896,7 @@ def main() -> None:
             _station_info.longitude,
             settings.marine_config.weather.dedup_radius_km,
         )
-        marine_weather_cache.configure(
-            forecast_ttl_hours=settings.marine_config.weather.forecast_ttl_hours,
-            observation_ttl_minutes=settings.marine_config.weather.observation_ttl_minutes,
-            dedup_radius_km=settings.marine_config.weather.dedup_radius_km,
-        )
-        logger.info("Marine location resolver and weather cache configured")
+        logger.info("Marine location resolver configured")
 
     # Step 6h½: Wire cache warmer (ADR-045).
     # Must run after wire_cache_from_env() (step 6h) and after
@@ -927,7 +918,6 @@ def main() -> None:
             settings=settings.cache_warmer,
             station_meta=_station_meta,
             seeing_settings=settings.seeing,
-            marine_config=settings.marine_config,
         )
         _warmer.start()
 
@@ -1040,21 +1030,15 @@ def main() -> None:
     # Step 6o½: Pass settings to seeing endpoint (keyless — no credentials).
     wire_seeing_settings(settings)
 
-    # Step 6o¾: Wire marine/tides/surf/fishing/beach-safety endpoints.
-    # Settings.marine_config is populated from [marine] in api.conf by
-    # load_settings(); None when the section is absent (zero impact).
-    wire_marine_config(settings)
-    wire_tides_config(settings)
-    wire_surf_config(settings)
-    wire_beach_profile_config(settings)
-    wire_fishing_config(settings)
-    wire_beach_safety_config(settings)
+    # Step 6o¾: T6.5 deleted endpoints/{marine,tides,surf,beach_profile,
+    # fishing,beach_safety}.py — marine routes are now served by the
+    # marine service and dynamically mounted by the companion proxy
+    # (services/companion_proxy.py's register_companion_proxy(), wired in
+    # app.py). Nothing left to wire here.
 
     # Step 6o¾b: Wire the companion-proxy post-conversion enrichment seam
     # (services/marine_enrichment.py, C-24/C-25/C-29/C-37) with its own
-    # independent copy of MarineConfig — endpoints/marine.py and
-    # endpoints/beach_safety.py (wired above) are deleted at T6.5/T6.8, so
-    # this seam cannot depend on their module state surviving.
+    # independent copy of MarineConfig.
     wire_marine_enrichment_config(settings)
 
     # Step 6p: Wire branding settings (ADR-022, Gap #10).
