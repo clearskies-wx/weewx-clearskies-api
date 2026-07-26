@@ -10,7 +10,13 @@ Endpoints:
   POST /setup/db-test                    — test a DB connection with supplied credentials
   GET  /setup/schema                     — reflect DB schema using stored db_params
   GET  /setup/station                    — return weewx.conf station identity
-  POST /setup/apply                      — write api.conf + secrets.env, mark setup complete
+  POST /setup/apply                      — write api.conf + secrets.env, mark setup complete;
+                                            also pushes the marine config subset to
+                                            {marine_service_url}/config when configured (T6.4)
+  GET  /setup/marine/config              — return the marine config subset (same payload
+                                            /setup/apply pushes); authenticated with
+                                            MARINE_SERVICE_SECRET, called by the marine
+                                            service on startup config recovery (T6.4b)
   GET  /setup/marine/eccodes-check       — probe whether a GRIB2 backend (eccodes or
                                             pygrib) is installed, before the wizard lets
                                             the operator enable marine features
@@ -1174,6 +1180,370 @@ def _build_marine_conf_section(
     return {"locations": locations}
 
 
+# ---------------------------------------------------------------------------
+# Marine service config push/pull (T6.4 / T6.4b)
+#
+# One serializer, both paths (API-MANUAL.md §19.5): _build_marine_service_config_payload()
+# is called both by the POST {marine_service_url}/config push at the end of
+# /setup/apply and by GET /setup/marine/config (the marine service's own
+# startup recovery pull). Both read the SAME source — the api.conf just
+# persisted to config_dir — rather than the in-memory ApplyRequest body, so
+# a pull days later returns byte-identical results to the push that
+# accompanied the apply call that produced the current on-disk state. This
+# also sidesteps a subtlety in _write_api_conf(): the [marine] section merge
+# there preserves station IDs from the prior config that the new request
+# didn't send, so the *persisted* config can differ from the raw request body.
+# ---------------------------------------------------------------------------
+
+
+def _cfg_opt_float(section: dict[str, Any], key: str) -> float | None:
+    """Return a float from a configobj section value, or None if absent/blank."""
+    raw = section.get(key)
+    if raw is None or str(raw).strip() == "":
+        return None
+    return float(raw)
+
+
+def _cfg_float(section: dict[str, Any], key: str, default: float) -> float:
+    value = _cfg_opt_float(section, key)
+    return default if value is None else value
+
+
+def _cfg_int(section: dict[str, Any], key: str, default: int) -> int:
+    raw = section.get(key)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return int(float(raw))
+
+
+def _cfg_bool(section: dict[str, Any], key: str, default: bool) -> bool:
+    raw = section.get(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("true", "1", "yes")
+
+
+def _cfg_opt_str(section: dict[str, Any], key: str) -> str | None:
+    raw = section.get(key)
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
+
+
+def _serialize_directional_exposure(raw: Any) -> dict[str, bool] | None:
+    """Convert api.conf's on-disk ``directional_exposure`` storage format —
+    a list of ``"DIR:bool"`` strings, the shape ``configobj`` produces for a
+    flat multi-value key — into the pinned wire shape: a JSON-native dict
+    (``{"N": false, "NE": false, ...}``).
+
+    C-23 decision: the wire payload always uses the dict shape, because the
+    payload is JSON and a dict of 8 known keys is the natural JSON
+    representation of "one bool per compass direction" — no reader has to
+    know a delimiter convention to parse it. api.conf's own on-disk format
+    is unrelated and unchanged by this (that's an INI-family storage
+    concern, not the API<->marine wire contract this function serialises
+    for). The marine service's parser accordingly only accepts the dict
+    shape now (config/marine_config.py's list-of-"DIR:bool" tolerance
+    branch was deleted as unused — rules/coding.md §3).
+    """
+    if not raw:
+        return None
+    items = raw if isinstance(raw, list) else [raw]
+    result: dict[str, bool] = {}
+    for item in items:
+        item_str = str(item).strip()
+        if ":" not in item_str:
+            continue
+        direction, _, value = item_str.partition(":")
+        direction = direction.strip()
+        if direction:
+            result[direction] = str(value).strip().lower() in ("true", "1", "yes")
+    return result or None
+
+
+def _serialize_marine_locations_section(marine_section: dict[str, Any]) -> dict[str, Any]:
+    """Build the ``marine.locations`` subtree of the push/pull payload from
+    api.conf's persisted ``[marine][[locations]]`` section.
+
+    Field-for-field mirror of what ``config/marine_config.py``'s
+    ``MarineLocation`` / ``SurfSpotConfig`` / ``FishingSpotConfig`` /
+    ``BeachSafetyConfig`` loaders on the marine side actually read (verified
+    against the ported copy in repos/weewx-clearskies-marine) — no field is
+    added here that has no consumer there, and no field the marine loader
+    reads is left out. ``[[weather]]`` is intentionally never written (see
+    ``_build_marine_conf_section`` docstring) so it is not serialised here
+    either — the marine side's ``MarineWeatherConfig`` defaults apply.
+
+    Station timezone and elevation are deliberately NOT included — the
+    marine service's fishing endpoint has no consumer for them yet
+    (MARINE-SEP-CONCERNS.md C-27, awaiting operator decision).
+    """
+    raw_locations = marine_section.get("locations", {})
+    if not isinstance(raw_locations, dict):
+        return {}
+
+    locations: dict[str, Any] = {}
+    for loc_id, raw_loc in raw_locations.items():
+        if not isinstance(raw_loc, dict):
+            continue
+
+        loc: dict[str, Any] = {
+            "name": str(raw_loc.get("name", "")).strip(),
+            "lat": _cfg_float(raw_loc, "lat", 0.0),
+            "lon": _cfg_float(raw_loc, "lon", 0.0),
+        }
+        raw_activities = raw_loc.get("activities", [])
+        loc["activities"] = (
+            list(raw_activities) if isinstance(raw_activities, list)
+            else ([str(raw_activities)] if raw_activities else [])
+        )
+        for list_key in ("ndbc_station_ids", "coops_station_ids"):
+            raw_val = raw_loc.get(list_key, [])
+            if isinstance(raw_val, list):
+                loc[list_key] = list(raw_val)
+            elif raw_val:
+                loc[list_key] = [str(raw_val)]
+        for opt_key in ("nws_marine_zone_id", "nws_srf_zone_id", "nws_srf_wfo", "ofs_model",
+                        "ofs_fallback", "ofs_region"):
+            val = _cfg_opt_str(raw_loc, opt_key)
+            if val is not None:
+                loc[opt_key] = val
+
+        raw_surf = raw_loc.get("surf")
+        if isinstance(raw_surf, dict):
+            surf: dict[str, Any] = {
+                "segment_start_lat": _cfg_float(raw_surf, "segment_start_lat", 0.0),
+                "segment_start_lon": _cfg_float(raw_surf, "segment_start_lon", 0.0),
+                "segment_end_lat": _cfg_float(raw_surf, "segment_end_lat", 0.0),
+                "segment_end_lon": _cfg_float(raw_surf, "segment_end_lon", 0.0),
+                "transect_spacing_m": _cfg_float(raw_surf, "transect_spacing_m", 10.0),
+                "bottom_type": str(raw_surf.get("bottom_type", "")).strip(),
+                "topographic_feature": str(raw_surf.get("topographic_feature", "")).strip(),
+                "breaker_formula": str(raw_surf.get("breaker_formula", "komar_gaughan")).strip(),
+                "surf_height_display": str(raw_surf.get("surf_height_display", "face")).strip(),
+                "l3_enabled": str(raw_surf.get("l3_enabled", "auto")).strip().lower(),
+                "friction_coefficient": _cfg_float(raw_surf, "friction_coefficient", 0.038),
+                "surfbeat_enabled": _cfg_bool(raw_surf, "surfbeat_enabled", True),
+                "surfbeat_cadence_hours": _cfg_int(raw_surf, "surfbeat_cadence_hours", 3),
+                "max_hs_m": _cfg_float(raw_surf, "max_hs_m", 4.0),
+            }
+            beach_slope = _cfg_opt_float(raw_surf, "beach_slope")
+            if beach_slope is not None:
+                surf["beach_slope"] = beach_slope
+            directional_exposure = _serialize_directional_exposure(
+                raw_surf.get("directional_exposure")
+            )
+            if directional_exposure is not None:
+                surf["directional_exposure"] = directional_exposure
+
+            raw_bathy = raw_surf.get("bathymetric_profile")
+            if isinstance(raw_bathy, dict) and raw_bathy:
+                surf["bathymetric_profile"] = {
+                    idx: {
+                        "distance_m": _cfg_float(pt, "distance_m", 0.0),
+                        "depth_m": _cfg_float(pt, "depth_m", 0.0),
+                    }
+                    for idx, pt in raw_bathy.items() if isinstance(pt, dict)
+                }
+
+            raw_structures = raw_surf.get("structures")
+            if isinstance(raw_structures, dict) and raw_structures:
+                structures: dict[str, Any] = {}
+                for idx, s in raw_structures.items():
+                    if not isinstance(s, dict):
+                        continue
+                    entry: dict[str, Any] = {
+                        "type": str(s.get("type", "")).strip(),
+                        "material": str(s.get("material", "")).strip(),
+                        "length_m": _cfg_float(s, "length_m", 0.0),
+                        "bearing_degrees": _cfg_float(s, "bearing_degrees", 0.0),
+                        "distance_m": _cfg_float(s, "distance_m", 0.0),
+                    }
+                    bearing_to_spot = _cfg_opt_float(s, "bearing_to_spot_degrees")
+                    if bearing_to_spot is not None:
+                        entry["bearing_to_spot_degrees"] = bearing_to_spot
+                    raw_coords = s.get("coordinates")
+                    if isinstance(raw_coords, list) and raw_coords:
+                        entry["coordinates"] = [
+                            [float(c[0]), float(c[1])] for c in raw_coords
+                        ]
+                    structures[idx] = entry
+                surf["structures"] = structures
+
+            loc["surf"] = surf
+
+        raw_fishing = raw_loc.get("fishing")
+        if isinstance(raw_fishing, dict):
+            raw_categories = raw_fishing.get("target_categories", [])
+            categories = (
+                list(raw_categories) if isinstance(raw_categories, list)
+                else ([str(raw_categories)] if raw_categories else [])
+            )
+            fishing: dict[str, Any] = {"target_categories": categories}
+            region = _cfg_opt_str(raw_fishing, "biogeographic_region")
+            if region is not None:
+                fishing["biogeographic_region"] = region
+            raw_species = raw_fishing.get("species", [])
+            if isinstance(raw_species, list) and raw_species:
+                fishing["species"] = list(raw_species)
+            elif raw_species:
+                fishing["species"] = [str(raw_species)]
+            loc["fishing"] = fishing
+
+        raw_beach_safety = raw_loc.get("beach_safety")
+        if isinstance(raw_beach_safety, dict):
+            raw_links = raw_beach_safety.get("external_links")
+            if isinstance(raw_links, dict) and raw_links:
+                loc["beach_safety"] = {
+                    "external_links": {
+                        key: {
+                            "label": str(link.get("label", "")).strip(),
+                            "url": str(link.get("url", "")).strip(),
+                        }
+                        for key, link in raw_links.items() if isinstance(link, dict)
+                    }
+                }
+
+        locations[loc_id] = loc
+
+    return {"locations": locations}
+
+
+def _serialize_swan_section(swan_section: dict[str, Any]) -> dict[str, Any]:
+    """Build the top-level ``swan`` payload key from api.conf's ``[swan]``
+    section — every field ``config/marine_config.py``'s ``SwanConfig``
+    reads on the marine side (still a live consumer today; ADR-099's
+    replacement of this section with ``marine_service_url`` alone is a
+    later Phase 7 task, not this one)."""
+    payload: dict[str, Any] = {
+        "service_url": str(swan_section.get("service_url", "")).strip(),
+        "omp_num_threads": _cfg_int(swan_section, "omp_num_threads", 0),
+        "outer_grid_resolution_km": _cfg_float(swan_section, "outer_grid_resolution_km", 3.0),
+        "inner_nest_resolution_m": _cfg_float(swan_section, "inner_nest_resolution_m", 200.0),
+    }
+    # verify_tls: only api.conf keys _write_api_conf() actually writes are
+    # read here; it does not currently write [swan] verify_tls, so this is
+    # normally absent and the marine-side SwanConfig applies its own
+    # documented default (True). Included when present so an operator who
+    # hand-edits api.conf still has it honoured.
+    if "verify_tls" in swan_section:
+        payload["verify_tls"] = _cfg_bool(swan_section, "verify_tls", True)
+    return payload
+
+
+def _build_marine_service_config_payload(config_dir: Path) -> dict[str, Any]:
+    """Build the marine service config push/pull payload from the persisted
+    api.conf (T6.4 push, T6.4b pull — API-MANUAL.md §19.5 "one serializer,
+    both paths").
+
+    Returns an empty dict when api.conf does not exist yet, or has neither
+    a ``[marine]`` nor a ``[swan]`` nor a ``[providers]`` compute-offload
+    section — i.e. nothing marine-relevant has ever been configured.
+    """
+    conf_path = config_dir / "api.conf"
+    if not conf_path.exists():
+        return {}
+    try:
+        cfg = configobj.ConfigObj(str(conf_path), interpolation=False)
+    except Exception:  # noqa: BLE001
+        logger.error("Failed to parse api.conf while building marine service config payload")
+        return {}
+
+    payload: dict[str, Any] = {}
+
+    marine_section = cfg.get("marine")
+    if isinstance(marine_section, dict):
+        payload["marine"] = _serialize_marine_locations_section(marine_section)
+
+    swan_section = cfg.get("swan")
+    if isinstance(swan_section, dict):
+        payload["swan"] = _serialize_swan_section(swan_section)
+
+    providers_section = cfg.get("providers")
+    if isinstance(providers_section, dict):
+        providers_payload: dict[str, Any] = {}
+        if "surf_compute_host" in providers_section:
+            host = _cfg_opt_str(providers_section, "surf_compute_host")
+            if host is not None:
+                providers_payload["surf_compute_host"] = host
+        if "surf_compute_verify_tls" in providers_section:
+            providers_payload["surf_compute_verify_tls"] = _cfg_bool(
+                providers_section, "surf_compute_verify_tls", True
+            )
+        if providers_payload:
+            payload["providers"] = providers_payload
+
+    return payload
+
+
+def _read_marine_service_connection(config_dir: Path) -> tuple[str | None, bool]:
+    """Return ``(marine_service_url, marine_verify_tls)`` from the persisted
+    api.conf ``[providers]`` section. ``marine_service_url`` is ``None`` when
+    unconfigured (marine service disabled — T6.4 does nothing in that case).
+    ``marine_verify_tls`` defaults to ``True`` (secure default; documented in
+    OPERATIONS-MANUAL.md "Marine service TLS")."""
+    conf_path = config_dir / "api.conf"
+    if not conf_path.exists():
+        return None, True
+    try:
+        cfg = configobj.ConfigObj(str(conf_path), interpolation=False)
+    except Exception:  # noqa: BLE001
+        return None, True
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        return None, True
+    url = _cfg_opt_str(providers, "marine_service_url")
+    verify_tls = _cfg_bool(providers, "marine_verify_tls", True)
+    return url, verify_tls
+
+
+async def _push_marine_service_config(config_dir: Path) -> None:
+    """POST the marine config subset to the marine service (T6.4).
+
+    Called from /setup/apply after api.conf has been written. Never raises:
+    an unreachable or erroring marine service logs ERROR and the apply
+    still succeeds (API-MANUAL.md §19.5 "config push failure handling" —
+    the marine service picks the config up on the next apply, or via its
+    own startup recovery pull, T6.4b).
+    """
+    marine_service_url, verify_tls = _read_marine_service_connection(config_dir)
+    if not marine_service_url:
+        return
+
+    secret = os.environ.get("MARINE_SERVICE_SECRET", "").strip()
+    if not secret:
+        logger.error(
+            "marine_service_url is configured but MARINE_SERVICE_SECRET is not set "
+            "in the environment; cannot push marine config"
+        )
+        return
+
+    payload = _build_marine_service_config_payload(config_dir)
+    push_url = marine_service_url.rstrip("/") + "/config"
+
+    import httpx  # noqa: PLC0415 — lazy import; mirrors providers_test_compute()
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=verify_tls) as client:
+            resp = await client.post(
+                push_url,
+                json=payload,
+                headers={"Authorization": f"Bearer {secret}"},
+            )
+    except httpx.HTTPError as exc:
+        logger.error(
+            "Failed to push marine config to %s: %s", push_url, type(exc).__name__
+        )
+        return
+
+    if resp.status_code >= 400:
+        logger.error(
+            "Marine service rejected config push to %s (HTTP %d)",
+            push_url, resp.status_code,
+        )
+
+
 def _write_api_conf(
     config_dir: Path,
     apply: ApplyRequest,
@@ -2260,6 +2630,11 @@ async def apply(
     ):
         background_tasks.add_task(_run_marine_apply_chain, config_dir)
 
+    # 1d. T6.4 — push the marine config subset to the marine service, if
+    # marine_service_url is configured. Failure logs ERROR but does not
+    # fail the apply (API-MANUAL.md §19.5).
+    await _push_marine_service_config(config_dir)
+
     # --- Step 1b: write skin.conf (ADR-043) ---
     if body.skin_conf:
         try:
@@ -2680,6 +3055,45 @@ async def get_skin_file(
 # ---------------------------------------------------------------------------
 # Marine setup endpoints (T6.3)
 # ---------------------------------------------------------------------------
+
+
+def _check_marine_service_auth(request: Request) -> None:
+    """Raise on missing/invalid marine-service credentials.
+
+    T6.4b — GET /setup/marine/config is called by the marine service itself
+    (startup config recovery), not by the wizard/admin, so it uses its own
+    auth: Authorization: Bearer {MARINE_SERVICE_SECRET} — the same shared
+    secret the API sends *to* the marine service on every push (T6.4), not
+    the setup-session or X-Clearskies-Proxy-Auth mechanisms the rest of
+    /setup/ uses. 503 when the secret is not configured (deployment fault,
+    matches the marine service's own MARINE_SERVICE_SECRET-unset handling
+    per OPERATIONS-MANUAL.md); 401 for a missing or wrong token.
+    """
+    secret = os.environ.get("MARINE_SERVICE_SECRET", "").strip()
+    if not secret:
+        raise HTTPException(503, detail="MARINE_SERVICE_SECRET not configured")
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or not hmac.compare_digest(
+        secret.encode("utf-8"), auth[7:].encode("utf-8")
+    ):
+        raise HTTPException(401, detail="Invalid or missing marine service credentials")
+
+
+@router.get("/marine/config")
+async def get_marine_service_config(request: Request) -> dict[str, Any]:
+    """Return the marine service config subset (T6.4b — config recovery on
+    restart).
+
+    Returns exactly what POST {marine_service_url}/config pushes (T6.4) —
+    both are built by the same _build_marine_service_config_payload()
+    (API-MANUAL.md §19.5 "one serializer, both paths"). Called by the
+    marine service on startup when it has no local config
+    (config/__init__.py's fetch-if-missing path); not part of the
+    wizard/admin flow.
+    """
+    _check_marine_service_auth(request)
+    config_dir: Path = request.app.state.config_dir
+    return _build_marine_service_config_payload(config_dir)
 
 
 class MarineEccodesCheckResponse(BaseModel):
