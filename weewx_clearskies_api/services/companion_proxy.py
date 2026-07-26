@@ -111,6 +111,7 @@ from weewx_clearskies_api.config.settings import Settings
 from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.marine_enrichment import apply_marine_enrichment
 from weewx_clearskies_api.services.marine_response_conversion import convert_marine_payload
 from weewx_clearskies_api.services.station import build_station_clock
 
@@ -186,23 +187,22 @@ _active_state: CompanionProxyState | None = None
 
 
 def _apply_post_conversion_enrichment(data: Any, *, manifest_entry: dict[str, Any]) -> Any:
-    """Identity passthrough — the seam the next round (post-T6.2) replaces.
+    """Restore what the marine-service port dropped (C-24/C-25/C-29/C-37).
 
     Runs AFTER unit conversion, on the already-display-unit-converted
-    ``data`` payload, BEFORE envelope wrapping. Restores whatever the
-    marine-service port dropped per its own module docstrings (station-
-    hardware wind/observations at is_station_served() locations, active
-    alerts, and locale-resolved conditionsText/quality/windQuality text —
-    C-24/C-29). Not this task's scope (T6.2 is conversion + envelope only)
-    — a real function boundary, exactly as T6.1 left ``_apply_response_
-    transform()`` itself as a real (if then-identity) function for this
-    round to replace, not a comment marking a future edit site.
+    ``data`` payload, BEFORE envelope wrapping. Delegates to
+    ``services/marine_enrichment.py`` — see that module's docstring for the
+    full field-by-field accounting and the one HELD item (surf t=0 station
+    wind, pending an operator ruling — MARINE-SEP-CONCERNS.md C-24). Kept as
+    a thin call site here, matching T6.1's original "a real function
+    boundary, not a comment" intent for this seam.
     """
-    return data
+    return apply_marine_enrichment(data, manifest_path=manifest_entry["path"])
 
 
 def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> Any:
-    """SI→operator-display-unit conversion + envelope wrapping (T6.2).
+    """SI→operator-display-unit conversion + envelope wrapping (T6.2) +
+    post-conversion enrichment (C-24/C-25/C-29/C-37).
 
     Every proxied 200 response — including a null payload carrying
     ``modelStatus: "unavailable"`` (three-state rule state 2) — flows
@@ -211,8 +211,9 @@ def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> A
 
     Order: convert (services/marine_response_conversion.py; never crashes
     on nulls — every marine numeric field is nullable and this walks past
-    None values untouched) -> post-conversion enrichment seam (currently
-    identity, see _apply_post_conversion_enrichment()) -> envelope wrap,
+    None values untouched) -> post-conversion enrichment seam
+    (services/marine_enrichment.py — station observations, alerts, locale
+    text composition; also never crashes on nulls) -> envelope wrap,
     reusing the same build_station_clock()/build_freshness() machinery
     every native endpoint uses (API-MANUAL §2 envelope shape) rather than a
     second implementation.

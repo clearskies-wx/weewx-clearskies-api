@@ -92,6 +92,7 @@ from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
 from weewx_clearskies_api.endpoints.surf import wire_surf_config
 from weewx_clearskies_api.endpoints.tides import wire_tides_config
 from weewx_clearskies_api.health import create_health_app
+from weewx_clearskies_api.services.marine_enrichment import wire_marine_enrichment_config
 from weewx_clearskies_api.logging.setup import setup_logging
 from weewx_clearskies_api.providers._common.cache import ConfigError as CacheConfigError
 from weewx_clearskies_api.providers._common.cache import wire_cache_from_env
@@ -1048,6 +1049,13 @@ def main() -> None:
     wire_beach_profile_config(settings)
     wire_fishing_config(settings)
     wire_beach_safety_config(settings)
+
+    # Step 6o¾b: Wire the companion-proxy post-conversion enrichment seam
+    # (services/marine_enrichment.py, C-24/C-25/C-29/C-37) with its own
+    # independent copy of MarineConfig — endpoints/marine.py and
+    # endpoints/beach_safety.py (wired above) are deleted at T6.5/T6.8, so
+    # this seam cannot depend on their module state surviving.
+    wire_marine_enrichment_config(settings)
 
     # Step 6p: Wire branding settings (ADR-022, Gap #10).
     wire_branding_settings(settings.branding)
