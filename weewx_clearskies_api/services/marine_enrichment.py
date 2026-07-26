@@ -494,15 +494,9 @@ def _compose_surf_conditions_text(
 
 
 def _height_target_and_label() -> tuple[str, str]:
-    # NOTE (flagged, not fixed — out of the scope of the lead's requested
-    # change): this ternary is the same local-label-table pattern the lead
-    # asked to be removed from the ocean-speed and water-level helpers
-    # below. Left as-is here because it was not named in that request;
-    # surfaced in the closeout for a decision on whether to route it
-    # through _marine_unit_label() too.
     is_us = get_target_unit() == "US"
     target = get_group_unit("group_wave_height", "foot" if is_us else "meter")
-    return target, ("ft" if target == "foot" else "m")
+    return target, _marine_unit_label(target)
 
 
 def _ocean_speed_target_and_label() -> tuple[str, str]:
