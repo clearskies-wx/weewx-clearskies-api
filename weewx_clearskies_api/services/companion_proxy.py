@@ -282,10 +282,22 @@ def _cache_key(service_url: str, resolved_upstream: str, query_params: Any) -> s
     return f"companion_proxy:{service_url}:{resolved_upstream}?{sorted_query}"
 
 
-async def _proxy_request(
+def _proxy_request(
     request: Request, state: CompanionProxyState, manifest_entry: dict[str, Any]
 ) -> JSONResponse:
-    """The three-state rule, implemented. See module docstring."""
+    """The three-state rule, implemented. See module docstring.
+
+    Deliberately a sync ``def``, not ``async def``: the fetch below
+    (``_fetch_upstream``) uses a blocking ``httpx.Client``, matching every
+    other HTTP-calling module in this codebase (``ProviderHTTPClient`` is
+    sync-only; ``providers/nearshore/swan.py``'s remote-mode calls are
+    sync). FastAPI dispatches a sync route handler to its threadpool
+    automatically, so this blocks a worker thread, not the asyncio event
+    loop — an ``async def`` wrapping this same blocking call would instead
+    stall every other in-flight request on this event loop for the
+    duration of the marine service round-trip, which is the actual bug an
+    earlier draft of this function had.
+    """
     upstream_template = manifest_entry["upstream"]
     ttl_seconds = manifest_entry["cache_ttl"]
 
@@ -369,8 +381,8 @@ async def _proxy_request(
 def _build_route(state: CompanionProxyState, path: str, manifest_entry: dict[str, Any]) -> APIRoute:
     full_path = f"{_API_PREFIX}{path}"
 
-    async def _handler(request: Request, _entry: dict[str, Any] = manifest_entry) -> JSONResponse:
-        return await _proxy_request(request, state, _entry)
+    def _handler(request: Request, _entry: dict[str, Any] = manifest_entry) -> JSONResponse:
+        return _proxy_request(request, state, _entry)
 
     return APIRoute(
         full_path,
