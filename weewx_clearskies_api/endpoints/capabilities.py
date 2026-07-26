@@ -30,8 +30,18 @@ from weewx_clearskies_api.models.responses import (
     utc_isoformat,
 )
 from weewx_clearskies_api.providers._common.capability import get_provider_registry
+from weewx_clearskies_api.services.companion_proxy import get_marine_capabilities
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock
+
+#: T6.3 / API-MANUAL §19.4: each marine capability id from the manifest is
+#: represented as its own CapabilityDeclaration (reusing the existing model
+#: rather than adding a new response field — CapabilityRegistry.providers
+#: already accepts one entry per configured capability of any domain).
+#: geographicCoverage mirrors the marine provider modules already registered
+#: in this same registry (providers/buoy/ndbc.py, providers/marine/
+#: nws_srf.py, providers/marine/nws_marine.py all declare "us_coastal").
+_MARINE_CAPABILITY_GEOGRAPHIC_COVERAGE = "us_coastal"
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +120,22 @@ def get_capabilities() -> CapabilityResponse:
         )
         for cap in provider_registry
     ]
+
+    # T6.3: merge marine capabilities from the companion proxy's manifest
+    # (already fetched/cached by services/companion_proxy.py — no second
+    # call into the marine service here). Present only when the marine
+    # service is connected and its most recent manifest fetch succeeded;
+    # absent (not stale) otherwise — see get_marine_capabilities()'s
+    # docstring for why capabilities differ from proxied routes here.
+    providers.extend(
+        CapabilityDeclaration(
+            providerId=f"marine:{capability_id}",
+            domain="marine",
+            suppliedCanonicalFields=[],
+            geographicCoverage=_MARINE_CAPABILITY_GEOGRAPHIC_COVERAGE,
+        )
+        for capability_id in get_marine_capabilities()
+    )
 
     return CapabilityResponse(
         data=CapabilityRegistry(

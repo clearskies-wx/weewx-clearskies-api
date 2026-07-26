@@ -18,13 +18,23 @@ and one secret. A second companion service would need its own config key
 and its own call into ``register_companion_proxy()``-shaped wiring; nothing
 here assumes there is only ever one.
 
-**Envelope wrapping and unit conversion are T6.2, NOT this module.** Every
-proxied response passes through ``_apply_response_transform()`` — currently
-an identity function — before being returned to the caller. This is the
-seam T6.2 replaces with envelope wrapping (``data``/``stationClock``/
-``freshness``/``units``) and SI→display-unit conversion (API-MANUAL §19.3).
-Do not add conversion/envelope logic anywhere else in this file; the single
-call site is the contract for where it plugs in.
+**Envelope wrapping and unit conversion (T6.2).** Every proxied 200 response
+passes through ``_apply_response_transform()`` before being cached/returned.
+That single call site does three things, in order: (1) SI→operator
+display-unit conversion of every known-group numeric field, delegated to
+``services/marine_response_conversion.py`` (kept in its own module so this
+generic proxy file doesn't have to carry an eleven-route field inventory —
+see that module's docstring for the full field→group mapping and how two
+genuine field-name collisions are resolved); (2) a named, currently-identity
+enrichment seam (``_apply_post_conversion_enrichment()``) for the next round
+to plug station-observation/alert/conditionsText/quality restoration into
+(C-24/C-29) — a real function boundary, not a comment, exactly as T6.1 left
+this seam for T6.2; (3) envelope wrapping (``data``/``stationClock``/
+``freshness``/``units``/``generatedAt``), reusing the same
+``build_station_clock()`` / ``build_freshness()`` machinery every native
+endpoint uses (no second envelope implementation). Do not add
+conversion/envelope logic anywhere else in this file; the single call site
+in ``_proxy_request()`` is the contract for where it plugs in.
 
 **The three-state rule (MARINE-SERVICE-SEPARATION-PLAN.md T6.1 ⚠ CORRECTED
 2026-07-25) is the single most load-bearing behaviour here.** Three
@@ -89,6 +99,7 @@ import queue as _queue
 import threading
 import time
 from collections import OrderedDict
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -97,7 +108,11 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
 from weewx_clearskies_api.config.settings import Settings
+from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.providers._common.cache import get_cache
+from weewx_clearskies_api.services.freshness import build_freshness
+from weewx_clearskies_api.services.marine_response_conversion import convert_marine_payload
+from weewx_clearskies_api.services.station import build_station_clock
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +155,22 @@ class CompanionProxyState:
         #: Guarded by _lock; read under lock, replaced wholesale on each
         #: successful reconciliation (never mutated in place).
         self.registered: dict[str, dict[str, Any]] = {}
+        #: T6.3: the manifest's own top-level "capabilities" list, verbatim,
+        #: as last successfully fetched. The marine service's real
+        #: endpoints/manifest.py (weewx-clearskies-marine) emits this as
+        #: list[str] (e.g. ["surf", "tides", ...]) — confirmed against that
+        #: module's compute_capabilities() and the plan's own example
+        #: manifest, NOT the richer {id, displayName, requiresConfig} object
+        #: shape API-MANUAL §19.1's illustrative example showed (lead-logged
+        #: doc error, C-35, corrected in the same commit as this). Replaced
+        #: wholesale on each successful manifest fetch, same discipline as
+        #: `registered`. Empty list before the first successful fetch, and
+        #: whenever the marine service is unreachable (get_marine_
+        #: capabilities() below then correctly reports "no marine
+        #: capabilities" to /capabilities rather than serving stale ones —
+        #: see that function's docstring for why this differs from
+        #: `registered`'s stale-routes-stay-mounted behaviour).
+        self.capabilities: list[str] = []
         self.lock = threading.Lock()
 
 
@@ -150,17 +181,53 @@ _active_state: CompanionProxyState | None = None
 
 
 # ---------------------------------------------------------------------------
-# Response transform seam (T6.2 plugs in here — identity for now)
+# Response transform (T6.2 — conversion + envelope; see module docstring)
 # ---------------------------------------------------------------------------
 
 
-def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> Any:
-    """Identity passthrough. T6.2 replaces this body with envelope wrapping
-    + SI->display-unit conversion (API-MANUAL §19.3). Every proxied 200
-    response flows through this single call site — do not add
-    conversion/envelope logic anywhere else in this module.
+def _apply_post_conversion_enrichment(data: Any, *, manifest_entry: dict[str, Any]) -> Any:
+    """Identity passthrough — the seam the next round (post-T6.2) replaces.
+
+    Runs AFTER unit conversion, on the already-display-unit-converted
+    ``data`` payload, BEFORE envelope wrapping. Restores whatever the
+    marine-service port dropped per its own module docstrings (station-
+    hardware wind/observations at is_station_served() locations, active
+    alerts, and locale-resolved conditionsText/quality/windQuality text —
+    C-24/C-29). Not this task's scope (T6.2 is conversion + envelope only)
+    — a real function boundary, exactly as T6.1 left ``_apply_response_
+    transform()`` itself as a real (if then-identity) function for this
+    round to replace, not a comment marking a future edit site.
     """
-    return body
+    return data
+
+
+def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> Any:
+    """SI→operator-display-unit conversion + envelope wrapping (T6.2).
+
+    Every proxied 200 response — including a null payload carrying
+    ``modelStatus: "unavailable"`` (three-state rule state 2) — flows
+    through this single call site before being cached and returned. Do not
+    add conversion/envelope logic anywhere else in this module.
+
+    Order: convert (services/marine_response_conversion.py; never crashes
+    on nulls — every marine numeric field is nullable and this walks past
+    None values untouched) -> post-conversion enrichment seam (currently
+    identity, see _apply_post_conversion_enrichment()) -> envelope wrap,
+    reusing the same build_station_clock()/build_freshness() machinery
+    every native endpoint uses (API-MANUAL §2 envelope shape) rather than a
+    second implementation.
+    """
+    converted, units_block = convert_marine_payload(body)
+    enriched = _apply_post_conversion_enrichment(converted, manifest_entry=manifest_entry)
+    return {
+        "data": enriched,
+        "stationClock": build_station_clock().model_dump(by_alias=True),
+        "freshness": build_freshness(
+            "marine", provider_refresh_interval=manifest_entry["cache_ttl"]
+        ).model_dump(by_alias=True),
+        "units": units_block,
+        "generatedAt": utc_isoformat(datetime.now(tz=UTC)),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +472,18 @@ def _reconcile_routes(app: FastAPI, state: CompanionProxyState, manifest: dict[s
     """
     new_entries = _valid_manifest_entries(manifest)
 
+    # T6.3: capabilities are refreshed on every successful fetch, independent
+    # of whether the route set changed below — a manifest that adds/removes
+    # a capability without touching endpoints must still be reflected.
+    raw_capabilities = manifest.get("capabilities")
+    new_capabilities = (
+        [c for c in raw_capabilities if isinstance(c, str)]
+        if isinstance(raw_capabilities, list)
+        else []
+    )
     with state.lock:
+        state.capabilities = new_capabilities
+
         if new_entries == state.registered:
             return  # nothing changed — skip the route-list rebuild entirely
 
@@ -462,9 +540,15 @@ def _refresh_loop(app: FastAPI, state: CompanionProxyState) -> None:
         time.sleep(_MANIFEST_REFRESH_INTERVAL_S)
         manifest = _fetch_manifest(state)
         if manifest is None:
+            # T6.3 / API-MANUAL §19.4: routes stay mounted (stale cache
+            # fallback per T6.1), but capabilities ARE removed on a failed
+            # refresh — "the next manifest fetch will detect the absence
+            # and remove marine capabilities from the response."
+            with state.lock:
+                state.capabilities = []
             logger.error(
                 "Companion proxy: periodic manifest refresh from %s failed; "
-                "retaining existing routes, retrying in %ds",
+                "retaining existing routes, clearing capabilities, retrying in %ds",
                 state.service_url, _MANIFEST_REFRESH_INTERVAL_S,
             )
             continue
@@ -506,6 +590,23 @@ def register_companion_proxy(app: FastAPI, settings: Settings) -> None:
         name="companion-proxy-manifest-refresh",
     )
     thread.start()
+
+
+def get_marine_capabilities() -> list[str]:
+    """Return the marine service's currently-known capability id list (T6.3).
+
+    Empty when the companion proxy is not configured, has never completed a
+    successful manifest fetch, or the most recent periodic refresh failed
+    (API-MANUAL §19.4 — capabilities are removed, not served stale, on a
+    failed refresh; contrast with `registered`'s routes, which stay mounted
+    against the stale cache). Consumed by endpoints/capabilities.py; that
+    endpoint does not make a second call into the marine service — this is
+    the manifest already fetched and cached by this module.
+    """
+    if _active_state is None:
+        return []
+    with _active_state.lock:
+        return list(_active_state.capabilities)
 
 
 def reset_companion_proxy_for_tests() -> None:
