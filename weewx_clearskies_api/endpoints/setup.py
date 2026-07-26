@@ -1630,7 +1630,7 @@ async def _push_marine_service_config(config_dir: Path) -> None:
     payload = _build_marine_service_config_payload(config_dir)
     push_url = marine_service_url.rstrip("/") + "/config"
 
-    import httpx  # noqa: PLC0415 — lazy import; mirrors providers_test_compute()
+    import httpx  # noqa: PLC0415 — lazy import; mirrors providers_test_marine()
 
     try:
         async with httpx.AsyncClient(timeout=10.0, verify=verify_tls) as client:
@@ -4396,89 +4396,155 @@ async def marine_bathymetry_upload(
 
 
 # ---------------------------------------------------------------------------
-# Test compute service connectivity (SURF-MODEL-FIX-PLAN T5.2)
+# Test marine service connectivity (T7.3, C-49, LC-P7-4)
 # ---------------------------------------------------------------------------
 
 
-class TestComputeRequest(BaseModel):
-    """Request body for POST /setup/providers/test-compute."""
+class TestMarineRequest(BaseModel):
+    """Request body for POST /setup/providers/test-marine (LC-P7-4)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    #: URL of the compute service (e.g. ``https://192.168.7.22:8770``).
+    #: URL of the marine service (e.g. ``https://localhost:8780``).
     url: str
-    #: Bearer token (the value of SURF_COMPUTE_SECRET on the compute host).
-    secret: str
+    #: Bearer token (the value of MARINE_SERVICE_SECRET on the marine
+    #: service host). Optional — a URL-only test still proves reachability
+    #: via the auth-exempt /health endpoint; the secret probe below only
+    #: runs when this is supplied.
+    secret: str | None = None
+    #: Verify TLS certificate on the marine service. Mirrors the
+    #: `marine_verify_tls` apply field (API-MANUAL §19.2) so Test
+    #: Connection exercises the same trust setting the operator is saving.
+    verify_tls: bool = True
 
 
-class TestComputeResponse(BaseModel):
-    """Response from POST /setup/providers/test-compute."""
+class TestMarineResponse(BaseModel):
+    """Response from POST /setup/providers/test-marine (LC-P7-4 pinned shape)."""
 
-    #: True when the compute service responded with 200 to GET /health.
+    #: True when /health responded 2xx and (if a secret was supplied) the
+    #: secret probe did not come back 401.
     ok: bool
-    #: Compute service version string from the health response, or None.
+    #: Marine service package version from the health response, or None.
     version: str | None = None
+    #: Number of configured surf spots with valid SWAN output, or None.
+    spots: int | None = None
+    #: ISO-8601 UTC timestamp of the last successful SWAN run, or None.
+    last_run: str | None = None
+    #: "ok" | "degraded" from the health response, or None.
+    status: str | None = None
     #: Human-readable error description when ok is False.
     error: str | None = None
 
 
-@router.post("/providers/test-compute", response_model=TestComputeResponse)
-async def providers_test_compute(
-    body: TestComputeRequest,
+@router.post("/providers/test-marine", response_model=TestMarineResponse)
+async def providers_test_marine(
+    body: TestMarineRequest,
     request: Request,
-) -> TestComputeResponse:
-    """Test connectivity to a remote wave modeling compute service (T5.2).
+) -> TestMarineResponse:
+    """Test connectivity to the marine service (T7.3, LC-P7-4).
 
-    Makes an authenticated ``GET /health`` request to ``{url}/health`` with
-    ``Authorization: Bearer {secret}``.  Returns ``{ok: true, version: "..."}``
-    on success and ``{ok: false, error: "..."}`` on any failure.
+    Two probes:
 
-    TLS: uses ``verify=False`` so the operator can test before the cert
-    fingerprint is pinned.  This is a setup-time test against a user-
-    supplied URL; production pipeline calls respect ``surf_compute_verify_tls``
-    in api.conf.
+    1. **Primary — GET {url}/health** (no auth; API-MANUAL §19.7 documents
+       this endpoint as auth-exempt). Proves reachability and returns
+       ``version``/``spots``/``last_run``/``status``. Because /health takes
+       no credential, a 200 here proves nothing about whether the supplied
+       secret is correct.
+    2. **Secondary — GET {url}/discovery/grib-availability, only when a
+       secret was supplied.** An existing, cheap, bearer-authenticated
+       endpoint (an ``importlib`` spec check on the marine service side;
+       C-42). A 401 here is reported as "Secret rejected" rather than
+       silently ignored. Without this second probe, a wrong secret would
+       pass Test Connection and only fail at the first real config push —
+       the "valid response, wrong answer" failure mode this plan exists to
+       remove.
 
-    Timeout: 10 s.  Auth: requires setup session (same as other /setup/ endpoints).
+    TLS verification follows the operator-supplied ``verify_tls`` (mirrors
+    the ``marine_verify_tls`` apply field being configured in the same
+    wizard step), unlike the old test-compute endpoint's hardcoded
+    ``verify=False``.
+
+    Timeout: 10 s per probe. Auth: requires setup session.
     """
     await require_setup_session(request)
 
     import httpx  # noqa: PLC0415 — lazy import; httpx is in the project deps
 
-    health_url = body.url.rstrip("/") + "/health"
+    base_url = body.url.rstrip("/")
+    health_url = base_url + "/health"
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-            resp = await client.get(
-                health_url,
-                headers={"Authorization": f"Bearer {body.secret}"},
-            )
+        async with httpx.AsyncClient(timeout=10.0, verify=body.verify_tls) as client:
+            resp = await client.get(health_url)
     except httpx.ConnectError as exc:
-        logger.debug("test-compute ConnectError for %s: %s", health_url, exc)
-        return TestComputeResponse(ok=False, error="Connection refused")
+        logger.debug("test-marine ConnectError for %s: %s", health_url, exc)
+        return TestMarineResponse(ok=False, error="Connection refused")
     except httpx.TimeoutException:
-        return TestComputeResponse(ok=False, error="Connection timed out")
+        return TestMarineResponse(ok=False, error="Connection timed out")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("test-compute unexpected error for %s: %s", health_url, type(exc).__name__)
-        return TestComputeResponse(ok=False, error=f"Connection failed: {type(exc).__name__}")
+        logger.warning("test-marine unexpected error for %s: %s", health_url, type(exc).__name__)
+        return TestMarineResponse(ok=False, error=f"Connection failed: {type(exc).__name__}")
 
-    if resp.status_code == 401:
-        return TestComputeResponse(ok=False, error="Authentication failed — check secret")
     if resp.status_code >= 500:
-        return TestComputeResponse(
-            ok=False, error=f"Compute service error (HTTP {resp.status_code})"
+        return TestMarineResponse(
+            ok=False, error=f"Marine service error (HTTP {resp.status_code})"
         )
     if resp.status_code >= 400:
-        return TestComputeResponse(
+        return TestMarineResponse(
             ok=False, error=f"Unexpected response (HTTP {resp.status_code})"
         )
 
-    # Parse version from JSON body — compute service health returns {version, ...}.
+    # Parse informational fields from the health body (API-MANUAL §19.7 shape).
     version: str | None = None
+    spots: int | None = None
+    last_run: str | None = None
+    status: str | None = None
     try:
         data = resp.json()
-        if isinstance(data, dict) and data.get("version"):
-            version = str(data["version"])
+        if isinstance(data, dict):
+            if data.get("version"):
+                version = str(data["version"])
+            if data.get("spots") is not None:
+                spots = int(data["spots"])
+            if data.get("last_run"):
+                last_run = str(data["last_run"])
+            if data.get("status"):
+                status = str(data["status"])
     except Exception:  # noqa: BLE001
-        pass  # version is informational — a non-JSON health body is still a pass
+        pass  # informational only — a non-JSON health body is still a reachable pass
 
-    return TestComputeResponse(ok=True, version=version)
+    if not body.secret:
+        return TestMarineResponse(
+            ok=True, version=version, spots=spots, last_run=last_run, status=status
+        )
+
+    # Secondary probe: proves the secret, since /health took none.
+    grib_url = base_url + "/discovery/grib-availability"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, verify=body.verify_tls) as client:
+            grib_resp = await client.get(
+                grib_url, headers={"Authorization": f"Bearer {body.secret}"}
+            )
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "test-marine secret probe failed for %s: %s", grib_url, type(exc).__name__
+        )
+        return TestMarineResponse(
+            ok=False, version=version, spots=spots, last_run=last_run, status=status,
+            error="Reachable, but the secret probe request failed",
+        )
+
+    if grib_resp.status_code == 401:
+        return TestMarineResponse(
+            ok=False, version=version, spots=spots, last_run=last_run, status=status,
+            error="Secret rejected",
+        )
+    if grib_resp.status_code >= 400:
+        return TestMarineResponse(
+            ok=False, version=version, spots=spots, last_run=last_run, status=status,
+            error=f"Secret verification failed (HTTP {grib_resp.status_code})",
+        )
+
+    return TestMarineResponse(
+        ok=True, version=version, spots=spots, last_run=last_run, status=status
+    )
