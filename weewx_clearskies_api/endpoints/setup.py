@@ -57,6 +57,13 @@ Endpoints:
                                             secret is supplied (proves the secret, since
                                             /health is auth-exempt); returns {ok, version,
                                             spots, last_run, status, error}
+  GET  /setup/marine/health              — admin status page pass-through (Marine Model
+                                            Restoration Plan B4): GET {marine_service_url}/health
+                                            verbatim, for the admin status page (the marine
+                                            service may only be reached through the API).
+                                            Returns {reachable, error, health} where health is
+                                            the marine service's health body unmodified — never
+                                            cherry-picked or re-typed
 
 No /api/v1 prefix — setup is a separate surface registered without a prefix
 in app.py.  All endpoints live directly under /setup/...
@@ -3022,6 +3029,96 @@ async def marine_swan_check(request: Request) -> MarineSwanCheckResponse:
         path=body.get("path"),
         cpu_cores=body.get("cpu_cores", 1),
     )
+
+
+class MarineHealthResponse(BaseModel):
+    """Response shape for ``GET /setup/marine/health`` (Marine Model Restoration
+    Plan B4, part A).
+
+    Carries the marine service's own ``GET /health`` body through to the admin
+    status page. **``health`` is an opaque pass-through** — the marine service's
+    health payload is still evolving (B3 is adding ``reasons``/``inputs``/
+    ``invariants`` to the existing ``status``/``version``/``last_run``/``spots``/
+    ``run_in_progress`` keys), and this response model does not name, validate,
+    or reshape any of its inner keys. Do not add a nested schema for ``health``
+    later — that would silently drop any key the marine service adds that this
+    model doesn't already know about, which is the exact defect this endpoint
+    exists to avoid (see ``TestMarineResponse``'s pinned six-field shape for the
+    contrast: that one intentionally narrows, this one intentionally does not).
+    """
+
+    #: True when the marine service's /health responded 2xx with a JSON object.
+    reachable: bool
+    #: Human-readable reason when reachable is False. None when reachable.
+    error: str | None = None
+    #: The marine service's parsed /health JSON body, verbatim. None when
+    #: reachable is False.
+    health: dict[str, Any] | None = None
+
+
+@router.get("/marine/health", response_model=MarineHealthResponse)
+async def marine_health(request: Request) -> MarineHealthResponse:
+    """Pass-through to the marine service's own health state (Marine Model
+    Restoration Plan B4, part A).
+
+    GET {marine_service_url}/health -> {reachable, error, health}. The marine
+    service's own /health is auth-exempt (API-MANUAL §19.7), so no bearer
+    token is sent. Feeds the admin status page (stack repo), which is the
+    only consumer — nothing in Clear Skies may contact the marine service
+    except through the API (ARCHITECTURE.md "The marine service is an add-on
+    reached only through the API — INVARIANT").
+
+    Always HTTP 200 (except an auth failure from require_setup_session): an
+    unreachable marine service is itself a status the operator needs to see
+    rendered, not an error page. Never raises past this handler.
+    """
+    await require_setup_session(request)
+
+    config_dir: Path = request.app.state.config_dir
+    marine_service_url, verify_tls = _read_marine_service_connection(config_dir)
+    if not marine_service_url:
+        return MarineHealthResponse(
+            reachable=False, error="Marine service is not configured", health=None
+        )
+
+    import httpx  # noqa: PLC0415 — lazy import; mirrors providers_test_marine()
+
+    health_url = marine_service_url.rstrip("/") + "/health"
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0, verify=verify_tls) as client:
+            resp = await client.get(health_url)
+    except httpx.ConnectError as exc:
+        logger.debug("marine_health ConnectError for %s: %s", health_url, exc)
+        return MarineHealthResponse(reachable=False, error="Connection refused", health=None)
+    except httpx.TimeoutException:
+        return MarineHealthResponse(reachable=False, error="Connection timed out", health=None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("marine_health unexpected error for %s: %s", health_url, type(exc).__name__)
+        return MarineHealthResponse(
+            reachable=False, error=f"Connection failed: {type(exc).__name__}", health=None
+        )
+
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return MarineHealthResponse(
+            reachable=False,
+            error=f"Marine service returned HTTP {resp.status_code}",
+            health=None,
+        )
+
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001
+        body = None
+
+    if not isinstance(body, dict):
+        return MarineHealthResponse(
+            reachable=False,
+            error="Marine service returned a non-JSON response",
+            health=None,
+        )
+
+    return MarineHealthResponse(reachable=True, error=None, health=body)
 
 
 class MarineNdbcStationEntry(BaseModel):
