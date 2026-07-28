@@ -530,6 +530,11 @@ class MarineStructureApplyConfig(BaseModel):
     length_m: float = Field(gt=0)
     bearing_degrees: float = Field(ge=0, lt=360)
     distance_m: float = Field(gt=0)
+    #: Real structure outline from the wizard's Overpass API discovery
+    #: (E13 / ADR-095 Decision 3), ``[[lon, lat], ...]`` — the marine
+    #: ``StructureConfig.coordinates`` contract. Optional: absent when no
+    #: discovery geometry was captured (e.g. hand-entered structure).
+    coordinates: list[list[float]] | None = None
 
     @field_validator("type")
     @classmethod
@@ -1294,16 +1299,27 @@ def _build_marine_conf_section(
                     for i, p in enumerate(profile_points)
                 }
             if surf.structures:
-                surf_section["structures"] = {
-                    str(i): {
+                structures_section: dict[str, Any] = {}
+                for i, s in enumerate(surf.structures):
+                    struct_entry: dict[str, Any] = {
                         "type": s.type,
                         "material": s.material,
                         "length_m": str(s.length_m),
                         "bearing_degrees": str(s.bearing_degrees),
                         "distance_m": str(s.distance_m),
                     }
-                    for i, s in enumerate(surf.structures)
-                }
+                    # E13 / ADR-095 Decision 3: discovery outline, JSON-string
+                    # encoded — configobj cannot round-trip a native nested
+                    # list into a shape the marine reader's
+                    # ``[float(c[0]), float(c[1])] for c in ...]`` can parse
+                    # (empirically verified: configobj yields a list of
+                    # per-element strings, not nested lists).
+                    if s.coordinates:
+                        struct_entry["coordinates"] = json.dumps(
+                            [[float(c[0]), float(c[1])] for c in s.coordinates]
+                        )
+                    structures_section[str(i)] = struct_entry
+                surf_section["structures"] = structures_section
             loc_section["surf"] = surf_section
 
         if loc.fishing is not None:
@@ -1513,6 +1529,13 @@ def _serialize_marine_locations_section(marine_section: dict[str, Any]) -> dict[
                     if bearing_to_spot is not None:
                         entry["bearing_to_spot_degrees"] = bearing_to_spot
                     raw_coords = s.get("coordinates")
+                    # E13 / ADR-095 Decision 3: on-disk value is the
+                    # JSON-string _build_marine_conf_section() writes;
+                    # decode it before the shape check below. The
+                    # isinstance(list) branch is a tolerant fallback for an
+                    # already-native list (e.g. a hand-built section).
+                    if isinstance(raw_coords, str) and raw_coords.strip():
+                        raw_coords = json.loads(raw_coords)
                     if isinstance(raw_coords, list) and raw_coords:
                         entry["coordinates"] = [
                             [float(c[0]), float(c[1])] for c in raw_coords
