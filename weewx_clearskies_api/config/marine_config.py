@@ -56,6 +56,7 @@ Example api.conf shape (see OPERATIONS-MANUAL.md for the full schema table):
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -310,8 +311,19 @@ class StructureConfig:
         self.bearing_degrees = float(section.get("bearing_degrees", 0.0))
         self.distance_m = float(section.get("distance_m", 0.0))
         self.bearing_to_spot_degrees = _opt_float(section, "bearing_to_spot_degrees")
+        # coordinates round-trips through api.conf as a JSON string: configobj
+        # cannot represent a native nested [[lon,lat],...] list, so the apply
+        # writer (endpoints/setup.py) json.dumps() it. Decode it here on read —
+        # otherwise load_marine_config() iterates the raw string character by
+        # character and raises. Mirrors the marine service's StructureConfig
+        # reader (weewx_clearskies_marine/config/marine_config.py), which
+        # already handles both the JSON-string (api.conf) and native-list
+        # (marine POST /config payload) shapes.
+        raw_coords = section.get("coordinates", [])
+        if isinstance(raw_coords, str):
+            raw_coords = json.loads(raw_coords) if raw_coords.strip() else []
         self.coordinates = [
-            [float(c[0]), float(c[1])] for c in section.get("coordinates", [])
+            [float(c[0]), float(c[1])] for c in raw_coords
         ]
 
     def validate(self, location_id: str) -> None:
