@@ -1422,6 +1422,33 @@ class RadarFramesResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Imagery (Phase LM, §LM-1) — orthophoto imagery for heatmap geographic context
+# ---------------------------------------------------------------------------
+
+
+class ImageryConfigResponse(BaseModel):
+    """GET /imagery/config response (OpenAPI-equivalent shape per §LM-1b).
+
+    Flat top-level shape — NOT wrapped in the data+generatedAt envelope used
+    elsewhere in this file, because §LM-1(b) pins the wire shape exactly:
+    {provider, tileUrl, attribution, proxyMode, bounds?}.
+
+    For NAIP (proxyMode="api"), tileUrl points at this API's own proxy path
+    (`/api/v1/imagery/tiles/{z}/{x}/{y}`) — NOT the upstream USGS URL. For
+    ESRI (proxyMode="direct"), tileUrl is the ESRI XYZ template the browser
+    fetches directly.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str  # "naip" | "esri"
+    tileUrl: str
+    attribution: str
+    proxyMode: str  # "api" | "direct"
+    bounds: dict[str, float] | None = None
+
+
+# ---------------------------------------------------------------------------
 # Marine (ADR-083..090, API-MANUAL §16 "Marine Data Model")
 # ---------------------------------------------------------------------------
 

@@ -23,6 +23,13 @@ Radar domain:
   mapbox_jma deferred per ADR-015 2026-05-11 amendment (raster-array shape;
     requires Mapbox GL JS, incompatible with Leaflet).
 
+Imagery domain (Phase LM, §LM-1): naip, esri. Unlike every other domain,
+  provider selection is a per-request CONUS-bbox test (endpoints/imagery.py),
+  not a single operator-wide pick — but dispatch.py itself is just a flat
+  (domain, provider_id) -> module lookup with no single-pick assumption
+  baked in, so both modules register normally; the per-request selection
+  logic lives entirely in the endpoint, same as every other dispatch caller.
+
 Marine domains (buoy/marine/tides/ocean/wind/nearshore) REMOVED (Phase 6,
 C-41/C-42, 2026-07-25). All marine provider logic — including the ndbc,
 wavewatch/nws_marine/nws_srf, coops, ofs/erddap_ocean, hrrr/gfs, and swan
@@ -50,6 +57,8 @@ from weewx_clearskies_api.providers.forecast import aeris as forecast_aeris
 from weewx_clearskies_api.providers.forecast import nws as forecast_nws
 from weewx_clearskies_api.providers.forecast import openmeteo as forecast_openmeteo
 from weewx_clearskies_api.providers.forecast import openweathermap as forecast_openweathermap
+from weewx_clearskies_api.providers.imagery import esri as imagery_esri
+from weewx_clearskies_api.providers.imagery import naip as imagery_naip
 from weewx_clearskies_api.providers.radar import aeris as radar_aeris
 from weewx_clearskies_api.providers.radar import dwd_radolan as radar_dwd_radolan
 from weewx_clearskies_api.providers.radar import iem_nexrad as radar_iem_nexrad
@@ -75,6 +84,8 @@ PROVIDER_MODULES: dict[tuple[str, str], ModuleType] = {
     ("forecast", "nws"): forecast_nws,
     ("forecast", "aeris"): forecast_aeris,
     ("forecast", "openweathermap"): forecast_openweathermap,
+    ("imagery", "esri"): imagery_esri,    # config-only, browser-direct — Phase LM §LM-1
+    ("imagery", "naip"): imagery_naip,    # API-proxied+cached — Phase LM §LM-1
     ("radar", "aeris"): radar_aeris,          # keyed — 3b-15; deprecated from radar valid set (T1.2)
     ("radar", "dwd_radolan"): radar_dwd_radolan,
     ("radar", "iframe"): radar_iframe,        # iframe embed — 3b-16

@@ -53,6 +53,7 @@ from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_rou
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
 from weewx_clearskies_api.endpoints.geographic_features import router as geographic_features_router
 from weewx_clearskies_api.endpoints.geographic_features import setup_router as geographic_features_setup_router
+from weewx_clearskies_api.endpoints.imagery import router as imagery_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
 from weewx_clearskies_api.endpoints.pages import router as pages_router
 from weewx_clearskies_api.endpoints.radar import router as radar_router
@@ -191,6 +192,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(custom_query_router, prefix="/api/v1")
         # ADR-078: geographic features PMTiles data endpoints.
         app.include_router(geographic_features_router, prefix="/api/v1")
+        # Phase LM §LM-1: imagery config + NAIP tile proxy.
+        app.include_router(imagery_router, prefix="/api/v1")
 
         # ADR-058: SSE stream — no /api/v1 prefix; endpoint lives at /sse.
         # Dashboard connects to /sse via Caddy proxy; prefix must match.

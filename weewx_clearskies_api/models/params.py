@@ -559,3 +559,33 @@ class RadarTileQueryParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     t: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# /imagery query params (Phase LM, §LM-1)
+# ---------------------------------------------------------------------------
+
+
+class ImageryConfigQueryParams(BaseModel):
+    """Query params for /imagery/config.
+
+    lat/lon are the spot's coordinates (§LM-1d provider selection: CONUS
+    coordinates prefer NAIP, otherwise ESRI). Both required — imagery is a
+    general-purpose provider, not station-scoped, so there is no station-
+    location fallback. extra="forbid" rejects unknown keys per
+    security-baseline §3.5.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+
+
+class ImageryTileQueryParams(BaseModel):
+    """Query params for /imagery/tiles/{z}/{x}/{y}.
+
+    No query params accepted — extra="forbid" rejects everything.
+    """
+
+    model_config = ConfigDict(extra="forbid")

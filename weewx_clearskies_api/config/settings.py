@@ -871,6 +871,61 @@ class RadarSettings:
             )
 
 
+class ImagerySettings:
+    """[imagery] section settings (Phase LM, §LM-1 — orthophoto imagery for
+    heatmap geographic context; operator-requested + rethought 2026-08-02).
+
+    General-purpose API provider, not marine-specific — configured like any
+    other external provider (forecast, AQI, radar). Two fixed providers:
+    naip (CONUS, API-proxied+cached) and esri (global, browser-direct).
+
+    provider: "auto" (default when configured) | "naip" | "esri". "auto"
+    means per-request CONUS-bbox selection (§LM-1d): NAIP for CONUS
+    coordinates, ESRI otherwise. An explicit "naip" or "esri" pins that one
+    provider regardless of spot location (operator override, per the phase
+    header design note "Configurable override in admin").
+
+    provider is None when the [imagery] section is absent or has no
+    `provider` key — matches every other domain's "absent = not configured"
+    convention (radar, alerts, aqi). The endpoint returns 404 in that case
+    (KAT e).
+
+    api_key: future-proofing only, per the phase design note "API key field
+    for future providers that may require one". NAIP and ESRI do not use it
+    at v1 — stored and passed through, never sent upstream by either module.
+
+    tile_cache_ttl_seconds: NAIP tile cache TTL. Default 7 days — NAIP tiles
+    are static imagery (PROVIDER-MANUAL §3 lead call), unlike weather data
+    which must never be cached like a static asset (coding.md §1).
+    """
+
+    #: Provider id: "auto", "naip", "esri", or None (not configured).
+    provider: str | None
+    #: Future-proofing only (see docstring). None when unset.
+    api_key: str | None
+    #: Seconds. Default 604800 (7 days).
+    tile_cache_ttl_seconds: int
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        raw_provider = str(section.get("provider", "")).strip().lower()
+        self.provider = raw_provider if raw_provider else None
+        raw_api_key = str(section.get("api_key", "")).strip()
+        self.api_key = raw_api_key if raw_api_key else None
+        self.tile_cache_ttl_seconds = int(section.get("tile_cache_ttl_seconds", 604800))
+
+    def validate(self) -> None:
+        """Raise ValueError on invalid provider id or TTL."""
+        valid_providers = {"auto", "naip", "esri"}
+        if self.provider is not None and self.provider not in valid_providers:
+            raise ValueError(
+                f"[imagery] provider {self.provider!r} not in {valid_providers}. "
+                "Supported values: 'auto' (NAIP for CONUS, ESRI otherwise), "
+                "'naip' (CONUS-only override), 'esri' (global override)."
+            )
+        if self.tile_cache_ttl_seconds < 0:
+            raise ValueError("[imagery] tile_cache_ttl_seconds must be >= 0")
+
+
 class ForecastSettings:
     """[forecast] section settings (3b-2, extended 3b-3 with NWS UA contact,
     extended 3b-4 with Aeris credentials, extended 3b-5 with OWM appid).
@@ -1550,6 +1605,7 @@ class Settings:
         geographic_features: GeographicFeaturesSettings | None = None,
         seeing: SeeingSettings | None = None,
         radar: RadarSettings | None = None,
+        imagery: "ImagerySettings | None" = None,
         forecast: ForecastSettings | None = None,
         tls: TlsSettings | None = None,
         branding: BrandingSettings | None = None,
@@ -1586,6 +1642,7 @@ class Settings:
         )
         self.seeing = seeing if seeing is not None else SeeingSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
+        self.imagery = imagery if imagery is not None else ImagerySettings({})
         self.forecast = forecast if forecast is not None else ForecastSettings({})
         self.tls = tls if tls is not None else TlsSettings({})
         self.branding = branding if branding is not None else BrandingSettings({})
@@ -1617,6 +1674,7 @@ class Settings:
         self.geographic_features.validate()
         self.seeing.validate()
         self.radar.validate()
+        self.imagery.validate()
         self.forecast.validate()
         self.tls.validate()
         self.branding.validate()
@@ -1725,6 +1783,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     geographic_features_cfg = GeographicFeaturesSettings(dict(cfg.get("geographic_features", {})))
     seeing_cfg = SeeingSettings(dict(cfg.get("seeing", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
+    imagery_cfg = ImagerySettings(dict(cfg.get("imagery", {})))
     forecast_cfg = ForecastSettings(dict(cfg.get("forecast", {})))
     tls_cfg = TlsSettings(dict(cfg.get("tls", {})))
     branding_cfg = BrandingSettings(dict(cfg.get("branding", {})))
@@ -1770,6 +1829,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         geographic_features=geographic_features_cfg,
         seeing=seeing_cfg,
         radar=radar_cfg,
+        imagery=imagery_cfg,
         forecast=forecast_cfg,
         tls=tls_cfg,
         branding=branding_cfg,
