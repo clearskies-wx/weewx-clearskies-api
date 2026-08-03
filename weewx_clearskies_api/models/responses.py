@@ -1669,13 +1669,14 @@ class SurfForecast(BaseModel):
     # through the locale file even in the null-score case (a "forecast
     # unavailable" sentence, never an empty string — API-MANUAL §17 i18n).
     windQuality: str            # offshore | cross_offshore | cross | cross_onshore | onshore
-    # Corrected 2026-08-02: NOT a continuous 0-1 ratio. Bucketed value from
-    # marine surf_scorer.py's _swell_dominance() -- energy ratio of ALL
-    # components with period > 10s (not just the primary one) over total,
-    # then bucketed: >0.8 -> 1.0, >=0.5 -> 0.6, else -> 0.2; 0.5 when no/
-    # zero-energy spectral data. Served value is always one of {1.0, 0.6,
-    # 0.2, 0.5} -- never an intermediate ratio. See API-MANUAL.md's
-    # SurfForecast field table for the full derivation.
+    # Continuous ratio (0.0-1.0), not bucketed (marine a751c9a, 2026-08-02):
+    # energy ratio of ALL spectral components with period > 10s (not just
+    # the primary one) over total spectral energy, returned as-is; 0.5 when
+    # spectral data is missing or carries zero total energy. The internal
+    # quality-score organizationSwellDominance sub-factor is a SEPARATE
+    # value -- it buckets this same ratio (>0.8 -> 1.0, >=0.5 -> 0.6, else
+    # -> 0.2, x7.5 weight) but that bucket never reaches the wire. See
+    # API-MANUAL.md's SurfForecast field table for the full derivation.
     swellDominance: float
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
