@@ -287,6 +287,27 @@ class TestTileCoordinateRangeGuard:
         _reset_all_provider_state()
         assert response.status_code == 422
 
+    def test_x_at_exact_boundary_2_pow_z_returns_400(self) -> None:
+        """Boundary pin (audit aud-c4lm1 F1, 2026-08-03): valid x is [0, 2**z)
+        EXCLUSIVE — x == 2**z is the first invalid value and must 400 before
+        any upstream call is constructed. An off-by-one (`<=` for `<`) in
+        `_validate_tile_coords` escaped every prior KAT because they tested
+        far outside the boundary (x=5 at z=1); this test fails against that
+        exact mutation."""
+        app = _make_imagery_app(provider="auto")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/imagery/tiles/3/8/0")  # x == 2**3
+        _reset_all_provider_state()
+        assert response.status_code == 400
+
+    def test_y_at_exact_boundary_2_pow_z_returns_400(self) -> None:
+        """Same boundary pin as above, y axis (y == 2**z)."""
+        app = _make_imagery_app(provider="auto")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/imagery/tiles/3/0/8")  # y == 2**3
+        _reset_all_provider_state()
+        assert response.status_code == 400
+
     def test_negative_zoom_returns_422(self) -> None:
         app = _make_imagery_app(provider="auto")
         client = TestClient(app, raise_server_exceptions=False)
