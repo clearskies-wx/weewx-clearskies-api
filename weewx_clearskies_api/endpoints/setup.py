@@ -576,7 +576,10 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: Spacing between parallel cross-shore transects (metres).
     #: Default 10m matches L3 grid resolution so each transect aligns with a
     #: SWAN grid node (SURF-ZONE-MODEL-BRIEF §2.2.4).
-    transect_spacing_m: float = Field(default=10.0, gt=0)
+    #: None (omitted from payload) is config-file-owned: preserved from the
+    #: existing api.conf value, or defaulted to 10.0 for a brand-new
+    #: location (operator ruling 2026-08-03, decision item 8).
+    transect_spacing_m: float | None = Field(default=None, gt=0)
 
     # --- Other surf config fields ---
     bottom_type: str
@@ -591,15 +594,22 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: Breaker height formula for this spot (T2.6, T4.4 wizard).
     #: "komar_gaughan" (default) — Komar & Gaughan (1973), general purpose.
     #: "caldwell" — Caldwell & Aucan (2007) H1/10 for steep volcanic coasts.
-    breaker_formula: str = "komar_gaughan"
+    #: None (omitted from payload) is config-file-owned: preserved from the
+    #: existing api.conf value (operator ruling 2026-08-03, decision item 8).
+    breaker_formula: str | None = None
     #: Display convention for surf height (T2.6, T4.4 wizard).
     #: "face" (default) — trough-to-crest face height (Western scale).
     #: "hawaiian" — back-of-wave scale (≈ face × 0.5, traditional Hawaii/Australia).
-    surf_height_display: str = "face"
+    #: None (omitted from payload) is config-file-owned: preserved from the
+    #: existing api.conf value (operator ruling 2026-08-03, decision item 8).
+    surf_height_display: str | None = None
     #: Operator override for L3 (fine) nested grid in SWAN.
     #: "auto" (default) — enable L3 only when structures are present.
     #: "on" — always enable L3.  "off" — never enable L3.
-    l3_enabled: str = "auto"
+    #: None (omitted from payload) is config-file-owned: preserved from the
+    #: existing api.conf value, or defaulted to "auto" for a brand-new
+    #: location (operator ruling 2026-08-03, decision item 8).
+    l3_enabled: str | None = None
     #: Bottom friction coefficient (cfjon) for SWAN FRICTION JON.
     #: Default 0.038 (JONSWAP swell value).  Always enabled in production —
     #: frictionless is not valid for nearshore wave modelling.
@@ -614,7 +624,10 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: step 11, API-MANUAL §17). Drives SwellTrack's fine-zone sizing
     #: (T4A.2) and the L3 viability check's breaking-depth expression
     #: (ADR-093 Amendment 2). Default 4.0m.
-    max_hs_m: float = Field(default=4.0, gt=0, le=30)
+    #: None (omitted from payload) is config-file-owned: preserved from the
+    #: existing api.conf value, or defaulted to 4.0 for a brand-new location
+    #: (operator ruling 2026-08-03, decision item 8).
+    max_hs_m: float | None = Field(default=None, gt=0, le=30)
 
     @field_validator("bottom_type")
     @classmethod
@@ -644,7 +657,9 @@ class MarineSurfSpotApplyConfig(BaseModel):
 
     @field_validator("breaker_formula")
     @classmethod
-    def _validate_breaker_formula(cls, v: str) -> str:
+    def _validate_breaker_formula(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         from weewx_clearskies_api.config.marine_config import _VALID_BREAKER_FORMULAS
         if v not in _VALID_BREAKER_FORMULAS:
             raise ValueError(f"breaker_formula {v!r} not in {sorted(_VALID_BREAKER_FORMULAS)}")
@@ -652,7 +667,9 @@ class MarineSurfSpotApplyConfig(BaseModel):
 
     @field_validator("surf_height_display")
     @classmethod
-    def _validate_surf_height_display(cls, v: str) -> str:
+    def _validate_surf_height_display(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         from weewx_clearskies_api.config.marine_config import _VALID_SURF_HEIGHT_DISPLAYS
         if v not in _VALID_SURF_HEIGHT_DISPLAYS:
             raise ValueError(
@@ -662,7 +679,9 @@ class MarineSurfSpotApplyConfig(BaseModel):
 
     @field_validator("l3_enabled")
     @classmethod
-    def _validate_l3_enabled(cls, v: str) -> str:
+    def _validate_l3_enabled(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         from weewx_clearskies_api.config.marine_config import _VALID_L3_ENABLED
         if v not in _VALID_L3_ENABLED:
             raise ValueError(f"l3_enabled {v!r} not in {sorted(_VALID_L3_ENABLED)}")
@@ -1270,22 +1289,30 @@ def _build_marine_conf_section(
                 "segment_start_lon": str(surf.segment_start_lon),
                 "segment_end_lat": str(surf.segment_end_lat),
                 "segment_end_lon": str(surf.segment_end_lon),
-                "transect_spacing_m": str(surf.transect_spacing_m),
                 "bottom_type": surf.bottom_type,
                 "topographic_feature": surf.topographic_feature,
-                # Breaker height pipeline config (T2.6 / T4.4).
-                "breaker_formula": surf.breaker_formula,
-                "surf_height_display": surf.surf_height_display,
-                # L3 nested grid override (F2 audit remediation).
-                "l3_enabled": surf.l3_enabled,
                 # SwellTrack friction (SURF-MODEL-FIX-PLAN T5.2).
                 "friction_coefficient": str(surf.friction_coefficient),
                 # SurfBeat IG strip config (SURF-MODEL-FIX-PLAN T5.1 / T5.2).
                 "surfbeat_enabled": str(surf.surfbeat_enabled).lower(),
                 "surfbeat_cadence_hours": str(surf.surfbeat_cadence_hours),
-                # Max expected Hs for fine-zone/viability sizing (T4A.3 Do step 11).
-                "max_hs_m": str(surf.max_hs_m),
             }
+            # Config-file-owned surf fields (operator ruling 2026-08-03,
+            # decision item 8): no wizard/admin UI exists for these, so they
+            # are written only when the payload explicitly supplies a value.
+            # Absence here is visible to the marine merge block, which
+            # preserves the existing api.conf value (or applies today's
+            # default for the three that carried one).
+            if surf.transect_spacing_m is not None:
+                surf_section["transect_spacing_m"] = str(surf.transect_spacing_m)
+            if surf.breaker_formula is not None:
+                surf_section["breaker_formula"] = surf.breaker_formula
+            if surf.surf_height_display is not None:
+                surf_section["surf_height_display"] = surf.surf_height_display
+            if surf.l3_enabled is not None:
+                surf_section["l3_enabled"] = surf.l3_enabled
+            if surf.max_hs_m is not None:
+                surf_section["max_hs_m"] = str(surf.max_hs_m)
             if surf.directional_exposure:
                 surf_section["directional_exposure"] = [
                     f"{direction}:{str(value).lower()}"
@@ -1956,12 +1983,51 @@ def _write_api_conf(
             existing_locs = existing_marine.get("locations", {})
             if isinstance(existing_locs, dict):
                 _PRESERVE_KEYS = ("ndbc_station_ids", "coops_station_ids", "nws_marine_zone_id")
+                # Surf-level fields with no wizard/admin UI are config-file-
+                # owned (operator ruling 2026-08-03, decision item 8):
+                # preserved from the existing config when absent from the
+                # payload. Payload-present still wins; a location removed
+                # from the payload stays removed (no resurrection of any of
+                # its keys).
+                _SURF_PRESERVE_KEYS = (
+                    "max_hs_m",
+                    "beach_slope",
+                    "transect_spacing_m",
+                    "l3_enabled",
+                    "breaker_formula",
+                    "surf_height_display",
+                )
                 for loc_id, new_loc in new_marine.get("locations", {}).items():
                     old_loc = existing_locs.get(loc_id)
                     if isinstance(old_loc, dict):
                         for key in _PRESERVE_KEYS:
                             if key not in new_loc and key in old_loc:
                                 new_loc[key] = old_loc[key]
+                        new_surf = new_loc.get("surf")
+                        old_surf = old_loc.get("surf")
+                        if isinstance(new_surf, dict) and isinstance(old_surf, dict):
+                            for key in _SURF_PRESERVE_KEYS:
+                                if key not in new_surf and key in old_surf:
+                                    new_surf[key] = old_surf[key]
+        # Fresh-install fallback: a surf field absent from both the payload
+        # and the existing config still gets today's documented default for
+        # the three fields that carried a hard model default before this
+        # change (max_hs_m, transect_spacing_m, l3_enabled) — so a brand-new
+        # location's api.conf write is unchanged. beach_slope,
+        # breaker_formula and surf_height_display carry no config-file
+        # default at write time; absence falls through to the read-time
+        # default in _serialize_marine_locations_section.
+        _SURF_FRESH_DEFAULTS = {
+            "max_hs_m": "4.0",
+            "transect_spacing_m": "10.0",
+            "l3_enabled": "auto",
+        }
+        for new_loc in new_marine.get("locations", {}).values():
+            new_surf = new_loc.get("surf")
+            if isinstance(new_surf, dict):
+                for key, default_val in _SURF_FRESH_DEFAULTS.items():
+                    if key not in new_surf:
+                        new_surf[key] = default_val
         cfg["marine"] = new_marine
 
     # [swan] — optional; written when the wizard's SWAN step sends
