@@ -2633,7 +2633,12 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     # Non-secret fields (provider id) come from api.conf.
     # Credentials come from secrets.env using the provider-scoped naming that
     # _provider_secrets() wrote at apply time.
-    _PROVIDER_DOMAINS = ("forecast", "aqi", "alerts", "radar", "earthquakes")
+    # "imagery" added 2026-08-03 (LM-3 finding 3): without it, a saved
+    # [imagery] provider never pre-filled on wizard re-run — the same
+    # silent-reset defect class as the study-area wizard bug. Imagery is
+    # keyless here (provider value only; its api_key is a plain api.conf
+    # field read by ImagerySettings, not a secrets.env credential).
+    _PROVIDER_DOMAINS = ("forecast", "aqi", "alerts", "radar", "earthquakes", "imagery")
     providers: dict[str, CurrentConfigProviderSection] = {}
     for domain in _PROVIDER_DOMAINS:
         domain_section = {}
