@@ -73,3 +73,24 @@ def test_full_configobj_roundtrip_through_configobj():
     assert isinstance(read_back["coordinates"], str)
     s = StructureConfig(read_back)
     assert s.coordinates == _COORDS
+
+
+def test_legacy_bearing_to_spot_degrees_key_is_tolerated_and_ignored():
+    """Deletion tolerance KAT: an api.conf structure section written by a
+    prior version that still carries the now-deleted `bearing_to_spot_degrees`
+    key must parse cleanly — no ValidationError, no crash, no attribute set —
+    and the field must not exist on the resulting StructureConfig. Guards
+    against a legacy artifact breaking on read after the field's removal."""
+    section = {
+        "type": "pier",
+        "material": "semi_permeable",
+        "length_m": "100.0",
+        "bearing_degrees": "45.0",
+        "distance_m": "50.0",
+        "bearing_to_spot_degrees": "270.0",  # stale key from a prior version
+        "coordinates": _COORDS,
+    }
+    s = StructureConfig(section)
+    assert s.coordinates == _COORDS
+    assert not hasattr(s, "bearing_to_spot_degrees")
+    s.validate("test_loc")  # must not raise

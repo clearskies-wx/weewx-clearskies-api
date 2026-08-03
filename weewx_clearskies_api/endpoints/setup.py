@@ -1525,9 +1525,6 @@ def _serialize_marine_locations_section(marine_section: dict[str, Any]) -> dict[
                         "bearing_degrees": _cfg_float(s, "bearing_degrees", 0.0),
                         "distance_m": _cfg_float(s, "distance_m", 0.0),
                     }
-                    bearing_to_spot = _cfg_opt_float(s, "bearing_to_spot_degrees")
-                    if bearing_to_spot is not None:
-                        entry["bearing_to_spot_degrees"] = bearing_to_spot
                     raw_coords = s.get("coordinates")
                     # E13 / ADR-095 Decision 3: on-disk value is the
                     # JSON-string _build_marine_conf_section() writes;
@@ -3572,11 +3569,6 @@ class MarineDiscoveredStructure(BaseModel):
     length_m: float
     bearing_degrees: float
     distance_m: float
-    #: Bearing (degrees true) from the structure's nearest point to the
-    #: queried (lat, lon) surf spot — feeds config/marine_config.py's
-    #: StructureConfig.bearing_to_spot_degrees, used by SWAN OBSTACLE
-    #: shadow-zone geometry.
-    bearing_to_spot_degrees: float
     #: [[lat, lon], ...] — the way's node coordinates in OSM order.
     geometry: list[list[float]]
 
@@ -3665,9 +3657,6 @@ def _parse_overpass_structures(
             points, key=lambda p: _haversine_m(lat, lon, p[0], p[1])
         )
         distance_m = _haversine_m(lat, lon, nearest_point[0], nearest_point[1])
-        bearing_to_spot_degrees = _initial_bearing_degrees(
-            nearest_point[0], nearest_point[1], lat, lon
-        )
 
         raw_material = str(tags.get("material", "")).strip().lower()
         material = _OSM_MATERIAL_MAP.get(raw_material)
@@ -3685,7 +3674,6 @@ def _parse_overpass_structures(
                 length_m=round(length_m, 1),
                 bearing_degrees=round(bearing_degrees, 1),
                 distance_m=round(distance_m, 1),
-                bearing_to_spot_degrees=round(bearing_to_spot_degrees, 1),
                 geometry=[[p_lat, p_lon] for p_lat, p_lon in points],
             )
         )

@@ -294,12 +294,6 @@ class StructureConfig:
     length_m: float
     bearing_degrees: float
     distance_m: float
-    #: Bearing (degrees true) from the structure's nearest point to the surf
-    #: spot. Optional — used by the SWAN OBSTACLE shadow-zone geometry to
-    #: orient the OBSTACLE LINE command correctly. Auto-populated by
-    #: GET /setup/marine/discover-structures; None for manually-entered
-    #: structures unless the operator supplies it.
-    bearing_to_spot_degrees: float | None
     #: Line geometry for the SWAN OBSTACLE command — list of [lon, lat] pairs.
     #: When empty, the OBSTACLE command is skipped for this structure.
     coordinates: list[list[float]]
@@ -310,7 +304,6 @@ class StructureConfig:
         self.length_m = float(section.get("length_m", 0.0))
         self.bearing_degrees = float(section.get("bearing_degrees", 0.0))
         self.distance_m = float(section.get("distance_m", 0.0))
-        self.bearing_to_spot_degrees = _opt_float(section, "bearing_to_spot_degrees")
         # coordinates round-trips through api.conf as a JSON string: configobj
         # cannot represent a native nested [[lon,lat],...] list, so the apply
         # writer (endpoints/setup.py) json.dumps() it. Decode it here on read —
@@ -342,14 +335,6 @@ class StructureConfig:
             raise ValueError(
                 f"[marine.locations.{location_id}.surf.structures] bearing_degrees "
                 f"{self.bearing_degrees!r} out of range [0, 360)"
-            )
-        if self.bearing_to_spot_degrees is not None and not (
-            0 <= self.bearing_to_spot_degrees < 360
-        ):
-            raise ValueError(
-                f"[marine.locations.{location_id}.surf.structures] "
-                f"bearing_to_spot_degrees {self.bearing_to_spot_degrees!r} "
-                "out of range [0, 360)"
             )
 
 
