@@ -22,7 +22,8 @@ Covers:
   - KAT-3: fresh location, fields absent -> today's documented defaults
     written for the three fields that carried a hard model default before
     this change (max_hs_m 4.0, transect_spacing_m 10.0, l3_enabled auto);
-    beach_slope/breaker_formula/surf_height_display stay absent (no
+    beach_slope stays absent (breaker_formula/surf_height_display get their
+    pre-change explicit defaults per aud-r1 F1; only beach_slope had no
     config-file default at write time for those three).
   - KAT-4: a location removed from the payload is fully gone (no key
     resurrection) on the next apply.
@@ -325,18 +326,20 @@ class TestSurfFreshLocationDefaults:
             assert resp.status_code == 200, resp.text
 
         surf_out = _read_surf_section(config_dir, "fresh_spot")
-        # Byte-identical to today's pre-change output for these three keys
-        # (str(4.0) == "4.0", str(10.0) == "10.0" -- same literal the old
-        # Field(default=...) + str(surf.X) write path produced).
+        # Byte-identical to pre-change output for EVERY key the old
+        # Field(default=...) + str(surf.X) write path produced (aud-r1 F1:
+        # pre-change code always wrote breaker_formula/surf_height_display
+        # explicitly for a fresh location too — the first cut of this test
+        # wrongly pinned their absence).
         assert surf_out["max_hs_m"] == "4.0"
         assert surf_out["transect_spacing_m"] == "10.0"
         assert surf_out["l3_enabled"] == "auto"
-        # beach_slope, breaker_formula, surf_height_display carry no
-        # config-file default at write time (design point 4) -- absent here,
-        # relying on the read-time default in _serialize_marine_locations_section.
+        assert surf_out["breaker_formula"] == "komar_gaughan"
+        assert surf_out["surf_height_display"] == "face"
+        # beach_slope alone was never written pre-change (never on the
+        # model) — absent here, relying on the read-time default in
+        # _serialize_marine_locations_section.
         assert "beach_slope" not in surf_out
-        assert "breaker_formula" not in surf_out
-        assert "surf_height_display" not in surf_out
 
 
 # ---------------------------------------------------------------------------

@@ -1298,7 +1298,11 @@ def _build_marine_conf_section(
                 "surfbeat_cadence_hours": str(surf.surfbeat_cadence_hours),
             }
             # Config-file-owned surf fields (operator ruling 2026-08-03,
-            # decision item 8): no wizard/admin UI exists for these, so they
+            # decision item 8): the SAVING surface may legitimately omit
+            # these (max_hs_m/beach_slope have no UI on either surface;
+            # breaker_formula/surf_height_display live on the TruShore
+            # step, not the marine page; transect_spacing_m/l3_enabled have
+            # admin UI that omits-when-default — aud-r1 F2 truth-fix), so they
             # are written only when the payload explicitly supplies a value.
             # Absence here is visible to the marine merge block, which
             # preserves the existing api.conf value (or applies today's
@@ -1983,7 +1987,7 @@ def _write_api_conf(
             existing_locs = existing_marine.get("locations", {})
             if isinstance(existing_locs, dict):
                 _PRESERVE_KEYS = ("ndbc_station_ids", "coops_station_ids", "nws_marine_zone_id")
-                # Surf-level fields with no wizard/admin UI are config-file-
+                # Surf-level fields the saving surface may omit are config-file-
                 # owned (operator ruling 2026-08-03, decision item 8):
                 # preserved from the existing config when absent from the
                 # payload. Payload-present still wins; a location removed
@@ -2011,16 +2015,21 @@ def _write_api_conf(
                                     new_surf[key] = old_surf[key]
         # Fresh-install fallback: a surf field absent from both the payload
         # and the existing config still gets today's documented default for
-        # the three fields that carried a hard model default before this
-        # change (max_hs_m, transect_spacing_m, l3_enabled) — so a brand-new
-        # location's api.conf write is unchanged. beach_slope,
-        # breaker_formula and surf_height_display carry no config-file
-        # default at write time; absence falls through to the read-time
-        # default in _serialize_marine_locations_section.
+        # every field that carried a hard model default before this change
+        # (max_hs_m, transect_spacing_m, l3_enabled, breaker_formula,
+        # surf_height_display) — so a brand-new location's api.conf write is
+        # byte-identical to pre-change output (aud-r1 F1: the first cut
+        # omitted breaker_formula/surf_height_display, which pre-change code
+        # always wrote explicitly). beach_slope alone has no write-time
+        # default — pre-change code never wrote it either (it was never on
+        # the model); absence falls through to the read-time default in
+        # _serialize_marine_locations_section.
         _SURF_FRESH_DEFAULTS = {
             "max_hs_m": "4.0",
             "transect_spacing_m": "10.0",
             "l3_enabled": "auto",
+            "breaker_formula": "komar_gaughan",
+            "surf_height_display": "face",
         }
         for new_loc in new_marine.get("locations", {}).values():
             new_surf = new_loc.get("surf")
