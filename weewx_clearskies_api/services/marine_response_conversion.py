@@ -171,6 +171,17 @@ _FIELD_GROUPS: dict[str, str] = {
     "breakingHawaiianHeight": "group_wave_height",
     "bestPeakFaceHeight": "group_wave_height",
     "spotAverageFaceHeight": "group_wave_height",
+    # D10.2 (2026-08-04, marine 69d831a): secondary shadow-zone face height
+    # on SurfForecast — same statistic family as the two fields above (mean
+    # of best_face_height_m over structure-affected transects, SI meters at
+    # the marine service). Without this entry the field would pass through
+    # in raw meters while the dashboard labels it with the height unit.
+    # (SurfForecast's new perPartitionBreaks needs NO entry: its sub-fields
+    # — heightM/meanFaceHeightM/peakFaceHeightM/meanBreakDistanceM/
+    # meanBreakDepthM/periodS — are already in this table via the
+    # beach-profile route, and the walker converts by field name at any
+    # nesting depth.)
+    "shadowFaceHeight": "group_wave_height",
     "surfHeightMin": "group_wave_height",
     "surfHeightMax": "group_wave_height",
     "hs": "group_wave_height",
