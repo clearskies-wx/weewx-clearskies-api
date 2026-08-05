@@ -826,6 +826,31 @@ class MarineApplyConfig(BaseModel):
         return v
 
 
+class SurfScoringWeightsApplyConfig(BaseModel):
+    """System-wide surf score weights for the top-level ``[surf_scoring]``
+    section of api.conf (ADR-101 Consequences; EYEBALL-FIX-PLAN-2026-08-04.md
+    §S3, operator-approved 2026-08-04 "adr 101 approved").
+
+    Whole-section-or-absent (unlike EarthquakeApplyConfig's per-field
+    optionality): the five weights are always sent together or not at all —
+    the admin form rejects zero/negative/malformed at the field level via
+    ``gt=0``. Absent ``surf_scoring`` on the apply request leaves any
+    existing ``[surf_scoring]`` section in api.conf untouched (same "None
+    means don't touch this" convention as ``EarthquakeApplyConfig``/
+    ``SocialApplyConfig``). Written TOP-LEVEL, not nested under
+    ``[marine]``, so the existing replace-whole-``[marine]``-section save
+    can never clobber it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    weight_size: float = Field(gt=0)
+    weight_shape: float = Field(gt=0)
+    weight_conditions: float = Field(gt=0)
+    weight_power: float = Field(gt=0)
+    weight_consistency: float = Field(gt=0)
+
+
 class SwanApplyConfig(BaseModel):
     """``[swan]`` section for api.conf (T4.2 / T4.4 wizard).
 
@@ -929,6 +954,11 @@ class ApplyRequest(BaseModel):
     #: locations configured behaves identically to a non-marine installation,
     #: per API-MANUAL §18 "Capability gating").
     marine: MarineApplyConfig | None = None
+    #: Optional system-wide surf score weights (Round S, ADR-101). When
+    #: present, written TOP-LEVEL to the [surf_scoring] section of api.conf
+    #: (NOT nested under [marine]). None → skip (leaves any existing
+    #: [surf_scoring] section unchanged, same convention as swan/earthquakes).
+    surf_scoring: SurfScoringWeightsApplyConfig | None = None
     #: Optional SWAN configuration (T4.2 / T4.4 wizard).  When present,
     #: written to the [swan] section of api.conf.  None → skip (leaves any
     #: existing [swan] section unchanged, preserving manually-set values).
@@ -1085,6 +1115,14 @@ class CurrentConfigResponse(BaseModel):
     column_units: dict[str, str] | None = None
     openaq_api_key: str | None = None
     marine: dict[str, Any] | None = None
+    #: System-wide surf score weights (Round S, ADR-101), read from the
+    #: TOP-LEVEL [surf_scoring] section (not nested under marine above) so
+    #: the admin form can pre-fill via this authoritative read path —
+    #: split-host deployments must not read api.conf directly (marine
+    #: admin code's own note). None when the section is absent/unconfigured
+    #: (code defaults apply, same "absent means use defaults" convention as
+    #: the apply side).
+    surf_scoring: dict[str, float] | None = None
     #: Marine service connection (T7.2, LC-P7-3), so a wizard re-run
     #: pre-fills the operator's existing settings without re-entry. Same
     #: round-trip convention as openaq_api_key above — the raw secret is
@@ -1697,6 +1735,21 @@ def _build_marine_service_config_payload(config_dir: Path) -> dict[str, Any]:
     if isinstance(swan_section, dict):
         payload["swan"] = _serialize_swan_section(swan_section)
 
+    # [surf_scoring] — Round S, ADR-101. TOP-LEVEL section (not nested
+    # under [marine]), attached independently of the marine_section check
+    # above so a location-less install can still carry operator-adjusted
+    # weights. One serializer, both paths (push and pull, per the module
+    # docstring) — this is the ONE call site that attaches it.
+    surf_scoring_section = cfg.get("surf_scoring")
+    if isinstance(surf_scoring_section, dict):
+        payload["surf_scoring"] = {
+            "weight_size": _cfg_float(surf_scoring_section, "weight_size", 0.0),
+            "weight_shape": _cfg_float(surf_scoring_section, "weight_shape", 0.0),
+            "weight_conditions": _cfg_float(surf_scoring_section, "weight_conditions", 0.0),
+            "weight_power": _cfg_float(surf_scoring_section, "weight_power", 0.0),
+            "weight_consistency": _cfg_float(surf_scoring_section, "weight_consistency", 0.0),
+        }
+
     # T6.8: the legacy [providers] surf_compute_host / surf_compute_verify_tls
     # compute-offload keys are removed from the push payload — marine_service_url
     # is the single key that replaces them (API-MANUAL §19.2).
@@ -2038,6 +2091,22 @@ def _write_api_conf(
                     if key not in new_surf:
                         new_surf[key] = default_val
         cfg["marine"] = new_marine
+
+    # [surf_scoring] — optional; TOP-LEVEL (Round S, ADR-101), NOT nested
+    # under [marine] -- written independently of the [marine] block above
+    # so the existing replace-whole-[marine]-section save can never clobber
+    # it. Whole-section-or-absent: SurfScoringWeightsApplyConfig requires
+    # all five weights together, so there is no partial-section merge case
+    # to handle here (unlike [earthquakes]' per-field optionality).
+    if apply.surf_scoring is not None:
+        ss = apply.surf_scoring
+        cfg["surf_scoring"] = {
+            "weight_size": str(ss.weight_size),
+            "weight_shape": str(ss.weight_shape),
+            "weight_conditions": str(ss.weight_conditions),
+            "weight_power": str(ss.weight_power),
+            "weight_consistency": str(ss.weight_consistency),
+        }
 
     # [swan] — optional; written when the wizard's SWAN step sends
     # this block (T4.2 / T4.4).  None → skip (existing values unchanged).
@@ -2919,6 +2988,22 @@ async def current_config(request: Request) -> CurrentConfigResponse:
     # T6.8: surf_compute_host / surf_compute_verify_tls removed — superseded
     # by marine_service_url (API-MANUAL §19.2).
 
+    # --- Surf scoring weights (Round S, ADR-101) ---
+    # TOP-LEVEL [surf_scoring] section, read independently of [marine]
+    # above — this is the authoritative read path the admin form pre-fills
+    # from (split-host deployments must not read api.conf directly).
+    surf_scoring_config: dict[str, float] | None = None
+    if api_cfg is not None:
+        surf_scoring_section = api_cfg.get("surf_scoring")
+        if isinstance(surf_scoring_section, dict) and surf_scoring_section:
+            surf_scoring_config = {
+                "weight_size": _cfg_float(surf_scoring_section, "weight_size", 0.0),
+                "weight_shape": _cfg_float(surf_scoring_section, "weight_shape", 0.0),
+                "weight_conditions": _cfg_float(surf_scoring_section, "weight_conditions", 0.0),
+                "weight_power": _cfg_float(surf_scoring_section, "weight_power", 0.0),
+                "weight_consistency": _cfg_float(surf_scoring_section, "weight_consistency", 0.0),
+            }
+
     # --- Marine service connection (T7.2, LC-P7-3) ---
     # Read via the same helper _push_marine_service_config() uses, so the
     # wizard's re-run pre-fill and the actual push read the same source.
@@ -2937,6 +3022,7 @@ async def current_config(request: Request) -> CurrentConfigResponse:
         column_units=col_units,
         openaq_api_key=openaq_key,
         marine=marine_config,
+        surf_scoring=surf_scoring_config,
         marine_service_url=marine_service_url,
         marine_verify_tls=marine_verify_tls,
         marine_service_secret=marine_service_secret,
