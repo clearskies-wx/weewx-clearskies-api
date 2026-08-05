@@ -220,6 +220,18 @@ _FIELD_GROUPS: dict[str, str] = {
     "widthM": "group_wave_height",
     "startDepth": "group_wave_height",
     "endDepth": "group_wave_height",
+    # Round Z (2026-08-05, marine perBreakZones contract addition, D6):
+    # beach-profile perBreakZones[].breakDistance — same cross-shore
+    # distance family as "distance"/"waterlineDistance" above, same
+    # group_wave_height precedent. Its nested impactZone/foamZone
+    # startDistance/endDistance/startDepth/endDepth fields need NO new
+    # entry here: _walk() (below) recurses into any dict/list-of-dicts by
+    # structure, matching leaf field names regardless of nesting depth or
+    # container name, so they already convert via the startDistance/
+    # endDistance/startDepth/endDepth entries above (verified by reading
+    # _walk()/_convert_field()/_resolve_group(), not assumed — group
+    # resolution is purely leaf-key-name-based, never path-based).
+    "breakDistance": "group_wave_height",
     # --- group_wave_period (base second; single-unit group, always a
     # no-op conversion — included for uniformity, not because it ever
     # changes a value) ---
