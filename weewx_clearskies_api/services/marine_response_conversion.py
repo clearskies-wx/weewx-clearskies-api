@@ -203,6 +203,14 @@ _FIELD_GROUPS: dict[str, str] = {
     "handoffDepthM": "group_wave_height",
     "meanBreakDistanceM": "group_wave_height",
     "meanBreakDepthM": "group_wave_height",
+    # Round P (2026-08-04, marine 8c2def8): beach-profile per-transect
+    # tide-aware waterline crossing (m) and raw signed-profile elevation
+    # (m, = -depth_m, LMSL datum) — same cross-shore-geometry family as
+    # distance/depth above, same group_wave_height precedent.
+    # ("tideLevel" needs NO new entry here: it already has a
+    # group_water_level entry below, pre-dating this round.)
+    "waterlineDistance": "group_wave_height",
+    "elevation": "group_wave_height",
     # SurfZones (1D analytical model) sub-dict fields — confirmed against
     # the still-present endpoints/beach_profile.py's _serialize_surf_zones()
     # / _convert_zone(), which converts exactly this key set via d_unit
