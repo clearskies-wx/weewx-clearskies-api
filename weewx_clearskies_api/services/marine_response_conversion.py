@@ -39,7 +39,7 @@ guesswork:
      authoritative precedent for which fields convert and against which
      group, not an assumption.
 
-Two genuine field-name collisions exist and are resolved by structural
+One genuine field-name collision exists and is resolved by structural
 context (the immediate parent container's key), not by guessing:
   - ``height``: means wave height (group_wave_height) inside
     ``spectralComponents`` / ``multiSwell`` lists (SpectralWaveComponent),
@@ -47,10 +47,18 @@ context (the immediate parent container's key), not by guessing:
     ``waterLevels`` / ``totalWaterLevelForecast`` lists (TidePrediction /
     WaterLevel). Elsewhere, an unqualified ``height`` field is left
     unconverted (never seen in the current 11-route inventory).
-  - ``waveHeight`` / ``wavePeriod`` / ``waveOrganization``: inside a
-    ``scoring`` object (SurfScoringBreakdown) these are 0-35/0-30 SCORE
-    POINTS, not physical quantities, and must never be converted — even
-    though the same names elsewhere mean physical wave height/period.
+
+  **Retired 2026-08-05 (Round S, ADR-101 SurfScoringBreakdown reshape):** a
+  second collision used to exist here — ``waveHeight``/``wavePeriod``/
+  ``waveOrganization`` inside a ``scoring`` object were 0-35/0-30 SCORE
+  POINTS, not physical quantities, suppressed via a dedicated
+  ``key_context == "scoring"`` rule in ``_resolve_group()``. The reshape
+  deletes all three field names from the scoring shape (replaced by
+  ``size``/``shape``/``conditions``/``power``/``consistency``, each a
+  unitless 0-100 int, plus a ``weights`` object of 0-1 floats) — none of
+  the six new names appear anywhere in ``_FIELD_GROUPS``, so no collision
+  is possible and the suppression rule/constants were deleted rather than
+  left as dead code for a collision that can no longer occur.
 
 **Deliberate extension beyond the pre-separation API's literal behaviour
 (flagged, not hidden):** the old ``endpoints/surf.py`` converted
@@ -102,11 +110,13 @@ pre-existing gap:**
   - ``breakingFraction`` (QB, dimensionless 0.0-1.0) — bucket (ii),
     correctly unconverted (not a length/time/speed/temperature/pressure
     quantity).
-  - Every ``SurfScoringBreakdown`` field outside the ``scoring``-context
-    suppression above, ``peelAngle``, ``peelClassification``,
-    ``peelDirection``, ``directionalSpread``, every ``*Direction*`` /
-    ``*Bearing*`` field — bucket (ii): scores/classifications/degrees
-    (single universal unit, no group).
+  - Every ``SurfScoringBreakdown`` field (``size``/``shape``/``conditions``/
+    ``power``/``consistency``/``weights``, reshaped 2026-08-05 — none of
+    these names appear in ``_FIELD_GROUPS``, so they pass through
+    unconverted with no context-based rule needed), ``peelAngle``,
+    ``peelClassification``, ``peelDirection``, ``directionalSpread``,
+    every ``*Direction*`` / ``*Bearing*`` field — bucket (ii):
+    scores/classifications/degrees (single universal unit, no group).
   - ``currentResidual`` (``TideBundle``, ADR-091 composite) — structure
     not verified against ``services/water_level_compositor.py``; walked
     with the default (non-water-level) context. If it carries a bare
@@ -157,8 +167,7 @@ _BASE_UNITS: dict[str, str] = {
 
 # ---------------------------------------------------------------------------
 # Flat field-name -> group table. Applies regardless of nesting depth
-# EXCEPT for the two collisions handled contextually below ("height" and
-# the "scoring" object's waveHeight/wavePeriod/waveOrganization).
+# EXCEPT for the one collision handled contextually below ("height").
 # ---------------------------------------------------------------------------
 
 _FIELD_GROUPS: dict[str, str] = {
@@ -279,14 +288,6 @@ _WATER_LEVEL_HEIGHT_CONTAINERS: frozenset[str] = frozenset(
 # (SpectralWaveComponent — API-MANUAL §16).
 _SPECTRAL_HEIGHT_CONTAINERS: frozenset[str] = frozenset({"spectralComponents", "multiSwell"})
 
-# Inside a "scoring" object (SurfScoringBreakdown), these names are score
-# points (0-35 / 0-30), not physical quantities — never converted despite
-# colliding with physical field names used elsewhere.
-_SCORE_CONTEXT_KEY = "scoring"
-_SCORE_SUPPRESSED_FIELDS: frozenset[str] = frozenset(
-    {"waveHeight", "wavePeriod", "waveOrganization"}
-)
-
 # ---------------------------------------------------------------------------
 # Display labels for marine-only target units (compact symbols, matching
 # the convention the pre-separation endpoints/marine.py established for
@@ -368,8 +369,6 @@ def _resolve_group(key: str, key_context: str | None, path: str) -> str | None:
             key_context,
             path,
         )
-        return None
-    if key_context == _SCORE_CONTEXT_KEY and key in _SCORE_SUPPRESSED_FIELDS:
         return None
     return _FIELD_GROUPS.get(key)
 

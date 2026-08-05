@@ -26,16 +26,18 @@ Scope, one function group per concern:
     a faithful restoration, not a place to fix that quirk.
 
     **HELD, not implemented here (coordinator ruling, 2026-07-25):** surf
-    t=0 windSource/windQuality/scoring.organizationWind station
-    restoration. Recomputing score_surf()'s composite formula in the API
-    would duplicate a scoring implementation across two services (trigger
-    1/5); patching only the wind-derived fields produces a
-    self-contradictory response (windSource="station" beside a
-    waveOrganization still computed from forecast wind). Escalated to the
-    operator. Surf entries are NOT touched by this module today -- t=0
-    windSource legitimately stays "forecast_provider" until that ruling
-    lands. Do not add a station-injection call site here without new
-    direction.
+    t=0 windSource/windQuality/scoring.conditions station restoration
+    (field name updated 2026-08-05, Round S, ADR-101 -- the wind sub-input
+    that used to be scoring.organizationWind is now blended inside the
+    scoring.conditions component; the ruling itself is unchanged).
+    Recomputing score_surf()'s composite formula in the API would
+    duplicate a scoring implementation across two services (trigger 1/5);
+    patching only the wind-derived fields produces a self-contradictory
+    response (windSource="station" beside a conditions component still
+    computed from forecast wind). Escalated to the operator. Surf entries
+    are NOT touched by this module today -- t=0 windSource legitimately
+    stays "forecast_provider" until that ruling lands. Do not add a
+    station-injection call site here without new direction.
 
   C-25 -- active alerts. Alerts never move to the marine service (plan
     T1.1 item 7, QC Gate 1, ARCHITECTURE.md:140 "unconditional"). Restored

@@ -1634,41 +1634,32 @@ class OceanDataResult(BaseModel):
 
 
 class SurfScoringBreakdown(BaseModel):
-    """Individual factor scores for the surf quality rating (API-MANUAL §17).
+    """Per-factor scoring detail for the surf quality rating (API-MANUAL
+    §SurfScoringBreakdown; ADR-101, reshaped 2026-08-05, Round S).
 
-    Three weighted factors express the core surf quality (max points shown):
-      waveHeight (max 35) + wavePeriod (max 35) + waveOrganization (max 30)
+    Mirrors the marine service's wire shape verbatim -- this model computes
+    nothing, it only types what ``SurfForecast.scoring`` carries. Five
+    components, each 0-100 int, combined by the marine service into
+    ``SurfForecast.qualityScore`` via a weighted geometric mean. Bars do
+    NOT sum to the total; any factor at 0 drives the total to 0.
 
-    Three signed-integer adjustments surface all penalty/bonus factors:
-      beachAlignment + directionalExposure + timeOfDay
-
-    Additive identity:
-      total = waveHeight + wavePeriod + waveOrganization
-              + beachAlignment + directionalExposure + timeOfDay
-
-    Organization sub-factors show each component's point contribution within
-    the 30-point organization budget:
-      organizationWind (max ~15) + organizationSwellDominance (max 7.5)
-      + organizationDirectionalSpread (max 4.5) + organizationCrossSwell (max 3)
+    Deleted with this reshape (S-SPEC-1): the old 3-factor + 3-adjustment
+    shape (waveHeight/wavePeriod/waveOrganization/organizationWind/
+    organizationSwellDominance/organizationDirectionalSpread/
+    organizationCrossSwell/beachAlignment/directionalExposure/timeOfDay).
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    # Top-level weighted factors (in their own scoring units)
-    waveHeight: int              # 0-35; wave height component score
-    wavePeriod: int              # 0-35+; wave period component score (multipliers may exceed 35)
-    waveOrganization: int        # 0-30; wave organization composite score
+    size: int          # 0-100; Wave Size component
+    shape: int         # 0-100; Wave Shape component
+    conditions: int    # 0-100; Conditions component
+    power: int         # 0-100; Swell Power component
+    consistency: int   # 0-100; Consistency component
 
-    # Organization composite sub-factors (point contributions, not 0-1 ratios)
-    organizationWind: float              # 0-~15; wind effect contribution (50% of 30)
-    organizationSwellDominance: float    # 0-7.5; swell dominance contribution (25% of 30)
-    organizationDirectionalSpread: float  # 0-4.5; directional spread contribution (15% of 30)
-    organizationCrossSwell: float        # 0-3; cross-swell interference contribution (10% of 30)
-
-    # Signed adjustment factors (negative = penalty, positive = bonus, 0 = neutral)
-    beachAlignment: int      # signed; beach angle alignment adjustment
-    directionalExposure: int  # signed; 0 when open, negative when blocked by headland/bathymetry
-    timeOfDay: int            # signed; positive at dawn, negative in afternoon, 0 otherwise
+    # Effective (normalized) weights actually used, keys size/shape/
+    # conditions/power/consistency, each 0-1.
+    weights: dict[str, float]
 
 
 class SurfForecast(BaseModel):
@@ -1692,6 +1683,13 @@ class SurfForecast(BaseModel):
     # unavailable) — a missing rating, not a defaulted "Poor" one.
     qualityStars: int | None = None    # 1-5 star rating
     qualityLabel: str | None = None    # "Poor" | "Fair" | "Good" | "Very Good" | "Epic"
+    # Added 2026-08-05 (Round S, ADR-101): the numeric total the five
+    # SurfScoringBreakdown factors combine into via weighted geometric
+    # mean -- no numeric total existed on the wire before this (dashboard
+    # leg's verified gap; client-side summing of the old shape's bars was
+    # never correct and is even less correct now that bars don't sum to
+    # the total). Same nullability convention as qualityStars/qualityLabel.
+    qualityScore: int | None = None    # 0-100 total score
     conditionsText: str         # natural-language conditions summary; resolves
     # through the locale file even in the null-score case (a "forecast
     # unavailable" sentence, never an empty string — API-MANUAL §17 i18n).
@@ -1699,11 +1697,12 @@ class SurfForecast(BaseModel):
     # Continuous ratio (0.0-1.0), not bucketed (marine a751c9a, 2026-08-02):
     # energy ratio of ALL spectral components with period > 10s (not just
     # the primary one) over total spectral energy, returned as-is; 0.5 when
-    # spectral data is missing or carries zero total energy. The internal
-    # quality-score organizationSwellDominance sub-factor is a SEPARATE
-    # value -- it buckets this same ratio (>0.8 -> 1.0, >=0.5 -> 0.6, else
-    # -> 0.2, x7.5 weight) but that bucket never reaches the wire. See
-    # API-MANUAL.md's SurfForecast field table for the full derivation.
+    # spectral data is missing or carries zero total energy. Reshaped
+    # 2026-08-05 (Round S, ADR-101): this same ratio also feeds
+    # scoring.consistency as a bucketed fallback substitute when SurfBeat
+    # set-timing/amplitude data is unavailable -- that bucket never reaches
+    # the wire on its own. See API-MANUAL.md's SurfScoringBreakdown section
+    # for the full derivation.
     swellDominance: float
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
