@@ -139,7 +139,10 @@ MARINE_SERVICE_SECRET_ENV_VAR = "MARINE_SERVICE_SECRET"  # noqa: S105 — env va
 _MANIFEST_REFRESH_INTERVAL_S = 300
 
 _MANIFEST_FETCH_TIMEOUT_S = 5.0
-_PROXY_REQUEST_TIMEOUT_S = 15.0
+#: 45 s, not 15: the all-transects profile route computes 25-30 s on the
+#: marine host; at 15 s the proxy gave up before the answer existed, so the
+#: heat map could never load (EYEBALL-FIX-PLAN 2026-08-04, S-SPEC-5 / M1).
+_PROXY_REQUEST_TIMEOUT_S = 45.0
 _API_PREFIX = "/api/v1"
 #: Marker prefix on every route this module registers, so route
 #: reconciliation can rebuild "everything except ours" without touching
