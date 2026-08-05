@@ -1687,6 +1687,11 @@ def _build_marine_service_config_payload(config_dir: Path) -> dict[str, Any]:
     Returns an empty dict when api.conf does not exist yet, or has neither
     a ``[marine]`` nor a ``[swan]`` nor a ``[providers]`` compute-offload
     section — i.e. nothing marine-relevant has ever been configured.
+    (Audit F2, 2026-08-05) A fourth, independently-checked case also
+    contributes: the TOP-LEVEL ``[surf_scoring]`` section (Round S,
+    ADR-101, checked below alongside ``[marine]``/``[swan]``) — a
+    ``[surf_scoring]``-only install (operator-adjusted weights, no marine
+    locations configured yet) still returns a non-empty payload.
 
     When ``[marine]`` locations exist, also attaches ``"station": {"lat",
     "lon"}`` from the weewx station's own metadata (C-51) — best-effort,
