@@ -1708,8 +1708,12 @@ class SurfForecast(BaseModel):
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
     # T2.6 — breaker height pipeline (API-MANUAL §16, §17)
     swellHeight: float | None = None            # HSWELL at ~10m depth (display units, ADR-095)
-    breakingFaceHeight: float | None = None     # trough-to-crest face height via breaker formula (meters)
+    breakingFaceHeight: float | None = None     # WC-D3: max qualifying (Tp≥5s) per-partition face height (meters)
     breakingHawaiianHeight: float | None = None  # back-of-wave scale = breakingFaceHeight × 0.5 (meters)
+    # WC-D3: surf height range — min/max of qualifying (Tp >= 5s) per-partition
+    # face heights. Distinct from NWS SRF surfHeightMin/Max on SurfZoneForecast.
+    modelSurfHeightMin: float | None = None      # group_wave_height
+    modelSurfHeightMax: float | None = None      # group_wave_height
     windSource: str | None = None  # "hrrr" for forecast timesteps, "station" for t=0
     breakPoints: list[dict] | None = None  # QB peak locations [{distance, depth, hs}] (T3.4, T4A.1)
     # T5.2 — SWAN TABLE quantities at ~10m depth

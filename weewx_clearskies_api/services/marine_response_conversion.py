@@ -193,6 +193,9 @@ _FIELD_GROUPS: dict[str, str] = {
     "shadowFaceHeight": "group_wave_height",
     "surfHeightMin": "group_wave_height",
     "surfHeightMax": "group_wave_height",
+    # WC-D3: model-derived surf height range (distinct from NWS SRF above)
+    "modelSurfHeightMin": "group_wave_height",
+    "modelSurfHeightMax": "group_wave_height",
     "hs": "group_wave_height",
     "faceHeight": "group_wave_height",
     "setup": "group_wave_height",  # SWAN TABLE SETUP — converted via the
