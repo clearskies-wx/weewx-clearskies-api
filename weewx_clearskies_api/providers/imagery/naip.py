@@ -75,7 +75,15 @@ DOMAIN = "imagery"
 _EXPORT_URL = (
     "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage"
 )
-_TILE_SIZE_PX = 256
+# 512, not the slippy-map-conventional 256 (operator-approved 2026-08-11):
+# exportImage rasterizes on demand, so raster size is independent of the
+# tile grid. At the heat map's typical zoom 17 (8-tile mosaic cap over a
+# ~1.8 km frame), 256px sampled NAIP at ~1.0 m/px — coarser than the
+# source's ~0.6 m native GSD. 512px doubles that to ~0.5 m/px (at-native)
+# with the same tile count and bboxes. Tile placement is unaffected: the
+# dashboard stretches each tile to its ground rectangle regardless of
+# raster size (HeatMapCard <image> with preserveAspectRatio="none").
+_TILE_SIZE_PX = 512
 _DEFAULT_TILE_TTL = 604800  # 7 days — static imagery (see module docstring)
 _API_VERSION = "0.1.0"
 
@@ -197,7 +205,9 @@ def _tile_to_web_mercator_bbox(z: int, x: int, y: int) -> tuple[float, float, fl
 
 def _build_tile_cache_key(z: int, x: int, y: int) -> str:
     payload = json.dumps(
-        {"provider_id": PROVIDER_ID, "endpoint": "tile", "z": z, "x": x, "y": y},
+        # px in the key so cached tiles at an older raster size (7-day TTL)
+        # can never be served after a _TILE_SIZE_PX change.
+        {"provider_id": PROVIDER_ID, "endpoint": "tile", "z": z, "x": x, "y": y, "px": _TILE_SIZE_PX},
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()

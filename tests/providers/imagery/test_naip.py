@@ -239,7 +239,10 @@ class TestNaipGetTileCacheMiss:
 
         assert captured["format"] == "png"
         assert captured["f"] == "image"
-        assert captured["size"] == "256,256"
+        # 512px raster (operator-approved 2026-08-11): ~0.5 m/px at the heat
+        # map's typical zoom 17, matching NAIP's ~0.6 m native GSD. A 256px
+        # regression would silently halve request resolution — pin it.
+        assert captured["size"] == "512,512"
         assert captured["bboxSR"] == "102100"
         assert "bbox" in captured
 
@@ -250,6 +253,22 @@ class TestNaipGetTileCacheMiss:
         )
 
         assert _build_tile_cache_key(4, 4, 6) == _build_tile_cache_key(4, 4, 6)
+
+    def test_cache_key_embeds_raster_size(self) -> None:
+        """The cache key changes when _TILE_SIZE_PX changes, so 7-day-TTL
+        tiles cached at an older raster size can never be served after a
+        resolution change (the 256->512 bump would otherwise serve stale
+        low-res tiles for up to a week)."""
+        from weewx_clearskies_api.providers.imagery import naip  # noqa: PLC0415
+
+        key_now = naip._build_tile_cache_key(4, 4, 6)
+        original = naip._TILE_SIZE_PX
+        try:
+            naip._TILE_SIZE_PX = 256
+            key_legacy = naip._build_tile_cache_key(4, 4, 6)
+        finally:
+            naip._TILE_SIZE_PX = original
+        assert key_now != key_legacy
 
 
 # ===========================================================================
