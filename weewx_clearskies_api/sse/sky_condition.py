@@ -428,12 +428,20 @@ def backfill(records: list[tuple[float, float, float]]) -> None:
     # Pre-classify so classify() returns a result immediately after backfill.
     # Archive data is pre-averaged — the coherence filter's stability requirement
     # doesn't apply to historical data.
+    #
+    # solar_elevation must be passed — without it _classify_sky defaults to 90°
+    # (strictest thresholds), which can misclassify clear sky as overcast when
+    # the sun is at a moderate elevation (the clear threshold at 90° is ~0.798
+    # but at 35° it drops to ~0.745, enough to flip the classification).
     global _last_stable_label
     if len(_ring) >= 3:
         indices = _compute_indices()
         if indices is not None:
             kcs, km, kmf, kv, kvf, latest_msr = indices
-            _last_stable_label = _classify_sky(kcs, km, kmf, kv, kvf, latest_msr)
+            elevation = _compute_solar_elevation(_ring[-1].ts)
+            _last_stable_label = _classify_sky(
+                kcs, km, kmf, kv, kvf, latest_msr, solar_elevation=elevation,
+            )
 
 
 # ---------------------------------------------------------------------------
