@@ -331,6 +331,86 @@ class TestComponentCombinations:
         assert result == "Clear, cold, gentle breeze, with light rain"
 
 
+class TestBeaufortWindKeyMismatch:
+    """_wind_key (used for wind_with_forms lookup) must be derived from the
+    same Beaufort number that produces the displayed label — not from a
+    parallel mph lookup (HYBRID_WIND_SCALE) that can round to a different
+    Beaufort tier than the m/s-based beaufort() calculation at the same
+    speed. See defect: wind key / Beaufort label mismatch.
+    """
+
+    @staticmethod
+    def _assert_key_matches_label(speed_mph: float) -> None:
+        from weewx_clearskies_api.units.derived import beaufort as _beaufort
+
+        b = _beaufort(speed_mph, "mile_per_hour", EN)
+        expected_key = ct._BEAUFORT_TO_WIND_KEY[b["value"]]
+        expected_form = ct._wind_with_form(expected_key, EN)
+
+        result = ct.build_weather_text(
+            sky=None,
+            provider_sky="Clear",
+            wind_speed=speed_mph,
+            wind_speed_unit="mile_per_hour",
+            locale=EN,
+        )
+        assert expected_form.lower() in result.lower()
+
+    def test_24_5_mph_beaufort_5_6_boundary(self):
+        # 24.5 mph -> 10.952 m/s -> Beaufort 6 ("Strong breeze"), but the
+        # old mph-based HYBRID_WIND_SCALE lookup (upper_bound 25 ->
+        # "fresh_breeze") would have picked Beaufort 5's key instead.
+        self._assert_key_matches_label(24.5)
+
+    def test_3_7_mph_mismatch_boundary(self):
+        self._assert_key_matches_label(3.7)
+
+    def test_7_8_mph_mismatch_boundary(self):
+        self._assert_key_matches_label(7.8)
+
+    def test_12_5_mph_mismatch_boundary(self):
+        self._assert_key_matches_label(12.5)
+
+    def test_17_9_mph_mismatch_boundary(self):
+        self._assert_key_matches_label(17.9)
+
+
+class TestGustSuffix:
+    """The gust suffix format call must supply both {gust} and {unit} —
+    the locale template (wind.gust_suffix) requires both placeholders, and
+    a missing {unit} raises KeyError (uncaught by the surrounding
+    ``except (ValueError, TypeError)``), crashing the whole wind component.
+    """
+
+    def test_gust_suffix_end_to_end(self):
+        result = ct.build_weather_text(
+            sky=None,
+            provider_sky="Clear",
+            wind_speed=15,
+            wind_speed_unit="mile_per_hour",
+            wind_gust=30,
+            wind_gust_unit="mile_per_hour",
+            locale=EN,
+        )
+        assert "with gusts to around 30 mph" in result
+
+    def test_gust_suffix_preserved_after_wind_with_forms_substitution(self):
+        # wind is the last component when only sky+wind are present, so the
+        # "with"-form substitution fires; the gust suffix (tracked
+        # separately via _wind_gust_suffix) must survive it.
+        result = ct.build_weather_text(
+            sky=None,
+            provider_sky="Clear",
+            wind_speed=15,
+            wind_speed_unit="mile_per_hour",
+            wind_gust=30,
+            wind_gust_unit="mile_per_hour",
+            locale=EN,
+        )
+        assert "with gusts to around 30 mph" in result
+        assert "a moderate breeze" in result.lower()
+
+
 class TestGermanLocale:
     """Non-English locale: order (sky-first, matching German's existing
     composition.order), locale-specific dative wind forms, and preserved

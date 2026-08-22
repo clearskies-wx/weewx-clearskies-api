@@ -43,6 +43,19 @@ _GFE_WIND_THRESHOLD_MPH = 30.0
 # old ADR-044 threshold (gust >= sustained + 12 mph AND gust >= 18 mph).
 _GUST_DIFFERENCE_MPH = 10.0
 
+# Maps Beaufort number (0-6, the sub-30mph range) to HYBRID_WIND_SCALE key.
+# Used to derive _wind_key from the same source as the displayed label,
+# avoiding rounding mismatches between mph and m/s threshold tables.
+_BEAUFORT_TO_WIND_KEY: dict[int, str] = {
+    0: "calm",
+    1: "very_light_breeze",
+    2: "light_breeze",
+    3: "gentle_breeze",
+    4: "moderate_breeze",
+    5: "fresh_breeze",
+    6: "strong_breeze",
+}
+
 
 def _format_gust_speed(value: float) -> str:
     """Render a gust speed without a trailing ``.0`` for whole numbers."""
@@ -506,22 +519,28 @@ def build_weather_text(
             # (ADR-044 T3.4 follow-up: locale-correct "with"-position
             # forms, keyed by the same hybrid Beaufort/GFE scale
             # wind_descriptor() uses).
-            wind_scale_key = None
-            if speed_mph is not None:
+            if speed_mph is not None and speed_mph >= _GFE_WIND_THRESHOLD_MPH:
+                # GFE path: both label and key from HYBRID_WIND_SCALE (same
+                # table, no mismatch).
                 for upper_bound, label_key in HYBRID_WIND_SCALE:
                     if speed_mph < upper_bound:
-                        wind_scale_key = label_key
+                        components["_wind_key"] = label_key
                         break
                 else:
-                    wind_scale_key = HYBRID_WIND_SCALE[-1][1]
-            components["_wind_key"] = wind_scale_key
+                    components["_wind_key"] = HYBRID_WIND_SCALE[-1][1]
+            else:
+                # Beaufort path: key from the Beaufort number (same source
+                # as the label) — avoids rounding mismatches between the
+                # mph HYBRID_WIND_SCALE and the m/s _BEAUFORT_SCALE.
+                components["_wind_key"] = _BEAUFORT_TO_WIND_KEY.get(b["value"], "calm")
 
             gust_phrase: str | None = None
             if b["value"] > 0 and wind_gust is not None and speed_mph is not None:
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
                 if gust_mph is not None and (gust_mph - speed_mph) > _GUST_DIFFERENCE_MPH:
                     gust_phrase = i18n.t("wind.gust_suffix", locale).format(
-                        gust=_format_gust_speed(gust_mph)
+                        gust=_format_gust_speed(gust_mph),
+                        unit=i18n.t("unit_labels.mile_per_hour", locale).strip(),
                     )
                     wind_label = f"{wind_label} {gust_phrase}"
 
