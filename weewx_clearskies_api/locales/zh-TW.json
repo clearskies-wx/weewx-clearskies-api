@@ -59,7 +59,8 @@
       "sky",
       "wind",
       "precipitation"
-    ]
+    ],
+    "wind_article": ""
   },
   "beaufort": {
     "0": "無風",

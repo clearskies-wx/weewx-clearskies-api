@@ -58,7 +58,8 @@
       "sky",
       "wind",
       "precipitation"
-    ]
+    ],
+    "wind_article": "isang"
   },
   "beaufort": {
     "0": "Calm",

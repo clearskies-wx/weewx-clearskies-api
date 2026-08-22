@@ -57,6 +57,7 @@
     "temporal_temporarily": "一時",
     "temporal_occasionally": "時々",
     "temporal_then": "のち",
+    "wind_article": "",
     "order": [
       "temperature",
       "sky",

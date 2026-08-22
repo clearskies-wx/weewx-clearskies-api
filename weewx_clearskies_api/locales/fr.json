@@ -58,7 +58,8 @@
       "temperature",
       "wind",
       "precipitation"
-    ]
+    ],
+    "wind_article": "une"
   },
   "beaufort": {
     "0": "Calme",

@@ -53,7 +53,8 @@
     "separator": ", ",
     "connector_and": "and",
     "connector_with": "with",
-    "order": ["temperature", "sky", "wind", "precipitation"]
+    "order": ["sky", "temperature", "wind", "precipitation"],
+    "wind_article": "a"
   },
   "beaufort": {
     "0": "Calm",

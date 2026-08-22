@@ -179,6 +179,27 @@ def _compose_components(
     return _template_compose(components, loc)
 
 
+def _wind_article(locale: str) -> str:
+    """Resolve the wind article for *locale* (e.g. "a" in "with a gentle
+    breeze"), honoring a deliberately empty value.
+
+    Locales without articles (Russian, CJK) define ``composition.wind_article``
+    as ``""`` on purpose — this must NOT be treated as "not yet translated"
+    and fall through ``i18n.t()``'s normal resolution chain to the English
+    "a" (see ``i18n.t()``'s docstring: an empty string ordinarily means an
+    untranslated placeholder). So the locale's own raw value is read
+    directly first; only a key that is genuinely absent from the locale
+    file falls through to ``i18n.t()``'s en/key resolution.
+    """
+    raw = i18n._resolve_key(  # noqa: SLF001
+        i18n._locales.get(locale, {}), "composition.wind_article"
+    )
+    if isinstance(raw, str):
+        return raw
+    resolved = i18n.t("composition.wind_article", locale)
+    return "" if resolved == "composition.wind_article" else resolved
+
+
 def _template_compose(
     components: dict[str, str | None],
     locale: str,
@@ -190,6 +211,14 @@ def _template_compose(
     double-"and" with compound temperature labels like "Warm and Humid"),
     except when the last part is Beaufort-0 ("Calm"), where ``connector_and``
     is more natural.
+
+    All component values are lowercased before assembly and only the first
+    character of the fully-assembled string is capitalized (NWS-style
+    sentence case, e.g. "Partly cloudy, with a gentle breeze" rather than
+    "Partly Cloudy, with Gentle Breeze").  When wind is the last component
+    and the "with" connector applies (i.e. wind is not "Calm"), the locale's
+    ``composition.wind_article`` is prepended to it (e.g. "with a gentle
+    breeze").
     """
     # Read order from locale file; fall back to default.
     order = _COMPONENT_ORDER_DEFAULT
@@ -199,22 +228,44 @@ def _template_compose(
     if isinstance(order_raw, list) and all(isinstance(x, str) for x in order_raw):
         order = order_raw
 
-    # Build ordered parts list from named components.
-    filtered = [components[k] for k in order if components.get(k)]
+    # Build ordered parts list from named components, tracking which
+    # component key produced each surviving value (needed below to detect
+    # whether wind is the final component).
+    filtered_keys = [k for k in order if components.get(k)]
+    filtered = [components[k] for k in filtered_keys]
     if not filtered:
         return ""
-    if len(filtered) == 1:
-        return filtered[0]
 
     separator = i18n.t("composition.separator", locale)
     connector_and = i18n.t("composition.connector_and", locale)
     connector_with = i18n.t("composition.connector_with", locale)
     calm_text = i18n.t("beaufort.0", locale)
 
+    # Determine the connector against the original (pre-lowercase) value —
+    # calm_text is compared as stored in the locale file.
     connector = connector_and if filtered[-1] == calm_text else connector_with
-    if len(filtered) == 2:
-        return f"{filtered[0]}{separator}{connector} {filtered[1]}"
-    return separator.join(filtered[:-1]) + f"{separator}{connector} {filtered[-1]}"
+
+    # Lowercase all components; the assembled string is capitalized as a
+    # single sentence below rather than each component staying Title Case.
+    filtered = [v.lower() for v in filtered]
+
+    if (
+        len(filtered) > 1
+        and filtered_keys[-1] == "wind"
+        and connector == connector_with
+    ):
+        article = _wind_article(locale)
+        if article:
+            filtered[-1] = f"{article} {filtered[-1]}"
+
+    if len(filtered) == 1:
+        result = filtered[0]
+    elif len(filtered) == 2:
+        result = f"{filtered[0]}{separator}{connector} {filtered[1]}"
+    else:
+        result = separator.join(filtered[:-1]) + f"{separator}{connector} {filtered[-1]}"
+
+    return result[0].upper() + result[1:] if result else result
 
 
 def _to_fahrenheit(value: float | None, source_unit: str) -> float | None:
@@ -281,12 +332,22 @@ def build_weather_text(
 ) -> str:
     """Build the full weatherText string (ADR-044 §9 amendment, 2026-05-28).
 
-    Components are assembled in priority order:
-      [temperature-comfort, sky, wind, precipitation]
+    Components (temperature-comfort, sky, wind, precipitation) are computed
+    here, then assembled by ``_compose_components`` in the order given by
+    the locale's ``composition.order`` (e.g. English/NWS convention is
+    sky-first: ``["sky", "temperature", "wind", "precipitation"]``).
 
     Null/absent components are dropped.  All Beaufort values including
     Beaufort 0 ("Calm") are included — calm is a real condition
     (ADR-044 §4, amended 2026-06-05).
+
+    The template composer (``_template_compose``) renders NWS-style
+    sentence case: every component is lowercased before assembly and only
+    the first character of the fully-assembled string is capitalized. When
+    wind is the final component and joined with the "with" connector (i.e.
+    not "Calm"), the locale's article (``composition.wind_article``, e.g.
+    "a") is prepended to it — "with a gentle breeze" rather than "with
+    Gentle Breeze".
 
     **Hybrid Beaufort/GFE wind scale** (ADR-082, settled decision #11;
     API-MANUAL.md SS8 "Wind"): below 30 mph, the Beaufort label is used
@@ -341,7 +402,7 @@ def build_weather_text(
                          (defaults to English).
 
     Returns:
-        Composed conditions text, e.g. "Warm and Humid, Partly Cloudy, with Light Rain",
+        Composed conditions text, e.g. "Partly cloudy, warm and humid, with light rain",
         or "" when no components are available.
     """
     components: dict[str, str | None] = {
