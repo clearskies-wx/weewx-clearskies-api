@@ -59,7 +59,19 @@
       "wind",
       "precipitation"
     ],
-    "wind_article": ""
+    "lowercase_components": true,
+    "wind_with_forms": {
+      "very_light_breeze": "тихим ветром",
+      "light_breeze": "лёгким ветром",
+      "gentle_breeze": "слабым ветром",
+      "moderate_breeze": "умеренным ветром",
+      "fresh_breeze": "свежим ветром",
+      "strong_breeze": "сильным ветром",
+      "windy": "",
+      "very_windy": "",
+      "strong_winds": "",
+      "hurricane_force_winds": ""
+    }
   },
   "beaufort": {
     "0": "Штиль",

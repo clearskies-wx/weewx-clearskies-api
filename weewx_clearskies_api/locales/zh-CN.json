@@ -60,7 +60,8 @@
       "wind",
       "precipitation"
     ],
-    "wind_article": ""
+    "lowercase_components": true,
+    "wind_with_forms": {}
   },
   "beaufort": {
     "0": "无风",

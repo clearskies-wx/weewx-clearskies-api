@@ -59,7 +59,19 @@
       "wind",
       "precipitation"
     ],
-    "wind_article": "een"
+    "lowercase_components": true,
+    "wind_with_forms": {
+      "very_light_breeze": "een flauwe wind",
+      "light_breeze": "een zwakke wind",
+      "gentle_breeze": "een lichte wind",
+      "moderate_breeze": "een matige wind",
+      "fresh_breeze": "een vrij krachtige wind",
+      "strong_breeze": "een krachtige wind",
+      "windy": "",
+      "very_windy": "",
+      "strong_winds": "",
+      "hurricane_force_winds": ""
+    }
   },
   "beaufort": {
     "0": "Windstil",

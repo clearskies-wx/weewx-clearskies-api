@@ -59,7 +59,19 @@
       "wind",
       "precipitation"
     ],
-    "wind_article": "una"
+    "lowercase_components": true,
+    "wind_with_forms": {
+      "very_light_breeze": "una bava di vento",
+      "light_breeze": "una brezza leggera",
+      "gentle_breeze": "una brezza tesa",
+      "moderate_breeze": "un vento moderato",
+      "fresh_breeze": "un vento teso",
+      "strong_breeze": "un vento fresco",
+      "windy": "",
+      "very_windy": "",
+      "strong_winds": "",
+      "hurricane_force_winds": ""
+    }
   },
   "beaufort": {
     "0": "Calma",

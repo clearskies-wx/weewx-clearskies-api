@@ -24,7 +24,7 @@ and produce the full text string.
 from __future__ import annotations
 
 from weewx_clearskies_api import i18n
-from weewx_clearskies_api.sse.gfe.wind_phrases import wind_descriptor
+from weewx_clearskies_api.sse.gfe.wind_phrases import HYBRID_WIND_SCALE, wind_descriptor
 from weewx_clearskies_api.units.conversion import convert
 from weewx_clearskies_api.units.derived import beaufort
 
@@ -179,25 +179,34 @@ def _compose_components(
     return _template_compose(components, loc)
 
 
-def _wind_article(locale: str) -> str:
-    """Resolve the wind article for *locale* (e.g. "a" in "with a gentle
-    breeze"), honoring a deliberately empty value.
+def _wind_with_form(wind_key: str | None, locale: str) -> str:
+    """Look up the complete "with"-position replacement text for *wind_key*.
 
-    Locales without articles (Russian, CJK) define ``composition.wind_article``
-    as ``""`` on purpose — this must NOT be treated as "not yet translated"
-    and fall through ``i18n.t()``'s normal resolution chain to the English
-    "a" (see ``i18n.t()``'s docstring: an empty string ordinarily means an
-    untranslated placeholder). So the locale's own raw value is read
-    directly first; only a key that is genuinely absent from the locale
-    file falls through to ``i18n.t()``'s en/key resolution.
+    Each locale's ``composition.wind_with_forms`` dict maps a
+    :data:`~weewx_clearskies_api.sse.gfe.wind_phrases.HYBRID_WIND_SCALE`
+    label key (e.g. ``"light_breeze"``) to the COMPLETE replacement text
+    for the wind component when it appears in the "with" connector
+    position — article, grammatical gender, case inflection (German
+    dative after "mit"), and GFE adjective/plural forms (English "windy
+    conditions", "strong winds") are all resolved by this single lookup
+    rather than composed from a separate article string (see ADR-044 T3.4
+    follow-up: a single ``wind_article`` string per locale cannot express
+    gender-agreement or case-inflected forms).
+
+    An empty string for a given key is a deliberate "no replacement" —
+    the caller falls back to the regular (possibly lowercased) wind
+    label. Returns ``""`` when *wind_key* is ``None`` or the locale has
+    no entry for it.
     """
-    raw = i18n._resolve_key(  # noqa: SLF001
-        i18n._locales.get(locale, {}), "composition.wind_article"
+    if wind_key is None:
+        return ""
+    forms = i18n._resolve_key(  # noqa: SLF001
+        i18n._locales.get(locale, {}), "composition.wind_with_forms"
     )
-    if isinstance(raw, str):
-        return raw
-    resolved = i18n.t("composition.wind_article", locale)
-    return "" if resolved == "composition.wind_article" else resolved
+    if isinstance(forms, dict):
+        form = forms.get(wind_key, "")
+        return form if isinstance(form, str) else ""
+    return ""
 
 
 def _template_compose(
@@ -212,13 +221,22 @@ def _template_compose(
     except when the last part is Beaufort-0 ("Calm"), where ``connector_and``
     is more natural.
 
-    All component values are lowercased before assembly and only the first
-    character of the fully-assembled string is capitalized (NWS-style
-    sentence case, e.g. "Partly cloudy, with a gentle breeze" rather than
-    "Partly Cloudy, with Gentle Breeze").  When wind is the last component
-    and the "with" connector applies (i.e. wind is not "Calm"), the locale's
-    ``composition.wind_article`` is prepended to it (e.g. "with a gentle
-    breeze").
+    Component values are lowercased before assembly, unless the locale's
+    ``composition.lowercase_components`` flag is ``false`` (German only —
+    German common nouns are always capitalized, so "Brise"/"Regen"/"Wind"
+    must survive assembly capitalized).  Only the first character of the
+    fully-assembled string is capitalized (NWS-style sentence case, e.g.
+    "Partly cloudy, with a gentle breeze" rather than "Partly Cloudy, with
+    Gentle Breeze"); this is harmless when the first component is already
+    capitalized, as with German.
+
+    When wind is the last component and the "with" connector applies (i.e.
+    wind is not "Calm"), the wind component is replaced with the locale's
+    ``composition.wind_with_forms.{wind_scale_key}`` entry when non-empty
+    (see :func:`_wind_with_form`) — this is a complete replacement, not an
+    article prepend, since it must also express grammatical gender and
+    case inflection for locales that need it. When the entry is empty (or
+    absent), the regular (possibly lowercased) wind label is used as-is.
     """
     # Read order from locale file; fall back to default.
     order = _COMPONENT_ORDER_DEFAULT
@@ -245,18 +263,33 @@ def _template_compose(
     # calm_text is compared as stored in the locale file.
     connector = connector_and if filtered[-1] == calm_text else connector_with
 
-    # Lowercase all components; the assembled string is capitalized as a
-    # single sentence below rather than each component staying Title Case.
-    filtered = [v.lower() for v in filtered]
+    # Lowercase all components unless the locale opts out (German: common
+    # nouns are always capitalized). The assembled string is capitalized
+    # as a single sentence below rather than each component staying Title
+    # Case — for locales that do lowercase, that's the only capital; for
+    # German, the first component is already capitalized, so the
+    # first-character capitalization below is a no-op there.
+    # Not read via i18n._resolve_key(): that helper only returns
+    # str/dict/list leaves (by design, for translation lookups), so a JSON
+    # `false` would be silently coerced to None and always read as "not
+    # set" -- read the composition block directly instead.
+    composition_data = i18n._locales.get(locale, {}).get("composition", {})
+    if not isinstance(composition_data, dict):
+        composition_data = {}
+    lowercase_flag = composition_data.get("lowercase_components")
+    should_lowercase = lowercase_flag is not False
+    if should_lowercase:
+        filtered = [v.lower() for v in filtered]
 
     if (
         len(filtered) > 1
         and filtered_keys[-1] == "wind"
         and connector == connector_with
     ):
-        article = _wind_article(locale)
-        if article:
-            filtered[-1] = f"{article} {filtered[-1]}"
+        form = _wind_with_form(components.get("_wind_key"), locale)
+        if form:
+            gust_suffix = components.get("_wind_gust_suffix")
+            filtered[-1] = f"{form} {gust_suffix}" if gust_suffix else form
 
     if len(filtered) == 1:
         result = filtered[0]
@@ -342,12 +375,15 @@ def build_weather_text(
     (ADR-044 §4, amended 2026-06-05).
 
     The template composer (``_template_compose``) renders NWS-style
-    sentence case: every component is lowercased before assembly and only
-    the first character of the fully-assembled string is capitalized. When
+    sentence case: every component is lowercased before assembly (unless
+    the locale's ``composition.lowercase_components`` is ``false`` —
+    German only, whose common nouns are always capitalized) and only the
+    first character of the fully-assembled string is capitalized. When
     wind is the final component and joined with the "with" connector (i.e.
-    not "Calm"), the locale's article (``composition.wind_article``, e.g.
-    "a") is prepended to it — "with a gentle breeze" rather than "with
-    Gentle Breeze".
+    not "Calm"), the wind label is replaced by the locale's
+    ``composition.wind_with_forms.{wind_scale_key}`` entry when non-empty
+    (e.g. English "with a gentle breeze", "with windy conditions"; German
+    "mit einer leichten Brise") — see :func:`_wind_with_form`.
 
     **Hybrid Beaufort/GFE wind scale** (ADR-082, settled decision #11;
     API-MANUAL.md SS8 "Wind"): below 30 mph, the Beaufort label is used
@@ -466,6 +502,21 @@ def build_weather_text(
             else:
                 wind_label = str(b["label"])
 
+            # Determine the wind scale key for wind_with_forms lookup
+            # (ADR-044 T3.4 follow-up: locale-correct "with"-position
+            # forms, keyed by the same hybrid Beaufort/GFE scale
+            # wind_descriptor() uses).
+            wind_scale_key = None
+            if speed_mph is not None:
+                for upper_bound, label_key in HYBRID_WIND_SCALE:
+                    if speed_mph < upper_bound:
+                        wind_scale_key = label_key
+                        break
+                else:
+                    wind_scale_key = HYBRID_WIND_SCALE[-1][1]
+            components["_wind_key"] = wind_scale_key
+
+            gust_phrase: str | None = None
             if b["value"] > 0 and wind_gust is not None and speed_mph is not None:
                 gust_mph = convert(wind_gust, wind_gust_unit, "mile_per_hour")
                 if gust_mph is not None and (gust_mph - speed_mph) > _GUST_DIFFERENCE_MPH:
@@ -475,6 +526,12 @@ def build_weather_text(
                     wind_label = f"{wind_label} {gust_phrase}"
 
             components["wind"] = wind_label
+            # Kept separately (not just embedded in wind_label) so
+            # _template_compose can reattach it when wind_with_forms
+            # substitutes the whole label text — otherwise a gust
+            # qualifier concatenated into wind_label above would be
+            # silently discarded by the substitution.
+            components["_wind_gust_suffix"] = gust_phrase
         except (ValueError, TypeError):
             pass
 

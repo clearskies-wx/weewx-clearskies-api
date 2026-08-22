@@ -59,7 +59,19 @@
       "wind",
       "precipitation"
     ],
-    "wind_article": "uma"
+    "lowercase_components": true,
+    "wind_with_forms": {
+      "very_light_breeze": "uma aragem",
+      "light_breeze": "uma brisa leve",
+      "gentle_breeze": "uma brisa fraca",
+      "moderate_breeze": "uma brisa moderada",
+      "fresh_breeze": "uma brisa fresca",
+      "strong_breeze": "uma brisa forte",
+      "windy": "",
+      "very_windy": "",
+      "strong_winds": "",
+      "hurricane_force_winds": ""
+    }
   },
   "beaufort": {
     "0": "Calmaria",

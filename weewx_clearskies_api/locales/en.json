@@ -54,7 +54,19 @@
     "connector_and": "and",
     "connector_with": "with",
     "order": ["sky", "temperature", "wind", "precipitation"],
-    "wind_article": "a"
+    "lowercase_components": true,
+    "wind_with_forms": {
+      "very_light_breeze": "a very light breeze",
+      "light_breeze": "a light breeze",
+      "gentle_breeze": "a gentle breeze",
+      "moderate_breeze": "a moderate breeze",
+      "fresh_breeze": "a fresh breeze",
+      "strong_breeze": "a strong breeze",
+      "windy": "windy conditions",
+      "very_windy": "very windy conditions",
+      "strong_winds": "",
+      "hurricane_force_winds": ""
+    }
   },
   "beaufort": {
     "0": "Calm",
