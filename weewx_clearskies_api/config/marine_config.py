@@ -433,8 +433,6 @@ class SurfSpotConfig:
     #: ``"off"`` — force L3 off (L2 DWR SPECOUT used as handoff boundary).
     l3_enabled: str
     friction_coefficient: float
-    surfbeat_enabled: bool
-    surfbeat_cadence_hours: int
     #: T4A.3 Do step 11 / API-MANUAL §17 "SwellTrack configuration" — maximum
     #: expected significant wave height (m) for this spot. Drives
     #: ``fine_zone_max_depth = max(1.3 * max_hs_m / gamma, structure_zone_depth)``
@@ -502,17 +500,6 @@ class SurfSpotConfig:
             self.friction_coefficient = float(raw_friction)
         else:
             self.friction_coefficient = 0.038
-        # SurfBeat strip — IG energy for set/lull timing
-        raw_sb = section.get("surfbeat_enabled")
-        if raw_sb is not None:
-            self.surfbeat_enabled = str(raw_sb).strip().lower() in ("true", "1", "yes")
-        else:
-            self.surfbeat_enabled = True
-        raw_cadence = section.get("surfbeat_cadence_hours")
-        if raw_cadence is not None and str(raw_cadence).strip():
-            self.surfbeat_cadence_hours = int(raw_cadence)
-        else:
-            self.surfbeat_cadence_hours = 3
         # T4A.3 Do step 11 — per-spot max Hs for fine-zone/viability sizing.
         # Default 4.0m per API-MANUAL §17 (matches the plan's documented default).
         raw_max_hs = section.get("max_hs_m")

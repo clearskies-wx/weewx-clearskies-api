@@ -614,12 +614,6 @@ class MarineSurfSpotApplyConfig(BaseModel):
     #: Default 0.038 (JONSWAP swell value).  Always enabled in production —
     #: frictionless is not valid for nearshore wave modelling.
     friction_coefficient: float = 0.038
-    #: Enable SurfBeat strip for infragravity / set timing predictions.
-    #: Default True.  When False, setTimingMinutes / igWaveHeightM are null.
-    surfbeat_enabled: bool = True
-    #: Hours between SurfBeat strip SWAN runs (1 per cadence hour, default 3).
-    #: Intermediate forecast hours carry forward the last strip result.
-    surfbeat_cadence_hours: int = 3
     #: Maximum expected significant wave height (m) for this spot (T4A.3 Do
     #: step 11, API-MANUAL §17). Drives SwellTrack's fine-zone sizing
     #: (T4A.2) and the L3 viability check's breaking-depth expression
@@ -1331,9 +1325,6 @@ def _build_marine_conf_section(
                 "topographic_feature": surf.topographic_feature,
                 # SwellTrack friction (SURF-MODEL-FIX-PLAN T5.2).
                 "friction_coefficient": str(surf.friction_coefficient),
-                # SurfBeat IG strip config (SURF-MODEL-FIX-PLAN T5.1 / T5.2).
-                "surfbeat_enabled": str(surf.surfbeat_enabled).lower(),
-                "surfbeat_cadence_hours": str(surf.surfbeat_cadence_hours),
             }
             # Config-file-owned surf fields (operator ruling 2026-08-03,
             # decision item 8): the SAVING surface may legitimately omit
@@ -1558,8 +1549,6 @@ def _serialize_marine_locations_section(marine_section: dict[str, Any]) -> dict[
                 "surf_height_display": str(raw_surf.get("surf_height_display", "face")).strip(),
                 "l3_enabled": str(raw_surf.get("l3_enabled", "auto")).strip().lower(),
                 "friction_coefficient": _cfg_float(raw_surf, "friction_coefficient", 0.038),
-                "surfbeat_enabled": _cfg_bool(raw_surf, "surfbeat_enabled", True),
-                "surfbeat_cadence_hours": _cfg_int(raw_surf, "surfbeat_cadence_hours", 3),
                 "max_hs_m": _cfg_float(raw_surf, "max_hs_m", 4.0),
             }
             beach_slope = _cfg_opt_float(raw_surf, "beach_slope")

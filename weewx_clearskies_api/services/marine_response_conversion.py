@@ -202,8 +202,6 @@ _FIELD_GROUPS: dict[str, str] = {
     # height group, matching the pre-separation endpoints/surf.py precedent
     # (`_convert_unit(setup, "meter", wave_height_internal)`), not a
     # separate water-level reading.
-    "setAmplitudeM": "group_wave_height",
-    "igWaveHeightM": "group_wave_height",
     "heightM": "group_wave_height",
     "meanFaceHeightM": "group_wave_height",
     "peakFaceHeightM": "group_wave_height",

@@ -1699,10 +1699,9 @@ class SurfForecast(BaseModel):
     # the primary one) over total spectral energy, returned as-is; 0.5 when
     # spectral data is missing or carries zero total energy. Reshaped
     # 2026-08-05 (Round S, ADR-101): this same ratio also feeds
-    # scoring.consistency as a bucketed fallback substitute when SurfBeat
-    # set-timing/amplitude data is unavailable -- that bucket never reaches
-    # the wire on its own. See API-MANUAL.md's SurfScoringBreakdown section
-    # for the full derivation.
+    # scoring.consistency via swell-dominance consistency bucketing -- that
+    # bucket never reaches the wire on its own. See API-MANUAL.md's
+    # SurfScoringBreakdown section for the full derivation.
     swellDominance: float
     multiSwell: list[SpectralWaveComponent] | None = None  # individual swell systems, if available
     scoring: SurfScoringBreakdown | None = None  # per-factor score breakdown; None if unavailable
