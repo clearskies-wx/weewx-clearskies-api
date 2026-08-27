@@ -338,6 +338,39 @@ iframe_url = https://radar.weather.gov/station/KLOT/standard
 
 ---
 
+## [basemap] — tiered PMTiles basemap (M1 — CS-BASEMAP)
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Whether basemap tile serving is enabled. When `false`, `GET /api/v1/basemap/{tier}/tiles` returns 404 regardless of whether the files have been extracted. |
+
+No operator-typed bounding box and no zoom-level keys — this is the only key. The extraction box
+for each of the three tiles is always derived at extract time, never configured:
+
+- `basemap-world.pmtiles` (z0–6): fixed global box, the fallback ground for any pan outside the
+  other two boxes.
+- `basemap-local.pmtiles` (z7–15): union of the seismic box (station lat/lon ± `[earthquakes]
+  default_radius_km × 1.15`) and the marine box (bounding box of the configured marine locations,
+  padded 40 px at z15). No marine service configured → seismic box alone. Marine service
+  configured but unreachable → the extraction refuses (no file is written; the previous file, if
+  any, stays in place).
+- `basemap-radar.pmtiles` (z0–12): `[radar] librewxr_bounds` when set, else the seismic box above.
+
+`POST /setup/basemap/update` (proxy secret required) recomputes all three boxes and re-extracts
+world → local → radar in one background thread; `GET /api/v1/basemap/status` reports per-tier
+`{available, size_bytes, updated_at, bounds, minzoom, maxzoom}` plus `updating`, `last_error`,
+`last_started_at`, `last_finished_at`. Requires the Go `pmtiles` CLI on PATH (same prerequisite as
+`[geographic_features]`, ADR-078).
+
+**Example:**
+
+```ini
+[basemap]
+enabled = true
+```
+
+---
+
 ## [conditions] — conditions text engine and haze detection
 
 | Key | Default | Description |

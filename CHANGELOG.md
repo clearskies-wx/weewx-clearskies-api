@@ -11,6 +11,25 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+**Basemap (M1 — CS-BASEMAP)**
+- `GET /api/v1/basemap/{tier}/tiles` (`world`/`local`/`radar`) — tiered PMTiles serving with HTTP
+  Range request support, generalising ADR-078's single-file geographic-features overlay into
+  three zoom-tiered files covering every map surface (marine, seismic, radar/satellite)
+- `GET /api/v1/basemap/status` — per-tier availability, size, extract bounds/zoom range, plus
+  `updating`/`last_error`/`last_started_at`/`last_finished_at`
+- `POST /setup/basemap/update` — background extraction of all three tiers (world → local → radar)
+  in one daemon thread; the extraction box is always derived from station + configured marine
+  locations (local tier) or the radar provider's declared coverage (radar tier) — never
+  operator-typed
+- `[basemap]` config section: `enabled` (bool, default `true`) — the only key
+- ADR-078's `[geographic_features]` endpoints/service remain in place this round (additive build)
+
+---
+
 ## [0.1.0] — 2026-05-19
 
 First public release.
