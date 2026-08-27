@@ -48,9 +48,11 @@ reconstruction; full raw stdout also pasted into the m5-test closeout
 report per rules/verification.md "A transcript is pasted only from a run
 that happened"):
 
-    $ .venv/Scripts/python.exe -m pytest tests/test_m5_geographic_features_removed.py -q -p no:cacheprovider
+    $ .venv/Scripts/python.exe -m pytest tests/test_m5_geographic_features_removed.py \
+          -q -p no:cacheprovider
     FFFFFFFF                                                                 [100%]
-    FAILED ...::TestLegacyGeographicFeaturesSectionIsInert::test_conf_with_geographic_features_section_loads_and_is_ignored
+    FAILED ...::TestLegacyGeographicFeaturesSectionIsInert::\
+        test_conf_with_geographic_features_section_loads_and_is_ignored
         AssertionError: assert not True
          +  where True = hasattr(<Settings ...>, 'geographic_features')
     FAILED ...::TestRoutesAreGone::test_tiles_route_gone

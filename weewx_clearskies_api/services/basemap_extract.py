@@ -232,7 +232,8 @@ def _bbox_for_tier(tier: str, settings: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Extraction mechanics (mirrors the removed services/geographic_features.py:54-192, ADR-078, history)
+# Extraction mechanics (mirrors the removed services/geographic_features.py:54-192 --
+# ADR-078, history)
 # ---------------------------------------------------------------------------
 
 
