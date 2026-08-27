@@ -13,6 +13,23 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
 
 ## [Unreleased]
 
+### Removed
+
+**ADR-078 geographic-features single-file overlay (M5 — ADR-078 Amendment 2, Accepted 2026-08-27)**
+- `endpoints/geographic_features.py` and `services/geographic_features.py` — deleted. The three
+  routes (`GET /api/v1/geographic-features/tiles`, `GET /api/v1/geographic-features/status`,
+  `POST /setup/geographic-features/update`) no longer exist and 404 generically.
+- `config/settings.py` — `GeographicFeaturesSettings` class deleted; `Settings.geographic_features`
+  no longer exists. A legacy `[geographic_features]` section in `api.conf` is now silently ignored
+  (nothing reads `cfg["geographic_features"]` any more; no per-section validation error is raised),
+  same treatment as `[imagery]` after M4-B. Operators may delete the section or the on-disk
+  `/etc/weewx-clearskies/geographic-features.pmtiles` file; neither has any effect any more.
+- `app.py` / `__main__.py` — router imports, `include_router()` calls, and
+  `wire_geographic_features_settings()` import/call all removed.
+- Superseded entirely by the `[basemap]` family (`GET /api/v1/basemap/{tier}/tiles`, `GET
+  /api/v1/basemap/status`, `POST /setup/basemap/update`), which shipped additively under M1 and now
+  stands alone — see the "Basemap (M1 — CS-BASEMAP)" entry below.
+
 ### Changed
 
 **Surf height map background (M4 — SURF-MAP-BASEMAP, PA9, Q5)**
@@ -60,7 +77,8 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
   locations (local tier) or the radar provider's declared coverage (radar tier) — never
   operator-typed
 - `[basemap]` config section: `enabled` (bool, default `true`) — the only key
-- ADR-078's `[geographic_features]` endpoints/service remain in place this round (additive build)
+- ADR-078's `[geographic_features]` endpoints/service remained in place this round (additive build);
+  removed in M5 — see "Removed" above
 - Gate M1-API F1 fix: a marine service that is installed but has no locations yet answers HTTP 404
   on `/marine`; the local tier now treats that as "no marine box" (seismic box alone) instead of
   refusing forever. `MarineDiscoveryUnavailableError` gains a `status_code` attribute so callers

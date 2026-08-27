@@ -359,8 +359,8 @@ for each of the three tiles is always derived at extract time, never configured:
 `POST /setup/basemap/update` (proxy secret required) recomputes all three boxes and re-extracts
 world → local → radar in one background thread; `GET /api/v1/basemap/status` reports per-tier
 `{available, size_bytes, updated_at, bounds, minzoom, maxzoom}` plus `updating`, `last_error`,
-`last_started_at`, `last_finished_at`. Requires the Go `pmtiles` CLI on PATH (same prerequisite as
-`[geographic_features]`, ADR-078).
+`last_started_at`, `last_finished_at`. Requires the Go `pmtiles` CLI on PATH (same prerequisite the
+old ADR-078 `[geographic_features]` single-file overlay had — removed, M5, ADR-078 Amendment 2).
 
 **Example:**
 
