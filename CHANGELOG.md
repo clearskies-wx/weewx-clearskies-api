@@ -13,6 +13,24 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
 
 ## [Unreleased]
 
+### Changed
+
+**Surf height map background (M4 — SURF-MAP-BASEMAP, PA9, Q5)**
+- `GET /api/v1/imagery/config` now always answers with the product basemap
+  (`provider: "basemap"`), regardless of `[imagery] provider` — NAIP/Esri/Esri-Topo ("map") are no
+  longer reachable from any user-facing surface. The endpoint no longer 404s when `[imagery]` is
+  absent. Response gains `light: {tileUrl, attribution}` (OSM raster), `dark: {pmtilesUrl:
+  "/api/v1/basemap/local/tiles", maxDataZoom: 15, attribution}` (the local Protomaps tier),
+  `zoomMin: 0`, `zoomMax: 19`. The legacy top-level `tileUrl`/`attribution` fields carry the light
+  values for old-client compatibility.
+- `wire_imagery_settings()` logs one WARNING at startup naming an ignored `[imagery] provider`
+  value, if set.
+- `GET /api/v1/imagery/tiles/{z}/{x}/{y}` (NAIP proxy) is unchanged; the `[imagery]` config
+  section, its provider modules, admin section and wizard selector all remain in place (Q10-6
+  open).
+- `models/responses.py`: new `ImageryLightSource`, `ImageryDarkSource`; `ImageryConfigResponse`
+  gains optional `light`/`dark`/`zoomMin`/`zoomMax` (additive).
+
 ### Added
 
 **Basemap (M1 — CS-BASEMAP)**
