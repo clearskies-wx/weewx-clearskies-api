@@ -747,6 +747,29 @@ class GeographicFeaturesSettings:
             )
 
 
+class BasemapSettings:
+    """[basemap] section settings (M1 -- CS-BASEMAP, plan MARINE-AND-MAPS-PLAN-2026-08-27).
+
+    Generalises ADR-078's single geographic-features PMTiles file into three
+    tiered basemap files (world/local/radar) serving every Clear Skies map
+    surface. ONE key -- no operator-typed box, no zoom knobs (directive 14;
+    PRIME DIRECTIVE 11): the extraction box is always derived at extract
+    time from the station + marine locations (local tier) or the radar
+    provider's declared coverage box (radar tier) --
+    see services/basemap_extract.py.
+    """
+
+    #: Whether basemap tile serving is enabled.
+    enabled: bool
+
+    def __init__(self, section: dict[str, Any]) -> None:
+        self.enabled = _bool(section.get("enabled", "true"))
+
+    def validate(self) -> None:
+        """No cross-field validation -- a single bool has nothing to check."""
+        return None
+
+
 class SeeingSettings:
     """[seeing] section settings.
 
@@ -1571,6 +1594,7 @@ class Settings:
     aqi_history: AQIHistorySettings
     earthquakes: EarthquakesSettings
     geographic_features: GeographicFeaturesSettings
+    basemap: BasemapSettings
     seeing: SeeingSettings
     radar: RadarSettings
     forecast: ForecastSettings
@@ -1608,6 +1632,7 @@ class Settings:
         aqi_history: AQIHistorySettings | None = None,
         earthquakes: EarthquakesSettings | None = None,
         geographic_features: GeographicFeaturesSettings | None = None,
+        basemap: BasemapSettings | None = None,
         seeing: SeeingSettings | None = None,
         radar: RadarSettings | None = None,
         imagery: "ImagerySettings | None" = None,
@@ -1645,6 +1670,7 @@ class Settings:
             geographic_features if geographic_features is not None
             else GeographicFeaturesSettings({})
         )
+        self.basemap = basemap if basemap is not None else BasemapSettings({})
         self.seeing = seeing if seeing is not None else SeeingSettings({})
         self.radar = radar if radar is not None else RadarSettings({})
         self.imagery = imagery if imagery is not None else ImagerySettings({})
@@ -1677,6 +1703,7 @@ class Settings:
         self.aqi.validate()
         self.earthquakes.validate()
         self.geographic_features.validate()
+        self.basemap.validate()
         self.seeing.validate()
         self.radar.validate()
         self.imagery.validate()
@@ -1786,6 +1813,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
     aqi_history_cfg = AQIHistorySettings(dict(cfg.get("aqi.history", {})))
     earthquakes_cfg = EarthquakesSettings(dict(cfg.get("earthquakes", {})))
     geographic_features_cfg = GeographicFeaturesSettings(dict(cfg.get("geographic_features", {})))
+    basemap_cfg = BasemapSettings(dict(cfg.get("basemap", {})))
     seeing_cfg = SeeingSettings(dict(cfg.get("seeing", {})))
     radar_cfg = RadarSettings(dict(cfg.get("radar", {})))
     imagery_cfg = ImagerySettings(dict(cfg.get("imagery", {})))
@@ -1832,6 +1860,7 @@ def load_settings(config_path: Path | None = None) -> Settings:
         aqi_history=aqi_history_cfg,
         earthquakes=earthquakes_cfg,
         geographic_features=geographic_features_cfg,
+        basemap=basemap_cfg,
         seeing=seeing_cfg,
         radar=radar_cfg,
         imagery=imagery_cfg,
