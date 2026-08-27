@@ -1,14 +1,10 @@
 """Tests for the fog/mist provider cross-check in compose_weather_text().
 
 When local sensors detect fog (T-Td ≤ 2°F, calm winds), the system checks the
-provider weather text for corroboration before reporting fog — but only in a
-narrow window: nighttime, with T-Td > 1°F.  Daytime cross-checks are skipped
-entirely (fog_condition.py's own solar suppression already handles daytime
-false positives), and nighttime T-Td <= 1°F is skipped because the local
-reading is definitive on its own.  If the provider has fresh data that does
-NOT mention fog/mist within that window, the local fog label is suppressed.
-Absence of fresh provider data (stale or unavailable) is not evidence of
-absence — the local label passes through.
+provider weather text for corroboration before reporting fog.  If the provider
+has fresh data that does NOT mention fog/mist, the local fog label is suppressed.
+Absence of fresh provider data (stale or unavailable) is not evidence of absence
+— the local label passes through.
 
 These tests exercise the cross-check integration in
 `weewx_clearskies_api.sse.enrichment.weather_text.compose_weather_text()`.
@@ -83,6 +79,13 @@ _SKY_GET_ELEV = "weewx_clearskies_api.sse.sky_condition.get_solar_elevation"
 # ---------------------------------------------------------------------------
 
 
+def _smoothed_with_dewpoint(field: str) -> float | None:
+    """Return a non-None dewpoint so the missing-hygrometer deferral doesn't fire."""
+    if field == "dewpoint":
+        return 60.0
+    return None
+
+
 def _compose(
     *,
     fog_mist_result: str | None,
@@ -90,42 +93,27 @@ def _compose(
     provider_age: float | None,
     obs_data: dict | None = None,
     has_dewpoint: bool = True,
-    is_daytime: bool = False,
-    smoothed_overrides: dict | None = None,
 ) -> str:
     """Call compose_weather_text() with cross-check inputs under full mock control.
 
     Everything except the fog/provider cross-check is pinned to neutral values:
-    - Smoothed readings return None for every field except dewpoint (prevents
-      the missing-hygrometer deferral from adopting provider fog text) and any
-      field named in *smoothed_overrides*.  Set *has_dewpoint* to False to
-      simulate a station with no hygrometer (the default dewpoint=60.0 is
-      then omitted unless also supplied via *smoothed_overrides*).
-    - *smoothed_overrides*: a dict of {field_name: value} returned by
-      get_smoothed() for those fields — used to set outTemp/dewpoint together
-      so the cross-check's T-Td computation is under test control.
-    - *is_daytime*: controls `_sky_module.is_daytime()`; defaults to False
-      (nighttime) to match the cross-check's original test posture.
+    - Smoothed readings return None except dewpoint (prevents the missing-
+      hygrometer deferral from adopting provider fog text).  Set *has_dewpoint*
+      to False to simulate a station with no hygrometer.
+    - Nighttime (no solar haze path).
     - No Kcs (no solar classifier output).
     - sky_classify() returns None (no sky label from solar).
     - detect_haze() returns None (haze path not under test).
     - build_observation / generate_current_text return stubs.
 
     The only signals that vary between test calls are fog_mist_result (what
-    detect_fog_mist returns), (provider_text, provider_age), is_daytime, and
-    smoothed_overrides.
+    detect_fog_mist returns) and (provider_text, provider_age).
     """
     from weewx_clearskies_api.sse.enrichment.weather_text import compose_weather_text
 
     mock_obs = MagicMock(return_value=MagicMock())
     mock_current_text = MagicMock(return_value=None)
-
-    overrides = dict(smoothed_overrides) if smoothed_overrides else {}
-    if has_dewpoint and "dewpoint" not in overrides:
-        overrides["dewpoint"] = 60.0
-
-    def smoothed_side_effect(field: str) -> float | None:
-        return overrides.get(field)
+    smoothed_side_effect = _smoothed_with_dewpoint if has_dewpoint else (lambda _: None)
 
     with (
         patch(_DETECT_FOG_MIST, return_value=fog_mist_result),
@@ -133,7 +121,7 @@ def _compose(
         patch(_GET_SMOOTHED, side_effect=smoothed_side_effect),
         patch(_SKY_CLASSIFY, return_value=None),
         patch(_DETECT_HAZE, return_value=None),
-        patch(_SKY_IS_DAYTIME, return_value=is_daytime),
+        patch(_SKY_IS_DAYTIME, return_value=False),
         patch(_SKY_GET_KCS, return_value=None),
         patch(_SKY_GET_ELEV, return_value=None),
         patch(_BUILD_OBS, mock_obs),
@@ -166,16 +154,13 @@ def test_local_foggy_confirmed_by_provider_fog_text_passes_through():
 def test_local_foggy_suppressed_when_provider_says_partly_cloudy():
     """Local 'Foggy' + fresh provider says 'Partly Cloudy' → fog label suppressed.
 
-    Nighttime, T-Td = 2°F (ambiguous range, cross-check active).  Provider has
-    fresh data that contradicts fog; cross-check must suppress the local fog
-    label so the composed text does not contain 'Foggy'.
+    Provider has fresh data that contradicts fog; cross-check must suppress the
+    local fog label so the composed text does not contain 'Foggy'.
     """
     result = _compose(
         fog_mist_result="Foggy",
         provider_text="Partly Cloudy",
         provider_age=60.0,
-        is_daytime=False,
-        smoothed_overrides={"outTemp": 65.0, "dewpoint": 63.0},
     )
     assert "Foggy" not in result, (
         f"Expected 'Foggy' suppressed when fresh provider says 'Partly Cloudy', "
@@ -219,16 +204,13 @@ def test_local_misty_confirmed_by_provider_mist_text_passes_through():
 def test_local_misty_suppressed_when_provider_says_clear():
     """Local 'Misty' + fresh provider says 'Clear' → mist label suppressed.
 
-    Nighttime, T-Td = 2°F (ambiguous range, cross-check active).  Provider has
-    fresh data with no fog/mist indicator; cross-check suppresses the local
-    mist label.
+    Provider has fresh data with no fog/mist indicator; cross-check suppresses
+    the local mist label.
     """
     result = _compose(
         fog_mist_result="Misty",
         provider_text="Clear",
         provider_age=60.0,
-        is_daytime=False,
-        smoothed_overrides={"outTemp": 65.0, "dewpoint": 63.0},
     )
     assert "Misty" not in result, (
         f"Expected 'Misty' suppressed when fresh provider says 'Clear', "
@@ -312,86 +294,4 @@ def test_detect_fog_mist_returns_hazy_cross_check_does_not_fire():
     assert "Misty" not in result, (
         f"Expected no 'Misty' when detect_fog_mist returned 'Hazy' (PM path), "
         f"got {result!r}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Day/night + T-Td window tests
-# ---------------------------------------------------------------------------
-
-
-def test_daytime_foggy_passes_through_regardless_of_provider():
-    """Daytime → cross-check is skipped entirely; local fog label always stands.
-
-    fog_condition.py's own solar suppression already handles daytime false
-    positives, so the provider cross-check must not run during the day even
-    when T-Td is in the otherwise-ambiguous range and the provider disagrees.
-    """
-    result = _compose(
-        fog_mist_result="Foggy",
-        provider_text="Clear",
-        provider_age=60.0,
-        is_daytime=True,
-        smoothed_overrides={"outTemp": 65.0, "dewpoint": 63.0},
-    )
-    assert "Foggy" in result, (
-        f"Expected 'Foggy' to pass through during daytime regardless of "
-        f"provider disagreement (cross-check skipped), got {result!r}"
-    )
-
-
-def test_night_tiny_spread_passes_through_regardless_of_provider():
-    """Night, T-Td <= 1°F → cross-check is skipped; local fog label stands.
-
-    Temp and dewpoint are essentially identical (T-Td = 0.3°F); the local
-    reading is definitive on its own and needs no provider confirmation.
-    """
-    result = _compose(
-        fog_mist_result="Foggy",
-        provider_text="Clear",
-        provider_age=60.0,
-        is_daytime=False,
-        smoothed_overrides={"outTemp": 70.3, "dewpoint": 70.0},
-    )
-    assert "Foggy" in result, (
-        f"Expected 'Foggy' to pass through when T-Td <= 1F regardless of "
-        f"provider disagreement (cross-check skipped), got {result!r}"
-    )
-
-
-def test_night_ambiguous_spread_suppressed_by_provider_disagreement():
-    """Night, T-Td 1-4°F, provider disagrees → cross-check suppresses fog.
-
-    This is the ambiguous range where the provider's visibility sensor adds
-    real value: T-Td = 2°F, provider says 'Partly Cloudy' (no fog/mist).
-    """
-    result = _compose(
-        fog_mist_result="Foggy",
-        provider_text="Partly Cloudy",
-        provider_age=60.0,
-        is_daytime=False,
-        smoothed_overrides={"outTemp": 65.0, "dewpoint": 63.0},
-    )
-    assert "Foggy" not in result, (
-        f"Expected 'Foggy' suppressed in ambiguous T-Td range when provider "
-        f"disagrees, got {result!r}"
-    )
-
-
-def test_night_ambiguous_spread_confirmed_by_provider_passes_through():
-    """Night, T-Td 1-4°F, provider confirms → fog label passes through.
-
-    T-Td = 2°F (ambiguous range, cross-check active), provider says 'Fog'
-    (corroborates); local fog label must not be suppressed.
-    """
-    result = _compose(
-        fog_mist_result="Foggy",
-        provider_text="Fog",
-        provider_age=60.0,
-        is_daytime=False,
-        smoothed_overrides={"outTemp": 65.0, "dewpoint": 63.0},
-    )
-    assert "Foggy" in result, (
-        f"Expected 'Foggy' to pass through in ambiguous T-Td range when "
-        f"provider confirms fog, got {result!r}"
     )

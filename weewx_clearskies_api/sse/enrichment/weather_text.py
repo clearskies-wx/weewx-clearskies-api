@@ -353,35 +353,20 @@ def compose_weather_text(obs_data: dict | None = None, locale: str | None = None
         _fog_is_hazy = False
 
     # Provider cross-check for fog/mist: require the provider's
-    # visibility-equipped station to corroborate before labeling fog,
-    # but only in the narrow window where corroboration adds value
-    # rather than suppressing real hyper-local (e.g. marine) fog:
-    # - Daytime: cross-check is skipped entirely. fog_condition.py's own
-    #   solar suppression already handles daytime false positives; a
-    #   distant airport ASOS should not be allowed to override fog the
-    #   station detected correctly.
-    # - Night, T-Td <= 1F: cross-check is skipped. Temp and dewpoint are
-    #   essentially identical, so the local reading is definitive on its
-    #   own and needs no provider confirmation.
-    # - Night, T-Td > 1F: cross-check runs. This is the ambiguous range
-    #   where the provider's visibility sensor adds real value.
+    # visibility-equipped station to corroborate before labeling fog.
+    # Suppresses marine-layer humidity false positives where T-Td is
+    # tight but ground-level visibility is fine.
     # When provider data is stale/unavailable, local detection stands
     # (absence of provider data is not evidence of absence).
     if _fog_mist_label in ("Foggy", "Misty"):
-        _t_td_xcheck = (
-            _out_temp - _dewpoint
-            if _out_temp is not None and _dewpoint is not None
-            else None
+        from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
+            get_provider_weather_text as _get_pwt_xcheck,
         )
-        if not _is_day and _t_td_xcheck is not None and _t_td_xcheck > 1.0:
-            from weewx_clearskies_api.sse.enrichment.provider_weather_feed import (  # noqa: PLC0415
-                get_provider_weather_text as _get_pwt_xcheck,
-            )
-            _pw_text_xcheck, _pw_age_xcheck = _get_pwt_xcheck()
-            if _pw_text_xcheck is not None:
-                _pw_lower_xcheck = _pw_text_xcheck.lower()
-                if not any(kw in _pw_lower_xcheck for kw in ("fog", "mist")):
-                    _fog_mist_label = None
+        _pw_text_xcheck, _pw_age_xcheck = _get_pwt_xcheck()
+        if _pw_text_xcheck is not None:
+            _pw_lower_xcheck = _pw_text_xcheck.lower()
+            if not any(kw in _pw_lower_xcheck for kw in ("fog", "mist")):
+                _fog_mist_label = None
 
     # Haze detection: two-channel confirmation (Kcs deficit + PM).
     # detect_haze() returns 'Hazy' when both channels fire and temporal
