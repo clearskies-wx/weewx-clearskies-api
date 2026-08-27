@@ -21,10 +21,52 @@ Plus the lead's 2026-08-03 addition:
 Plus the IMAGERY-MAP round's addition (2026-08-26, operator ruling: replace
 orthophoto background with a map-style tile base):
   (g) provider "map" config carries the World_Topo_Map template + pinned
-      attribution.
-  (h) "auto" never selects "map" (naip-vs-esri only, unchanged).
+      attribution. [STALE — see below]
+  (h) "auto" never selects "map" (naip-vs-esri only, unchanged). [STALE — see below]
   (i) "map" tiles never flow through the NAIP tile proxy (browser-direct,
-      same posture as "esri").
+      same posture as "esri"). [/imagery/tiles — unchanged, kept]
+
+SURF-MAP-BASEMAP round (PA9, Q5; plan MARINE-AND-MAPS-PLAN-2026-08-27.md
+§M4, 2026-08-27): /imagery/config now ALWAYS answers with the product
+basemap (provider="basemap") regardless of [imagery] provider — the KAT
+(c)/(d)/(g)/(h) assertions above that pinned the naip/esri/map/auto
+*provider-selection* decision tree for /config are STALE BY DESIGN
+(lead-identified; test-author updates them, M4-API brief 2026-08-27) and
+rewritten below to assert the new invariant: /config output does not vary
+with [imagery] provider or with coordinates. The 404-when-not-configured
+KAT (e) for /config is likewise stale — the endpoint never 404s now (the
+surf map must always get a basemap). /imagery/tiles KATs (a)/(b)/(e-tiles)/
+(f)/(i) are UNCHANGED — the tile proxy's own decision tree is untouched by
+this round.
+
+Guard proof (ran against the M4-API dev's landed change, commit 87924c9,
+BEFORE this file's own edits — this transcript IS the pre-change-behavior
+evidence for the assertions rewritten below, per coordinator ruling
+2026-08-27: "the 9 pre-identified provider-selection assertions failing
+against the new code... ARE the proof that behaviour changed"):
+
+  Command: .venv\\Scripts\\python.exe -m pytest tests/test_endpoints_imagery_integration.py
+    tests/test_wire_imagery_settings.py tests/test_config_settings_imagery_validation.py
+    tests/test_current_config_imagery_prefill.py -q -p no:cacheprovider
+
+  9 failed, 36 passed, 1 warning in 1.94s
+  FAILED TestNoImageryConfig::test_config_endpoint_returns_404_when_not_configured
+  FAILED TestEsriConfig::test_esri_config_shape
+  FAILED TestEsriConfig::test_esri_pinned_regardless_of_location
+  FAILED TestMapConfig::test_map_config_shape
+  FAILED TestMapConfig::test_map_pinned_regardless_of_location
+  FAILED TestMapConfig::test_map_config_differs_from_esri_only_in_tile_url_and_attribution
+    (AssertionError: assert 'basemap' != 'basemap')
+  FAILED TestAutoProviderSelection::test_conus_coordinates_select_naip
+    (AssertionError: assert 'basemap' == 'naip')
+  FAILED TestAutoProviderSelection::test_non_conus_coordinates_fall_back_to_esri
+    (AssertionError: assert 'basemap' == 'esri')
+  FAILED TestAutoProviderSelection::test_naip_override_pins_naip_even_for_non_conus
+    (AssertionError: assert 'basemap' == 'naip')
+
+  (test_auto_never_selects_map_for_conus / _for_non_conus already passed —
+  vacuously true once /config always answers "basemap"; both rewritten below
+  to positively assert "basemap" so they pin real behavior, not a leftover.)
 """
 
 from __future__ import annotations
@@ -111,13 +153,15 @@ def _make_imagery_app(provider: str | None) -> FastAPI:
 
 
 class TestNoImageryConfig:
-    def test_config_endpoint_returns_404_when_not_configured(self) -> None:
+    def test_config_endpoint_returns_basemap_when_not_configured(self) -> None:
+        """STALE→rewritten (§M4, PA9): /config never 404s — the surf map must
+        always get a basemap answer, [imagery] configured or not."""
         app = _make_imagery_app(provider=None)
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
-        assert response.status_code == 404
-        assert response.headers["content-type"] == "application/problem+json"
+        assert response.status_code == 200
+        assert response.json()["provider"] == "basemap"
 
     def test_tiles_endpoint_returns_404_when_not_configured(self) -> None:
         app = _make_imagery_app(provider=None)
@@ -134,27 +178,31 @@ class TestNoImageryConfig:
 
 class TestEsriConfig:
     def test_esri_config_shape(self) -> None:
+        """STALE→rewritten (§M4, PA9): [imagery] provider="esri" no longer
+        selects an esri-branded /config answer — /config always answers
+        "basemap", carrying the OSM light tile template + attribution."""
         app = _make_imagery_app(provider="esri")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
         assert response.status_code == 200
         body = response.json()
-        assert body["provider"] == "esri"
+        assert body["provider"] == "basemap"
         assert body["proxyMode"] == "direct"
         assert "{z}" in body["tileUrl"] and "{x}" in body["tileUrl"] and "{y}" in body["tileUrl"]
-        assert body["attribution"] == (
-            "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community"
-        )
+        assert body["attribution"] == "© OpenStreetMap contributors"
         assert body["bounds"] is None
 
     def test_esri_pinned_regardless_of_location(self) -> None:
-        """Explicit override pins esri even for CONUS coordinates."""
+        """STALE→rewritten (§M4, PA9): [imagery] provider="esri" no longer
+        pins anything at /config — the basemap answer is now the same
+        regardless of the spot's location (positive pin of the new
+        invariant, same test name/intent, new mechanism)."""
         app = _make_imagery_app(provider="esri")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
-        assert response.json()["provider"] == "esri"
+        assert response.json()["provider"] == "basemap"
 
     def test_esri_tiles_never_flow_through_the_tile_proxy(self) -> None:
         """provider='esri' -> NAIP tile proxy is not available -> 404 (§LM-1c)."""
@@ -172,33 +220,36 @@ class TestEsriConfig:
 
 class TestMapConfig:
     def test_map_config_shape(self) -> None:
+        """STALE→rewritten (§M4, PA9): [imagery] provider="map" no longer
+        selects a World_Topo_Map /config answer — always "basemap" now."""
         app = _make_imagery_app(provider="map")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
         assert response.status_code == 200
         body = response.json()
-        assert body["provider"] == "map"
+        assert body["provider"] == "basemap"
         assert body["proxyMode"] == "direct"
         assert "{z}" in body["tileUrl"] and "{x}" in body["tileUrl"] and "{y}" in body["tileUrl"]
-        assert "World_Topo_Map" in body["tileUrl"]
-        assert body["attribution"] == (
-            "Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, "
-            "NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China "
-            "(Hong Kong), (c) OpenStreetMap contributors, and the GIS User Community"
-        )
+        assert "tile.openstreetmap.org" in body["tileUrl"]
+        assert body["attribution"] == "© OpenStreetMap contributors"
         assert body["bounds"] is None
 
     def test_map_pinned_regardless_of_location(self) -> None:
-        """Explicit override pins map even for CONUS coordinates."""
+        """STALE→rewritten (§M4, PA9): same invariant as the esri case —
+        /config answer is location-independent under provider="map" too."""
         app = _make_imagery_app(provider="map")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
-        assert response.json()["provider"] == "map"
+        assert response.json()["provider"] == "basemap"
 
-    def test_map_config_differs_from_esri_only_in_tile_url_and_attribution(self) -> None:
-        """Mutation-style check (brief §Verification)."""
+    def test_map_config_is_identical_to_esri_config(self) -> None:
+        """STALE→rewritten (§M4, PA9): the premise of the old test (map and
+        esri /config answers differ only in tileUrl/attribution) is gone —
+        under [imagery] provider="map" vs "esri", /config now returns the
+        SAME basemap body either way. This is the positive pin of the new
+        invariant: /config output does not depend on [imagery] provider."""
         map_app = _make_imagery_app(provider="map")
         map_client = TestClient(map_app, raise_server_exceptions=False)
         map_response = map_client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
@@ -209,14 +260,7 @@ class TestMapConfig:
         esri_response = esri_client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
 
-        map_body = map_response.json()
-        esri_body = esri_response.json()
-
-        assert map_body["proxyMode"] == esri_body["proxyMode"] == "direct"
-        assert map_body["bounds"] == esri_body["bounds"] is None
-        assert map_body["provider"] != esri_body["provider"]
-        assert map_body["tileUrl"] != esri_body["tileUrl"]
-        assert map_body["attribution"] != esri_body["attribution"]
+        assert map_response.json() == esri_response.json()
 
     def test_map_tiles_never_flow_through_the_tile_proxy(self) -> None:
         """provider='map' -> NAIP tile proxy is not available -> 404 (§LM-1c,
@@ -235,49 +279,58 @@ class TestMapConfig:
 
 class TestAutoProviderSelection:
     def test_conus_coordinates_select_naip(self) -> None:
+        """STALE→rewritten (§M4, PA9): CONUS coordinates no longer select
+        naip at /config — always "basemap" regardless of location."""
         app = _make_imagery_app(provider="auto")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
         assert response.status_code == 200
         body = response.json()
-        assert body["provider"] == "naip"
-        assert body["proxyMode"] == "api"
-        assert body["tileUrl"] == "/api/v1/imagery/tiles/{z}/{x}/{y}"
+        assert body["provider"] == "basemap"
+        assert body["proxyMode"] == "direct"
 
     def test_non_conus_coordinates_fall_back_to_esri(self) -> None:
+        """STALE→rewritten (§M4, PA9): non-CONUS coordinates no longer fall
+        back to esri at /config — always "basemap", same as CONUS."""
         app = _make_imagery_app(provider="auto")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_LONDON_LAT}&lon={_LONDON_LON}")
         _reset_all_provider_state()
         assert response.status_code == 200
         body = response.json()
-        assert body["provider"] == "esri"
+        assert body["provider"] == "basemap"
         assert body["proxyMode"] == "direct"
 
     def test_naip_override_pins_naip_even_for_non_conus(self) -> None:
+        """STALE→rewritten (§M4, PA9): explicit provider="naip" no longer
+        pins naip at /config — always "basemap"."""
         app = _make_imagery_app(provider="naip")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_LONDON_LAT}&lon={_LONDON_LON}")
         _reset_all_provider_state()
         assert response.status_code == 200
-        assert response.json()["provider"] == "naip"
+        assert response.json()["provider"] == "basemap"
 
     def test_auto_never_selects_map_for_conus(self) -> None:
-        """KAT (h): "auto" resolves to naip-vs-esri only, never "map"."""
+        """STALE reasoning→rewritten (§M4, PA9): the old assertion
+        (provider != "map") passed vacuously once /config always answers
+        "basemap" — it no longer pins the KAT (h) decision-tree reasoning it
+        was written for. Rewritten to positively assert the real current
+        answer."""
         app = _make_imagery_app(provider="auto")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
         _reset_all_provider_state()
-        assert response.json()["provider"] != "map"
+        assert response.json()["provider"] == "basemap"
 
     def test_auto_never_selects_map_for_non_conus(self) -> None:
-        """KAT (h): "auto" resolves to naip-vs-esri only, never "map"."""
+        """STALE reasoning→rewritten (§M4, PA9): see above, non-CONUS case."""
         app = _make_imagery_app(provider="auto")
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get(f"/api/v1/imagery/config?lat={_LONDON_LAT}&lon={_LONDON_LON}")
         _reset_all_provider_state()
-        assert response.json()["provider"] != "map"
+        assert response.json()["provider"] == "basemap"
 
     def test_missing_lat_lon_returns_422(self) -> None:
         app = _make_imagery_app(provider="auto")
