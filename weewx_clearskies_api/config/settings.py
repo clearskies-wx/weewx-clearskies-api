@@ -879,11 +879,15 @@ class ImagerySettings:
     other external provider (forecast, AQI, radar). Two fixed providers:
     naip (CONUS, API-proxied+cached) and esri (global, browser-direct).
 
-    provider: "auto" (default when configured) | "naip" | "esri". "auto"
-    means per-request CONUS-bbox selection (§LM-1d): NAIP for CONUS
-    coordinates, ESRI otherwise. An explicit "naip" or "esri" pins that one
+    provider: "auto" (default when configured) | "naip" | "esri" | "map".
+    "auto" means per-request CONUS-bbox selection (§LM-1d): NAIP for CONUS
+    coordinates, ESRI otherwise — "auto" never selects "map" (IMAGERY-MAP
+    round, 2026-08-26). An explicit "naip", "esri", or "map" pins that one
     provider regardless of spot location (operator override, per the phase
-    header design note "Configurable override in admin").
+    header design note "Configurable override in admin"). "map" is the Esri
+    World Topo Map provider (esri_topo.py) — a map-style background added
+    2026-08-26 because the orthophoto backgrounds (naip/esri) can render
+    surf over what looks like dry land at abnormal low tide.
 
     provider is None when the [imagery] section is absent or has no
     `provider` key — matches every other domain's "absent = not configured"
@@ -915,12 +919,13 @@ class ImagerySettings:
 
     def validate(self) -> None:
         """Raise ValueError on invalid provider id or TTL."""
-        valid_providers = {"auto", "naip", "esri"}
+        valid_providers = {"auto", "naip", "esri", "map"}
         if self.provider is not None and self.provider not in valid_providers:
             raise ValueError(
                 f"[imagery] provider {self.provider!r} not in {valid_providers}. "
                 "Supported values: 'auto' (NAIP for CONUS, ESRI otherwise), "
-                "'naip' (CONUS-only override), 'esri' (global override)."
+                "'naip' (CONUS-only override), 'esri' (global orthophoto override), "
+                "'map' (global map-style override)."
             )
         if self.tile_cache_ttl_seconds < 0:
             raise ValueError("[imagery] tile_cache_ttl_seconds must be >= 0")

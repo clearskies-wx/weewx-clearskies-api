@@ -17,6 +17,14 @@ KAT coverage (plan §LM-1):
 Plus the lead's 2026-08-03 addition:
   (f) tile z/x/y out of range -> 4xx (amplification-surface guard), not
       forwarded upstream unchecked.
+
+Plus the IMAGERY-MAP round's addition (2026-08-26, operator ruling: replace
+orthophoto background with a map-style tile base):
+  (g) provider "map" config carries the World_Topo_Map template + pinned
+      attribution.
+  (h) "auto" never selects "map" (naip-vs-esri only, unchanged).
+  (i) "map" tiles never flow through the NAIP tile proxy (browser-direct,
+      same posture as "esri").
 """
 
 from __future__ import annotations
@@ -60,7 +68,7 @@ def _reset_all_provider_state() -> None:
 def _make_imagery_app(provider: str | None) -> FastAPI:
     """Build a test FastAPI app with [imagery] provider configured.
 
-    provider: "auto" | "naip" | "esri" | None (not configured).
+    provider: "auto" | "naip" | "esri" | "map" | None (not configured).
     """
     from weewx_clearskies_api.app import create_app  # noqa: PLC0415
     from weewx_clearskies_api.config.settings import (  # noqa: PLC0415
@@ -73,7 +81,7 @@ def _make_imagery_app(provider: str | None) -> FastAPI:
     )
     from weewx_clearskies_api.endpoints.imagery import wire_imagery_settings  # noqa: PLC0415
     from weewx_clearskies_api.providers._common.capability import wire_providers  # noqa: PLC0415
-    from weewx_clearskies_api.providers.imagery import esri, naip  # noqa: PLC0415
+    from weewx_clearskies_api.providers.imagery import esri, esri_topo, naip  # noqa: PLC0415
 
     _reset_all_provider_state()
 
@@ -82,6 +90,8 @@ def _make_imagery_app(provider: str | None) -> FastAPI:
         capabilities.append(naip.CAPABILITY)
     if provider in ("auto", "esri"):
         capabilities.append(esri.CAPABILITY)
+    if provider == "map":
+        capabilities.append(esri_topo.CAPABILITY)
     wire_providers(capabilities)
 
     settings = Settings(
@@ -156,6 +166,69 @@ class TestEsriConfig:
 
 
 # ===========================================================================
+# KAT (g)/(h)/(i) — "map" provider (IMAGERY-MAP round, 2026-08-26)
+# ===========================================================================
+
+
+class TestMapConfig:
+    def test_map_config_shape(self) -> None:
+        app = _make_imagery_app(provider="map")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
+        _reset_all_provider_state()
+        assert response.status_code == 200
+        body = response.json()
+        assert body["provider"] == "map"
+        assert body["proxyMode"] == "direct"
+        assert "{z}" in body["tileUrl"] and "{x}" in body["tileUrl"] and "{y}" in body["tileUrl"]
+        assert "World_Topo_Map" in body["tileUrl"]
+        assert body["attribution"] == (
+            "Sources: Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, "
+            "NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China "
+            "(Hong Kong), (c) OpenStreetMap contributors, and the GIS User Community"
+        )
+        assert body["bounds"] is None
+
+    def test_map_pinned_regardless_of_location(self) -> None:
+        """Explicit override pins map even for CONUS coordinates."""
+        app = _make_imagery_app(provider="map")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
+        _reset_all_provider_state()
+        assert response.json()["provider"] == "map"
+
+    def test_map_config_differs_from_esri_only_in_tile_url_and_attribution(self) -> None:
+        """Mutation-style check (brief §Verification)."""
+        map_app = _make_imagery_app(provider="map")
+        map_client = TestClient(map_app, raise_server_exceptions=False)
+        map_response = map_client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
+        _reset_all_provider_state()
+
+        esri_app = _make_imagery_app(provider="esri")
+        esri_client = TestClient(esri_app, raise_server_exceptions=False)
+        esri_response = esri_client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
+        _reset_all_provider_state()
+
+        map_body = map_response.json()
+        esri_body = esri_response.json()
+
+        assert map_body["proxyMode"] == esri_body["proxyMode"] == "direct"
+        assert map_body["bounds"] == esri_body["bounds"] is None
+        assert map_body["provider"] != esri_body["provider"]
+        assert map_body["tileUrl"] != esri_body["tileUrl"]
+        assert map_body["attribution"] != esri_body["attribution"]
+
+    def test_map_tiles_never_flow_through_the_tile_proxy(self) -> None:
+        """provider='map' -> NAIP tile proxy is not available -> 404 (§LM-1c,
+        same browser-direct posture as esri)."""
+        app = _make_imagery_app(provider="map")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/api/v1/imagery/tiles/4/4/6")
+        _reset_all_provider_state()
+        assert response.status_code == 404
+
+
+# ===========================================================================
 # KAT (d) — non-CONUS coordinates with NAIP-preferred (auto) config -> ESRI
 # ===========================================================================
 
@@ -189,6 +262,22 @@ class TestAutoProviderSelection:
         _reset_all_provider_state()
         assert response.status_code == 200
         assert response.json()["provider"] == "naip"
+
+    def test_auto_never_selects_map_for_conus(self) -> None:
+        """KAT (h): "auto" resolves to naip-vs-esri only, never "map"."""
+        app = _make_imagery_app(provider="auto")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(f"/api/v1/imagery/config?lat={_HB_LAT}&lon={_HB_LON}")
+        _reset_all_provider_state()
+        assert response.json()["provider"] != "map"
+
+    def test_auto_never_selects_map_for_non_conus(self) -> None:
+        """KAT (h): "auto" resolves to naip-vs-esri only, never "map"."""
+        app = _make_imagery_app(provider="auto")
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(f"/api/v1/imagery/config?lat={_LONDON_LAT}&lon={_LONDON_LON}")
+        _reset_all_provider_state()
+        assert response.json()["provider"] != "map"
 
     def test_missing_lat_lon_returns_422(self) -> None:
         app = _make_imagery_app(provider="auto")

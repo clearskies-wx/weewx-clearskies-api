@@ -7,7 +7,7 @@ config class.
 Verifies that:
   - Absent [imagery] section → provider is None (not configured), matching
     every other domain's "absence = not configured" convention.
-  - "auto", "naip", "esri" are all valid provider values.
+  - "auto", "naip", "esri", "map" are all valid provider values.
   - Unknown provider ids are rejected.
   - Negative tile_cache_ttl_seconds is rejected.
   - api_key is stored/passed through but optional.
@@ -43,7 +43,7 @@ class TestImagerySettingsDefaults:
 
 
 class TestImagerySettingsValidProviders:
-    @pytest.mark.parametrize("provider", ["auto", "naip", "esri"])
+    @pytest.mark.parametrize("provider", ["auto", "naip", "esri", "map"])
     def test_valid_provider_passes(self, provider: str) -> None:
         s = ImagerySettings({"provider": provider})
         s.validate()  # must not raise

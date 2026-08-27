@@ -9,27 +9,36 @@ note). Any card/feature may call /imagery/config, not just the marine
 heatmap. HARD RULE (phase header): imagery is DISPLAY-ONLY — nothing here
 feeds SWAN, the 1D model, transect selection, or any physics path.
 
-Behavior decision tree for /config (§LM-1b, KAT e):
+Behavior decision tree for /config (§LM-1b, KAT e; extended IMAGERY-MAP round
+2026-08-26 for the "map" provider):
   1. lat/lon missing/out-of-range → 422 (Pydantic Depends validator).
   2. [imagery] not configured (provider is None) → 404 Problem.
-  3. provider == "naip" or "esri" (explicit override) → that provider,
-     regardless of the spot's coordinates (phase design note "Configurable
-     override in admin").
+  3. provider == "naip" or "esri" or "map" (explicit override) → that
+     provider, regardless of the spot's coordinates (phase design note
+     "Configurable override in admin").
   4. provider == "auto" → naip.is_conus(lat, lon): True → "naip",
      False → "esri" (KAT d: non-CONUS + naip-preferred config falls back
-     to esri).
+     to esri). "auto" never selects "map" — unchanged by the IMAGERY-MAP
+     round.
   5. naip → proxyMode="api", tileUrl points at THIS API's own proxy path
      (`/api/v1/imagery/tiles/{z}/{x}/{y}`), NOT the upstream USGS URL.
-  6. esri → proxyMode="direct", tileUrl is the ESRI XYZ template for the
-     browser to fetch directly. ESRI tile bytes never flow through this API.
+  6. esri → proxyMode="direct", tileUrl is the ESRI World Imagery XYZ
+     template for the browser to fetch directly. ESRI tile bytes never flow
+     through this API.
+  7. map → proxyMode="direct", tileUrl is the Esri World Topo Map XYZ
+     template (operator ruling 2026-08-26: replaces orthophotography with a
+     map-style background because NAIP's low-tide flyover made surf render
+     on what looked like dry land). Same browser-direct, no-proxy shape as
+     esri.
 
 Behavior decision tree for /tiles/{z}/{x}/{y} (§LM-1c):
   1. z/x/y out of range (z via FastAPI Path constraint; x/y validated
      against 2**z here) → 400 Problem. Tile-proxy amplification-surface
      guard (lead ruling 2026-08-03) — do not forward arbitrary z/x/y bbox
      math upstream unchecked.
-  2. [imagery] not configured, or provider explicitly pinned to "esri"
-     (ESRI never flows through this endpoint per §LM-1c) → 404 Problem.
+  2. [imagery] not configured, or provider explicitly pinned to "esri" or
+     "map" (neither ever flows through this endpoint per §LM-1c — both are
+     browser-direct, config-only providers) → 404 Problem.
   3. Cache hit (inside naip.get_tile()) → return cached bytes, no upstream
      call.
   4. Cache miss → naip.get_tile() → upstream exportImage call → cache →
@@ -70,6 +79,7 @@ from weewx_clearskies_api.providers._common.errors import (
     TransientNetworkError,
 )
 from weewx_clearskies_api.providers.imagery import esri as esri_module
+from weewx_clearskies_api.providers.imagery import esri_topo as esri_topo_module
 from weewx_clearskies_api.providers.imagery import naip as naip_module
 
 logger = logging.getLogger(__name__)
@@ -147,13 +157,15 @@ def _get_imagery_tile_params(request: Request) -> ImageryTileQueryParams:
 
 
 def _select_provider(lat: float, lon: float) -> str:
-    """Return "naip" or "esri" for the given coordinates.
+    """Return "naip", "esri", or "map" for the given coordinates.
 
     Only called when _imagery_provider is not None (caller's responsibility).
-    "auto" resolves per-request via the CONUS bbox test; an explicit
-    "naip"/"esri" override pins that provider regardless of location.
+    "auto" resolves per-request via the CONUS bbox test and never selects
+    "map" (naip-vs-esri only, unchanged by the IMAGERY-MAP round); an
+    explicit "naip"/"esri"/"map" override pins that provider regardless of
+    location.
     """
-    if _imagery_provider in ("naip", "esri"):
+    if _imagery_provider in ("naip", "esri", "map"):
         return _imagery_provider
     # "auto"
     return "naip" if naip_module.is_conus(lat, lon) else "esri"
@@ -213,12 +225,22 @@ def get_imagery_config(
             bounds=dict(naip_module.CONUS_BOUNDS),
         )
 
-    # provider_id == "esri"
-    esri_config = esri_module.get_config()
+    if provider_id == "esri":
+        esri_config = esri_module.get_config()
+        return ImageryConfigResponse(
+            provider="esri",
+            tileUrl=esri_config["tileUrl"],
+            attribution=esri_config["attribution"],
+            proxyMode="direct",
+            bounds=None,
+        )
+
+    # provider_id == "map"
+    esri_topo_config = esri_topo_module.get_config()
     return ImageryConfigResponse(
-        provider="esri",
-        tileUrl=esri_config["tileUrl"],
-        attribution=esri_config["attribution"],
+        provider="map",
+        tileUrl=esri_topo_config["tileUrl"],
+        attribution=esri_topo_config["attribution"],
         proxyMode="direct",
         bounds=None,
     )
@@ -247,7 +269,7 @@ def get_imagery_tile(
 
     _validate_tile_coords(z, x, y)
 
-    if _imagery_provider is None or _imagery_provider == "esri":
+    if _imagery_provider is None or _imagery_provider in ("esri", "map"):
         logger.debug(
             "Imagery tile proxy: not available (provider=%r; NAIP tile proxy requires "
             "[imagery] provider to be 'auto' or 'naip')",

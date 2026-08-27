@@ -1441,7 +1441,7 @@ class ImageryConfigResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: str  # "naip" | "esri"
+    provider: str  # "naip" | "esri" | "map"
     tileUrl: str
     attribution: str
     proxyMode: str  # "api" | "direct"
