@@ -472,3 +472,76 @@ class TestTiers:
 # report for the full accounting, including the one genuine FINDING
 # (get_status() vs get_basemap_status() naming, ruled by the lead same day).
 # ===========================================================================
+
+
+class TestMarineConfiguredButNoLocations:
+    """Gate M1-API finding F1 (2026-08-27): the marine service answers HTTP 404
+    on GET /marine when it is installed but has no locations configured yet
+    (weewx_clearskies_marine/endpoints/marine.py list_marine_locations). That
+    is the same structural "no marine box" state as unconfigured -- the local
+    tier must use the seismic box alone, not refuse forever. Any other status
+    (or a network failure, status_code None) is still a genuine outage and
+    still refuses. Pre-change (6fda155): the 404 case raised
+    MarineDiscoveryUnavailableError out of compute_local_bounds()."""
+
+    def test_404_from_marine_means_no_locations_seismic_box_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from weewx_clearskies_api.services import basemap_extract
+        from weewx_clearskies_api.services.companion_proxy import (
+            MarineDiscoveryUnavailableError,
+        )
+
+        _patch_station(monkeypatch, _fake_station_info())
+
+        def _raise_404(path: str, params: dict[str, Any]) -> Any:
+            raise MarineDiscoveryUnavailableError(
+                "The marine service returned HTTP 404 for /marine", status_code=404
+            )
+
+        _patch_marine_discovery(monkeypatch, _raise_404)
+        settings = _FakeSettings(default_radius_km=_DEFAULT_RADIUS_KM)
+
+        got = _parse_bounds_str(basemap_extract.compute_local_bounds(settings))
+        want = _reference_seismic_box(
+            _STATION_LAT, _STATION_LON, _DEFAULT_RADIUS_KM * _RADIUS_FACTOR
+        )
+        for g, w in zip(got, want, strict=True):
+            assert abs(g - w) < 1e-3
+
+    def test_non_404_status_still_refuses(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from weewx_clearskies_api.services import basemap_extract
+        from weewx_clearskies_api.services.companion_proxy import (
+            MarineDiscoveryUnavailableError,
+        )
+
+        _patch_station(monkeypatch, _fake_station_info())
+
+        def _raise_503(path: str, params: dict[str, Any]) -> Any:
+            raise MarineDiscoveryUnavailableError(
+                "The marine service returned HTTP 503 for /marine", status_code=503
+            )
+
+        _patch_marine_discovery(monkeypatch, _raise_503)
+        settings = _FakeSettings(default_radius_km=_DEFAULT_RADIUS_KM)
+        with pytest.raises(MarineDiscoveryUnavailableError):
+            basemap_extract.compute_local_bounds(settings)
+
+    def test_network_failure_has_no_status_and_still_refuses(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from weewx_clearskies_api.services import basemap_extract
+        from weewx_clearskies_api.services.companion_proxy import (
+            MarineDiscoveryUnavailableError,
+        )
+
+        _patch_station(monkeypatch, _fake_station_info())
+
+        def _raise_net(path: str, params: dict[str, Any]) -> Any:
+            raise MarineDiscoveryUnavailableError("The marine service is unreachable: timeout")
+
+        _patch_marine_discovery(monkeypatch, _raise_net)
+        settings = _FakeSettings(default_radius_km=_DEFAULT_RADIUS_KM)
+        with pytest.raises(MarineDiscoveryUnavailableError) as excinfo:
+            basemap_extract.compute_local_bounds(settings)
+        assert excinfo.value.status_code is None

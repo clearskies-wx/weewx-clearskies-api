@@ -140,8 +140,21 @@ def compute_local_bounds(settings: Any) -> str:
     except companion_proxy.MarineDiscoveryUnconfiguredError:
         # No marine service configured -- structural, not a failure.
         locations = None
-        # MarineDiscoveryUnavailableError (configured but unreachable) is
-        # deliberately NOT caught here -- it propagates to the caller.
+    except companion_proxy.MarineDiscoveryUnavailableError as exc:
+        # Gate M1-API finding (2026-08-27): the marine service answers 404
+        # on GET /marine when it is installed but has no locations configured
+        # yet (endpoints/marine.py list_marine_locations) -- the same
+        # structural "no marine box" state as unconfigured, not an outage.
+        # Any other status, or a network/parse failure (status_code None),
+        # is a genuine outage and propagates: the local tier refuses rather
+        # than silently shrinking to the seismic box.
+        if exc.status_code != 404:
+            raise
+        logger.info(
+            "basemap: marine service is configured but has no locations "
+            "(HTTP 404 on /marine) -- local tier uses the seismic box alone."
+        )
+        locations = None
 
     if locations:
         station_lat = get_station_info().latitude

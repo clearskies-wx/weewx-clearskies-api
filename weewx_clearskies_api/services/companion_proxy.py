@@ -379,7 +379,18 @@ class MarineDiscoveryUnavailableError(MarineDiscoveryError):
     """The marine service is configured but the discovery request failed
     (network error, non-JSON body, or a non-200 status). A genuine outage —
     message text is distinct from MarineDiscoveryUnconfiguredError's.
+
+    ``status_code`` carries the HTTP status when the service answered with a
+    non-200 (``None`` for network/parse failures) so callers can dispatch on
+    state, never on the message string (rules/coding.md "Dispatch on
+    exception state via attributes"). Gate M1-API finding (2026-08-27): the
+    marine service answers 404 on ``GET /marine`` when it is installed but
+    has no locations yet — a legitimate install state, not an outage.
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 _DISCOVERY_REQUEST_TIMEOUT_S = 15.0
@@ -425,7 +436,8 @@ def marine_discovery_get(path: str, params: dict[str, Any]) -> Any:
 
     if response.status_code != 200:
         raise MarineDiscoveryUnavailableError(
-            f"The marine service returned HTTP {response.status_code} for {path}"
+            f"The marine service returned HTTP {response.status_code} for {path}",
+            status_code=response.status_code,
         )
 
     return body

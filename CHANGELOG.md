@@ -27,6 +27,10 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
   operator-typed
 - `[basemap]` config section: `enabled` (bool, default `true`) — the only key
 - ADR-078's `[geographic_features]` endpoints/service remain in place this round (additive build)
+- Gate M1-API F1 fix: a marine service that is installed but has no locations yet answers HTTP 404
+  on `/marine`; the local tier now treats that as "no marine box" (seismic box alone) instead of
+  refusing forever. `MarineDiscoveryUnavailableError` gains a `status_code` attribute so callers
+  dispatch on state, not on the message string
 
 ---
 
