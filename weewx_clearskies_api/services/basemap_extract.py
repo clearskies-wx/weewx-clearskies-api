@@ -420,7 +420,7 @@ def _run_extract_all(settings: Any) -> None:
         _state["last_error"] = "; ".join(errors) if errors else None
 
 
-def get_status() -> dict:
+def get_basemap_status() -> dict:
     """Return per-tier availability + extract-run state.
 
     Availability/size/mtime are read fresh from disk on every call (disk is

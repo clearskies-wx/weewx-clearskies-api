@@ -153,7 +153,7 @@ def get_basemap_status() -> dict:
     bounds, minzoom, maxzoom}}, updating, last_error, last_started_at,
     last_finished_at}.
     """
-    return basemap_extract.get_status()
+    return basemap_extract.get_basemap_status()
 
 
 # ---------------------------------------------------------------------------
