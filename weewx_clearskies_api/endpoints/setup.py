@@ -1833,6 +1833,13 @@ async def _push_marine_service_config(config_dir: Path) -> MarineConfigPushResul
     return MarineConfigPushResult(attempted=True, ok=True)
 
 
+#: The provider domains `_write_api_conf()` persists to api.conf. Mirrors the
+#: read-side `_PROVIDER_DOMAINS` in `get_current_config()` (kept in sync by
+#: `tests/test_m4b_gate_f1_apply_domain_allowlist.py`). "imagery" left this
+#: set with Q10-6 (2026-08-27).
+_WRITABLE_PROVIDER_DOMAINS = frozenset({"forecast", "aqi", "alerts", "radar", "earthquakes"})
+
+
 def _write_api_conf(
     config_dir: Path,
     apply: ApplyRequest,
@@ -1899,6 +1906,18 @@ def _write_api_conf(
     if apply.providers:
         for domain, pc in apply.providers.items():
             section = domain.lower()
+            # Gate M4-B F1 (2026-08-27): only the five known provider domains
+            # are written. Anything else (a stale wizard bundle still sending
+            # "imagery" after Q10-6, a hand-crafted payload) is logged and
+            # dropped -- never persisted as an orphan section the loader will
+            # not read.
+            if section not in _WRITABLE_PROVIDER_DOMAINS:
+                logger.warning(
+                    "setup/apply: ignoring unknown provider domain %r "
+                    "(writable domains: %s)",
+                    domain, ", ".join(sorted(_WRITABLE_PROVIDER_DOMAINS)),
+                )
+                continue
             if section not in cfg:
                 cfg[section] = {}
             cfg[section]["provider"] = _canonical_provider(pc.provider)
