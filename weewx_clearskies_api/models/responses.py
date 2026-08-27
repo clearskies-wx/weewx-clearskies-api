@@ -1467,16 +1467,17 @@ class ImageryConfigResponse(BaseModel):
     elsewhere in this file, because §LM-1(b) pins the wire shape exactly:
     {provider, tileUrl, attribution, proxyMode, bounds?}.
 
-    As of §M4, provider is always "basemap" — [imagery] provider (naip/esri/
-    map/auto) is no longer reachable from any user-facing surface (PA9).
-    The legacy top-level tileUrl/attribution fields carry the light theme's
-    values so an old client still renders. light/dark/zoomMin/zoomMax are
-    additive optional fields carrying the full per-theme basemap config.
+    As of §M4, provider is always "basemap" — the prior provider-selection
+    machinery is no longer reachable from any user-facing surface (PA9) and
+    was removed entirely (Q10-6, 2026-08-27). The legacy top-level
+    tileUrl/attribution fields carry the light theme's values so an old
+    client still renders. light/dark/zoomMin/zoomMax are additive optional
+    fields carrying the full per-theme basemap config.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: str  # "basemap" (naip/esri/map retired from user-facing use, PA9)
+    provider: str  # always "basemap" (prior providers removed 2026-08-27, Q10-6)
     tileUrl: str
     attribution: str
     proxyMode: str  # "api" | "direct"

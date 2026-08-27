@@ -198,7 +198,7 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(geographic_features_router, prefix="/api/v1")
         # M1: tiered basemap PMTiles data endpoints (generalises ADR-078).
         app.include_router(basemap_router, prefix="/api/v1")
-        # Phase LM §LM-1: imagery config + NAIP tile proxy.
+        # Phase LM §LM-1: imagery config (basemap answer, PA9/Q10-6).
         app.include_router(imagery_router, prefix="/api/v1")
 
         # ADR-058: SSE stream — no /api/v1 prefix; endpoint lives at /sse.
