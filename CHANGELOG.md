@@ -23,13 +23,29 @@ The cross-repo compatibility matrix (which api/dashboard/realtime versions work 
   "/api/v1/basemap/local/tiles", maxDataZoom: 15, attribution}` (the local Protomaps tier),
   `zoomMin: 0`, `zoomMax: 19`. The legacy top-level `tileUrl`/`attribution` fields carry the light
   values for old-client compatibility.
-- `wire_imagery_settings()` logs one WARNING at startup naming an ignored `[imagery] provider`
-  value, if set.
-- `GET /api/v1/imagery/tiles/{z}/{x}/{y}` (NAIP proxy) is unchanged; the `[imagery]` config
-  section, its provider modules, admin section and wizard selector all remain in place (Q10-6
-  open).
 - `models/responses.py`: new `ImageryLightSource`, `ImageryDarkSource`; `ImageryConfigResponse`
   gains optional `light`/`dark`/`zoomMin`/`zoomMax` (additive).
+
+### Removed
+
+**Imagery provider machinery (M4-B — Q10-6, "if we dont need it then get rid of it")**
+- `providers/imagery/{esri,esri_topo,naip}.py` and their package `__init__.py` — deleted. Nothing
+  user-facing read the `[imagery]` provider any more after M4's `/imagery/config` change above.
+- `providers/_common/dispatch.py` — the three `("imagery", ...)` rows removed.
+- `config/settings.py` — `ImagerySettings` class deleted; `Settings.imagery` no longer exists. A
+  legacy `[imagery]` section in `api.conf` is now silently ignored (nothing reads `cfg["imagery"]`
+  any more; no per-section validation error is raised). Operators may delete the section from
+  `api.conf` — it has no effect.
+- `__main__.py` — startup imagery-module dispatch-table checks and the `wire_imagery_settings()`
+  call/import removed.
+- `endpoints/imagery.py` — `wire_imagery_settings()`, `reset_imagery_settings_for_tests()`,
+  `_select_provider()`, the `_imagery_provider`/tile-cache-TTL module globals, the startup
+  WARNING, and `GET /api/v1/imagery/tiles/{z}/{x}/{y}` (the NAIP tile proxy: `get_imagery_tile`,
+  `_validate_tile_coords`, `_get_imagery_tile_params`) are all gone — that route now 404s.
+  `GET /api/v1/imagery/config` is unchanged (byte-identical response; `lat`/`lon` still required
+  and validated, still unused for provider selection).
+- `models/params.py` — `ImageryTileQueryParams` deleted. `ImageryConfigQueryParams` unchanged.
+- `endpoints/setup.py` — `"imagery"` dropped from `_PROVIDER_DOMAINS` (wizard-apply prefill).
 
 ### Added
 
