@@ -9,27 +9,27 @@ note). Any card/feature may call /imagery/config, not just the marine
 heatmap. HARD RULE (phase header): imagery is DISPLAY-ONLY — nothing here
 feeds SWAN, the 1D model, transect selection, or any physics path.
 
-Behavior decision tree for /config (§LM-1b, KAT e; extended IMAGERY-MAP round
-2026-08-26 for the "map" provider):
-  1. lat/lon missing/out-of-range → 422 (Pydantic Depends validator).
-  2. [imagery] not configured (provider is None) → 404 Problem.
-  3. provider == "naip" or "esri" or "map" (explicit override) → that
-     provider, regardless of the spot's coordinates (phase design note
-     "Configurable override in admin").
-  4. provider == "auto" → naip.is_conus(lat, lon): True → "naip",
-     False → "esri" (KAT d: non-CONUS + naip-preferred config falls back
-     to esri). "auto" never selects "map" — unchanged by the IMAGERY-MAP
-     round.
-  5. naip → proxyMode="api", tileUrl points at THIS API's own proxy path
-     (`/api/v1/imagery/tiles/{z}/{x}/{y}`), NOT the upstream USGS URL.
-  6. esri → proxyMode="direct", tileUrl is the ESRI World Imagery XYZ
-     template for the browser to fetch directly. ESRI tile bytes never flow
-     through this API.
-  7. map → proxyMode="direct", tileUrl is the Esri World Topo Map XYZ
-     template (operator ruling 2026-08-26: replaces orthophotography with a
-     map-style background because NAIP's low-tide flyover made surf render
-     on what looked like dry land). Same browser-direct, no-proxy shape as
-     esri.
+Behavior for /config (SURF-MAP-BASEMAP, PA9, Q5; plan
+MARINE-AND-MAPS-PLAN-2026-08-27.md §M4, 2026-08-27 — supersedes the
+naip/esri/map decision tree below the 2026-08-26 IMAGERY-MAP round left in
+place):
+  /imagery/config now ALWAYS answers with the product basemap
+  (provider="basemap") regardless of [imagery] provider — naip/esri/map/auto
+  are no longer reachable from any user-facing surface (the operator: "get
+  rid of the orthophotography for the surf height map and replace it with a
+  regular basemap"). The endpoint never 404s: the surf height map must
+  always get a basemap answer. lat/lon are still validated (422 on
+  missing/out-of-range) but no longer used to select a provider —
+  _select_provider() is not called here or anywhere else in this module
+  (kept, unmodified, per lead mechanics; /imagery/tiles inlines its own
+  provider check rather than calling it). light.tileUrl/attribution mirror
+  the legacy top-level tileUrl/attribution fields (an old client still
+  renders). dark.pmtilesUrl is the LOCAL basemap tier
+  (`/api/v1/basemap/local/tiles`) — the surf map lives inside the local box
+  by construction. wire_imagery_settings() logs ONE startup WARNING naming
+  the ignored [imagery] provider value, if set. The [imagery] provider
+  config, its modules, admin section, and wizard selector all stay pending
+  Q10-6 — only this endpoint's answer changed.
 
 Behavior decision tree for /tiles/{z}/{x}/{y} (§LM-1c):
   1. z/x/y out of range (z via FastAPI Path constraint; x/y validated
@@ -70,7 +70,11 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import ValidationError
 
 from weewx_clearskies_api.models.params import ImageryConfigQueryParams, ImageryTileQueryParams
-from weewx_clearskies_api.models.responses import ImageryConfigResponse
+from weewx_clearskies_api.models.responses import (
+    ImageryConfigResponse,
+    ImageryDarkSource,
+    ImageryLightSource,
+)
 from weewx_clearskies_api.providers._common.dispatch import get_provider_module
 from weewx_clearskies_api.providers._common.errors import (
     KeyInvalid,
@@ -78,8 +82,6 @@ from weewx_clearskies_api.providers._common.errors import (
     QuotaExhausted,
     TransientNetworkError,
 )
-from weewx_clearskies_api.providers.imagery import esri as esri_module
-from weewx_clearskies_api.providers.imagery import esri_topo as esri_topo_module
 from weewx_clearskies_api.providers.imagery import naip as naip_module
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,13 @@ router = APIRouter()
 
 _imagery_provider: str | None = None  # "auto" | "naip" | "esri" | None (not configured)
 _imagery_tile_cache_ttl_seconds: int = 604800  # 7 days
+
+# SURF-MAP-BASEMAP (PA9, §M4, 2026-08-27): fixed light-theme tile source for
+# /imagery/config's "basemap" answer. {s} pre-expanded to "a" per lead
+# mechanics — the surf map's mosaic fetches a single subdomain, not a
+# rotating {s} substitution.
+_BASEMAP_LIGHT_TILE_URL = "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
+_OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 
 # NAIP-sensible zoom bounds (see providers/imagery/naip.py docstring): NAIP's
 # native resolution (~0.6-1m/px) is fully represented by z<=20 (~0.15m/px at
@@ -110,6 +119,11 @@ def wire_imagery_settings(settings: object) -> None:
     provider config leave module defaults as-is (matches wire_seeing_settings
     pattern in endpoints/seeing.py — the simplest existing precedent for a
     keyless, no-credential settings wiring).
+
+    SURF-MAP-BASEMAP (PA9, §M4, 2026-08-27): [imagery] provider is no longer
+    used by /imagery/config (always answers "basemap") or by any other
+    user-facing surface. If provider is set, log ONE WARNING here at wiring
+    time naming the ignored value — not per request.
     """
     global _imagery_provider, _imagery_tile_cache_ttl_seconds  # noqa: PLW0603
     imagery_section = getattr(settings, "imagery", None)
@@ -118,6 +132,12 @@ def wire_imagery_settings(settings: object) -> None:
         _imagery_tile_cache_ttl_seconds = int(
             getattr(imagery_section, "tile_cache_ttl_seconds", 604800)
         )
+        if _imagery_provider is not None:
+            logger.warning(
+                "[imagery] provider=%s is no longer used by any user-facing surface "
+                "(PA9, 2026-08-27); the surf height map draws the product basemap",
+                _imagery_provider,
+            )
 
 
 def reset_imagery_settings_for_tests() -> None:
@@ -204,45 +224,33 @@ def _validate_tile_coords(z: int, x: int, y: int) -> None:
 def get_imagery_config(
     params: Annotated[ImageryConfigQueryParams, Depends(_get_imagery_config_params)],
 ) -> ImageryConfigResponse:
-    """Return the active imagery provider's config for the given coordinates.
+    """Return the product basemap config for the surf height map (§M4, PA9).
 
-    See module docstring for the full /config decision tree.
+    Always answers with provider="basemap" — never 404s, and does not call
+    _select_provider() (see module docstring, unchanged and unused in this
+    endpoint). lat/lon are still validated
+    (422 on missing/out-of-range) via the Depends params model but are not
+    otherwise used — the basemap answer does not vary by coordinates.
     """
-    if _imagery_provider is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Imagery provider not configured. Check the [imagery] section in api.conf.",
-        )
+    del params  # validated for shape only; the basemap answer is fixed
 
-    provider_id = _select_provider(params.lat, params.lon)
-
-    if provider_id == "naip":
-        return ImageryConfigResponse(
-            provider="naip",
-            tileUrl="/api/v1/imagery/tiles/{z}/{x}/{y}",
-            attribution=naip_module.ATTRIBUTION,
-            proxyMode="api",
-            bounds=dict(naip_module.CONUS_BOUNDS),
-        )
-
-    if provider_id == "esri":
-        esri_config = esri_module.get_config()
-        return ImageryConfigResponse(
-            provider="esri",
-            tileUrl=esri_config["tileUrl"],
-            attribution=esri_config["attribution"],
-            proxyMode="direct",
-            bounds=None,
-        )
-
-    # provider_id == "map"
-    esri_topo_config = esri_topo_module.get_config()
     return ImageryConfigResponse(
-        provider="map",
-        tileUrl=esri_topo_config["tileUrl"],
-        attribution=esri_topo_config["attribution"],
+        provider="basemap",
+        tileUrl=_BASEMAP_LIGHT_TILE_URL,
+        attribution=_OSM_ATTRIBUTION,
         proxyMode="direct",
         bounds=None,
+        light=ImageryLightSource(
+            tileUrl=_BASEMAP_LIGHT_TILE_URL,
+            attribution=_OSM_ATTRIBUTION,
+        ),
+        dark=ImageryDarkSource(
+            pmtilesUrl="/api/v1/basemap/local/tiles",
+            maxDataZoom=15,
+            attribution="© OpenStreetMap contributors © Protomaps",
+        ),
+        zoomMin=0,
+        zoomMax=19,
     )
 
 
