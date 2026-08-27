@@ -1,15 +1,15 @@
 """Basemap extract service (M1 -- CS-BASEMAP, plan MARINE-AND-MAPS-PLAN-2026-08-27 SS"M1").
 
-Generalises ADR-078's single geographic-features PMTiles file into three
-tiered basemap files serving every Clear Skies map surface (marine, seismic,
-radar/satellite): a coarse global fallback, a detailed local box around the
-station + marine locations, and a box matching the radar provider's declared
-coverage. ADR-078's own service/endpoints stay live this round (additive
-build) -- this module does not import from or modify them.
+Generalises ADR-078's single-file geographic-features PMTiles overlay
+(removed, M5 -- ADR-078 Amendment 2) into three tiered basemap files serving
+every Clear Skies map surface (marine, seismic, radar/satellite): a coarse
+global fallback, a detailed local box around the station + marine locations,
+and a box matching the radar provider's declared coverage. This module never
+imported from or modified the old service/endpoints.
 
 Extraction mechanics (today/yesterday Protomaps daily-build fallback, temp
-file + atomic move, 1800 s subprocess timeout) mirror
-``services/geographic_features.py:108-160`` (ADR-078) -- with both
+file + atomic move, 1800 s subprocess timeout) mirror the removed
+``services/geographic_features.py:108-160`` (ADR-078, history) -- with both
 ``--minzoom`` and ``--maxzoom`` per tier, run world -> local -> radar in ONE
 background daemon thread per ``POST /setup/basemap/update`` call
 (``start_extract_in_background()`` returns ``False`` when one is already
@@ -232,7 +232,7 @@ def _bbox_for_tier(tier: str, settings: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Extraction mechanics (mirrors services/geographic_features.py:54-192)
+# Extraction mechanics (mirrors the removed services/geographic_features.py:54-192, ADR-078, history)
 # ---------------------------------------------------------------------------
 
 
@@ -287,8 +287,8 @@ def _extract_one_tier(tier: str, bbox: str) -> dict:
 
             # cmd is a fixed-shape list built entirely from trusted config/
             # derived values (pmtiles binary name, computed bbox, tier zoom
-            # range), never raw user input -- same posture as
-            # geographic_features.py's identical call.
+            # range), never raw user input -- same posture as the removed
+            # geographic_features.py's identical call (ADR-078, history).
             result = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,

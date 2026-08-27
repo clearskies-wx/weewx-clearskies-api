@@ -1,11 +1,11 @@
 """Basemap endpoints -- tiered PMTiles serving + status + admin extraction
 (M1 -- CS-BASEMAP, plan MARINE-AND-MAPS-PLAN-2026-08-27 SS"M1").
 
-Generalises ADR-078's single geographic-features PMTiles file/endpoint into
-three tiers (world/local/radar) serving every Clear Skies map surface.
-ADR-078's own endpoints/service (endpoints/geographic_features.py,
-services/geographic_features.py) stay live this round (additive build) --
-this module does not touch them.
+Generalises ADR-078's single-file geographic-features PMTiles overlay
+(removed, M5 -- ADR-078 Amendment 2) into three tiers (world/local/radar)
+serving every Clear Skies map surface. The old endpoints/service
+(endpoints/geographic_features.py, services/geographic_features.py) are gone;
+this module never touched them.
 
 Endpoints:
   GET  /api/v1/basemap/{tier}/tiles  -- serve one tier's PMTiles file (public)
@@ -14,13 +14,13 @@ Endpoints:
                                          all three tiers (auth required)
 
 Starlette's FileResponse handles HTTP Range requests natively (206 Partial
-Content), same mechanism ADR-078's tiles endpoint uses.
+Content), same mechanism the old (removed) geographic-features tiles endpoint used.
 
-Auth pattern for the setup endpoint mirrors endpoints/geographic_features.py
-:69-81, 176-187 -- copied inline (not imported) for the same circular-import
-reason documented there.
+Auth pattern for the setup endpoint mirrored the removed
+endpoints/geographic_features.py:69-81, 176-187 (ADR-078, history) -- copied
+inline (not imported) for a circular-import reason documented at the time.
 
-Two routers, mirroring geographic_features.py:
+Two routers, a pattern the removed geographic_features.py also used:
   router       -- data endpoints, mounted with prefix /api/v1 in app.py
   setup_router -- setup endpoint, mounted without prefix (lives at /setup/...)
 """
@@ -71,7 +71,8 @@ def reset_basemap_settings_for_tests() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Auth helper -- mirrors _check_proxy_auth from endpoints/geographic_features.py
+# Auth helper -- mirrored _check_proxy_auth from the removed
+# endpoints/geographic_features.py (ADR-078, history).
 # Copied inline to avoid circular import risk (same reason documented there).
 # ---------------------------------------------------------------------------
 

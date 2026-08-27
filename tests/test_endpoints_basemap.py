@@ -7,8 +7,9 @@ mechanics — API side"; module under test is weewx_clearskies_api/endpoints/
 basemap.py. Written by clearskies-test-author, M1-API round, mirroring
 tests/test_endpoints_imagery_integration.py's FastAPI TestClient scaffolding
 (closest existing precedent for a tile-serving + admin-action endpoint
-family) and the auth/status-shape pattern documented in endpoints/
-geographic_features.py (ADR-078, the feature this generalises).
+family) and the auth/status-shape pattern documented in the removed
+endpoints/geographic_features.py (ADR-078, the feature this generalises --
+deleted M5, ADR-078 Amendment 2).
 
 KAT coverage (brief §Scope — test-author, "Endpoints"):
   (a) GET /api/v1/basemap/local/tiles with a Range header -> 206 +
