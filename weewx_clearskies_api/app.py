@@ -53,8 +53,6 @@ from weewx_clearskies_api.endpoints.content import router as content_router
 from weewx_clearskies_api.endpoints.custom_query import router as custom_query_router
 from weewx_clearskies_api.endpoints.earthquakes import router as earthquakes_router
 from weewx_clearskies_api.endpoints.forecast import router as forecast_router
-from weewx_clearskies_api.endpoints.geographic_features import router as geographic_features_router
-from weewx_clearskies_api.endpoints.geographic_features import setup_router as geographic_features_setup_router
 from weewx_clearskies_api.endpoints.imagery import router as imagery_router
 from weewx_clearskies_api.endpoints.observations import router as observations_router
 from weewx_clearskies_api.endpoints.pages import router as pages_router
@@ -138,9 +136,6 @@ def create_app(settings: Settings) -> FastAPI:
         # Setup mode: only the setup router and the catch-all 503 are mounted.
         # No DB, no providers, no data routers.
         app.include_router(setup_router)
-        # ADR-078: geographic features setup endpoint available in setup mode
-        # (operator needs to download PMTiles before first use).
-        app.include_router(geographic_features_setup_router)
         # M1: basemap setup endpoint available in setup mode, same reason.
         app.include_router(basemap_setup_router)
 
@@ -194,9 +189,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(seeing_router, prefix="/api/v1")
         # Custom SQL query: operator-defined series from charts.conf.
         app.include_router(custom_query_router, prefix="/api/v1")
-        # ADR-078: geographic features PMTiles data endpoints.
-        app.include_router(geographic_features_router, prefix="/api/v1")
-        # M1: tiered basemap PMTiles data endpoints (generalises ADR-078).
+        # M1: tiered basemap PMTiles data endpoints (generalises the removed
+        # ADR-078 geographic-features endpoint family).
         app.include_router(basemap_router, prefix="/api/v1")
         # Phase LM §LM-1: imagery config (basemap answer, PA9/Q10-6).
         app.include_router(imagery_router, prefix="/api/v1")
@@ -207,8 +201,6 @@ def create_app(settings: Settings) -> FastAPI:
 
         # Setup endpoints — no /api/v1 prefix (separate surface per ADR-038).
         app.include_router(setup_router)
-        # ADR-078: geographic features setup endpoint (download PMTiles).
-        app.include_router(geographic_features_setup_router)
         # M1: basemap setup endpoint (world+local+radar background extract).
         app.include_router(basemap_setup_router)
 
