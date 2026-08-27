@@ -1423,29 +1423,68 @@ class RadarFramesResponse(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Imagery (Phase LM, §LM-1) — orthophoto imagery for heatmap geographic context
+# SURF-MAP-BASEMAP (PA9, Q5, plan MARINE-AND-MAPS-PLAN-2026-08-27.md §M4,
+# 2026-08-27): /imagery/config now answers with the product basemap
+# ("basemap"/light/dark) regardless of [imagery] provider.
 # ---------------------------------------------------------------------------
 
 
+class ImageryLightSource(BaseModel):
+    """Light-theme tile source for the surf height map's product basemap (§M4).
+
+    Mirrors the legacy top-level tileUrl/attribution fields exactly — the
+    surf map's light theme is browser-direct OSM raster tiles, same as the
+    product's other light-theme Leaflet maps.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    tileUrl: str
+    attribution: str
+
+
+class ImageryDarkSource(BaseModel):
+    """Dark-theme tile source for the surf height map's product basemap (§M4).
+
+    pmtilesUrl is the LOCAL basemap tier (`/api/v1/basemap/local/tiles`) —
+    the surf map lives inside the local box by construction. maxDataZoom is
+    the local tier's vector data ceiling (z15); zoom levels above that are
+    client-side vector magnification, not additional data.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    pmtilesUrl: str
+    maxDataZoom: int
+    attribution: str
+
+
 class ImageryConfigResponse(BaseModel):
-    """GET /imagery/config response (OpenAPI-equivalent shape per §LM-1b).
+    """GET /imagery/config response (OpenAPI-equivalent shape per §LM-1b;
+    extended for the product basemap per §M4, 2026-08-27).
 
     Flat top-level shape — NOT wrapped in the data+generatedAt envelope used
     elsewhere in this file, because §LM-1(b) pins the wire shape exactly:
     {provider, tileUrl, attribution, proxyMode, bounds?}.
 
-    For NAIP (proxyMode="api"), tileUrl points at this API's own proxy path
-    (`/api/v1/imagery/tiles/{z}/{x}/{y}`) — NOT the upstream USGS URL. For
-    ESRI (proxyMode="direct"), tileUrl is the ESRI XYZ template the browser
-    fetches directly.
+    As of §M4, provider is always "basemap" — [imagery] provider (naip/esri/
+    map/auto) is no longer reachable from any user-facing surface (PA9).
+    The legacy top-level tileUrl/attribution fields carry the light theme's
+    values so an old client still renders. light/dark/zoomMin/zoomMax are
+    additive optional fields carrying the full per-theme basemap config.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: str  # "naip" | "esri" | "map"
+    provider: str  # "basemap" (naip/esri/map retired from user-facing use, PA9)
     tileUrl: str
     attribution: str
     proxyMode: str  # "api" | "direct"
     bounds: dict[str, float] | None = None
+    light: ImageryLightSource | None = None
+    dark: ImageryDarkSource | None = None
+    zoomMin: int | None = None
+    zoomMax: int | None = None
 
 
 # ---------------------------------------------------------------------------
