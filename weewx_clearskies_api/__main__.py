@@ -83,7 +83,6 @@ from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_features_settings
 from weewx_clearskies_api.endpoints.forecast import wire_forecast_settings
-from weewx_clearskies_api.endpoints.imagery import wire_imagery_settings
 from weewx_clearskies_api.endpoints.setup import wire_forecast_correction_settings
 from weewx_clearskies_api.endpoints.radar import wire_radar_settings
 from weewx_clearskies_api.endpoints.seeing import wire_seeing_settings
@@ -587,39 +586,6 @@ def _wire_providers_from_config(settings: Settings) -> None:
         else:
             declarations.append(module.CAPABILITY)
 
-    # Phase LM §LM-1: imagery domain (naip, esri). Unlike every other domain,
-    # provider selection is per-request (CONUS-bbox test in endpoints/imagery.py),
-    # not a single operator-wide pick — "auto" registers BOTH modules'
-    # CAPABILITY (either may serve a given request); an explicit "naip"/"esri"
-    # override registers only that one. Registration is required (lead ruling
-    # 2026-08-03): /capabilities and the About-page attribution list are the
-    # load-bearing truthfulness parts of PROVIDER-MANUAL §1, and ESRI's
-    # ToS-required attribution should not depend solely on one card's rendering.
-    if settings.imagery.provider:
-        imagery_provider = settings.imagery.provider
-        if imagery_provider in ("auto", "naip"):
-            try:
-                naip_module = get_provider_module(domain="imagery", provider_id="naip")
-            except KeyError as exc:
-                logger.critical(
-                    "FATAL: imagery naip module not found in dispatch table — "
-                    "clearskies-api cannot start. Cause: %s.",
-                    exc,
-                )
-                sys.exit(1)
-            declarations.append(naip_module.CAPABILITY)
-        if imagery_provider in ("auto", "esri"):
-            try:
-                esri_module = get_provider_module(domain="imagery", provider_id="esri")
-            except KeyError as exc:
-                logger.critical(
-                    "FATAL: imagery esri module not found in dispatch table — "
-                    "clearskies-api cannot start. Cause: %s.",
-                    exc,
-                )
-                sys.exit(1)
-            declarations.append(esri_module.CAPABILITY)
-
     # Seeing provider (7Timer — keyless, no dispatch registry entry needed).
     if settings.seeing.provider:
         from weewx_clearskies_api.providers.seeing.seven_timer import (
@@ -1067,10 +1033,6 @@ def main() -> None:
     # no-op. Aeris + OWM: extracts credentials from settings.forecast per 3b-5 Q2
     # provider-scoped decision (same env vars as forecast/alerts/AQI).
     wire_radar_settings(settings)
-
-    # Step 6o¼: Phase LM §LM-1 — pass settings to imagery endpoint (keyless —
-    # no credentials; provider + tile_cache_ttl_seconds only).
-    wire_imagery_settings(settings)
 
     # Step 6o½: Pass settings to seeing endpoint (keyless — no credentials).
     wire_seeing_settings(settings)

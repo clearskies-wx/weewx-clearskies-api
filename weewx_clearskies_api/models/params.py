@@ -569,23 +569,16 @@ class RadarTileQueryParams(BaseModel):
 class ImageryConfigQueryParams(BaseModel):
     """Query params for /imagery/config.
 
-    lat/lon are the spot's coordinates (§LM-1d provider selection: CONUS
-    coordinates prefer NAIP, otherwise ESRI). Both required — imagery is a
-    general-purpose provider, not station-scoped, so there is no station-
-    location fallback. extra="forbid" rejects unknown keys per
-    security-baseline §3.5.
+    lat/lon are the spot's coordinates. Both required and still validated
+    (422 on missing/out-of-range) though no longer used to select a
+    provider — the endpoint always answers with the product basemap (Q10-6,
+    2026-08-27; removing a required param is a wire change and is not
+    authorized by that round). imagery is a general-purpose provider, not
+    station-scoped, so there is no station-location fallback. extra="forbid"
+    rejects unknown keys per security-baseline §3.5.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     lat: float = Field(..., ge=-90, le=90)
     lon: float = Field(..., ge=-180, le=180)
-
-
-class ImageryTileQueryParams(BaseModel):
-    """Query params for /imagery/tiles/{z}/{x}/{y}.
-
-    No query params accepted — extra="forbid" rejects everything.
-    """
-
-    model_config = ConfigDict(extra="forbid")
