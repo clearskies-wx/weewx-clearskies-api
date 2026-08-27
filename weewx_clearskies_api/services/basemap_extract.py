@@ -45,6 +45,7 @@ error in the module's ``last_error`` state; the other tiers still run.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -271,7 +272,11 @@ def _extract_one_tier(tier: str, bbox: str) -> dict:
             ]
             logger.info("basemap extract (%s): %s", tier, " ".join(cmd))
 
-            result = subprocess.run(
+            # cmd is a fixed-shape list built entirely from trusted config/
+            # derived values (pmtiles binary name, computed bbox, tier zoom
+            # range), never raw user input -- same posture as
+            # geographic_features.py's identical call.
+            result = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -326,10 +331,8 @@ def _extract_one_tier(tier: str, bbox: str) -> dict:
         ) from exc
     finally:
         if tmp_path is not None and tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
 
     stat = output_path.stat()
     updated_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
