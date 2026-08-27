@@ -78,6 +78,7 @@ from weewx_clearskies_api.db.registry import wire_registry
 from weewx_clearskies_api.db.session import get_engine, wire_engine
 from weewx_clearskies_api.endpoints.alerts import wire_alerts_settings
 from weewx_clearskies_api.endpoints.aqi import wire_aqi_settings
+from weewx_clearskies_api.endpoints.basemap import wire_basemap_settings
 from weewx_clearskies_api.endpoints.branding import wire_branding_settings, wire_social_settings
 from weewx_clearskies_api.endpoints.earthquakes import wire_earthquakes_settings
 from weewx_clearskies_api.endpoints.geographic_features import wire_geographic_features_settings
@@ -986,6 +987,12 @@ def main() -> None:
     # Step 6l½: Pass settings to geographic features endpoint (ADR-078 — PMTiles).
     # Extracts bounds and maxzoom for pmtiles extract invocation.
     wire_geographic_features_settings(settings)
+
+    # Step 6l¾: Pass settings to basemap endpoint (M1 — CS-BASEMAP). basemap_extract's
+    # compute_local_bounds()/compute_radar_bounds() need settings.earthquakes and
+    # settings.radar at extract time, not just [basemap] enabled — wire_basemap_settings()
+    # stores the full Settings reference for the setup endpoint to pass through.
+    wire_basemap_settings(settings)
 
     # Step 6m: Pass settings to forecast endpoint (NWS UA contact wiring).
     wire_forecast_settings(settings)

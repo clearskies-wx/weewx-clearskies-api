@@ -44,6 +44,8 @@ from weewx_clearskies_api.endpoints.alerts import router as alerts_router
 from weewx_clearskies_api.endpoints.almanac import router as almanac_router
 from weewx_clearskies_api.endpoints.aqi import router as aqi_router
 from weewx_clearskies_api.endpoints.archive_grouped import router as archive_grouped_router
+from weewx_clearskies_api.endpoints.basemap import router as basemap_router
+from weewx_clearskies_api.endpoints.basemap import setup_router as basemap_setup_router
 from weewx_clearskies_api.endpoints.branding import router as branding_router
 from weewx_clearskies_api.endpoints.capabilities import router as capabilities_router
 from weewx_clearskies_api.endpoints.charts import router as charts_router
@@ -139,6 +141,8 @@ def create_app(settings: Settings) -> FastAPI:
         # ADR-078: geographic features setup endpoint available in setup mode
         # (operator needs to download PMTiles before first use).
         app.include_router(geographic_features_setup_router)
+        # M1: basemap setup endpoint available in setup mode, same reason.
+        app.include_router(basemap_setup_router)
 
         @app.api_route(
             "/api/v1/{path:path}",
@@ -192,6 +196,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(custom_query_router, prefix="/api/v1")
         # ADR-078: geographic features PMTiles data endpoints.
         app.include_router(geographic_features_router, prefix="/api/v1")
+        # M1: tiered basemap PMTiles data endpoints (generalises ADR-078).
+        app.include_router(basemap_router, prefix="/api/v1")
         # Phase LM §LM-1: imagery config + NAIP tile proxy.
         app.include_router(imagery_router, prefix="/api/v1")
 
@@ -203,6 +209,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.include_router(setup_router)
         # ADR-078: geographic features setup endpoint (download PMTiles).
         app.include_router(geographic_features_setup_router)
+        # M1: basemap setup endpoint (world+local+radar background extract).
+        app.include_router(basemap_setup_router)
 
         # T6.1: companion proxy — no-op unless [providers] marine_service_url
         # is configured. Native marine routers were deleted in T6.5-T6.8;
