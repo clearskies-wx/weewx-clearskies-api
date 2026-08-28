@@ -747,6 +747,15 @@ class MarineLocationApplyConfig(BaseModel):
     ndbc_station_ids: list[str] = []
     coops_station_ids: list[str] = []
     nws_marine_zone_id: str | None = None
+    #: CHAIN-SERVES D1 per-location switch (API-MANUAL §19.7a). Today it
+    #: gates only the marine service's buoy-scorecard ledger writers. None
+    #: (omitted from the payload) is CONFIG-FILE-OWNED: preserved from the
+    #: existing api.conf on apply (same treatment as the station IDs and
+    #: the six surf fields, operator ruling 2026-08-03 item 8); payload-
+    #: present wins. Before 2026-08-28 this key existed only as a hand-
+    #: placed value in the marine service's own marine.conf, and every
+    #: config push erased it (operator: "it still needs set").
+    ww3_chain_enabled: bool | None = None
     surf: MarineSurfSpotApplyConfig | None = None
     fishing: MarineFishingSpotApplyConfig | None = None
     beach_safety: MarineBeachSafetyApplyConfig | None = None
@@ -1290,6 +1299,8 @@ def _build_marine_conf_section(
             loc_section["coops_station_ids"] = list(loc.coops_station_ids)
         if loc.nws_marine_zone_id:
             loc_section["nws_marine_zone_id"] = loc.nws_marine_zone_id
+        if loc.ww3_chain_enabled is not None:
+            loc_section["ww3_chain_enabled"] = "true" if loc.ww3_chain_enabled else "false"
 
         # C-42: OFS model annotation is config-write-time, not a live
         # wizard query the operator is looking at — a marine-service outage
@@ -1534,6 +1545,13 @@ def _serialize_marine_locations_section(marine_section: dict[str, Any]) -> dict[
             val = _cfg_opt_str(raw_loc, opt_key)
             if val is not None:
                 loc[opt_key] = val
+        # CHAIN-SERVES D1 per-location switch (API-MANUAL §19.7a): the marine
+        # side reads `marine.locations.<id>.ww3_chain_enabled` (its
+        # MarineLocation loader, default False). Carried only when api.conf
+        # has it, so an install that never set it pushes exactly what it
+        # pushed before 2026-08-28.
+        if "ww3_chain_enabled" in raw_loc:
+            loc["ww3_chain_enabled"] = _cfg_bool(raw_loc, "ww3_chain_enabled", False)
 
         raw_surf = raw_loc.get("surf")
         if isinstance(raw_surf, dict):
@@ -2052,7 +2070,12 @@ def _write_api_conf(
         if isinstance(existing_marine, dict):
             existing_locs = existing_marine.get("locations", {})
             if isinstance(existing_locs, dict):
-                _PRESERVE_KEYS = ("ndbc_station_ids", "coops_station_ids", "nws_marine_zone_id")
+                # ww3_chain_enabled joined this list 2026-08-28 (CHAIN-SERVES
+                # D1 switch; no wizard UI; config-file-owned like the rest).
+                _PRESERVE_KEYS = (
+                    "ndbc_station_ids", "coops_station_ids", "nws_marine_zone_id",
+                    "ww3_chain_enabled",
+                )
                 # Surf-level fields the saving surface may omit are config-file-
                 # owned (operator ruling 2026-08-03, decision item 8):
                 # preserved from the existing config when absent from the
