@@ -1510,6 +1510,14 @@ class SpectralWaveComponent(BaseModel):
     energy: float                 # zeroth spectral moment m0 (m^2)
     frequencyRange: list[float]   # [min_hz, max_hz] bounds of this spectral partition
     classification: str           # "groundswell" (>=12s) | "swell" (8-12s) | "wind_swell" (<8s)
+    nu: float | None = None
+    qp: float | None = None
+    kappa: float | None = None
+    tm02S: float | None = None
+    nSet: float | None = None
+    nRep: float | None = None
+    tSetS: float | None = None
+    bandHz: list[float] | None = None
 
 
 class MarineObservation(BaseModel):
