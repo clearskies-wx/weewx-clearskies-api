@@ -88,8 +88,8 @@ because the module was rewritten in place rather than patched twice):
     key (the marine service now does the swell-dominance bucket selection
     that used to happen inline in ``_compose_conditions_text()``).
   - ``periodLabelKey`` (top-level on a fishing entry) resolves to
-    ``periodLabel``; ``speciesScores[].statusKey`` resolves to
-    ``speciesScores[].status``.
+    ``periodLabel``. Fishing has one selected species per request, with no
+    generic-score or species-score-array response path.
   - Fishing entries carry one selected species and its semantic status; the
     API creates no generic Fishing conditions summary.
   - ``currentResidual``: ``{"valueM": float, "quality": str, "source":
@@ -941,7 +941,11 @@ def _enrich_fishing_entry(entry: dict[str, Any], locale: str) -> None:
         # generic conditions rating. Keep this semantic explanation local to
         # that selection instead of reviving the retired overall-label path.
         entry.pop("conditionsTextParts", None)
-        entry["conditionsText"] = f"{selected_species}: {selected_status.replace('_', ' ')}"
+        status_key = f"fishing.species_status.{selected_status}"
+        status_text = i18n.t(status_key, locale)
+        if status_text == status_key:
+            status_text = selected_status.replace("_", " ")
+        entry["conditionsText"] = f"{selected_species}: {status_text.replace('_', ' ')}"
         return
 
     entry.pop("conditionsTextParts", None)

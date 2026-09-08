@@ -30,14 +30,8 @@ Endpoints:
                                             — SWAN runs on the marine service host,
                                             not this one
   GET  /setup/marine/discover-stations   — discover nearby NDBC/CO-OPS stations (T6.3)
-  GET  /setup/marine/species             — species checklist for a coordinate + fishing
-                                            target category, keyed by biogeographic region
-                                            (T2.5)
-  GET  /setup/marine/species-database    — dump the full loaded species reference data
-                                            (regions, species-by-region, per-species scoring
-                                            profiles, seasonal behavior) for admin/wizard
-                                            reference (T8.2 — data externalized to
-                                            data/species.yaml)
+  GET  /setup/marine/species             — eligible matrix-derived Fishing choices for
+                                            a coordinate and target category
   GET  /setup/marine/coverage             — data source coverage panel for a coordinate
                                             (T3.6); bathymetry block is a C-48 pass-through
                                             to {marine_service_url}/discovery/bathymetry-coverage
@@ -112,13 +106,6 @@ from weewx_clearskies_api.correction.models import (
     RetrainResponse,
 )
 from weewx_clearskies_api.db.reflection import STOCK_COLUMN_MAP, SchemaReflector
-from weewx_clearskies_api.enrichment.fishing_species import (
-    BIOGEOGRAPHIC_REGIONS,
-    SEASONAL_BEHAVIOR,
-    SPECIES_BY_REGION,
-    SPECIES_PROFILES,
-    classify_region as _classify_fishing_region,
-)
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.errors import ProviderError
 from weewx_clearskies_api.providers._common.http import ProviderHTTPClient
@@ -3640,19 +3627,12 @@ async def marine_species(
         ),
     ),
 ) -> MarineSpeciesResponse:
-    """Return available species for a coordinate + one or more fishing
-    target categories (T2.5; multi-category union added T6.3).
+    """Return the generated-matrix choices eligible at this coordinate.
 
-    Used by the wizard to populate species checkboxes for a marine fishing
-    spot, based on the biogeographic region covering the spot's coordinates.
-    Delegates entirely to the existing hardcoded lookup tables in
-    ``enrichment/fishing_species.py`` (API-MANUAL §17: "Species data is
-    hardcoded lookup tables ... keyed by biogeographic region and target
-    category. No external API.") — this endpoint performs no I/O.
-
-    ``category`` accepts a comma-separated list of categories; the response
-    is the deduplicated union of species across all of them, order
-    preserved by first appearance.
+    The API keeps its setup-session responsibility, while the marine service
+    owns the read-only generated SQLite lookup.  This removes the retired YAML
+    catalogue from both setup selection and scoring: the same FAO-area and
+    fishing-type eligibility rule is used for the wizard and the forecast.
     """
     await require_setup_session(request)
 
@@ -3666,55 +3646,23 @@ async def marine_species(
             detail=f"category {bad!r} not in {sorted(_VALID_TARGET_CATEGORIES)}",
         )
 
-    region = _classify_fishing_region(lat, lon)
-    region_species = SPECIES_BY_REGION.get(region, {})
-    species: list[str] = []
-    seen: set[str] = set()
-    for cat in categories:
-        for name in region_species.get(cat, []):
-            if name not in seen:
-                seen.add(name)
-                species.append(name)
+    try:
+        body = marine_discovery_get(
+            "/discovery/fishing-species",
+            {"lat": lat, "lon": lon, "category": ",".join(categories)},
+        )
+    except MarineDiscoveryError as exc:
+        raise _marine_discovery_http_exception(exc) from exc
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=503, detail="Marine service returned an invalid Fishing lookup")
+    region = body.get("region")
+    species = body.get("species")
+    if not isinstance(region, str) or not isinstance(species, list) or not all(
+        isinstance(item, str) for item in species
+    ):
+        raise HTTPException(status_code=503, detail="Marine service returned an invalid Fishing lookup")
     return MarineSpeciesResponse(region=region, species=species)
-
-
-class MarineSpeciesDatabaseResponse(BaseModel):
-    regions: dict[str, dict[str, float]]
-    species_by_region: dict[str, dict[str, list[str]]]
-    species_profiles: dict[str, dict[str, Any]]
-    seasonal_behavior: dict[str, dict[int, dict[str, Any]]]
-    source_path: str
-
-
-@router.get("/marine/species-database", response_model=MarineSpeciesDatabaseResponse)
-async def marine_species_database(request: Request) -> MarineSpeciesDatabaseResponse:
-    """Dump the full loaded species reference data for admin/wizard reference (T8.2).
-
-    Externalizing ``enrichment/fishing_species.py``'s data tables from
-    hardcoded Python dicts to an operator-editable ``data/species.yaml``
-    file (T8.2) means an admin/wizard client has no other way to inspect
-    what's currently loaded (regions, species-by-region, per-species
-    scoring profiles, seasonal behavior) short of reading the YAML file on
-    disk directly. This endpoint returns exactly what the module loaded at
-    process start — no re-read from disk, no transformation beyond the
-    response model's field naming.
-
-    ``source_path`` is the bundled default location relative to the
-    package root (``data/species.yaml``). A future config override
-    (``api.conf [fishing] species_data_path``) is documented in
-    ``fishing_species.py``'s module docstring but not implemented yet — the
-    loader always uses the bundled default today, so this is always
-    ``"data/species.yaml"`` for now.
-    """
-    await require_setup_session(request)
-
-    return MarineSpeciesDatabaseResponse(
-        regions=BIOGEOGRAPHIC_REGIONS,
-        species_by_region=SPECIES_BY_REGION,
-        species_profiles=SPECIES_PROFILES,
-        seasonal_behavior=SEASONAL_BEHAVIOR,
-        source_path="data/species.yaml",
-    )
 
 
 # ---------------------------------------------------------------------------

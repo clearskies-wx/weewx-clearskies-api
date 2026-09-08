@@ -214,6 +214,14 @@ class AlmanacQueryParams(BaseModel):
 
     # Fully-qualified type reference avoids Pydantic forward-ref shadowing bug.
     date: _datetime_mod.date | None = None
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lon: float | None = Field(default=None, ge=-180, le=180)
+
+    @model_validator(mode="after")
+    def validate_location_pair(self) -> AlmanacQueryParams:
+        if (self.lat is None) != (self.lon is None):
+            raise ValueError("lat and lon must be supplied together")
+        return self
 
     @field_validator("date", mode="before")
     @classmethod

@@ -62,9 +62,10 @@ defines; the proxy does not invent a fourth meaning for them.
 
 **Wizard discovery pass-throughs (C-42).** ``marine_discovery_get()`` is a
 second, smaller call path alongside the manifest proxy above — a direct
-authenticated GET for the four wizard discovery lookups
+authenticated GET for wizard discovery lookups
 (``/discovery/buoy-stations``, ``/discovery/tide-stations``,
-``/discovery/ofs-model``, ``/discovery/grib-availability``), which are
+``/discovery/ofs-model``, ``/discovery/grib-availability``, and
+``/discovery/fishing-species``), which are
 one-off setup-time calls from ``endpoints/setup.py``, not cacheable
 ``/api/v1/*`` resources. It raises ``MarineDiscoveryUnconfiguredError`` /
 ``MarineDiscoveryUnavailableError`` instead of building a ``JSONResponse``
@@ -156,7 +157,7 @@ _API_PREFIX = "/api/v1"
 #: native routers' entries in app.router.routes.
 _ROUTE_NAME_PREFIX = "companion_proxy:"
 _FISHING_SCORING_INPUTS_PARAM = "scoringInputs"
-_FISHING_SCORING_INPUTS_VERSION = 1
+_FISHING_SCORING_INPUTS_VERSION = 3
 _FISHING_FORECAST_DAYS = 3
 
 
@@ -512,7 +513,7 @@ def _auth_headers() -> dict[str, str]:
 # Wizard discovery pass-throughs (C-42, MARINE-SEP-CONCERNS.md).
 #
 # The manifest/_proxy_request() machinery above exists for cacheable
-# /api/v1/* dashboard resources. The wizard's four discovery lookups
+# /api/v1/* dashboard resources. The wizard's discovery lookups
 # (nearby NDBC buoys, nearby CO-OPS tide stations, the covering OFS model,
 # GRIB2 backend availability) are one-off setup-time calls made directly by
 # endpoints/setup.py's own /setup/* handlers — they were never manifest
@@ -570,8 +571,8 @@ def marine_discovery_get(path: str, params: dict[str, Any]) -> Any:
 
     Used by endpoints/setup.py's wizard discovery pass-throughs:
     ``/discovery/buoy-stations``, ``/discovery/tide-stations``,
-    ``/discovery/ofs-model``, ``/discovery/grib-availability`` (pinned
-    contract, C-42). Returns the parsed JSON body on HTTP 200.
+    ``/discovery/ofs-model``, ``/discovery/grib-availability``, and the
+    matrix-backed ``/discovery/fishing-species``. Returns parsed JSON on 200.
 
     Raises:
         MarineDiscoveryUnconfiguredError: ``marine_service_url`` is not
@@ -830,6 +831,16 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
     marine_result = _fetch_upstream(state, f"/marine/{location_id}", {})
     marine_body = marine_result[1] if marine_result is not None and marine_result[0] == 200 else {}
     temperature_candidates = _fishing_depth_temperature_candidates(marine_body)
+    swell_candidates = [
+        {
+            "validTime": entry.get("time"),
+            "swellHeight": entry.get("swellHeight"),
+            "swellPeriod": entry.get("swellPeriod"),
+            "swellProvenance": entry.get("swellProvenance", _unavailable_field_provenance()),
+        }
+        for entry in marine_body.get("forecast", [])
+        if isinstance(entry, dict)
+    ] if isinstance(marine_body, dict) else []
 
     points: list[dict[str, Any]] = []
     for period_start, period_end, midpoint in periods:
@@ -838,6 +849,7 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
         if start_time is None or end_time is None:
             continue
         weather = _period_input_at_midpoint(weather_inputs, start_time, end_time)
+        swell = _period_input_at_midpoint(swell_candidates, start_time, end_time)
         temperature_candidates_for_period = [
             candidate
             for candidate in temperature_candidates
@@ -871,6 +883,9 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
                 "pressureProvenance": weather.get("pressureProvenance") if weather else _unavailable_field_provenance(),
                 "tideCurrentProvenance": tide_provenance,
                 "weatherProvenance": weather.get("weatherProvenance") if weather else _unavailable_field_provenance(),
+                "swellHeight": swell.get("swellHeight") if swell else None,
+                "swellPeriod": swell.get("swellPeriod") if swell else None,
+                "swellProvenance": swell.get("swellProvenance") if swell else _unavailable_field_provenance(),
             }
         )
 
@@ -878,6 +893,10 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
         "version": _FISHING_SCORING_INPUTS_VERSION,
         "locationId": location_id,
         "points": points,
+        # The Fishing card consumes the same real CO-OPS predictions used to
+        # derive each period's tide/current state.  They are sourced only via
+        # the API-owned assembler and returned unchanged by marine.
+        "tidePredictions": tide_predictions,
     }
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return base64.urlsafe_b64encode(zlib.compress(encoded, level=9)).decode("ascii").rstrip("=")

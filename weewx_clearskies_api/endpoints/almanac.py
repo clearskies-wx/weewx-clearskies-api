@@ -15,7 +15,7 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
@@ -197,50 +197,53 @@ def get_almanac(
 ) -> AlmanacResponse:
     """Sun and moon snapshot for a given date (Skyfield-computed, no DB hit)."""
     target_date = params.date if params.date is not None else _today_in_station_tz()
-    lat, lon, alt = _station_location()
+    station_lat, station_lon, alt = _station_location()
+    lat = params.lat if params.lat is not None else station_lat
+    lon = params.lon if params.lon is not None else station_lon
     station_tz = get_station_info().timezone
 
     # Cache-check-first guard (ADR-045).
-    try:
-        cached = get_cache().get(f"warmer:almanac:snapshot:{target_date.isoformat()}")
-        if cached is not None:
-            logger.debug("almanac snapshot cache hit: %s", target_date)
-            sun = SunSnapshot(
-                rise=cached["sun"]["rise"],
-                set=cached["sun"]["set"],
-                transit=cached["sun"]["transit"],
-                civilTwilightDawn=cached["sun"]["civil_twilight_dawn"],
-                civilTwilightDusk=cached["sun"]["civil_twilight_dusk"],
-                azimuth=cached["sun"]["azimuth"],
-                altitude=cached["sun"]["altitude"],
-                rightAscension=cached["sun"]["right_ascension"],
-                declination=cached["sun"]["declination"],
-                daylightMinutes=cached["sun"]["daylight_minutes"],
-                daylightDeltaVsYesterdayMinutes=cached["sun"]["daylight_delta_vs_yesterday_minutes"],
-                nextEquinox=cached["sun"]["next_equinox"],
-                nextSolstice=cached["sun"]["next_solstice"],
-            )
-            moon = MoonSnapshot(
-                rise=cached["moon"]["rise"],
-                set=cached["moon"]["set"],
-                transit=cached["moon"]["transit"],
-                azimuth=cached["moon"]["azimuth"],
-                altitude=cached["moon"]["altitude"],
-                rightAscension=cached["moon"]["right_ascension"],
-                declination=cached["moon"]["declination"],
-                phaseName=cached["moon"]["phase_name"],
-                illuminationPercent=cached["moon"]["illumination_percent"],
-                nextFullMoon=cached["moon"]["next_full_moon"],
-                nextNewMoon=cached["moon"]["next_new_moon"],
-            )
-            return AlmanacResponse(
-                data=AlmanacSnapshot(date=cached["date_str"], sun=sun, moon=moon),
-                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
-                stationClock=build_station_clock(),
-                freshness=build_freshness("almanac_daily"),
-            )
-    except Exception:
-        logger.debug("almanac snapshot cache miss or error: %s", target_date, exc_info=True)
+    if params.lat is None:
+        try:
+            cached = get_cache().get(f"warmer:almanac:snapshot:{target_date.isoformat()}")
+            if cached is not None:
+                logger.debug("almanac snapshot cache hit: %s", target_date)
+                sun = SunSnapshot(
+                    rise=cached["sun"]["rise"],
+                    set=cached["sun"]["set"],
+                    transit=cached["sun"]["transit"],
+                    civilTwilightDawn=cached["sun"]["civil_twilight_dawn"],
+                    civilTwilightDusk=cached["sun"]["civil_twilight_dusk"],
+                    azimuth=cached["sun"]["azimuth"],
+                    altitude=cached["sun"]["altitude"],
+                    rightAscension=cached["sun"]["right_ascension"],
+                    declination=cached["sun"]["declination"],
+                    daylightMinutes=cached["sun"]["daylight_minutes"],
+                    daylightDeltaVsYesterdayMinutes=cached["sun"]["daylight_delta_vs_yesterday_minutes"],
+                    nextEquinox=cached["sun"]["next_equinox"],
+                    nextSolstice=cached["sun"]["next_solstice"],
+                )
+                moon = MoonSnapshot(
+                    rise=cached["moon"]["rise"],
+                    set=cached["moon"]["set"],
+                    transit=cached["moon"]["transit"],
+                    azimuth=cached["moon"]["azimuth"],
+                    altitude=cached["moon"]["altitude"],
+                    rightAscension=cached["moon"]["right_ascension"],
+                    declination=cached["moon"]["declination"],
+                    phaseName=cached["moon"]["phase_name"],
+                    illuminationPercent=cached["moon"]["illumination_percent"],
+                    nextFullMoon=cached["moon"]["next_full_moon"],
+                    nextNewMoon=cached["moon"]["next_new_moon"],
+                )
+                return AlmanacResponse(
+                    data=AlmanacSnapshot(date=cached["date_str"], sun=sun, moon=moon),
+                    generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+                    stationClock=build_station_clock(),
+                    freshness=build_freshness("almanac_daily"),
+                )
+        except Exception:
+            logger.debug("almanac snapshot cache miss or error: %s", target_date, exc_info=True)
 
     day = almanac_svc.compute_almanac(target_date, lat, lon, alt, station_tz=station_tz)
 
@@ -886,10 +889,19 @@ def get_meteor_showers(
 
 
 @router.get("/almanac/positions", summary="Current sun and moon positions", tags=["Almanac"])
-def get_positions() -> PositionsResponse:
+def get_positions(
+    lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
+    lon: Annotated[float | None, Query(ge=-180, le=180)] = None,
+) -> PositionsResponse:
     """Real-time sun and moon azimuth/altitude. No caching — computed at request time."""
+    if (lat is None) != (lon is None):
+        raise HTTPException(status_code=422, detail="lat and lon must be supplied together")
     info = get_station_info()
-    positions = almanac_svc.compute_current_positions(info.latitude, info.longitude, info.altitude)
+    positions = almanac_svc.compute_current_positions(
+        info.latitude if lat is None else lat,
+        info.longitude if lon is None else lon,
+        info.altitude,
+    )
     return PositionsResponse(
         data=PositionsSnapshot(
             sun=SunPosition(**positions["sun"]),
