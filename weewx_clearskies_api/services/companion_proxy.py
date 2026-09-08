@@ -105,14 +105,18 @@ auth/rate-limit implementation.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 import queue as _queue
 import threading
 import time
+import zlib
 from collections import OrderedDict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time as clock_time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -124,8 +128,11 @@ from weewx_clearskies_api.models.responses import utc_isoformat
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.marine_enrichment import apply_marine_enrichment
-from weewx_clearskies_api.services.marine_response_conversion import convert_marine_payload
-from weewx_clearskies_api.services.station import build_station_clock
+from weewx_clearskies_api.services.marine_response_conversion import (
+    collect_marine_unit_labels,
+    convert_marine_payload,
+)
+from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +155,9 @@ _API_PREFIX = "/api/v1"
 #: reconciliation can rebuild "everything except ours" without touching
 #: native routers' entries in app.router.routes.
 _ROUTE_NAME_PREFIX = "companion_proxy:"
+_FISHING_SCORING_INPUTS_PARAM = "scoringInputs"
+_FISHING_SCORING_INPUTS_VERSION = 1
+_FISHING_FORECAST_DAYS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +234,160 @@ def _apply_post_conversion_enrichment(data: Any, *, manifest_entry: dict[str, An
     return apply_marine_enrichment(data, manifest_path=manifest_entry["path"])
 
 
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    """Parse a UTC timestamp without treating malformed bounds as current."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _regular_forecast_timezone() -> ZoneInfo:
+    """Return the configured local time zone for regular forecast columns."""
+    try:
+        return ZoneInfo(get_station_info().timezone)
+    except (RuntimeError, ZoneInfoNotFoundError):
+        logger.warning("Marine CWF alignment has no usable station timezone; using UTC")
+        return ZoneInfo("UTC")
+
+
+def _forecast_column_key(valid_time: datetime, timezone: ZoneInfo) -> tuple[date, bool]:
+    """Return the existing regular forecast's local 6am/6pm column key."""
+    local_time = valid_time.astimezone(timezone)
+    if 6 <= local_time.hour < 18:
+        return local_time.date(), True
+    return (
+        local_time.date() - timedelta(days=1) if local_time.hour < 6 else local_time.date(),
+        False,
+    )
+
+
+def _forecast_column_bounds(
+    column_date: date, is_day: bool, timezone: ZoneInfo
+) -> tuple[datetime, datetime]:
+    """Return the UTC bounds of an existing local day or night forecast column."""
+    start_hour = 6 if is_day else 18
+    start = datetime.combine(column_date, clock_time(hour=start_hour), tzinfo=timezone)
+    return start.astimezone(UTC), (start + timedelta(hours=12)).astimezone(UTC)
+
+
+_WEEKDAY_LABELS = {
+    "MONDAY": 0,
+    "TUESDAY": 1,
+    "WEDNESDAY": 2,
+    "THURSDAY": 3,
+    "FRIDAY": 4,
+    "SATURDAY": 5,
+    "SUNDAY": 6,
+    "MON": 0,
+    "TUE": 1,
+    "WED": 2,
+    "THU": 3,
+    "FRI": 4,
+    "SAT": 5,
+    "SUN": 6,
+}
+
+
+def _cwf_label_column(
+    label: Any, *, anchor_date: date
+) -> tuple[date, bool] | None:
+    """Map a CWF day/night label to one existing regular forecast column.
+
+    CWF prose does not carry separate machine-readable period bounds. The
+    regular forecast's local day/night columns therefore provide the time
+    authority: an unrecognised CWF label remains unaligned rather than gaining
+    an invented interval.
+    """
+    if not isinstance(label, str):
+        return None
+    normalized = " ".join(label.upper().split())
+    if not normalized or "EXTENDED" in normalized:
+        return None
+
+    is_night = (
+        normalized in {"TONIGHT", "OVERNIGHT", "THIS EVENING"}
+        or normalized.endswith(" NIGHT")
+    )
+    if normalized in {"TODAY", "THIS MORNING", "THIS AFTERNOON", "THIS EVENING", "TONIGHT", "OVERNIGHT"}:
+        return anchor_date, not is_night
+    if normalized in {"TOMORROW", "TOMORROW MORNING", "TOMORROW AFTERNOON"}:
+        return anchor_date + timedelta(days=1), True
+    if normalized in {"TOMORROW NIGHT", "TOMORROW EVENING"}:
+        return anchor_date + timedelta(days=1), False
+
+    weekday_label = normalized.removesuffix(" NIGHT")
+    weekday = _WEEKDAY_LABELS.get(weekday_label)
+    if weekday is None:
+        return None
+    return anchor_date + timedelta(days=(weekday - anchor_date.weekday()) % 7), not is_night
+
+
+def _join_regional_marine_additions(data: Any, *, manifest_path: str) -> Any:
+    """Attach CWF regional fields to their matching location forecast columns.
+
+    CWF never overwrites provider weather. Its period bounds are the matched
+    existing regular-forecast column bounds, and its product issuance stays
+    attached as source provenance.
+    """
+    if manifest_path != "/marine/{location_id}" or not isinstance(data, dict):
+        return data
+    forecast = data.get("regularForecast")
+    periods = data.get("textForecast")
+    if not isinstance(forecast, list) or not isinstance(periods, list):
+        return data
+
+    timezone = _regular_forecast_timezone()
+    timed_points = [
+        (point, _parse_utc_timestamp(point.get("validTime")))
+        for point in forecast
+        if isinstance(point, dict)
+    ]
+    timed_points = [(point, valid_time) for point, valid_time in timed_points if valid_time is not None]
+    if not timed_points:
+        return data
+    now = datetime.now(tz=UTC)
+    anchor_date = min(timed_points, key=lambda item: abs(item[1] - now))[1].astimezone(timezone).date()
+
+    available_columns = {
+        _forecast_column_key(valid_time, timezone)
+        for _point, valid_time in timed_points
+    }
+    periods_by_column: dict[tuple[date, bool], dict[str, Any]] = {}
+    for period in periods:
+        if not isinstance(period, dict):
+            continue
+        column = _cwf_label_column(period.get("periodName"), anchor_date=anchor_date)
+        if column is None or column not in available_columns:
+            continue
+        period_start, period_end = _forecast_column_bounds(*column, timezone)
+        period["periodStart"] = utc_isoformat(period_start)
+        period["periodEnd"] = utc_isoformat(period_end)
+        periods_by_column[column] = period
+
+    for point, valid_time in timed_points:
+        column_date, is_day = _forecast_column_key(valid_time, timezone)
+        matching_period = periods_by_column.get((column_date, is_day))
+        if matching_period is None:
+            continue
+        point["marineAdditions"] = {
+            "source": "nws_cwf",
+            "validTime": point["validTime"],
+            "periodStart": matching_period["periodStart"],
+            "periodEnd": matching_period["periodEnd"],
+            "periodName": matching_period.get("periodName"),
+            "issuanceTime": matching_period.get("issuanceTime"),
+            "wind": matching_period.get("wind"),
+            "seas": matching_period.get("seas"),
+            "visibility": matching_period.get("visibility"),
+            "weather": matching_period.get("weather"),
+            "text": matching_period.get("text"),
+        }
+    return data
+
+
 def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> Any:
     """SI→operator-display-unit conversion + envelope wrapping (T6.2) +
     post-conversion enrichment (C-24/C-25/C-29/C-37).
@@ -244,6 +408,11 @@ def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> A
     """
     converted, units_block = convert_marine_payload(body)
     enriched = _apply_post_conversion_enrichment(converted, manifest_entry=manifest_entry)
+    enriched = _join_regional_marine_additions(
+        enriched,
+        manifest_path=manifest_entry["path"],
+    )
+    collect_marine_unit_labels(enriched, units_block)
     return {
         "data": enriched,
         "stationClock": build_station_clock().model_dump(by_alias=True),
@@ -473,6 +642,247 @@ def _fetch_upstream(
     return response.status_code, body
 
 
+def _tide_state_at(predictions: list[dict[str, Any]], at_time: datetime) -> str | None:
+    """Classify a time-matched CO-OPS prediction interval without scoring it."""
+    parsed: list[tuple[datetime, str]] = []
+    for prediction in predictions:
+        valid_time = _parse_utc_timestamp(prediction.get("time"))
+        tide_type = prediction.get("type")
+        if valid_time is not None and tide_type in {"high", "low"}:
+            parsed.append((valid_time, tide_type))
+    parsed.sort(key=lambda item: item[0])
+    if len(parsed) < 2:
+        return None
+
+    before: tuple[datetime, str] | None = None
+    after: tuple[datetime, str] | None = None
+    for item in parsed:
+        if item[0] <= at_time:
+            before = item
+        else:
+            after = item
+            break
+    if before is None or after is None:
+        return None
+    if abs(at_time - before[0]) <= timedelta(minutes=30):
+        return "slack_high" if before[1] == "high" else "slack_low"
+    if abs(after[0] - at_time) <= timedelta(minutes=30):
+        return "slack_high" if after[1] == "high" else "slack_low"
+    midpoint = before[0] + (after[0] - before[0]) / 2
+    if abs(at_time - midpoint) <= timedelta(minutes=30):
+        return "peak_flow"
+    return "incoming" if before[1] == "low" else "outgoing"
+
+
+def _period_input_at_midpoint(
+    candidates: list[dict[str, Any]], period_start: datetime, period_end: datetime
+) -> dict[str, Any] | None:
+    """Choose a source record only when its valid time is inside the period."""
+    midpoint = period_start + (period_end - period_start) / 2
+    timed = [
+        (entry, _parse_utc_timestamp(entry.get("validTime")))
+        for entry in candidates
+        if isinstance(entry, dict)
+    ]
+    timed = [
+        (entry, valid_time)
+        for entry, valid_time in timed
+        if valid_time is not None and period_start <= valid_time <= period_end
+    ]
+    if not timed:
+        return None
+    return min(timed, key=lambda item: abs(item[1] - midpoint))[0]
+
+
+def _unavailable_field_provenance() -> dict[str, Any]:
+    return {
+        "available": False,
+        "source": "unavailable",
+        "sourceType": "unavailable",
+        "validTime": None,
+        "unit": None,
+    }
+
+
+def _fishing_periods(location_id: str) -> list[tuple[str, str, datetime]]:
+    """Build the same three-day period midpoints the Fishing endpoint consumes.
+
+    The API already owns astronomical data.  This only identifies time windows
+    so source values can be matched before the request crosses to marine; it
+    does not calculate a fishing score or any species treatment.
+    """
+    from weewx_clearskies_api.enrichment.solunar import compute_solunar  # noqa: PLC0415
+    from weewx_clearskies_api.services.marine_enrichment import _find_location  # noqa: PLC0415
+
+    location = _find_location(location_id)
+    if location is None:
+        return []
+    timezone = _regular_forecast_timezone().key
+    periods: list[tuple[str, str, datetime]] = []
+    for day_offset in range(_FISHING_FORECAST_DAYS):
+        solunar = compute_solunar(
+            datetime.now(tz=UTC).date() + timedelta(days=day_offset),
+            location.lat,
+            location.lon,
+            station_tz=timezone,
+        )
+        sunrise = _parse_utc_timestamp(solunar.sunrise)
+        sunset = _parse_utc_timestamp(solunar.sunset)
+        if sunrise is None or sunset is None or sunset <= sunrise:
+            continue
+        daylight_third = (sunset - sunrise) / 3
+        for start, end in (
+            (sunrise - timedelta(hours=1), sunrise + timedelta(hours=1)),
+            (sunrise + timedelta(hours=1), sunrise + daylight_third),
+            (sunrise + daylight_third, sunrise + 2 * daylight_third),
+            (sunrise + 2 * daylight_third, sunset - timedelta(hours=1)),
+            (sunset - timedelta(hours=1), sunset + timedelta(hours=1)),
+            (sunset + timedelta(hours=1), sunset + timedelta(hours=7)),
+        ):
+            if end > start:
+                periods.append((utc_isoformat(start), utc_isoformat(end), start + (end - start) / 2))
+    return periods
+
+
+def _fishing_depth_temperature_candidates(marine_body: Any) -> list[dict[str, Any]]:
+    """Select only explicit depth-bearing marine temperature records.
+
+    A selected-location surface observation without a depth is deliberately
+    not eligible for Fishing's target-depth core input.  NDBC is never read
+    here and cannot enter this transport path.
+    """
+    if not isinstance(marine_body, dict):
+        return []
+    candidates: list[dict[str, Any]] = []
+    raw_entries = list(marine_body.get("forecast", []))
+    observation = marine_body.get("observation")
+    if isinstance(observation, dict):
+        raw_entries.append(observation)
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            continue
+        temperature = entry.get("waterTemp")
+        provenance = entry.get("waterTempProvenance")
+        if not isinstance(provenance, dict):
+            provenance = (
+                entry.get("provenance", {}).get("waterTemperature")
+                if isinstance(entry.get("provenance"), dict)
+                else None
+            )
+        depth_m = provenance.get("depthM") if isinstance(provenance, dict) else None
+        valid_time = entry.get("time") or (provenance.get("validTime") if isinstance(provenance, dict) else None)
+        coverage_tier = provenance.get("coverageTier") if isinstance(provenance, dict) else None
+        source = provenance.get("source") if isinstance(provenance, dict) else None
+        if (
+            isinstance(temperature, int | float)
+            and not isinstance(temperature, bool)
+            and isinstance(depth_m, int | float)
+            and not isinstance(depth_m, bool)
+            and depth_m >= 0
+            and _parse_utc_timestamp(valid_time) is not None
+            and isinstance(provenance, dict)
+            and provenance.get("available") is True
+            and provenance.get("sourceType") in {"observed", "modeled", "forecast"}
+            and isinstance(source, str)
+            and not source.casefold().startswith(("ndbc", "coops"))
+            and coverage_tier
+            in {"local_sensor", "ofs", "regional_erddap", "rtofs", "mur_sst", "observed"}
+        ):
+            candidates.append(
+                {
+                    "validTime": valid_time,
+                    "waterTemperatureC": float(temperature),
+                    "provenance": {
+                        "available": True,
+                        "source": source,
+                        "sourceType": provenance.get("sourceType"),
+                        "validTime": provenance.get("validTime") or valid_time,
+                        "coverageTier": coverage_tier,
+                        "depthM": float(depth_m),
+                        "unit": "degree_C",
+                    },
+                }
+            )
+    return candidates
+
+
+def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) -> str | None:
+    """Assemble API-owned, time-matched inputs for the proxied Fishing call."""
+    try:
+        from weewx_clearskies_api.services.marine_enrichment import (  # noqa: PLC0415
+            build_fishing_weather_inputs,
+        )
+
+        weather_inputs = build_fishing_weather_inputs(location_id)
+        periods = _fishing_periods(location_id)
+    except Exception:
+        logger.warning("Fishing input assembly failed for %s", location_id, exc_info=True)
+        return None
+    if not periods:
+        return None
+
+    tide_result = _fetch_upstream(state, f"/tides/{location_id}", {})
+    tide_body = tide_result[1] if tide_result is not None and tide_result[0] == 200 else {}
+    tide_predictions = tide_body.get("predictions", []) if isinstance(tide_body, dict) else []
+    if not isinstance(tide_predictions, list):
+        tide_predictions = []
+
+    marine_result = _fetch_upstream(state, f"/marine/{location_id}", {})
+    marine_body = marine_result[1] if marine_result is not None and marine_result[0] == 200 else {}
+    temperature_candidates = _fishing_depth_temperature_candidates(marine_body)
+
+    points: list[dict[str, Any]] = []
+    for period_start, period_end, midpoint in periods:
+        start_time = _parse_utc_timestamp(period_start)
+        end_time = _parse_utc_timestamp(period_end)
+        if start_time is None or end_time is None:
+            continue
+        weather = _period_input_at_midpoint(weather_inputs, start_time, end_time)
+        temperature_candidates_for_period = [
+            candidate
+            for candidate in temperature_candidates
+            if (
+                (candidate_time := _parse_utc_timestamp(candidate.get("validTime"))) is not None
+                and start_time <= candidate_time <= end_time
+            )
+        ]
+        tide_state = _tide_state_at(tide_predictions, midpoint)
+        tide_provenance = (
+            {
+                "available": True,
+                "source": "coops",
+                "sourceType": "forecast",
+                "validTime": utc_isoformat(midpoint),
+                "unit": "meter",
+            }
+            if tide_state is not None
+            else _unavailable_field_provenance()
+        )
+        points.append(
+            {
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "pressureTrendHpa3h": weather.get("pressureTrendHpa3h") if weather else None,
+                "tideState": tide_state,
+                "temperatureCandidates": temperature_candidates_for_period,
+                "windSpeed": weather.get("windSpeed") if weather else None,
+                "windDirection": weather.get("windDirection") if weather else None,
+                "windGust": weather.get("windGust") if weather else None,
+                "pressureProvenance": weather.get("pressureProvenance") if weather else _unavailable_field_provenance(),
+                "tideCurrentProvenance": tide_provenance,
+                "weatherProvenance": weather.get("weatherProvenance") if weather else _unavailable_field_provenance(),
+            }
+        )
+
+    payload = {
+        "version": _FISHING_SCORING_INPUTS_VERSION,
+        "locationId": location_id,
+        "points": points,
+    }
+    encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return base64.urlsafe_b64encode(zlib.compress(encoded, level=9)).decode("ascii").rstrip("=")
+
+
 def _cache_key(service_url: str, resolved_upstream: str, query_params: Any) -> str:
     sorted_query = "&".join(f"{k}={v}" for k, v in sorted(dict(query_params).items()))
     return f"companion_proxy:{service_url}:{resolved_upstream}?{sorted_query}"
@@ -507,10 +917,23 @@ def _proxy_request(
             detail=f"Companion proxy: manifest upstream template missing parameter {exc}",
         ) from exc
 
-    cache = get_cache()
-    cache_key = _cache_key(state.service_url, resolved_upstream, request.query_params)
+    upstream_query = dict(request.query_params)
+    # This is authenticated API-to-marine transport only.  A browser-supplied
+    # value is discarded; it must never be possible to inject arbitrary
+    # scoring inputs through the public proxy route.
+    upstream_query.pop(_FISHING_SCORING_INPUTS_PARAM, None)
+    if manifest_entry["path"] == "/fishing/{location_id}":
+        assembled_inputs = _build_fishing_scoring_inputs(
+            state,
+            str(request.path_params.get("location_id", "")),
+        )
+        if assembled_inputs is not None:
+            upstream_query[_FISHING_SCORING_INPUTS_PARAM] = assembled_inputs
 
-    fetch_result = _fetch_upstream(state, resolved_upstream, request.query_params)
+    cache = get_cache()
+    cache_key = _cache_key(state.service_url, resolved_upstream, upstream_query)
+
+    fetch_result = _fetch_upstream(state, resolved_upstream, upstream_query)
 
     if fetch_result is None:
         # State 1a: unreachable / non-JSON. Stale-preferred-to-none, else 503.

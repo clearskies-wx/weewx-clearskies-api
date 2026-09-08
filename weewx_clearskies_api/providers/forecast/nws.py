@@ -9,12 +9,13 @@ Five responsibilities per ADR-038 §2:
   4. Capability declaration — CAPABILITY symbol consumed at startup.
   5. Error handling — provider errors translated to canonical taxonomy.
 
-Five outbound calls per cache miss (call 10 from brief):
+Six outbound calls per cache miss (call 10 from brief, plus Phase 3 pressure):
   1. GET /points/{lat},{lon}  → cwa, gridId, gridX, gridY, timeZone
   2. GET /gridpoints/{cwa}/{gridX},{gridY}/forecast/hourly → ~156 hourly periods
   3. GET /gridpoints/{cwa}/{gridX},{gridY}/forecast → ~14 day/night periods
-  4. GET /products?type=AFD&location={cwa} → list of recent AFD products
-  5. GET /products/{id} → AFD body (productText, issuanceTime, etc.)
+  4. GET /gridpoints/{cwa}/{gridX},{gridY} → optional raw pressure series
+  5. GET /products?type=AFD&location={cwa} → list of recent AFD products
+  6. GET /products/{id} → AFD body (productText, issuanceTime, etc.)
 
 NWS User-Agent (ADR-006, brief call 12):
   Operators put their own contact email/URL in api.conf:
@@ -90,7 +91,8 @@ import json
 import logging
 import re
 import urllib.parse
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -105,6 +107,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import (
+    FishingPressureCapability,
     ProviderAttribution,
     ProviderCapability,
 )
@@ -132,6 +135,7 @@ NWS_PRODUCTS_PATH = "/products"
 DEFAULT_FORECAST_TTL_SECONDS = 1800   # 30 min per ADR-017
 DEFAULT_CONDITIONS_TTL_SECONDS = 300  # 5 min per brief
 DEFAULT_STATION_LIST_TTL_SECONDS = 3600  # 1 h — station list rarely changes
+_FISHING_PRESSURE_MIN_WINDOW = timedelta(hours=3)
 
 _API_VERSION = "0.1.0"
 
@@ -152,6 +156,8 @@ CAPABILITY = ProviderCapability(
         "precipType",
         "weatherCode",
         "weatherText",
+        "pressure",
+        "pressureSource",
         # DailyForecastPoint — paired day/night periods
         "validDate",
         "tempMax",
@@ -173,6 +179,10 @@ CAPABILITY = ProviderCapability(
     geographic_coverage="us",  # USA + territories
     auth_required=(),  # no key; UA contact recommended via [forecast] section
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
+    fishing_pressure=FishingPressureCapability(
+        supported=True,
+        location_specific=True,
+    ),
     operator_notes=(
         "NWS forecast: USA-only coverage. Set [forecast] "
         "nws_user_agent_contact in api.conf for best results "
@@ -269,6 +279,7 @@ class _NwsPointProperties(BaseModel):
     gridY: int
     forecast: str                         # URL for 12-hour day/night periods
     forecastHourly: str                   # URL for hourly periods
+    forecastGridData: str | None = None   # raw grid time series, including pressure
     timeZone: str                         # IANA TZ for station (e.g. "America/Los_Angeles")
     observationStations: str | None = None  # URL for nearest METAR station list
     radarStation: str | None = None         # not load-bearing
@@ -281,6 +292,41 @@ class _NwsPointResponse(BaseModel):
 
     type: Literal["Feature"]
     properties: _NwsPointProperties
+
+
+class _NwsGridValue(BaseModel):
+    """One time-bounded value in an NWS raw grid layer."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    validTime: str
+    value: float | None = None
+
+
+class _NwsGridLayer(BaseModel):
+    """NWS raw-grid numeric layer, whose values may be interval-compressed."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    uom: str | None = None
+    values: list[_NwsGridValue] = Field(default_factory=list)
+
+
+class _NwsGridProperties(BaseModel):
+    """Subset of the raw NWS grid response needed for Fishing pressure."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    pressure: _NwsGridLayer | None = None
+
+
+class _NwsGridResponse(BaseModel):
+    """Raw NWS grid response used only for location-specific pressure checks."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["Feature"]
+    properties: _NwsGridProperties
 
 
 class _NwsForecastPeriod(BaseModel):
@@ -510,6 +556,268 @@ def _build_cache_key(lat: float, lon: float, target_unit: str) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Fishing pressure compatibility (Fishing and Boating remediation Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FishingPressureCheck:
+    """Result of one live, location-specific NWS pressure-series check."""
+
+    supported: bool
+    provider: str
+    checked_at: str
+    valid_from: str | None
+    valid_to: str | None
+    reason: str | None
+
+
+_NWS_DURATION_RE = re.compile(
+    r"^P(?:(?P<days>\d+)D)?(?:T(?:(?P<hours>\d+)H)?"
+    r"(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
+)
+
+
+def _parse_grid_valid_time(value: str) -> tuple[datetime, datetime] | None:
+    """Return one NWS raw-grid value's UTC validity interval, if valid.
+
+    NWS compresses adjacent identical grid values into ISO-8601
+    ``start/duration`` windows.  The pressure check must retain that window
+    rather than pretending every source value is an instantaneous observation.
+    """
+    try:
+        start_raw, duration_raw = value.split("/", 1)
+        start = datetime.fromisoformat(
+            start_raw.replace("Z", "+00:00")
+        ).astimezone(UTC)
+    except (TypeError, ValueError):
+        return None
+
+    match = _NWS_DURATION_RE.fullmatch(duration_raw)
+    if match is None:
+        return None
+
+    duration = timedelta(
+        days=int(match.group("days") or 0),
+        hours=int(match.group("hours") or 0),
+        minutes=int(match.group("minutes") or 0),
+        seconds=int(match.group("seconds") or 0),
+    )
+    if duration <= timedelta(0):
+        return None
+    return start, start + duration
+
+
+def _pressure_value_hpa(value: float, uom: str | None) -> float | None:
+    """Normalize the NWS raw-grid pressure unit to canonical hPa."""
+    unit = (uom or "").strip().lower()
+    if unit in {"wmoUnit:Pa".lower(), "pa"}:
+        return value / 100.0
+    if unit in {"wmoUnit:hPa".lower(), "hpa", "mb", "mbar"}:
+        return value
+    return None
+
+
+def _largest_contiguous_pressure_coverage(
+    layer: _NwsGridLayer,
+) -> tuple[datetime, datetime] | None:
+    """Return the largest valid non-null pressure window from an NWS layer."""
+    intervals: list[tuple[datetime, datetime]] = []
+    for entry in layer.values:
+        if entry.value is None or _pressure_value_hpa(entry.value, layer.uom) is None:
+            continue
+        interval = _parse_grid_valid_time(entry.validTime)
+        if interval is not None:
+            intervals.append(interval)
+
+    if not intervals:
+        return None
+
+    intervals.sort(key=lambda interval: interval[0])
+    merged: list[tuple[datetime, datetime]] = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return max(merged, key=lambda interval: interval[1] - interval[0])
+
+
+def _pressure_at_valid_time(
+    layer: _NwsGridLayer | None,
+    valid_time: str,
+) -> float | None:
+    """Return canonical hPa pressure for one regular-forecast hour."""
+    if layer is None:
+        return None
+    try:
+        point_time = datetime.fromisoformat(
+            valid_time.replace("Z", "+00:00")
+        ).astimezone(UTC)
+    except ValueError:
+        return None
+
+    for entry in layer.values:
+        if entry.value is None:
+            continue
+        interval = _parse_grid_valid_time(entry.validTime)
+        if interval is None:
+            continue
+        start, end = interval
+        if start <= point_time < end:
+            return _pressure_value_hpa(entry.value, layer.uom)
+    return None
+
+
+def _fetch_grid_pressure_layer(
+    client: ProviderHTTPClient,
+    props: _NwsPointProperties,
+) -> _NwsGridLayer | None:
+    """Fetch NWS raw-grid pressure without making the regular forecast fail.
+
+    Pressure is an optional canonical field.  A missing or malformed raw-grid
+    layer must therefore preserve an honest null on the regular forecast,
+    rather than turning a usable NWS temperature/wind forecast into a failure.
+    The setup compatibility path uses the same wire models, but treats a
+    failed live check as a setup failure rather than silently accepting it.
+    """
+    grid_url = props.forecastGridData or (
+        f"{NWS_BASE_URL}/gridpoints/{props.cwa}/{props.gridX},{props.gridY}"
+    )
+    try:
+        response = client.get(
+            grid_url,
+            headers={"Accept": "application/geo+json"},
+        )
+        grid = _NwsGridResponse.model_validate(response.json())
+    except (ProviderProtocolError, ValidationError, ValueError) as exc:
+        logger.warning(
+            "NWS raw-grid pressure unavailable; returning pressure=null for "
+            "regular forecast: %s",
+            exc,
+            extra={"provider_id": PROVIDER_ID, "domain": DOMAIN},
+        )
+        return None
+    return grid.properties.pressure
+
+
+def check_fishing_pressure(
+    *,
+    lat: float,
+    lon: float,
+    user_agent_contact: str | None,
+) -> FishingPressureCheck:
+    """Check NWS raw-grid pressure for one proposed Fishing location.
+
+    This is deliberately separate from :func:`fetch`: the regular NWS
+    `/forecast/hourly` response does not carry pressure, while the raw grid
+    does so only at locations where NWS publishes that layer.  The result
+    checks a continuous three-hour window, the minimum data needed to derive
+    Fishing's real three-hour pressure trend.  Provider/network failures keep
+    their canonical exceptions; an absent, null, malformed, or too-short
+    pressure layer is an honest unsupported result.
+    """
+    if not user_agent_contact:
+        _warn_once_missing_contact()
+
+    checked_at = utc_isoformat(datetime.now(tz=UTC))
+    user_agent = _build_user_agent(user_agent_contact)
+    client = _get_http_client(user_agent)
+    _rate_limiter.acquire()
+
+    lat4 = round(lat, 4)
+    lon4 = round(lon, 4)
+    points_url = f"{NWS_BASE_URL}{NWS_POINTS_PATH}/{lat4},{lon4}"
+    try:
+        points_response = client.get(
+            points_url,
+            headers={"Accept": "application/geo+json"},
+        )
+    except ProviderProtocolError as exc:
+        if exc.status_code == 404:
+            return FishingPressureCheck(
+                supported=False,
+                provider=PROVIDER_ID,
+                checked_at=checked_at,
+                valid_from=None,
+                valid_to=None,
+                reason="NWS does not cover this location",
+            )
+        raise
+
+    try:
+        points = _NwsPointResponse.model_validate(points_response.json())
+    except (ValidationError, ValueError) as exc:
+        raise ProviderProtocolError(
+            f"NWS /points response validation failed during Fishing pressure check: {exc}",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        ) from exc
+
+    props = points.properties
+    grid_url = props.forecastGridData or (
+        f"{NWS_BASE_URL}/gridpoints/{props.cwa}/{props.gridX},{props.gridY}"
+    )
+    grid_response = client.get(
+        grid_url,
+        headers={"Accept": "application/geo+json"},
+    )
+    try:
+        grid = _NwsGridResponse.model_validate(grid_response.json())
+    except (ValidationError, ValueError) as exc:
+        raise ProviderProtocolError(
+            f"NWS raw-grid response validation failed during Fishing pressure check: {exc}",
+            provider_id=PROVIDER_ID,
+            domain=DOMAIN,
+        ) from exc
+
+    pressure = grid.properties.pressure
+    if pressure is None or not pressure.values:
+        return FishingPressureCheck(
+            supported=False,
+            provider=PROVIDER_ID,
+            checked_at=checked_at,
+            valid_from=None,
+            valid_to=None,
+            reason="NWS does not provide an hourly pressure series for this location",
+        )
+
+    coverage = _largest_contiguous_pressure_coverage(pressure)
+    if coverage is None:
+        return FishingPressureCheck(
+            supported=False,
+            provider=PROVIDER_ID,
+            checked_at=checked_at,
+            valid_from=None,
+            valid_to=None,
+            reason="NWS pressure values are unavailable or use an unsupported unit",
+        )
+
+    valid_from, valid_to = coverage
+    if valid_to - valid_from < _FISHING_PRESSURE_MIN_WINDOW:
+        return FishingPressureCheck(
+            supported=False,
+            provider=PROVIDER_ID,
+            checked_at=checked_at,
+            valid_from=utc_isoformat(valid_from),
+            valid_to=utc_isoformat(valid_to),
+            reason=(
+                "NWS pressure coverage is shorter than the required three-hour "
+                "trend window"
+            ),
+        )
+
+    return FishingPressureCheck(
+        supported=True,
+        provider=PROVIDER_ID,
+        checked_at=checked_at,
+        valid_from=utc_isoformat(valid_from),
+        valid_to=utc_isoformat(valid_to),
+        reason=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +1113,7 @@ def _zip_hourly(
     periods: list[_NwsForecastPeriod],
     *,
     target_unit: str,
+    pressure_layer: _NwsGridLayer | None = None,
 ) -> list[HourlyForecastPoint]:
     """Convert NWS hourly periods to canonical HourlyForecastPoint records.
 
@@ -832,6 +1141,7 @@ def _zip_hourly(
         if wind_speed is not None and target_unit == "METRICWX":
             # NWS returns km/h for units=si; convert to m/s (ADR-019).
             wind_speed = round(wind_speed / 3.6, 4)
+        pressure = _pressure_at_valid_time(pressure_layer, valid_time)
 
         points.append(
             HourlyForecastPoint(
@@ -843,6 +1153,8 @@ def _zip_hourly(
                 precipType=_get_precip_type_from_icon(period.icon),
                 weatherCode=weather_code,
                 weatherText=period.shortForecast,
+                pressure=pressure,
+                pressureSource=PROVIDER_ID if pressure is not None else None,
                 source=PROVIDER_ID,
             )
         )
@@ -977,6 +1289,7 @@ def _to_canonical(
     discussion: ForecastDiscussion | None,
     *,
     target_unit: str,
+    pressure_layer: _NwsGridLayer | None = None,
 ) -> ForecastBundle:
     """Translate NWS wire responses to canonical ForecastBundle.
 
@@ -989,6 +1302,7 @@ def _to_canonical(
     hourly_points = _zip_hourly(
         hourly_wire.properties.periods,
         target_unit=target_unit,
+        pressure_layer=pressure_layer,
     )
 
     pairs = _pair_day_night(daily_wire.properties.periods)
@@ -1017,12 +1331,13 @@ def fetch(
 ) -> ForecastBundle:
     """Call NWS forecast endpoints and return a canonical ForecastBundle.
 
-    Five outbound calls per cache miss:
+    Six outbound calls per cache miss:
       1. /points/{lat},{lon}                             → cwa, gridX, gridY
       2. /gridpoints/{cwa}/{gridX},{gridY}/forecast/hourly → hourly periods
       3. /gridpoints/{cwa}/{gridX},{gridY}/forecast       → 12-hr day/night
-      4. /products?type=AFD&location={cwa}                → AFD list
-      5. /products/{id}                                   → AFD body
+      4. /gridpoints/{cwa}/{gridX},{gridY}                → optional pressure series
+      5. /products?type=AFD&location={cwa}                → AFD list
+      6. /products/{id}                                   → AFD body
 
     Cache stores the post-normalization ForecastBundle for 30 min (ADR-017).
     Cache key: SHA-256 of (provider_id, "forecast_bundle", lat4, lon4, unit).
@@ -1082,7 +1397,7 @@ def fetch(
     user_agent = _build_user_agent(user_agent_contact)
     client = _get_http_client(user_agent)
 
-    # Rate-limiter: single acquire() per fetch() despite the 5 outbound HTTP
+    # Rate-limiter: single acquire() per fetch() despite the 6 outbound HTTP
     # calls that follow on a cache miss.  Accepted deviation from
     # RateLimiter's "acquire before each outbound call" docstring contract:
     # NWS forecast TTL = 30 min (ADR-017), so the real call rate per station
@@ -1190,7 +1505,10 @@ def fetch(
             domain=DOMAIN,
         ) from exc
 
-    # --- Steps 4-5: AFD discussion (soft-failure per brief call 14) ---
+    # --- Step 4: raw-grid pressure (optional canonical field) ---
+    pressure_layer = _fetch_grid_pressure_layer(client, props)
+
+    # --- Steps 5-6: AFD discussion (soft-failure per brief call 14) ---
     discussion: ForecastDiscussion | None = None
     try:
         afd_list_url = f"{NWS_BASE_URL}{NWS_PRODUCTS_PATH}"
@@ -1282,6 +1600,7 @@ def fetch(
         daily_wire,
         discussion,
         target_unit=target_unit,
+        pressure_layer=pressure_layer,
     )
 
     # --- Cache the full bundle (slice happens in endpoints/forecast.py) ---

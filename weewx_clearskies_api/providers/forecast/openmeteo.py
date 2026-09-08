@@ -81,6 +81,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import (
+    FishingPressureCapability,
     ProviderAttribution,
     ProviderCapability,
 )
@@ -127,6 +128,8 @@ CAPABILITY = ProviderCapability(
         "weatherCode",
         "weatherText",
         "feelsLike",
+        "pressure",
+        "pressureSource",
         # DailyForecastPoint fields
         "validDate",
         "tempMax",
@@ -147,6 +150,7 @@ CAPABILITY = ProviderCapability(
     geographic_coverage="global",
     auth_required=(),
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
+    fishing_pressure=FishingPressureCapability(supported=True),
     operator_notes=(
         "Open-Meteo free-tier; no API key required for non-commercial "
         "use. Throttled at ~10 000 calls/day fair-use. No forecast "
@@ -266,6 +270,7 @@ _HOURLY_VARS = (
     "weather_code",
     "cloud_cover",
     "apparent_temperature",
+    "pressure_msl",
 )
 
 _DAILY_VARS = (
@@ -317,6 +322,7 @@ class _OpenMeteoHourlyBlock(BaseModel):
     weather_code: list[int | None] = Field(default_factory=list)
     cloud_cover: list[float | None] = Field(default_factory=list)
     apparent_temperature: list[float | None] = Field(default_factory=list)
+    pressure_msl: list[float | None] = Field(default_factory=list)
 
 
 class _OpenMeteoDailyBlock(BaseModel):
@@ -565,6 +571,12 @@ def _zip_hourly(
                 weatherCode=code_str,
                 weatherText=weather_text,
                 feelsLike=_get_at(hourly.apparent_temperature, i),
+                pressure=_get_at(hourly.pressure_msl, i),
+                pressureSource=(
+                    PROVIDER_ID
+                    if _get_at(hourly.pressure_msl, i) is not None
+                    else None
+                ),
                 source=PROVIDER_ID,
             )
         )

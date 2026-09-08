@@ -1005,6 +1005,18 @@ class MarineConfigPushResult(BaseModel):
     error: str | None = None
 
 
+class FishingPressureSetupCheck(BaseModel):
+    """One live Fishing-pressure compatibility result from setup/apply."""
+
+    location_id: str
+    supported: bool
+    provider: str
+    checked_at: str
+    valid_from: str | None = None
+    valid_to: str | None = None
+    reason: str | None = None
+
+
 class ApplyResponse(BaseModel):
     success: bool
     message: str
@@ -1018,6 +1030,10 @@ class ApplyResponse(BaseModel):
     #: is configured, so the wizard doesn't need a separate "was it even
     #: attempted" check beyond that field.
     marine_config_push: MarineConfigPushResult
+    #: Live NWS pressure checks performed before this apply wrote configuration.
+    #: Empty when the request did not enable Fishing or uses a provider whose
+    #: pressure capability is not location-specific.
+    fishing_pressure_checks: list[FishingPressureSetupCheck] = Field(default_factory=list)
 
 
 class RestartResponse(BaseModel):
@@ -1151,6 +1167,147 @@ _PROVIDER_ALIASES: dict[str, str] = {
 def _canonical_provider(name: str) -> str:
     """Return the canonical provider name, resolving any known aliases."""
     return _PROVIDER_ALIASES.get(name, name)
+
+
+def _effective_forecast_provider(
+    body: ApplyRequest,
+    config_dir: Path,
+) -> tuple[str | None, str | None]:
+    """Resolve the forecast provider/contact this apply will leave active."""
+    if body.providers:
+        submitted = next(
+            (
+                config
+                for domain, config in body.providers.items()
+                if domain.lower() == "forecast"
+            ),
+            None,
+        )
+        if submitted is not None:
+            return _canonical_provider(submitted.provider), submitted.nws_user_agent_contact
+
+    conf_path = config_dir / "api.conf"
+    if not conf_path.exists():
+        return None, None
+    try:
+        config = configobj.ConfigObj(str(conf_path), interpolation=False)
+        forecast = config.get("forecast", {})
+    except Exception:  # noqa: BLE001
+        return None, None
+    if not isinstance(forecast, dict):
+        return None, None
+    provider_raw = str(forecast.get("provider", "")).strip()
+    contact_raw = str(forecast.get("nws_user_agent_contact", "")).strip()
+    return (
+        _canonical_provider(provider_raw) if provider_raw else None,
+        contact_raw or None,
+    )
+
+
+def _check_fishing_pressure_compatibility(
+    body: ApplyRequest,
+    config_dir: Path,
+) -> list[FishingPressureSetupCheck]:
+    """Reject Fishing apply requests without their required pressure series.
+
+    This runs before any setup file is written.  NWS is the sole
+    location-specific provider: its raw grid is checked for every proposed
+    Fishing location, while the other eligible providers declare their stable
+    support through the provider capability registry.
+    """
+    fishing_locations = [
+        location
+        for location in (body.marine.locations if body.marine is not None else [])
+        if location.fishing is not None
+    ]
+    if not fishing_locations:
+        return []
+
+    provider_id, nws_user_agent_contact = _effective_forecast_provider(body, config_dir)
+    if provider_id is None:
+        raise HTTPException(
+            422,
+            detail="Fishing requires a forecast provider with an hourly pressure series.",
+        )
+
+    try:
+        from weewx_clearskies_api.providers._common.dispatch import get_provider_module
+
+        provider = get_provider_module(domain="forecast", provider_id=provider_id)
+        pressure_capability = provider.CAPABILITY.fishing_pressure
+    except (AttributeError, KeyError) as exc:
+        logger.warning(
+            "Fishing pressure setup check could not resolve forecast provider %r",
+            provider_id,
+        )
+        raise HTTPException(
+            422,
+            detail="Fishing requires a forecast provider with an hourly pressure series.",
+        ) from exc
+
+    if pressure_capability is None or not pressure_capability.supported:
+        raise HTTPException(
+            422,
+            detail=(
+                f"Fishing cannot be enabled because {provider_id} does not provide "
+                "the required hourly pressure series. Choose a forecast provider that does."
+            ),
+        )
+
+    if not pressure_capability.location_specific:
+        return []
+
+    from weewx_clearskies_api.providers.forecast import nws
+
+    checks: list[FishingPressureSetupCheck] = []
+    for location in fishing_locations:
+        try:
+            result = nws.check_fishing_pressure(
+                lat=location.lat,
+                lon=location.lon,
+                user_agent_contact=nws_user_agent_contact,
+            )
+        except ProviderError as exc:
+            logger.warning(
+                "NWS Fishing pressure check failed for location %s: %s",
+                location.id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                503,
+                detail=(
+                    "Fishing configuration could not be checked against NWS right now. "
+                    "Try again before saving Fishing for this location."
+                ),
+            ) from exc
+
+        check = FishingPressureSetupCheck(
+            location_id=location.id,
+            supported=result.supported,
+            provider=result.provider,
+            checked_at=result.checked_at,
+            valid_from=result.valid_from,
+            valid_to=result.valid_to,
+            reason=result.reason,
+        )
+        checks.append(check)
+
+    failed_location_ids = [check.location_id for check in checks if not check.supported]
+    if failed_location_ids:
+        raise HTTPException(
+            422,
+            detail={
+                "message": (
+                    "Fishing cannot be enabled because NWS does not provide the required "
+                    "hourly pressure series for: "
+                    f"{', '.join(failed_location_ids)}. Choose a forecast provider that "
+                    "supplies pressure for every Fishing location."
+                ),
+                "fishing_pressure_checks": [item.model_dump() for item in checks],
+            },
+        )
+
+    return checks
 
 
 # ---------------------------------------------------------------------------
@@ -2637,6 +2794,11 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         if not wcp.startswith("/") or not wcp.endswith(".conf") or not Path(wcp).exists():
             raise HTTPException(422, detail="Invalid weewx.conf path")
 
+    # 0b. Fishing requires provider-neutral hourly pressure.  Check the
+    # configured provider before persisting this request so an NWS location
+    # without a real raw-grid series cannot leave Fishing enabled.
+    fishing_pressure_checks = _check_fishing_pressure_compatibility(body, config_dir)
+
     # 1. Write non-secret settings to api.conf.
     try:
         _write_api_conf(config_dir, body)
@@ -2736,6 +2898,7 @@ async def apply(body: ApplyRequest, request: Request) -> ApplyResponse:
         message="Configuration saved. Restart the API to apply.",
         restart_token=restart_token,
         marine_config_push=marine_config_push,
+        fishing_pressure_checks=fishing_pressure_checks,
     )
 
 

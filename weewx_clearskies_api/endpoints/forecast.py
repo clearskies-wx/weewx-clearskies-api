@@ -75,7 +75,10 @@ from weewx_clearskies_api.models.responses import (
     ForecastResponse,
     utc_isoformat,
 )
-from weewx_clearskies_api.providers._common.capability import get_provider_registry
+from weewx_clearskies_api.providers._common.capability import (
+    ProviderCapability,
+    get_provider_registry,
+)
 from weewx_clearskies_api.services.freshness import build_freshness
 from weewx_clearskies_api.services.station import build_station_clock, get_station_info
 from weewx_clearskies_api.services.units import get_target_unit, get_units_block
@@ -252,6 +255,88 @@ def _get_forecast_params(request: Request) -> ForecastQueryParams:
         raise RequestValidationError(exc.errors()) from exc
 
 
+def fetch_configured_forecast_at(
+    *,
+    lat: float,
+    lon: float,
+    timezone: str,
+) -> tuple[ForecastBundle, str, ProviderCapability | None]:
+    """Fetch the configured provider's canonical bundle for coordinates.
+
+    This is the one provider dispatch used both by ``GET /forecast`` and by
+    the marine post-conversion seam for a selected location outside the
+    station-service radius.  It deliberately returns the provider's full,
+    time-stamped canonical data without adding station-specific sunrise or
+    text enrichment; callers choose the fields appropriate to their surface.
+    """
+    target_unit = get_target_unit()
+    forecast_providers = [
+        capability
+        for capability in get_provider_registry()
+        if capability.domain == "forecast"
+    ]
+    if not forecast_providers:
+        return (
+            ForecastBundle(
+                hourly=[],
+                daily=[],
+                discussion=None,
+                source="none",
+                generatedAt=utc_isoformat(datetime.now(tz=UTC)),
+            ),
+            "none",
+            None,
+        )
+
+    provider_cap = forecast_providers[0]
+    provider_id = provider_cap.provider_id
+    if provider_id == "openmeteo":
+        from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
+
+        bundle = openmeteo.fetch(
+            lat=lat,
+            lon=lon,
+            target_unit=target_unit,
+            timezone=timezone,
+        )
+    elif provider_id == "nws":
+        from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
+
+        bundle = forecast_nws.fetch(
+            lat=lat,
+            lon=lon,
+            target_unit=target_unit,
+            user_agent_contact=_nws_user_agent_contact,
+        )
+    elif provider_id == "aeris":
+        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
+
+        bundle = aeris.fetch(
+            lat=lat,
+            lon=lon,
+            target_unit=target_unit,
+            client_id=_aeris_client_id,
+            client_secret=_aeris_client_secret,
+            forecast_model=_aeris_forecast_model,
+        )
+    elif provider_id == "openweathermap":
+        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
+
+        bundle = openweathermap.fetch(
+            lat=lat,
+            lon=lon,
+            target_unit=target_unit,
+            appid=_openweathermap_appid,
+        )
+    else:
+        logger.error("Unknown configured forecast provider: %r", provider_id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unknown forecast provider: {provider_id!r}",
+        )
+    return bundle, provider_id, provider_cap
+
+
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------
@@ -278,7 +363,6 @@ def get_forecast(
     # --- Assemble units block (same wiring as observations + records) ---
     try:
         units = get_units_block()
-        target_unit = get_target_unit()
     except RuntimeError:
         # Defense-in-depth: units should always be wired before uvicorn starts.
         # This branch is theoretically unreachable if startup order is correct.
@@ -288,12 +372,9 @@ def get_forecast(
         )
         raise HTTPException(status_code=503, detail="Service starting")
 
-    # --- Find the configured forecast provider in the capability registry ---
-    provider_registry = get_provider_registry()
-    forecast_providers = [p for p in provider_registry if p.domain == "forecast"]
-
-    # --- Decision tree branch 1: no provider configured ---
-    if not forecast_providers:
+    if not any(
+        capability.domain == "forecast" for capability in get_provider_registry()
+    ):
         logger.debug("No forecast provider in registry; returning empty bundle")
         return ForecastResponse(
             data=ForecastBundle(
@@ -310,10 +391,6 @@ def get_forecast(
             freshness=build_freshness("forecast"),
         )
 
-    # Single source per deploy per ADR-007; take the first (and only) entry.
-    provider_cap = forecast_providers[0]
-    provider_id = provider_cap.provider_id
-
     # --- Obtain station lat/lon / timezone (ADR-011: single-station, no ?station= param) ---
     try:
         station = get_station_info()
@@ -325,67 +402,14 @@ def get_forecast(
         )
         raise HTTPException(status_code=503, detail="Service starting")
 
-    # --- Dispatch to provider module ---
-    if provider_id == "openmeteo":
-        from weewx_clearskies_api.providers.forecast import openmeteo  # noqa: PLC0415
+    bundle, provider_id, provider_cap = fetch_configured_forecast_at(
+        lat=station.latitude,
+        lon=station.longitude,
+        timezone=station.timezone,
+    )
 
-        # fetch() returns the FULL canonical bundle (all hours/days from Open-Meteo).
-        # Cache stores the full bundle; slice is applied below after cache lookup.
-        bundle = openmeteo.fetch(
-            lat=station.latitude,
-            lon=station.longitude,
-            target_unit=target_unit,
-            timezone=station.timezone,
-        )
-    elif provider_id == "nws":
-        from weewx_clearskies_api.providers.forecast import nws as forecast_nws  # noqa: PLC0415
-
-        # fetch() returns the FULL canonical bundle (all NWS hourly + daily + discussion).
-        # Cache stores the full bundle; slice is applied below after cache lookup.
-        # _nws_user_agent_contact is set at startup via wire_forecast_settings().
-        bundle = forecast_nws.fetch(
-            lat=station.latitude,
-            lon=station.longitude,
-            target_unit=target_unit,
-            user_agent_contact=_nws_user_agent_contact,
-        )
-    elif provider_id == "aeris":
-        from weewx_clearskies_api.providers.forecast import aeris  # noqa: PLC0415
-
-        # fetch() returns the FULL canonical bundle (hourly + daily from two upstream
-        # calls: filter=1hr and filter=daynight). Cache stores the full bundle;
-        # slice is applied below after cache lookup.
-        # _aeris_client_id + _aeris_client_secret set at startup via wire_forecast_settings().
-        bundle = aeris.fetch(
-            lat=station.latitude,
-            lon=station.longitude,
-            target_unit=target_unit,
-            client_id=_aeris_client_id,
-            client_secret=_aeris_client_secret,
-            forecast_model=_aeris_forecast_model,
-        )
-    elif provider_id == "openweathermap":
-        from weewx_clearskies_api.providers.forecast import openweathermap  # noqa: PLC0415
-
-        # fetch() returns the FULL canonical bundle (one upstream call:
-        # /data/3.0/onecall with exclude=current,minutely,alerts). Cache stores
-        # the full bundle; slice is applied below after cache lookup.
-        # _openweathermap_appid set at startup via wire_forecast_settings().
-        # Basic-tier 401 → graceful empty bundle per Q1 user decision 2026-05-08.
-        bundle = openweathermap.fetch(
-            lat=station.latitude,
-            lon=station.longitude,
-            target_unit=target_unit,
-            appid=_openweathermap_appid,
-        )
-    else:
-        # Unknown provider should have been caught at startup by _wire_providers_from_config.
-        # If we reach here, it means a bug in the startup sequence — treat as 502.
-        logger.error("Unknown forecast provider at request time: %r", provider_id)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Unknown forecast provider: {provider_id!r}",
-        )
+    if provider_cap is None:
+        raise RuntimeError("forecast provider registry changed during request")
 
     # --- Inject locally-computed sunrise/sunset into daily points ---
     _inject_sunrise_sunset(

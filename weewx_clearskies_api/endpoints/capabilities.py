@@ -25,6 +25,7 @@ from weewx_clearskies_api.models.responses import (
     CapabilityDeclaration,
     CapabilityRegistry,
     CapabilityResponse,
+    FishingPressureCapabilityResponse,
     ProviderAttributionResponse,
     WeewxColumnEntry,
     utc_isoformat,
@@ -87,6 +88,14 @@ def get_capabilities() -> CapabilityResponse:
             geographicCoverage=cap.geographic_coverage,
             defaultPollIntervalSeconds=cap.default_poll_interval_seconds,
             operatorNotes=cap.operator_notes,
+            fishingPressure=(
+                FishingPressureCapabilityResponse(
+                    supported=cap.fishing_pressure.supported,
+                    locationSpecific=cap.fishing_pressure.location_specific,
+                )
+                if cap.fishing_pressure is not None
+                else None
+            ),
             tileUrlTemplate=cap.tile_url_template,
             wmsEndpointUrl=cap.wms_endpoint_url,
             wmsLayerName=cap.wms_layer_name,

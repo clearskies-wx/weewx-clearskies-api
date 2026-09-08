@@ -737,6 +737,13 @@ class ProviderAttributionResponse(BaseModel):
     doNotUseLogo: bool = False
 
 
+class FishingPressureCapabilityResponse(BaseModel):
+    """Machine-readable provider-level Fishing pressure support."""
+
+    supported: bool
+    locationSpecific: bool = False
+
+
 class CapabilityDeclaration(BaseModel):
     """Per ADR-038: one configured provider module."""
 
@@ -746,6 +753,7 @@ class CapabilityDeclaration(BaseModel):
     geographicCoverage: str
     defaultPollIntervalSeconds: int | None = None
     operatorNotes: str | None = None
+    fishingPressure: FishingPressureCapabilityResponse | None = None
     tileUrlTemplate: str | None = None
     wmsEndpointUrl: str | None = None
     wmsLayerName: str | None = None
@@ -975,6 +983,24 @@ class MarkdownResponse(BaseModel):
 # ruff: noqa: N815  (field names use canonical camelCase: validTime, outTemp, etc.)
 
 
+class MarineForecastAugmentation(BaseModel):
+    """Regional CWF additions attached to one location-weather forecast point."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: str
+    validTime: str
+    periodStart: str
+    periodEnd: str
+    periodName: str
+    issuanceTime: str | None = None
+    wind: str | None = None
+    seas: str | None = None
+    visibility: str | None = None
+    weather: str | None = None
+    text: str
+
+
 class HourlyForecastPoint(BaseModel):
     """Canonical hourly forecast record (ADR-010 §3.3, OpenAPI HourlyForecastPoint schema).
 
@@ -999,6 +1025,9 @@ class HourlyForecastPoint(BaseModel):
     weatherText: str | None = None           # Human-readable (decoded from WMO)
     feelsLike: float | None = None           # Apparent temp (heat index / wind chill)
     dewpoint: float | None = None            # Dewpoint temperature
+    pressure: float | None = None            # Mean sea-level pressure (hPa)
+    pressureSource: str | None = None        # Provider id for the pressure value
+    marineAdditions: MarineForecastAugmentation | None = None
     source: str
     extras: dict[str, Any] = {}
 
@@ -1605,6 +1634,9 @@ class MarineTextForecast(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    periodStart: str | None = None
+    periodEnd: str | None = None
+    issuanceTime: str | None = None
     periodName: str  # e.g. "Tonight", "Thursday"
     text: str        # full forecast narrative
     wind: str | None = None         # wind description extracted from narrative
@@ -1898,6 +1930,7 @@ class MarineBundle(BaseModel):
     coordinates: dict[str, float]  # {lat, lon}
     observation: MarineObservation | None = None  # latest buoy observation, if available
     forecast: list[MarineForecastPoint] = []       # WaveWatch III timesteps
+    regularForecast: list[HourlyForecastPoint] = []
     textForecast: list[MarineTextForecast] = []    # NWS marine zone text periods
     source: str
     generatedAt: str  # UTC ISO-8601 with Z

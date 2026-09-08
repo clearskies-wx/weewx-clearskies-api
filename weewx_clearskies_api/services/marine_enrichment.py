@@ -90,9 +90,8 @@ because the module was rewritten in place rather than patched twice):
   - ``periodLabelKey`` (top-level on a fishing entry) resolves to
     ``periodLabel``; ``speciesScores[].statusKey`` resolves to
     ``speciesScores[].status``.
-  - ``conditionsTextParts`` (fishing): ``{"overallLabelKey": str,
-    "pressurePhraseKey": str, "tidePhraseKey": str, "solunarClauseKey":
-    str|None, "activeSpeciesNames": list[str]}``.
+  - Fishing entries carry one selected species and its semantic status; the
+    API creates no generic Fishing conditions summary.
   - ``currentResidual``: ``{"valueM": float, "quality": str, "source":
     str}`` -- no ``value``, no ``description``; this module adds both,
     converting ``valueM`` (also outside ``_FIELD_GROUPS``, also raw SI at
@@ -102,6 +101,7 @@ because the module was rewritten in place rather than patched twice):
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import configobj
@@ -129,6 +129,7 @@ from weewx_clearskies_api.config.marine_config import (
 from weewx_clearskies_api.services.marine_response_conversion import (
     _unit_label as _marine_unit_label,
 )
+from weewx_clearskies_api.services.station import get_station_info
 from weewx_clearskies_api.services.units import get_group_unit, get_target_unit
 from weewx_clearskies_api.units.conversion import convert as _convert_unit
 
@@ -228,6 +229,282 @@ def _fetch_station_observation() -> Any | None:
         return None
 
 
+_FORECAST_CURRENT_FIELDS = (
+    "windSpeed",
+    "windDirection",
+    "windGust",
+    "airTemp",
+    "pressure",
+    "dewpoint",
+    "visibility",
+    "feelsLike",
+    "humidity",
+    "weatherCode",
+    "weatherText",
+    "isDay",
+)
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _forecast_units() -> tuple[str, str]:
+    """Return the configured provider's canonical temperature and wind units."""
+    target_unit = get_target_unit()
+    if target_unit == "US":
+        return "degree_F", "mile_per_hour"
+    if target_unit == "METRIC":
+        return "degree_C", "km_per_hour"
+    return "degree_C", "meter_per_second"
+
+
+def _provider_hourly_conditions(location: MarineLocation) -> tuple[Any | None, list[Any], str]:
+    """Fetch the configured provider once at a selected marine location."""
+    try:
+        from weewx_clearskies_api.endpoints.forecast import (  # noqa: PLC0415
+            fetch_configured_forecast_at,
+        )
+
+        try:
+            timezone = get_station_info().timezone
+        except RuntimeError:
+            timezone = "UTC"
+        bundle, provider_id, _capability = fetch_configured_forecast_at(
+            lat=location.lat,
+            lon=location.lon,
+            timezone=timezone,
+        )
+    except Exception:
+        logger.warning(
+            "marine_enrichment: forecast provider fetch failed for location %r",
+            location.id,
+            exc_info=True,
+        )
+        return None, [], "unavailable"
+
+    timed_points = [
+        (point, _parse_utc(getattr(point, "validTime", None)))
+        for point in bundle.hourly
+    ]
+    timed_points = [(point, valid_time) for point, valid_time in timed_points if valid_time is not None]
+    if not timed_points:
+        return None, [], provider_id
+
+    now = datetime.now(tz=UTC)
+    point, _valid_time = min(timed_points, key=lambda item: abs(item[1] - now))
+    return point, [item[0] for item in timed_points], provider_id
+
+
+def _hourly_pressure_tendency(point: Any, hourly: list[Any]) -> float | None:
+    """Derive only an observed three-hour provider-series pressure delta."""
+    point_time = _parse_utc(getattr(point, "validTime", None))
+    pressure = getattr(point, "pressure", None)
+    if point_time is None or not isinstance(pressure, int | float):
+        return None
+
+    target_time = point_time - timedelta(hours=3)
+    candidates = [
+        candidate
+        for candidate in hourly
+        if isinstance(getattr(candidate, "pressure", None), int | float)
+        and _parse_utc(getattr(candidate, "validTime", None)) is not None
+    ]
+    if not candidates:
+        return None
+    previous = min(
+        candidates,
+        key=lambda candidate: abs(_parse_utc(candidate.validTime) - target_time),
+    )
+    previous_time = _parse_utc(previous.validTime)
+    if previous_time is None or abs(previous_time - target_time) > timedelta(minutes=30):
+        return None
+    return float(pressure) - float(previous.pressure)
+
+
+def build_fishing_weather_inputs(location_id: str) -> list[dict[str, Any]]:
+    """Return canonical, time-stamped local forecast inputs for Fishing.
+
+    This is an API-to-marine service transport helper, not a public response
+    model.  It deliberately carries only the resolved location forecast values
+    Fishing needs: a real three-hour mean-sea-level-pressure delta and
+    informational nearshore wind.  The marine scorer owns score calculation;
+    callers add tide/current and eligible water-column inputs before sending
+    the authenticated internal request.
+    """
+    location = _find_location(location_id)
+    if location is None:
+        return []
+
+    _point, hourly, provider_id = _provider_hourly_conditions(location)
+    if not hourly:
+        return []
+
+    _temperature_unit, wind_unit = _forecast_units()
+    points: list[dict[str, Any]] = []
+    for point in hourly:
+        valid_time = getattr(point, "validTime", None)
+        if _parse_utc(valid_time) is None:
+            continue
+
+        def canonical_wind(value: Any) -> float | None:
+            if not isinstance(value, int | float) or isinstance(value, bool):
+                return None
+            return _convert_unit(float(value), wind_unit, "meter_per_second")
+
+        pressure_trend = _hourly_pressure_tendency(point, hourly)
+        pressure_available = pressure_trend is not None
+        weather_available = any(
+            value is not None
+            for value in (
+                canonical_wind(getattr(point, "windSpeed", None)),
+                getattr(point, "windDir", None),
+                canonical_wind(getattr(point, "windGust", None)),
+            )
+        )
+        points.append(
+            {
+                "validTime": valid_time,
+                "pressureTrendHpa3h": pressure_trend,
+                "windSpeed": canonical_wind(getattr(point, "windSpeed", None)),
+                "windDirection": getattr(point, "windDir", None),
+                "windGust": canonical_wind(getattr(point, "windGust", None)),
+                "pressureProvenance": {
+                    "available": pressure_available,
+                    "source": provider_id if pressure_available else "unavailable",
+                    "sourceType": "forecast" if pressure_available else "unavailable",
+                    "validTime": valid_time if pressure_available else None,
+                    "unit": "hPa" if pressure_available else None,
+                },
+                "weatherProvenance": {
+                    "available": weather_available,
+                    "source": provider_id if weather_available else "unavailable",
+                    "sourceType": "forecast" if weather_available else "unavailable",
+                    "validTime": valid_time if weather_available else None,
+                    "unit": "meter_per_second" if weather_available else None,
+                },
+            }
+        )
+    return points
+
+
+def _provider_observation_updates(
+    point: Any | None,
+    hourly: list[Any],
+    provider_id: str,
+) -> dict[str, Any]:
+    """Map one canonical hourly point to the selected-location weather fields."""
+    updates: dict[str, Any] = {field: None for field in _FORECAST_CURRENT_FIELDS}
+    updates["stationId"] = None
+    updates["source"] = provider_id
+    if point is not None:
+        updates["time"] = getattr(point, "validTime", None)
+
+    if point is None:
+        updates["provenance"] = {
+            "conditions": {
+                "available": False,
+                "source": provider_id,
+                "sourceType": "forecast",
+                "validTime": None,
+                "unit": None,
+            },
+            "pressure": {
+                "available": False,
+                "source": provider_id,
+                "sourceType": "forecast",
+                "validTime": None,
+                "unit": None,
+            },
+        }
+        return updates
+
+    temperature_unit, wind_unit = _forecast_units()
+    speed_target = get_group_unit("group_ocean_speed", "knot")
+    temperature_target = get_group_unit(
+        "group_temperature",
+        "degree_F" if get_target_unit() == "US" else "degree_C",
+    )
+    pressure_target = get_group_unit(
+        "group_pressure",
+        "inHg" if get_target_unit() == "US" else "mbar",
+    )
+
+    def converted(value: Any, source_unit: str, target_unit: str) -> float | None:
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return None
+        return _convert_unit(float(value), source_unit, target_unit)
+
+    updates.update(
+        {
+            "windSpeed": converted(getattr(point, "windSpeed", None), wind_unit, speed_target),
+            "windDirection": getattr(point, "windDir", None),
+            "windGust": converted(getattr(point, "windGust", None), wind_unit, speed_target),
+            "airTemp": converted(getattr(point, "outTemp", None), temperature_unit, temperature_target),
+            "pressure": converted(getattr(point, "pressure", None), "hPa", pressure_target),
+            "dewpoint": converted(getattr(point, "dewpoint", None), temperature_unit, temperature_target),
+            "feelsLike": converted(getattr(point, "feelsLike", None), temperature_unit, temperature_target),
+            "humidity": getattr(point, "outHumidity", None),
+            "weatherText": getattr(point, "weatherText", None),
+        }
+    )
+    raw_weather_code = getattr(point, "weatherCode", None)
+    updates["weatherCode"] = int(raw_weather_code) if str(raw_weather_code).isdigit() else None
+    tendency_hpa = _hourly_pressure_tendency(point, hourly)
+    updates["pressureTendency"] = (
+        _convert_unit(tendency_hpa, "hPa", pressure_target)
+        if tendency_hpa is not None
+        else None
+    )
+    valid_time = getattr(point, "validTime", None)
+    has_conditions = any(
+        updates[field] is not None
+        for field in ("windSpeed", "windDirection", "windGust", "airTemp", "humidity", "weatherText")
+    )
+    updates["provenance"] = {
+        "conditions": {
+            "available": has_conditions,
+            "source": provider_id,
+            "sourceType": "forecast",
+            "validTime": valid_time,
+            "unit": None,
+        },
+        "pressure": {
+            "available": updates["pressure"] is not None,
+            "source": provider_id,
+            "sourceType": "forecast",
+            "validTime": valid_time if updates["pressure"] is not None else None,
+            "unit": pressure_target if updates["pressure"] is not None else None,
+        },
+    }
+    return updates
+
+
+def _merge_provider_observation(
+    observation: dict[str, Any] | None,
+    location: MarineLocation,
+    provider_data: tuple[Any | None, list[Any], str] | None = None,
+) -> dict[str, Any] | None:
+    """Replace only outside-radius nearshore-weather fields with provider data."""
+    point, hourly, provider_id = provider_data or _provider_hourly_conditions(location)
+    if point is None and not isinstance(observation, dict):
+        return None
+    updates = _provider_observation_updates(point, hourly, provider_id)
+    merged = dict(observation) if isinstance(observation, dict) else {}
+    existing_provenance = merged.get("provenance")
+    updates_provenance = updates.pop("provenance")
+    merged.update(updates)
+    provenance = dict(existing_provenance) if isinstance(existing_provenance, dict) else {}
+    provenance.update(updates_provenance)
+    merged["provenance"] = provenance
+    return merged
+
+
 def _restore_marine_list(data: list[Any]) -> list[Any]:
     """C-24 (list summary fields) + C-25 (activeAlerts) for GET /marine."""
     for item in data:
@@ -245,6 +522,21 @@ def _restore_marine_list(data: list[Any]) -> list[Any]:
             )
 
             if not is_station_served(location.id):
+                current_conditions = _merge_provider_observation(
+                    item.get("currentConditions"),
+                    location,
+                )
+                item["currentConditions"] = current_conditions
+                item["weatherCode"] = (
+                    current_conditions.get("weatherCode")
+                    if isinstance(current_conditions, dict)
+                    else None
+                )
+                item["isDay"] = (
+                    current_conditions.get("isDay")
+                    if isinstance(current_conditions, dict)
+                    else None
+                )
                 continue
         except Exception:
             logger.warning(
@@ -284,12 +576,23 @@ def _restore_marine_detail(data: dict[str, Any]) -> dict[str, Any]:
     if location is None:
         return data
 
+    provider_data = _provider_hourly_conditions(location)
+    _point, hourly, _provider_id = provider_data
+    data["regularForecast"] = [
+        point.model_dump(by_alias=True, exclude_none=False) for point in hourly
+    ]
+
     try:
         from weewx_clearskies_api.services.marine_location_resolver import (  # noqa: PLC0415
             is_station_served,
         )
 
         if not is_station_served(location.id):
+            data["observation"] = _merge_provider_observation(
+                data.get("observation"),
+                location,
+                provider_data,
+            )
             return data
     except Exception:
         logger.warning(
@@ -626,81 +929,22 @@ def _join_names(names: list[str], locale: str) -> str:
     return separator.join(names[:-1]) + f"{final_connector}{names[-1]}"
 
 
-def _compose_fishing_conditions_text(
-    *,
-    overall_label_key: str,
-    pressure_phrase_key: str,
-    tide_phrase_key: str,
-    solunar_clause_key: str | None,
-    active_species_names: list[str],
-    locale: str,
-) -> str:
-    """Relocated essentially unchanged from enrichment/fishing_scorer.py's
-    _compose_conditions_text() (deleted at T6.7). The marine service
-    already selected which locale key applies for each phrase (overall
-    bucket, pressure bucket, tide state, solunar period) -- this module
-    only resolves and assembles, matching the surf composer's division of
-    labor.
-    """
-    solunar_clause = i18n.t(solunar_clause_key, locale) if solunar_clause_key else ""
-
-    text = i18n.t("fishing.conditions.summary", locale).format(
-        overall_label=i18n.t(overall_label_key, locale),
-        pressure_phrase=i18n.t(pressure_phrase_key, locale),
-        tide_phrase=i18n.t(tide_phrase_key, locale),
-        solunar_clause=solunar_clause,
-    )
-    if active_species_names:
-        text += " " + i18n.t("fishing.conditions.species_active", locale).format(
-            names=_join_names(active_species_names, locale)
-        )
-    return text
-
-
 def _enrich_fishing_entry(entry: dict[str, Any], locale: str) -> None:
     period_label_key = entry.pop("periodLabelKey", None)
     if isinstance(period_label_key, str):
         entry["periodLabel"] = i18n.t(period_label_key, locale)
 
-    species_scores = entry.get("speciesScores")
-    if isinstance(species_scores, list):
-        for species in species_scores:
-            if not isinstance(species, dict):
-                continue
-            status_key = species.pop("statusKey", None)
-            if isinstance(status_key, str):
-                species["status"] = i18n.t(status_key, locale)
-
-    parts = entry.pop("conditionsTextParts", None)
-    if not isinstance(parts, dict):
+    selected_species = entry.get("selectedSpecies")
+    selected_status = entry.get("status")
+    if isinstance(selected_species, str) and isinstance(selected_status, str):
+        # Phase 4's Fishing response has one selected species, never a
+        # generic conditions rating. Keep this semantic explanation local to
+        # that selection instead of reviving the retired overall-label path.
+        entry.pop("conditionsTextParts", None)
+        entry["conditionsText"] = f"{selected_species}: {selected_status.replace('_', ' ')}"
         return
 
-    overall_key = parts.get("overallLabelKey")
-    pressure_key = parts.get("pressurePhraseKey")
-    tide_key = parts.get("tidePhraseKey")
-    if not isinstance(overall_key, str) or not isinstance(pressure_key, str) or not isinstance(
-        tide_key, str
-    ):
-        logger.warning(
-            "marine_enrichment: fishing conditionsTextParts missing required "
-            "keys; leaving conditionsText untouched: %r",
-            parts,
-        )
-        return
-
-    solunar_key = parts.get("solunarClauseKey")
-    active_names = parts.get("activeSpeciesNames")
-
-    entry["conditionsText"] = _compose_fishing_conditions_text(
-        overall_label_key=overall_key,
-        pressure_phrase_key=pressure_key,
-        tide_phrase_key=tide_key,
-        solunar_clause_key=solunar_key if isinstance(solunar_key, str) else None,
-        active_species_names=[n for n in active_names if isinstance(n, str)]
-        if isinstance(active_names, list)
-        else [],
-        locale=locale,
-    )
+    entry.pop("conditionsTextParts", None)
 
 
 def _walk_fishing_entries(node: Any, locale: str) -> None:

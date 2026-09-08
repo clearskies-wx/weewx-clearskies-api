@@ -18,7 +18,7 @@ Covers per the task-3b-3 brief §Test-author parallel scope:
   - Extra field → ignored
 
   Module fetch (respx-mocked):
-  - Happy path: 5 URLs intercepted, ForecastBundle returned with correct counts,
+  - Happy path: 6 URLs intercepted, ForecastBundle returned with correct counts,
     discussion populated, source="nws"
   - Cache hit: pre-populated cache, no outbound HTTP calls
   - /points 404 → GeographicallyUnsupported
@@ -212,12 +212,34 @@ def forecast_client_no_provider() -> Any:
 _NWS_POINTS_URL = "https://api.weather.gov/points/47.6062,-122.3321"
 _NWS_HOURLY_URL = "https://api.weather.gov/gridpoints/SEW/125,68/forecast/hourly"
 _NWS_DAILY_URL = "https://api.weather.gov/gridpoints/SEW/125,68/forecast"
+_NWS_GRIDPOINT_URL = "https://api.weather.gov/gridpoints/SEW/125,68"
 _NWS_AFD_LIST_URL = "https://api.weather.gov/products"
 _NWS_AFD_BODY_URL = "https://api.weather.gov/products/44453767-e473-4c16-835d-96495e091585"
 
 # Station lat/lon used in all fetch() calls.
 _LAT = 47.6062
 _LON = -122.3321
+
+
+def _mock_empty_pressure_grid(mock: Any) -> None:
+    """Mock the raw grid pressure request with an honest empty layer.
+
+    The NWS forecast path now fetches this existing gridpoint resource after
+    the hourly and daily forecasts.  The baseline forecast fixtures predate
+    that optional layer, so an empty pressure array preserves their intended
+    null-pressure behavior while exercising the new request shape.
+    """
+    mock.get(_NWS_GRIDPOINT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "type": "Feature",
+                "properties": {
+                    "pressure": {"uom": "wmoUnit:Pa", "values": []},
+                },
+            },
+        )
+    )
 
 
 # ===========================================================================
@@ -1086,10 +1108,10 @@ class TestWireShapeModels:
 
 
 class TestFetchHappyPath:
-    """fetch() with all 5 NWS URLs mocked returns ForecastBundle with correct counts."""
+    """fetch() with all 6 NWS URLs mocked returns ForecastBundle with correct counts."""
 
     def test_happy_path_returns_forecast_bundle(self) -> None:
-        """fetch() returns a ForecastBundle instance (not dict, not list)."""
+        """fetch() returns a ForecastBundle and preserves empty pressure."""
         from weewx_clearskies_api.models.responses import ForecastBundle  # noqa: PLC0415
         from weewx_clearskies_api.providers.forecast.nws import fetch  # noqa: PLC0415
 
@@ -1105,6 +1127,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1114,6 +1137,8 @@ class TestFetchHappyPath:
             result = fetch(lat=_LAT, lon=_LON, target_unit="US", user_agent_contact="test@example.com")
 
         assert isinstance(result, ForecastBundle)
+        assert all(point.pressure is None for point in result.hourly)
+        assert all(point.pressureSource is None for point in result.hourly)
 
     def test_happy_path_returns_156_hourly_points(self) -> None:
         """156 hourly periods from NWS → 156 HourlyForecastPoints."""
@@ -1131,6 +1156,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1157,6 +1183,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1189,6 +1216,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1224,6 +1252,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1250,6 +1279,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1276,6 +1306,7 @@ class TestFetchHappyPath:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
             )
@@ -1447,6 +1478,7 @@ class TestFetchErrorPaths:
                 mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                     return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
                 )
+                _mock_empty_pressure_grid(mock)
                 mock.get("https://api.weather.gov/products").mock(
                     return_value=httpx.Response(200, json=_load_fixture("products_afd_list_empty.json"))
                 )
@@ -1485,6 +1517,7 @@ class TestFetchErrorPaths:
                 mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                     return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
                 )
+                _mock_empty_pressure_grid(mock)
                 mock.get("https://api.weather.gov/products").mock(
                     return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
                 )
@@ -1518,6 +1551,7 @@ class TestFetchErrorPaths:
                 mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                     return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
                 )
+                _mock_empty_pressure_grid(mock)
                 mock.get("https://api.weather.gov/products").mock(
                     return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
                 )
@@ -1572,6 +1606,7 @@ class TestFetchErrorPaths:
             mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                 return_value=httpx.Response(200, json=starts_night_fixture)
             )
+            _mock_empty_pressure_grid(mock)
             mock.get("https://api.weather.gov/products").mock(
                 return_value=httpx.Response(200, json=_load_fixture("products_afd_list_empty.json"))
             )
@@ -1625,6 +1660,7 @@ class TestUAContactWiring:
                 mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
                     return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
                 )
+                _mock_empty_pressure_grid(mock)
                 mock.get("https://api.weather.gov/products").mock(
                     return_value=httpx.Response(200, json=_load_fixture("products_afd_list_empty.json"))
                 )
@@ -1750,7 +1786,7 @@ class TestForecastEndpointNws:
     """/forecast endpoint behavior with NWS provider configured."""
 
     def _mock_all_nws(self, mock: Any) -> None:
-        """Wire respx mock for all 5 NWS URLs with real fixtures."""
+        """Wire respx mock for all 6 NWS URLs with real fixtures."""
         mock.get("https://api.weather.gov/points/47.6062,-122.3321").mock(
             return_value=httpx.Response(200, json=_load_fixture("forecast_points.json"))
         )
@@ -1760,6 +1796,7 @@ class TestForecastEndpointNws:
         mock.get("https://api.weather.gov/gridpoints/SEW/125,68/forecast").mock(
             return_value=httpx.Response(200, json=_load_fixture("forecast.json"))
         )
+        _mock_empty_pressure_grid(mock)
         mock.get("https://api.weather.gov/products").mock(
             return_value=httpx.Response(200, json=_load_fixture("products_afd_list.json"))
         )

@@ -47,6 +47,20 @@ class ProviderAttribution:
 
 
 @dataclass(frozen=True)
+class FishingPressureCapability:
+    """Provider-level support for Fishing's hourly pressure requirement.
+
+    ``supported`` means the provider has an approved path for the canonical
+    hourly mean-sea-level-pressure series.  ``location_specific`` distinguishes
+    NWS: its grid layer must be checked at each fishing location before Fishing
+    can be saved.  It is not a provider-wide rejection.
+    """
+
+    supported: bool
+    location_specific: bool = False
+
+
+@dataclass(frozen=True)
 class ProviderCapability:
     """Static capability declaration per ADR-038 §4.
 
@@ -99,6 +113,8 @@ class ProviderCapability:
     alerts_available: bool | None = None      # whether weather alerts are available from this provider
     satellite_available: bool | None = None   # whether satellite imagery is available
     satellite_tile_url_template: str | None = None  # XYZ tile URL template for satellite tiles
+    # Fishing and Boating remediation Phase 3 provider metadata.
+    fishing_pressure: FishingPressureCapability | None = None
 
 
 # ---------------------------------------------------------------------------

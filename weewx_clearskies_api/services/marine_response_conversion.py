@@ -272,6 +272,7 @@ _FIELD_GROUPS: dict[str, str] = {
     "visibility": "group_visibility",
     # --- group_temperature (base degree_C) ---
     "airTemp": "group_temperature",
+    "feelsLike": "group_temperature",
     "waterTemp": "group_temperature",
     "dewpoint": "group_temperature",
     # --- group_pressure (base hPa) ---
@@ -447,3 +448,40 @@ def convert_marine_payload(body: Any) -> tuple[Any, dict[str, str]]:
     units_block: dict[str, str] = {}
     converted = _walk(body, None, "", targets, units_block)
     return converted, units_block
+
+
+def collect_marine_unit_labels(body: Any, units_block: dict[str, str]) -> None:
+    """Add labels for numeric marine fields populated after conversion.
+
+    The companion proxy's post-conversion enrichment may fill a previously
+    null local-weather field from the configured forecast provider.  Those
+    values are already in display units, so converting the tree a second time
+    would be wrong; this helper reuses the same field-group table only to add
+    the corresponding unit label.
+    """
+    targets = _resolve_targets()
+
+    def walk(node: Any, key_context: str | None, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child_path = f"{path}.{key}" if path else key
+                if isinstance(value, dict):
+                    walk(value, key, child_path)
+                elif isinstance(value, list):
+                    for index, item in enumerate(value):
+                        if isinstance(item, dict):
+                            walk(item, key, f"{child_path}[{index}]")
+                elif isinstance(value, int | float) and not isinstance(value, bool):
+                    # Post-conversion enrichment only introduces unambiguous
+                    # field names (wind/temperature/pressure); do not rerun
+                    # the contextual ``height`` warning path for preexisting
+                    # values already examined by ``convert_marine_payload``.
+                    group = _FIELD_GROUPS.get(key)
+                    if group is not None:
+                        units_block[key] = _unit_label(targets[group])
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                if isinstance(item, dict):
+                    walk(item, key_context, f"{path}[{index}]")
+
+    walk(body, None, "")

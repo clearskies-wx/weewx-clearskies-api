@@ -96,6 +96,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import (
+    FishingPressureCapability,
     ProviderAttribution,
     ProviderCapability,
 )
@@ -150,6 +151,8 @@ CAPABILITY = ProviderCapability(
         "weatherCode",
         "weatherText",
         "feelsLike",
+        "pressure",
+        "pressureSource",
         # DailyForecastPoint
         "validDate",
         "tempMax",
@@ -185,6 +188,7 @@ CAPABILITY = ProviderCapability(
     geographic_coverage="global",   # Trust Aeris's authoritative answer per lead-call 17
     auth_required=("client_id", "client_secret"),
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
+    fishing_pressure=FishingPressureCapability(supported=True),
     operator_notes=(
         "Vaisala Xweather free-tier and entry-paid plans. "
         "Requires client_id + client_secret bound to a registered domain "
@@ -692,6 +696,8 @@ def _hourly_period_to_point(period: _AerisHourlyPeriod, target_unit: str) -> Hou
         weatherText=period.weather,
         feelsLike=feels_like,
         dewpoint=dewpoint,
+        pressure=period.pressureMB,
+        pressureSource=PROVIDER_ID if period.pressureMB is not None else None,
         source=PROVIDER_ID,
         extras=extras,
     )

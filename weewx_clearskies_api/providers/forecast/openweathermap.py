@@ -90,6 +90,7 @@ from weewx_clearskies_api.models.responses import (
 )
 from weewx_clearskies_api.providers._common.cache import get_cache
 from weewx_clearskies_api.providers._common.capability import (
+    FishingPressureCapability,
     ProviderAttribution,
     ProviderCapability,
 )
@@ -140,6 +141,8 @@ CAPABILITY = ProviderCapability(
         "weatherCode",
         "weatherText",
         "feelsLike",
+        "pressure",
+        "pressureSource",
         # DailyForecastPoint fields (canonical §4.1.3 OWM column)
         "validDate",
         "tempMax",
@@ -162,6 +165,7 @@ CAPABILITY = ProviderCapability(
     geographic_coverage="global",   # Trust OWM's authoritative answer (brief lead-call 29)
     auth_required=("appid",),
     default_poll_interval_seconds=DEFAULT_FORECAST_TTL_SECONDS,
+    fishing_pressure=FishingPressureCapability(supported=True),
     operator_notes=(
         "OpenWeatherMap One Call 3.0 (paid 'One Call by Call' subscription "
         "required for /data/3.0/onecall). Basic-tier appid returns empty "
@@ -661,6 +665,8 @@ def _owm_to_hourly_point(
         weatherCode=weather_code,
         weatherText=weather_text,
         feelsLike=period.feels_like,
+        pressure=period.pressure,
+        pressureSource=PROVIDER_ID if period.pressure is not None else None,
         source=PROVIDER_ID,
     )
 
