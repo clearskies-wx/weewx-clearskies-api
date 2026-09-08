@@ -807,8 +807,17 @@ def _fishing_depth_temperature_candidates(marine_body: Any) -> list[dict[str, An
     return candidates
 
 
-def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) -> str | None:
-    """Assemble API-owned, time-matched inputs for the proxied Fishing call."""
+def _build_fishing_scoring_payload(
+    state: CompanionProxyState, location_id: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Assemble bounded scorer input and the separate public tide chart.
+
+    The public Fishing response retains every CO-OPS prediction needed by the
+    tide chart.  Those chart points are not scorer inputs: the scorer receives
+    only the derived state for each of its bounded forecast periods.  Keeping
+    the chart outside the compressed API-to-marine handoff prevents a dense
+    prediction series from exceeding marine's defensive decoded-size limit.
+    """
     try:
         from weewx_clearskies_api.services.marine_enrichment import (  # noqa: PLC0415
             build_fishing_weather_inputs,
@@ -818,9 +827,9 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
         periods = _fishing_periods(location_id)
     except Exception:
         logger.warning("Fishing input assembly failed for %s", location_id, exc_info=True)
-        return None
+        return None, []
     if not periods:
-        return None
+        return None, []
 
     tide_result = _fetch_upstream(state, f"/tides/{location_id}", {})
     tide_body = tide_result[1] if tide_result is not None and tide_result[0] == 200 else {}
@@ -893,13 +902,10 @@ def _build_fishing_scoring_inputs(state: CompanionProxyState, location_id: str) 
         "version": _FISHING_SCORING_INPUTS_VERSION,
         "locationId": location_id,
         "points": points,
-        # The Fishing card consumes the same real CO-OPS predictions used to
-        # derive each period's tide/current state.  They are sourced only via
-        # the API-owned assembler and returned unchanged by marine.
-        "tidePredictions": tide_predictions,
     }
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-    return base64.urlsafe_b64encode(zlib.compress(encoded, level=9)).decode("ascii").rstrip("=")
+    transport = base64.urlsafe_b64encode(zlib.compress(encoded, level=9)).decode("ascii").rstrip("=")
+    return transport, tide_predictions
 
 
 def _cache_key(service_url: str, resolved_upstream: str, query_params: Any) -> str:
@@ -942,7 +948,7 @@ def _proxy_request(
     # scoring inputs through the public proxy route.
     upstream_query.pop(_FISHING_SCORING_INPUTS_PARAM, None)
     if manifest_entry["path"] == "/fishing/{location_id}":
-        assembled_inputs = _build_fishing_scoring_inputs(
+        assembled_inputs, tide_predictions = _build_fishing_scoring_payload(
             state,
             str(request.path_params.get("location_id", "")),
         )
@@ -1009,6 +1015,13 @@ def _proxy_request(
     # is cached like any other. C-10: still scan the raw body for a model
     # gap and forward it (see _report_model_gaps_from_response() below) —
     # this does not affect what is cached or returned.
+    if manifest_entry["path"] == "/fishing/{location_id}" and isinstance(body, dict):
+        # The dense CO-OPS chart series belongs to the public API response,
+        # rather than the bounded private scoring handoff.  It is attached
+        # before the normal response conversion/envelope pipeline so its
+        # tide-height units receive the same handling as every other marine
+        # payload field.
+        body = {**body, "tidePredictions": tide_predictions}
     _report_model_gaps_from_response(body, manifest_entry=manifest_entry)
     transformed = _apply_response_transform(body, manifest_entry=manifest_entry)
     cache.set(cache_key, {"body": transformed, "status_code": 200}, ttl_seconds)

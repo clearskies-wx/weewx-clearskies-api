@@ -6,6 +6,9 @@ weather observation columns, and edge cases where patterns must not over-match.
 
 from __future__ import annotations
 
+import base64
+import json
+import zlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -296,8 +299,8 @@ def test_browser_scoring_inputs_are_removed_and_replaced_by_server_payload(
 
     monkeypatch.setattr(
         companion_proxy,
-        "_build_fishing_scoring_inputs",
-        lambda state, location_id: "server-generated-inputs",
+        "_build_fishing_scoring_payload",
+        lambda state, location_id: ("server-generated-inputs", []),
     )
 
     def capture_fetch(state, resolved_upstream, query_params):
@@ -335,6 +338,115 @@ def test_browser_scoring_inputs_are_removed_and_replaced_by_server_payload(
     assert captured["hours"] == "24"
     assert captured["scoringInputs"] == "server-generated-inputs"
     assert captured["scoringInputs"] != "attacker-payload"
+
+
+def test_fishing_transport_excludes_dense_tide_chart_but_retains_it_for_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dense chart cannot consume the scorer handoff's 64 KiB budget."""
+    import weewx_clearskies_api.services.companion_proxy as companion_proxy
+    import weewx_clearskies_api.services.marine_enrichment as marine_enrichment
+
+    start = datetime(2026, 9, 7, tzinfo=UTC)
+    end = start + timedelta(hours=6)
+    tide_predictions = [
+        {
+            "time": (start + timedelta(minutes=index * 6)).isoformat().replace("+00:00", "Z"),
+            "height": 1.0 + index / 1000,
+            "type": "high" if index % 2 else "low",
+        }
+        for index in range(721)
+    ]
+
+    monkeypatch.setattr(marine_enrichment, "build_fishing_weather_inputs", lambda location_id: [])
+    monkeypatch.setattr(
+        companion_proxy,
+        "_fishing_periods",
+        lambda location_id: [
+            (
+                start.isoformat().replace("+00:00", "Z"),
+                end.isoformat().replace("+00:00", "Z"),
+                start + (end - start) / 2,
+            )
+        ],
+    )
+
+    def fetch(state, resolved_upstream, query_params):
+        if resolved_upstream == "/tides/harbor":
+            return 200, {"predictions": tide_predictions}
+        if resolved_upstream == "/marine/harbor":
+            return 200, {"forecast": []}
+        raise AssertionError(f"unexpected upstream request: {resolved_upstream}")
+
+    monkeypatch.setattr(companion_proxy, "_fetch_upstream", fetch)
+    transport, public_tide_predictions = companion_proxy._build_fishing_scoring_payload(
+        companion_proxy.CompanionProxyState(service_url="https://marine.example.test"), "harbor"
+    )
+
+    assert transport is not None
+    padded = transport + "=" * (-len(transport) % 4)
+    decoded = zlib.decompress(base64.urlsafe_b64decode(padded.encode("ascii")))
+    payload = json.loads(decoded)
+    assert len(decoded) <= 64 * 1024
+    assert "tidePredictions" not in payload
+    assert public_tide_predictions == tide_predictions
+
+
+def test_fishing_proxy_restores_public_tide_chart_after_marine_scores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bounded private handoff must not remove the public chart field."""
+    from starlette.requests import Request
+
+    import weewx_clearskies_api.services.companion_proxy as companion_proxy
+
+    tide_predictions = [{"time": "2026-09-07T12:00:00Z", "height": 1.1, "type": "high"}]
+    monkeypatch.setattr(
+        companion_proxy,
+        "_build_fishing_scoring_payload",
+        lambda state, location_id: ("server-generated-inputs", tide_predictions),
+    )
+    monkeypatch.setattr(
+        companion_proxy,
+        "_fetch_upstream",
+        lambda state, resolved_upstream, query_params: (200, {"tidePredictions": [], "days": []}),
+    )
+    monkeypatch.setattr(
+        companion_proxy,
+        "_apply_response_transform",
+        lambda body, *, manifest_entry: body,
+    )
+
+    class EmptyCache:
+        def get(self, key):
+            return None
+
+        def set(self, key, value, ttl):
+            return None
+
+    monkeypatch.setattr(companion_proxy, "get_cache", EmptyCache)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/api/v1/fishing/harbor",
+            "query_string": b"",
+            "headers": [],
+            "path_params": {"location_id": "harbor"},
+        }
+    )
+    state = companion_proxy.CompanionProxyState(service_url="https://marine.example.test")
+    manifest = {
+        "path": "/fishing/{location_id}",
+        "upstream": "/fishing/{location_id}",
+        "cache_ttl": 3600,
+    }
+
+    response = companion_proxy._proxy_request(request, state, manifest)
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["tidePredictions"] == tide_predictions
 
 
 def test_fishing_depth_temperature_candidates_exclude_nonlocal_ndbc_source() -> None:
