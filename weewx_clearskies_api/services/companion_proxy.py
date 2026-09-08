@@ -109,6 +109,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import os
 import queue as _queue
 import threading
@@ -233,6 +234,17 @@ def _apply_post_conversion_enrichment(data: Any, *, manifest_entry: dict[str, An
     boundary, not a comment" intent for this seam.
     """
     return apply_marine_enrichment(data, manifest_path=manifest_entry["path"])
+
+
+def _strip_private_marine_fields(body: Any, *, manifest_path: str) -> Any:
+    """Remove API-to-marine handoff-only fields before a public response.
+
+    This is deliberately before conversion and enrichment: private profile
+    layers neither claim display units nor become dashboard-visible data.
+    """
+    if manifest_path != "/marine/{location_id}" or not isinstance(body, dict):
+        return body
+    return {key: value for key, value in body.items() if key != "temperatureProfileTimeline"}
 
 
 def _parse_utc_timestamp(value: Any) -> datetime | None:
@@ -407,6 +419,10 @@ def _apply_response_transform(body: Any, *, manifest_entry: dict[str, Any]) -> A
     every native endpoint uses (API-MANUAL §2 envelope shape) rather than a
     second implementation.
     """
+    # The profile timeline crosses only the authenticated API-to-marine
+    # Fishing handoff. It is not a public Marine field and must not reach the
+    # dashboard or generic unit conversion.
+    body = _strip_private_marine_fields(body, manifest_path=manifest_entry["path"])
     converted, units_block = convert_marine_payload(body)
     enriched = _apply_post_conversion_enrichment(converted, manifest_entry=manifest_entry)
     enriched = _join_regional_marine_additions(
@@ -746,42 +762,33 @@ def _fishing_periods(location_id: str) -> list[tuple[str, str, datetime]]:
 
 
 def _fishing_depth_temperature_candidates(marine_body: Any) -> list[dict[str, Any]]:
-    """Select only explicit depth-bearing marine temperature records.
+    """Select only private, source-timestamped depth-profile layers.
 
-    A selected-location surface observation without a depth is deliberately
-    not eligible for Fishing's target-depth core input.  NDBC is never read
-    here and cannot enter this transport path.
+    Surface observations and the public surf forecast are deliberately not
+    eligible. Each candidate must originate in the private profile timeline,
+    with the outer and provenance valid times agreeing. NDBC and CO-OPS can
+    never enter this transport path.
     """
     if not isinstance(marine_body, dict):
         return []
+    timeline = marine_body.get("temperatureProfileTimeline")
+    if not isinstance(timeline, list):
+        return []
     candidates: list[dict[str, Any]] = []
-    raw_entries = list(marine_body.get("forecast", []))
-    observation = marine_body.get("observation")
-    if isinstance(observation, dict):
-        raw_entries.append(observation)
-    for entry in raw_entries:
+    for entry in timeline:
         if not isinstance(entry, dict):
             continue
-        temperature = entry.get("waterTemp")
-        provenance = entry.get("waterTempProvenance")
-        if not isinstance(provenance, dict):
-            provenance = (
-                entry.get("provenance", {}).get("waterTemperature")
-                if isinstance(entry.get("provenance"), dict)
-                else None
-            )
-        depth_m = provenance.get("depthM") if isinstance(provenance, dict) else None
-        valid_time = entry.get("time") or (provenance.get("validTime") if isinstance(provenance, dict) else None)
-        coverage_tier = provenance.get("coverageTier") if isinstance(provenance, dict) else None
-        source = provenance.get("source") if isinstance(provenance, dict) else None
-        if (
-            isinstance(temperature, int | float)
-            and not isinstance(temperature, bool)
-            and isinstance(depth_m, int | float)
-            and not isinstance(depth_m, bool)
-            and depth_m >= 0
+        valid_time = entry.get("validTime")
+        provenance = entry.get("provenance")
+        layers = entry.get("layers")
+        if not isinstance(provenance, dict) or not isinstance(layers, list):
+            continue
+        source = provenance.get("source")
+        coverage_tier = provenance.get("coverageTier")
+        if not (
+            isinstance(valid_time, str)
             and _parse_utc_timestamp(valid_time) is not None
-            and isinstance(provenance, dict)
+            and provenance.get("validTime") == valid_time
             and provenance.get("available") is True
             and provenance.get("sourceType") in {"observed", "modeled", "forecast"}
             and isinstance(source, str)
@@ -789,6 +796,22 @@ def _fishing_depth_temperature_candidates(marine_body: Any) -> list[dict[str, An
             and coverage_tier
             in {"local_sensor", "ofs", "regional_erddap", "rtofs", "mur_sst", "observed"}
         ):
+            continue
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            temperature = layer.get("waterTemperatureC")
+            depth_m = layer.get("depthM")
+            if not (
+                isinstance(temperature, int | float)
+                and not isinstance(temperature, bool)
+                and isinstance(depth_m, int | float)
+                and not isinstance(depth_m, bool)
+                and math.isfinite(temperature)
+                and math.isfinite(depth_m)
+                and depth_m >= 0
+            ):
+                continue
             candidates.append(
                 {
                     "validTime": valid_time,
@@ -796,8 +819,8 @@ def _fishing_depth_temperature_candidates(marine_body: Any) -> list[dict[str, An
                     "provenance": {
                         "available": True,
                         "source": source,
-                        "sourceType": provenance.get("sourceType"),
-                        "validTime": provenance.get("validTime") or valid_time,
+                        "sourceType": provenance["sourceType"],
+                        "validTime": valid_time,
                         "coverageTier": coverage_tier,
                         "depthM": float(depth_m),
                         "unit": "degree_C",

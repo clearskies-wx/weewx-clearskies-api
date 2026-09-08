@@ -455,38 +455,83 @@ def test_fishing_depth_temperature_candidates_exclude_nonlocal_ndbc_source() -> 
     )
 
     body = {
-        "forecast": [
+        "forecast": [{"time": "2026-09-07T12:00:00Z", "waterTemp": 99.0}],
+        "temperatureProfileTimeline": [
             {
-                "time": "2026-09-07T12:00:00Z",
-                "waterTemp": 18.0,
-                "waterTempProvenance": {
+                "validTime": "2026-09-07T12:00:00Z",
+                "layers": [
+                    {"depthM": 0.0, "waterTemperatureC": 18.0},
+                    {"depthM": 10.0, "waterTemperatureC": 17.0},
+                ],
+                "provenance": {
                     "available": True,
-                    "source": "ofs:cbofs",
+                    "source": "ofs:WCOFS",
                     "sourceType": "modeled",
                     "validTime": "2026-09-07T12:00:00Z",
                     "coverageTier": "ofs",
-                    "depthM": 25.0,
+                    "unit": "degree_C",
                 },
             },
             {
-                "time": "2026-09-07T12:00:00Z",
-                "waterTemp": 18.0,
-                "waterTempProvenance": {
+                "validTime": "2026-09-07T12:00:00Z",
+                "layers": [{"depthM": 25.0, "waterTemperatureC": 18.0}],
+                "provenance": {
                     "available": True,
                     "source": "ndbc:46253",
                     "sourceType": "observed",
                     "validTime": "2026-09-07T12:00:00Z",
                     "coverageTier": "observed",
-                    "depthM": 25.0,
+                    "unit": "degree_C",
                 },
             },
-        ]
+        ],
     }
 
     result = _fishing_depth_temperature_candidates(body)
 
-    assert len(result) == 1
-    assert result[0]["provenance"]["source"] == "ofs:cbofs"
+    assert [candidate["waterTemperatureC"] for candidate in result] == [18.0, 17.0]
+    assert {candidate["provenance"]["source"] for candidate in result} == {"ofs:WCOFS"}
+
+
+def test_fishing_depth_temperature_candidates_reject_mismatched_profile_provenance_time() -> None:
+    from weewx_clearskies_api.services.companion_proxy import (
+        _fishing_depth_temperature_candidates,
+    )
+
+    result = _fishing_depth_temperature_candidates(
+        {
+            "temperatureProfileTimeline": [
+                {
+                    "validTime": "2026-09-07T12:00:00Z",
+                    "layers": [{"depthM": 10.0, "waterTemperatureC": 17.0}],
+                    "provenance": {
+                        "available": True,
+                        "source": "ofs:WCOFS",
+                        "sourceType": "modeled",
+                        "validTime": "2026-09-07T15:00:00Z",
+                        "coverageTier": "ofs",
+                        "unit": "degree_C",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert result == []
+
+
+def test_public_marine_response_strips_private_temperature_profile_timeline() -> None:
+    from weewx_clearskies_api.services.companion_proxy import _strip_private_marine_fields
+
+    result = _strip_private_marine_fields(
+        {
+            "locationId": "huntington-harbor",
+            "temperatureProfileTimeline": [{"validTime": "2026-09-07T12:00:00Z"}],
+        },
+        manifest_path="/marine/{location_id}",
+    )
+
+    assert result == {"locationId": "huntington-harbor"}
 
 
 def test_fishing_enrichment_exposes_selected_status_without_generic_phrase() -> None:
