@@ -53,7 +53,9 @@ situations must stay distinguishable end to end:
      proxied response, not a proxy failure.
   3. Unknown location / bad parameter → the marine service's own **404**,
      passed through untouched, never cached (``_proxy_request()``'s
-     ``status_code == 404`` branch).
+     ``status_code == 404`` branch). For Fishing only, an invalid or
+     ineligible ``selectedSpecies`` is the marine service's own **422** and
+     is likewise passed through untouched and never cached.
 
 Any other upstream status (5xx, 401/403 from a misconfigured secret, etc.)
 is treated the same as "unreachable" — cache fallback, else 503 — because
@@ -1001,6 +1003,15 @@ def _proxy_request(
         )
 
     status_code, body = fetch_result
+
+    if manifest_entry["path"] == "/fishing/{location_id}" and status_code == 422:
+        # The Fishing contract gives the marine service authority to reject
+        # unknown or ineligible selectedSpecies values. Preserve that
+        # validation response rather than relabelling a client-correctable
+        # selection error as a proxy outage. This exception is deliberately
+        # route- and status-specific: other upstream 4xx responses retain
+        # the proxy's established cache-or-503 behavior.
+        return JSONResponse(content=body, status_code=422)
 
     if status_code == 404:
         # State 3: unknown location / bad parameter. Passed through

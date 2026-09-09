@@ -340,6 +340,58 @@ def test_browser_scoring_inputs_are_removed_and_replaced_by_server_payload(
     assert captured["scoringInputs"] != "attacker-payload"
 
 
+def test_fishing_proxy_passes_upstream_selected_species_validation_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fishing preserves the marine service's selected-species validation."""
+    from starlette.requests import Request
+
+    import weewx_clearskies_api.services.companion_proxy as companion_proxy
+
+    upstream_body = {
+        "detail": {
+            "message": "selectedSpecies is not eligible for this location",
+            "selectedSpecies": "Not a configured choice",
+        }
+    }
+    monkeypatch.setattr(
+        companion_proxy,
+        "_build_fishing_scoring_payload",
+        lambda state, location_id: (None, []),
+    )
+    monkeypatch.setattr(
+        companion_proxy,
+        "_fetch_upstream",
+        lambda state, resolved_upstream, query_params: (422, upstream_body),
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/api/v1/fishing/harbor",
+            "query_string": b"selectedSpecies=Not%20a%20configured%20choice",
+            "headers": [],
+            "path_params": {"location_id": "harbor"},
+        }
+    )
+    manifest = {
+        "path": "/fishing/{location_id}",
+        "upstream": "/fishing/{location_id}",
+        "cache_ttl": 3600,
+    }
+
+    response = companion_proxy._proxy_request(
+        request,
+        companion_proxy.CompanionProxyState(service_url="https://marine.example.test"),
+        manifest,
+    )
+
+    assert response.status_code == 422
+    assert json.loads(response.body) == upstream_body
+
+
 def test_fishing_transport_excludes_dense_tide_chart_but_retains_it_for_the_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
