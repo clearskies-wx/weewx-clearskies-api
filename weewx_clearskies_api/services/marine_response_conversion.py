@@ -44,8 +44,8 @@ context (the immediate parent container's key), not by guessing:
   - ``height``: means wave height (group_wave_height) inside
     ``spectralComponents`` / ``multiSwell`` lists (SpectralWaveComponent),
     but means water level (group_water_level) inside ``predictions`` /
-    ``waterLevels`` / ``totalWaterLevelForecast`` lists (TidePrediction /
-    WaterLevel). Elsewhere, an unqualified ``height`` field is left
+    ``tidePredictions`` / ``waterLevels`` / ``totalWaterLevelForecast``
+    lists (TidePrediction / WaterLevel). Elsewhere, an unqualified ``height`` field is left
     unconverted (never seen in the current 11-route inventory).
 
   **Retired 2026-08-05 (Round S, ADR-101 SurfScoringBreakdown reshape):** a
@@ -283,7 +283,7 @@ _FIELD_GROUPS: dict[str, str] = {
 # Containers whose *dict items'* "height" field means water level, not
 # wave height (TidePrediction / WaterLevel — API-MANUAL §16).
 _WATER_LEVEL_HEIGHT_CONTAINERS: frozenset[str] = frozenset(
-    {"predictions", "waterLevels", "totalWaterLevelForecast"}
+    {"predictions", "tidePredictions", "waterLevels", "totalWaterLevelForecast"}
 )
 
 # Containers whose dict items' "height" field means wave height

@@ -17,6 +17,8 @@ pin only the D10.2-relevant behavior, not the whole inventory.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from weewx_clearskies_api.services import marine_response_conversion as mrc
@@ -51,6 +53,43 @@ def test_shadow_face_height_null_passes_through(_us_units) -> None:
     assert converted["forecast"][0]["shadowFaceHeight"] is None
     # A null is not a numeric conversion — no units key is claimed by it.
     assert "shadowFaceHeight" not in units_block
+
+
+def test_tide_predictions_height_converts_without_ambiguous_height_warning(
+    _us_units, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fishing's public CO-OPS series has the same water-level semantics."""
+    caplog.set_level(logging.WARNING, logger=mrc.logger.name)
+
+    converted, units_block = mrc.convert_marine_payload(
+        {"tidePredictions": [{"time": "2026-09-09T12:00:00Z", "height": 1.5}]}
+    )
+
+    assert converted["tidePredictions"][0]["height"] == pytest.approx(
+        1.5 * _M_TO_FT, rel=1e-4
+    )
+    assert units_block["height"] == "ft"
+    assert not any(
+        "unrecognised container" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_unknown_height_container_still_warns_and_passes_value_through(
+    _us_units, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only documented water-level containers resolve an ambiguous height."""
+    caplog.set_level(logging.WARNING, logger=mrc.logger.name)
+
+    converted, units_block = mrc.convert_marine_payload(
+        {"unrecognizedSeries": [{"height": 1.5}]}
+    )
+
+    assert converted["unrecognizedSeries"][0]["height"] == 1.5
+    assert "height" not in units_block
+    assert any(
+        "unrecognised container 'unrecognizedSeries'" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_per_partition_breaks_subfields_convert_recursively(_us_units) -> None:
