@@ -1,0 +1,3 @@
+3c479b339d11e9170207acda47700561d794e5a6:tests/test_providers_forecast_wunderground_integration.py:generic-api-key:73
+955b683067a601e09c09fc9d152e7751964f54af:tests/test_providers_forecast_wunderground_unit.py:generic-api-key:147
+b87071a697a655814756fab9d830150a20cadbc4:tests/test_providers_forecast_aeris_unit.py:generic-api-key:1172
